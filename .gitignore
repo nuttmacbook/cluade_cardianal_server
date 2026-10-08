@@ -3,3 +3,4 @@ tmp/
 data/
 *.mdb
 .DS_Store
+simulate-report*.json

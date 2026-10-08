@@ -493,6 +493,22 @@ code: function program() { function evil(p) { return process.env } return { evil
 **ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
 `scripts/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
 
+### จำลองผู้ใช้ 200 กระเป๋า (`npm run simulate`)
+
+`scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (3 วิ) แล้วตรวจว่าทุกใบเข้า block
+
+```
+RATE_LIMIT=0 BLOCK_MS=3000 npm start          # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว)
+npm run simulate                               # terminal 2 · เปิด explorer ดูไปพร้อมกันได้
+npm run simulate -- --spawn                    # หรือให้สคริปต์เปิด server เอง (ปิดตอนจบ)
+npm run simulate -- --blocks 200 --min 15 --max 25
+```
+
+- เฟส 1 (~10 block แรก): genesis → 10 กระเป๋าแจก → อีก 190 กระเป๋า · ~20 tx/block
+- เฟส 2 (`--blocks`, ค่าเริ่ม 100): deploy token / market / poll 10 ตัว (admin init ให้อัตโนมัติ) แล้วใช้งานจริง 15–25 tx/block: โอน, ตั้งชื่อ, แจกโทเคน, approve, ประกาศขาย, ซื้อ, ฝาก-ถอน, โหวต + tx ผิดพลาดตั้งใจเล็กน้อย (ต้องโดนปฏิเสธที่ `/sendtx`)
+- จบแล้วสรุป: ส่ง / เข้าคิว / ถูกปฏิเสธ (แยกสาเหตุ) / เข้าคิวแต่ไม่เข้า block / tx ต่อ block / ระยะห่าง block · รายงานเต็มที่ `simulate-report.json` · key ของกระเป๋าที่ `simulate-report-wallets.json`
+- ต้องเริ่มจาก chain ใหม่ (block 0) เพราะใช้เงินจาก genesis ~7.7 ล้าน และชื่อ namespace ซ้ำกับรอบก่อนไม่ได้ · ถ้า server ตั้ง `ADMINS` ต้องส่ง `--admin-key`
+
 ---
 
 ## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
