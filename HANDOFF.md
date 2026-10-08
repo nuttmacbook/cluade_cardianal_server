@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID`
+env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 2000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด)
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
@@ -49,6 +49,7 @@ src/core/autoreview.js         201        ตรวจโค้ดด้วย�
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
 src/node/mempool.js            140        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice
+src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
 src/node/routes.js             172        ⚠️ ตัวอย่าง route สำหรับ Fastify — ไม่ได้ถูกใช้โดย server.js
@@ -182,10 +183,12 @@ new Function("api", `"use strict";\nconst { readDB, writeDB, … } = api;\n${bod
 
 ```
 POST /sendtx
+  → postLimiter.allow(ip)       จำกัด POST ต่อ IP → เกินตอบ 429
   → verifyTransaction()         ตรวจลายเซ็น → sender มาจากลายเซ็นเท่านั้น (ห้ามเชื่อ tx.from)
-  → reviewProgram(code)         เฉพาะ action deploy
-  → simulate(vm, verified)      รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400 ทันที
-  → mempool.add()               rate limit + โควตา + ลำดับ nonce
+  → mempool.add(…, { simulate }) rate limit + โควตา + ลำดับ nonce ก่อน แล้วจึงเรียก simulate:
+      reviewProgram(code)       เฉพาะ action deploy
+      simulate(vm, verified)    รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400
+                                ครั้งที่ simulate ไม่ผ่านก็ถูกนับใน rate limit ต่อ address
   ⏱ ทุก BLOCK_MS (3 วินาที)
   → vm.createBlock() → mempool.take(block) → block.commit()
 ```
@@ -497,7 +500,7 @@ code: function program() { function evil(p) { return process.env } return { evil
    `node:vm` ถูกใช้แค่จับเวลา ไม่ได้ใช้แยก context จริง
    autoreview ช่วยกรองได้มาก แต่เป็นชั้นเดียวและไม่ใช่ขอบเขตการรันจริง
    ทางเลือกที่คุยไว้: QuickJS (wasm, แยกจริง + นับขั้นได้), worker thread (แยกครึ่ง), เข้ม autoreview ต่อ (ถูกสุด อ่อนสุด)
-2. **gas ยังไม่นับขั้น** — `while(true) {}` ที่ไม่แตะ DB กินได้เต็ม `timeoutMs` (30 วิ) โดยเสียแก๊สเท่าเดิม
+2. **gas ยังไม่นับขั้น** — `while(true) {}` ที่ไม่แตะ DB กินได้เต็ม `timeoutMs` (server ตั้งไว้ 2 วิ ผ่าน `TIMEOUT_MS`) โดยเสียแก๊สเท่าเดิม
    ต้องแก้: ฉีดตัวนับเข้าไปใน loop/call ทุกจุด (หรือย้ายไป QuickJS ที่นับ instruction ได้)
 3. ค่ากลางในหน่วยความจำยังไม่จำกัด — `maxValueSize` กันเฉพาะตอนเขียน / return / emit
 

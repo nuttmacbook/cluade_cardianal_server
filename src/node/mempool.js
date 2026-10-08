@@ -59,9 +59,14 @@ export class Mempool {
 
   /**
    * รับ tx เข้าคิว: ตรวจลายเซ็น, rate limit, โควตา, ลำดับ nonce
-   * @returns {{ ok: boolean, hash?: string, sender?: string, reason?: string, expectedNonce?: number }}
+   *
+   * simulate (ถ้าส่งมา) ถูกเรียกหลังผ่านการตรวจราคาถูกทั้งหมดแล้วเท่านั้น
+   * และครั้งที่ simulate ไม่ผ่านก็ถูกนับใน rate limit ด้วย → ยิง tx ที่รันนานซ้ำ ๆ ไม่ได้
+   *   simulate(verified) → { ok, ... }   ผลถูกส่งกลับใน simulation
+   *
+   * @returns {{ ok: boolean, hash?: string, sender?: string, reason?: string, expectedNonce?: number, simulation?: object }}
    */
-  add({ tx, signature }, { now = Date.now() } = {}) {
+  add({ tx, signature }, { now = Date.now(), simulate } = {}) {
     let verified;
     try {
       verified = verifyTransaction({ tx, signature });
@@ -83,10 +88,16 @@ export class Mempool {
       return { ok: false, hash, sender, reason: `nonce ต้องเป็น ${expectedNonce}`, expectedNonce };
     }
 
+    this.#recent.set(sender, [...(this.#recent.get(sender) ?? []), now]);
+    let simulation;
+    if (simulate) {
+      simulation = simulate(verified);
+      if (!simulation.ok) return { ok: false, hash, sender, reason: simulation.error ?? "ประเมินผลไม่ผ่าน", simulation };
+    }
+
     this.#items.set(hash, { tx, signature, hash, sender, method, request, receivedAt: now });
     this.#seen.set(hash, now);
-    this.#recent.set(sender, [...(this.#recent.get(sender) ?? []), now]);
-    return { ok: true, hash, sender };
+    return simulation ? { ok: true, hash, sender, simulation } : { ok: true, hash, sender };
   }
 
   /** ใส่ tx ที่พร้อมลงใน block ตามลำดับราคา → คืน hash ที่ใส่ไปแล้ว */
