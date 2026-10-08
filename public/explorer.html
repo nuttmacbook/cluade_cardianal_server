@@ -82,7 +82,7 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
 <header><div class="bar">
   <div class="brand" onclick="go('')">Program VM<span id="tick"></span></div>
   <input id="q" placeholder="ค้นหา block / tx / address / ชื่อ" onkeydown="if(event.key==='Enter')search()">
-  <button class="btn" id="wbtn" onclick="connect()">เชื่อมต่อ wallet</button>
+  <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>
 </div></header>
 <main id="view"></main>
 <div class="toast" id="toast">คัดลอกแล้ว</div>
@@ -207,23 +207,33 @@ function canonical(value) {
   return JSON.stringify(value ?? null);
 }
 
-async function connect() {
-  if (!window.ethereum) return alert("ไม่พบ wallet — ติดตั้ง MetaMask ก่อน");
+/** input + code ที่ถูกเซ็น — ต้องตรงกับ buildTypedData() ใน signature.js (string 0x… hex เป็นตัวพิมพ์เล็กทั้งค่าและ key) */
+function signingInput(tx) {
+  const lower = (v) => (typeof v === "string" && /^0x[0-9a-f]+$/i.test(v) ? v.toLowerCase() : v);
+  const deep = (v) => (Array.isArray(v) ? v.map(deep)
+    : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [lower(k), deep(x)])) : lower(v));
+  return canonical({ input: deep(tx.input ?? {}), code: tx.code ?? null });
+}
+
+/** rerender = false ตอนถูกเรียกระหว่างส่ง tx — วาดหน้าใหม่ตอนนั้นจะลบช่องผลลัพธ์ (#out) ทิ้ง */
+async function connect(rerender = true) {
+  if (!window.ethereum) throw new Error("ไม่พบ wallet — ติดตั้ง MetaMask ก่อน");
   const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
   wallet = account.toLowerCase();
-  render();
+  document.getElementById("wbtn").textContent = cut(wallet, 6, 4);
+  if (rerender) render();
 }
 
 /** เซ็นแล้วส่งขึ้น chain — คืนผลจาก /sendtx */
 async function sendTx(fields) {
-  if (!wallet) await connect();
+  if (!wallet) await connect(false);
   const info = await api("/genesis");
   const { nonce } = await api(`/nonce/${wallet}`);
   const tx = { chainId: info.chainId, action: "call", from: wallet, to: "", method: "", input: {},
     value: 0, nonce, gasLimit: 500000, gasPrice: 1, ...fields };
 
   const message = { action: tx.action, from: tx.from, to: tx.to, method: tx.method,
-    input: canonical({ input: tx.input, code: tx.code ?? null }),
+    input: signingInput(tx),
     value: tx.value, nonce: tx.nonce, gasLimit: tx.gasLimit, gasPrice: tx.gasPrice };
 
   const signature = await window.ethereum.request({
@@ -247,7 +257,7 @@ function interactPanel(program) {
   return `<div class="pad form">
     <div class="row">
       ${wallet ? `<span class="tag ok">เชื่อมต่อแล้ว</span> ${addr(wallet, cut(wallet))}`
-               : '<button class="btn solid" onclick="connect()">เชื่อมต่อ wallet</button>'}
+               : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>'}
       <span class="dim">ส่ง tx ต้องเชื่อมต่อ ส่วนการอ่านค่าไม่ต้อง</span>
     </div>
     <label>ฟังก์ชัน<select id="fn">${options || "<option>ไม่มีฟังก์ชันที่เรียกได้</option>"}</select></label>

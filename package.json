@@ -14,6 +14,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
+    "test:e2e": "node --test --test-timeout=120000 \"test/e2e/*.e2e.js\"",
     "demo": "node scripts/demo.js",
     "examples": "node scripts/examples.js",
     "start": "node server.js",
@@ -28,7 +29,8 @@
     "lmdb": "^3.0.0"
   },
   "devDependencies": {
-    "ethers": "^6.0.0"
+    "ethers": "^6.0.0",
+    "playwright": "^1.56.1"
   },
   "engines": {
     "node": ">=22.0.0 <23"
