@@ -1,6 +1,8 @@
 /**
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
+ *   TIMEOUT_MS=2000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms)
+ *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -11,20 +13,27 @@ import { DB, MemoryDB } from "./src/storage/db.js";
 import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
+import { RateLimiter } from "./src/node/ratelimit.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
 const BLOCK_MS = Number(process.env.BLOCK_MS ?? 3000);
+// โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
+// (ยังไม่มีแก๊สแบบนับขั้น ลูปที่ไม่แตะ DB จึงถูกหยุดได้ด้วยเวลานี้อย่างเดียว)
+const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 2000);
+const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
   chainId: Number(process.env.CHAIN_ID ?? 1),
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true, bigintValues: true,
-  feeRecipient: MINER, burnPercent: 50, timeoutMs: 30_000,
+  feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000,
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
 });
 export const mempool = new Mempool(vm);
+// POST ทุกตัวอาจรันโปรแกรม → จำกัดต่อ IP (ส่วน /sendtx ยังมี rate limit ต่อ address ใน mempool อีกชั้น)
+export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("genesis.json", "utf8")));
 
 let mining = false;
@@ -140,16 +149,19 @@ function handlePost(url, body) {
     try { verified = verifyTransaction({ tx, signature }); }
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
 
-    if (tx.action === "deploy") {
-      const reviewed = reviewProgram(tx.code);
-      if (!reviewed.ok) return { status: 400, body: { queued: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues } };
-    }
-    const simulation = simulate(vm, verified);
-    if (!simulation.ok) return { status: 400, body: { queued: false, hash: verified.hash, simulation } };
-
-    const queued = mempool.add({ tx, signature });
+    // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
+    const check = (item) => {
+      if (tx.action === "deploy") {
+        const reviewed = reviewProgram(tx.code);
+        if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
+      }
+      return simulate(vm, item);
+    };
+    const queued = mempool.add({ tx, signature }, { simulate: check });
+    if (queued.simulation?.issues) return { status: 400, body: { queued: false, error: queued.simulation.error, issues: queued.simulation.issues } };
+    if (queued.simulation && !queued.ok) return { status: 400, body: { queued: false, hash: verified.hash, simulation: queued.simulation } };
     if (!queued.ok) return { status: 400, body: { queued: false, ...queued } };
-    return { queued: true, hash: queued.hash, sender: queued.sender, simulation };
+    return { queued: true, hash: queued.hash, sender: queued.sender, simulation: queued.simulation };
   }
   if (url === "/query") {
     const result = vm.query(body ?? {});
@@ -175,6 +187,11 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
+      const ip = request.socket.remoteAddress ?? "unknown";
+      if (!postLimiter.allow(ip)) {
+        response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
+        return send(response, 429, { error: "เรียกถี่เกินกำหนด ลองใหม่ภายหลัง" });
+      }
       result = handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
     } else if (ROUTES[url.pathname]) {
       result = ROUTES[url.pathname](url.searchParams);
