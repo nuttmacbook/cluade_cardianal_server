@@ -424,7 +424,8 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 `runQuery()` ไม่ต้องต่อ wallet · `runWrite()` ต้องเซ็น แล้วเด้งไปหน้า tx หลัง 2.5 วิ
 
 ⚠️ `canonical()` ในหน้าเว็บ**ต้องตรงกับ `canonicalJson()` ใน VM เป๊ะ ๆ** (เรียง key, bigint → `"123n"`)
-ไม่ตรง = digest ไม่ตรง = ลายเซ็นใช้ไม่ได้ทุกใบ
+และ `signingInput()` ต้องทำ hex ใน input เป็นตัวพิมพ์เล็กแบบเดียวกับ `normalizeTransaction()` ใน `signature.js`
+ไม่ตรง = digest ไม่ตรง = ลายเซ็นใช้ไม่ได้ทุกใบ (`test/46-explorer-canonical.test.js` คุมอยู่)
 
 ---
 
@@ -485,6 +486,10 @@ code: function program() { function evil(p) { return process.env } return { evil
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
 
+`test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
+ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
+`46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorer.html` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
+
 **ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
 `scripts/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
 
@@ -511,8 +516,8 @@ code: function program() { function evil(p) { return process.env } return { evil
 6. **native / gas ยังเป็น `number`** ติดเพดาน 2^53 ส่วนค่าในโปรแกรมเป็น BigInt แล้ว — ทำพร้อมข้อ 2
 7. `/program/:a/groups` นับได้สูงสุด 5,000 key (hard-coded ใน `server.js`)
 8. แท็บ interactions / event ยังไม่มี pagination (ต่างจากแท็บ storage ที่มีแล้ว)
-9. **explorer ยังไม่เคยถูกเทสต์ในเบราว์เซอร์จริงหรือกับ MetaMask จริง** — เทสต์ที่ใช้ jsdom ถูกถอดออกเพราะค้าง
-   (`jsdom` ถูกเอาออกจาก dependencies แล้ว ถ้าจะเทสต์หน้าเว็บให้ใช้ Playwright)
+9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
+   แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
 10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
