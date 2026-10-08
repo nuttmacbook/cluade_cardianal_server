@@ -20,7 +20,8 @@
     "start": "node server.js",
     "seed": "node scripts/seed.js",
     "demo:market": "node scripts/demo-market.js",
-    "demo:chain": "node scripts/demo-chain.js"
+    "demo:chain": "node scripts/demo-chain.js",
+    "simulate": "node scripts/simulate-users.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
