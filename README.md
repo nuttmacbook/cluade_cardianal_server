@@ -27,14 +27,12 @@ src/
   node/
     mempool.js             คิว tx: rate limit, TTL, กัน tx ซ้ำ, เรียงตาม gasPrice
     sync.js                node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
-    routes.js              endpoint ครบชุด + ปิด block อัตโนมัติ
 
 server.js                  server จริง (node:http ไม่มี dependency เพิ่ม)
 public/explorer.html       หน้า explorer ไฟล์เดียว
 genesis.json               ยอดเงินตั้งต้น
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
 scripts/                   demo.js, examples.js
-client/                    ตัวอย่างฝั่งผู้ใช้ + SAFE-PATTERNS.md
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 test/                      44 ไฟล์ · 550 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน

@@ -1,5 +1,7 @@
 # Checkpoint 5
 
+> เอกสารนี้คือภาพ ณ Checkpoint 5 · ข้อมูลล่าสุด (ไฟล์, env, สิ่งที่ค้าง) อยู่ใน `HANDOFF.md` — ถ้าสองไฟล์ขัดกันให้ยึด `HANDOFF.md`
+
 สถานะ: เสถียร — เทสต์ 550 เคสผ่านทั้งหมด (`npm install` แล้ว `npm test`)
 
 | ไฟล์ | บรรทัด | sha256 (16 ตัวแรก) |
@@ -17,10 +19,13 @@ src/storage/db.js            DB (LMDB) + MemoryDB
 src/crypto/signature.js      EIP-712 บน secp256k1
 src/node/mempool.js          คิว tx: rate limit, TTL, เรียงตาม gasPrice
 src/node/sync.js             node ผู้อ่าน + syncRoute()
-src/node/routes.js           endpoint ครบชุด + startMiner()
+src/node/simulate.js         ลองรัน tx ก่อนรับเข้าคิว
+src/core/autoreview.js       ตรวจโค้ดด้วยบัญชีขาว
+server.js                    server จริง (node:http) + ปิด block อัตโนมัติ
+public/explorer.html         explorer ไฟล์เดียว
 index.js                     จุดเข้าเดียว
-scripts/                     demo.js, examples.js
-client/ program-sdk/ test/   ตัวอย่างผู้ใช้, ชุดเขียนโปรแกรม, เทสต์ 44 ไฟล์
+scripts/                     demo.js, examples.js, seed.js, demo-market.js, demo-chain.js
+program-sdk/ test/           ชุดเขียนโปรแกรมสำหรับคนนอก, เทสต์
 ```
 
 ## ตั้งค่าที่แนะนำสำหรับของจริง
@@ -50,7 +55,7 @@ const mempool = new Mempool(vm, { maxPerSender: 16, maxSize: 5000, ttlMs: 5 * 60
 | transfer | `vm.transfer` | โอน native ไม่เรียกโปรแกรม |
 | metadata | `vm.setMetadata` | namespace / description ของตัวเอง |
 
-## API ในโปรแกรม (16 ตัว)
+## API ในโปรแกรม (18 ตัว)
 
 ```
 readDB / writeDB / deleteDB / map
@@ -68,7 +73,7 @@ Date (เวลาของ block) / Math (random แบบ deterministic)
 ```
 pending:<id> | <id>:code | <id>:context | <id>:this | <id>:storage:<a>:<b>
 <addr>:nonce | <addr>:native:received|sended|consumed | <addr>:metadata:<field>
-namespace:<name> | <addr>:txn:<nonce>:<txhash>
+namespace:<name> | <addr>:txn:<nonce>:<txhash> | txto:<addr>:<n>:<idx>:<callIdx> | event:<program>:<name>:<n>:<idx>:<i>
 block:<n> | blockbody:<n> | blockundo:<n> | blockhash:<hash> | latestblock
 tx:<txhash> | sigtx:<digest> | history:<dbKey>:<n>
 0x000…000:native:received   (เงินที่ถูกเผา)
@@ -107,8 +112,8 @@ tx:<txhash> | sigtx:<digest> | history:<dbKey>:<n>
 - node ผู้อ่านพร้อมแล้ว (`sync.js`) เหลือ gas แบบนับขั้นเพื่อปิดช่อง `while(true)` ที่ไม่แตะ DB
 
 **งานครึ่งวันก่อนรันจริง**
-- ต่อ `mempool.js` / `server/routes.js` เข้ากับ API จริง
-- เปิด `recordHistory` + `bigintValues` แล้วล้าง DB เริ่มใหม่
+- ~~ต่อ `mempool.js` เข้ากับ API จริง~~ ทำแล้วใน `server.js`
+- ~~เปิด `recordHistory` + `bigintValues`~~ เปิดแล้วใน `server.js` (ล้าง DB เริ่มใหม่ถ้ามีข้อมูลเก่า)
 - ทดสอบลายเซ็นกับ MetaMask จริง
 
 **เมื่อถึงเวลา**
