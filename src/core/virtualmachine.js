@@ -80,14 +80,6 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *
  *  address (wallet / program): programUuid, sender, origin → ตัวพิมพ์เล็กเสมอ
  *    string รูปแบบ 0x… hex ใน input และใน key ของ storage → ตัวพิมพ์เล็ก (string อื่นไม่เปลี่ยน)
- *
- *  รูปแบบโปรแกรม
- *    export program = {
- *    function initialization(params) {}   // เรียกครั้งเดียวตอน init
- *    function helper() {}                  // internal
- *    function transfer(params) {}          // external
- *    export { transfer }
- *    }
  */
 
 // ============================================================================

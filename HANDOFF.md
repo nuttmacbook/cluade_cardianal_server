@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
-| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb` (+`ethers`, `jsdom` เป็น dev) |
+| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb` (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
 | เทสต์ | `npm test` → 550 เคส ใช้เวลา ~20 วินาที |
@@ -52,7 +52,6 @@ src/node/mempool.js            140        คิว tx: rate limit, TTL, กั�
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
-src/node/routes.js             172        ⚠️ ตัวอย่าง route สำหรับ Fastify — ไม่ได้ถูกใช้โดย server.js
 server.js                      193        server จริง (node:http) — ตัวที่ใช้งานอยู่
 public/explorer.html           414        explorer ทั้งหมดในไฟล์เดียว
 index.js                         9        จุดเข้าเดียวสำหรับ import เป็น library
@@ -75,12 +74,10 @@ index.js                         9        จุดเข้าเดียว�
 
 ### ส่วนที่มีสองชุดและต้องระวัง
 
-1. **route**: `server.js` (node:http, ของจริง) กับ `src/node/routes.js` (Fastify, ตัวอย่าง) — แก้ `server.js` เป็นหลัก
-   ถ้าจะเลิกใช้ Fastify ให้ลบ `routes.js` และเอา `routes`/`startMiner` ออกจาก `index.js`
-2. **canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorer.html` (`canonical`)
-   **ถ้าแก้ตัวใดตัวหนึ่งแล้วไม่แก้อีกตัว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด**
-3. **`client/`** กับ **`program-sdk/`** ซ้ำกันบางส่วน (`program-globals.js`, `SAFE-PATTERNS.md`)
-   `program-sdk/` คือชุดที่จะปล่อยให้คนนอก · `client/` เป็นของเก่า/ตัวอย่างในบ้าน
+**canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorer.html` (`canonical`)
+**ถ้าแก้ตัวใดตัวหนึ่งแล้วไม่แก้อีกตัว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด**
+
+(`src/node/routes.js` ตัวอย่าง Fastify และโฟลเดอร์ `client/` ที่ซ้ำกับ `program-sdk/` ถูกลบไปแล้ว — server จริงคือ `server.js` ตัวเดียว)
 
 ---
 
@@ -515,10 +512,8 @@ code: function program() { function evil(p) { return process.env } return { evil
 7. `/program/:a/groups` นับได้สูงสุด 5,000 key (hard-coded ใน `server.js`)
 8. แท็บ interactions / event ยังไม่มี pagination (ต่างจากแท็บ storage ที่มีแล้ว)
 9. **explorer ยังไม่เคยถูกเทสต์ในเบราว์เซอร์จริงหรือกับ MetaMask จริง** — เทสต์ที่ใช้ jsdom ถูกถอดออกเพราะค้าง
-   `jsdom` ยังค้างอยู่ใน dependencies ลบได้
+   (`jsdom` ถูกเอาออกจาก dependencies แล้ว ถ้าจะเทสต์หน้าเว็บให้ใช้ Playwright)
 10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
-11. `src/node/routes.js` (Fastify) ไม่ได้ถูกใช้ — ซ้ำซ้อนกับ `server.js`
-12. `client/` ซ้ำกับ `program-sdk/` บางส่วน
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
 **ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
