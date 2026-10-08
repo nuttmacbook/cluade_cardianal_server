@@ -1,0 +1,541 @@
+# HANDOFF — Program VM + Explorer
+
+เอกสารส่งต่อโปรเจคให้ agent หรือทีมอื่นทำงานต่อ อ่านไฟล์นี้ไฟล์เดียวแล้วทำงานต่อได้ทันที
+
+> **สรุป 30 วินาที**
+> blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
+> VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
+> มี server จริง (node:http) + explorer ไฟล์เดียว + ชุด SDK สำหรับคนเขียนโปรแกรม
+> เทสต์ 550 เคสผ่านหมด **แต่ยังไม่มี sandbox จริงและยังไม่มี gas แบบนับขั้น → ยังไม่ควรเปิดให้คนนอก deploy**
+
+| | |
+|---|---|
+| ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
+| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb` (+`ethers`, `jsdom` เป็น dev) |
+| โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
+| ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
+| เทสต์ | `npm test` → 550 เคส ใช้เวลา ~20 วินาที |
+
+---
+
+## 1. เริ่มต้นใน 2 นาที
+
+```bash
+npm install
+npm test                         # 550 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+
+npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
+node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
+node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
+```
+
+สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
+`npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
+
+env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID`
+ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
+ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
+`0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
+
+สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
+
+---
+
+## 2. แผนผังไฟล์ — แก้อะไรต้องไปไฟล์ไหน
+
+```
+src/core/virtualmachine.js   2,521 บรรทัด  ตรรกะทั้งหมดของ chain (ดูหัวข้อ 4)
+src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
+src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
+src/crypto/signature.js        214        EIP-712 + secp256k1
+src/node/mempool.js            140        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice
+src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
+src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
+src/node/routes.js             172        ⚠️ ตัวอย่าง route สำหรับ Fastify — ไม่ได้ถูกใช้โดย server.js
+server.js                      193        server จริง (node:http) — ตัวที่ใช้งานอยู่
+public/explorer.html           414        explorer ทั้งหมดในไฟล์เดียว
+index.js                         9        จุดเข้าเดียวสำหรับ import เป็น library
+```
+
+ทิศทางการพึ่งพาเป็นทางเดียวเสมอ **`node` → `crypto` → `core` → `storage`**
+`core` ไม่รู้จักลายเซ็น / HTTP / คิว · `storage` ไม่รู้ความหมายของ key — อย่าทำให้ทิศทางนี้พัง
+
+| อยากแก้เรื่อง | ไปที่ |
+|---|---|
+| ค่าแก๊ส, ตารางราคา | `DEFAULT_GAS` ท้ายหัวข้อ "ค่าที่ปรับบ่อย" ใน `virtualmachine.js` |
+| ค่าตั้งต้นของ VM | `DEFAULT_OPTIONS` ในไฟล์เดียวกัน |
+| ข้อความ error | `ERRORS` ในไฟล์เดียวกัน (ทุกข้อความรวมไว้ที่เดียว) |
+| รูปแบบ key ใน DB | กลุ่มฟังก์ชัน `*Key()` ประมาณบรรทัด 430–490 + `decodeDbKey()` |
+| โครงสร้างโปรแกรมที่ยอมรับ | `PROGRAM_WRAPPER_PATTERN` / `Compiler.parse` |
+| API ที่โปรแกรมเรียกได้ | `PROGRAM_API_NAMES` + `createProgramApi()` + `PROGRAM_API` ใน `autoreview.js` (**ต้องแก้ทั้ง 3 ที่**) |
+| กฎการตรวจโค้ด | `ALLOWED_NODES` / `ALLOWED_MEMBERS` / `BANNED_*` ใน `autoreview.js` |
+| endpoint | `ROUTES` + `DYNAMIC` + `handlePost` ใน `server.js` |
+| หน้าเว็บ | `public/explorer.html` |
+
+### ส่วนที่มีสองชุดและต้องระวัง
+
+1. **route**: `server.js` (node:http, ของจริง) กับ `src/node/routes.js` (Fastify, ตัวอย่าง) — แก้ `server.js` เป็นหลัก
+   ถ้าจะเลิกใช้ Fastify ให้ลบ `routes.js` และเอา `routes`/`startMiner` ออกจาก `index.js`
+2. **canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorer.html` (`canonical`)
+   **ถ้าแก้ตัวใดตัวหนึ่งแล้วไม่แก้อีกตัว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด**
+3. **`client/`** กับ **`program-sdk/`** ซ้ำกันบางส่วน (`program-globals.js`, `SAFE-PATTERNS.md`)
+   `program-sdk/` คือชุดที่จะปล่อยให้คนนอก · `client/` เป็นของเก่า/ตัวอย่างในบ้าน
+
+---
+
+## 3. โครงสร้างโปรแกรม (smart contract)
+
+โปรแกรมคือ **JavaScript ที่ valid ทั้งไฟล์ อยู่ใน scope เดียว** ส่งผ่าน API เป็น string ได้ตรง ๆ
+
+```js
+function program() {
+  function initialization(params) {       // รันครั้งเดียวตอน init — เรียกจากภายนอกไม่ได้เด็ดขาด
+    writeDB("owner", params.context.sender)
+    writeDB(map("balances", params.context.sender), params.input.supply)
+  }
+
+  function helper() {}                    // ไม่อยู่ใน return = internal
+
+  const onlyOwner = (fn) => (params) => { // modifier ใช้ได้ (const ที่มีค่าเป็นฟังก์ชัน)
+    if (readDB("owner") !== params.context.sender) throw new Error("ไม่ใช่เจ้าของ")
+    return fn(params)
+  }
+
+  const mint = onlyOwner(function (params) { /* … */ })
+
+  function transfer(params) {
+    const balance = readDB(map("balances", params.context.sender)) || 0n
+    if (balance < params.input.amount) throw new Error("ยอดไม่พอ")
+    // …
+    emit("Transfer", { to: params.input.to, amount: params.input.amount })
+    return true
+  }
+
+  return { transfer, mint }               // ← บรรทัดสุดท้าย: รายชื่อที่เรียกจากภายนอกได้
+}
+```
+
+กติกา
+- ชื่อฟังก์ชันครอบเป็นอะไรก็ได้ · `const program = () => { … }` ก็ได้ · **ห้าม `import` / `export`**
+- `return { … }` ต้องเป็น**บรรทัดสุดท้าย**ของฟังก์ชันครอบ (regex จับท้ายไฟล์)
+- ห้าม export `initialization`
+- `params` ที่ทุกฟังก์ชันได้รับ: `{ input, context: { sender, origin }, value, block: { timestamp } }`
+  (เลข block ไม่ได้อยู่ใน `params` — เรียก `BlockNumber()` แทน)
+
+### params / ค่าที่ส่งกลับ — โหมด BigInt
+
+เมื่อเปิด `bigintValues: true` (ซึ่ง `server.js` เปิดอยู่) **ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น**
+
+- `10` → error `numberNotAllowed` · ต้องเขียน `10n`
+- เก็บลง DB เป็น string `"123n"` แปลงกลับเป็น BigInt อัตโนมัติตอนอ่าน
+- ค่าที่ออกไปทาง JSON ของ API ก็เป็น `"123n"` → **ฝั่ง client ห้ามใช้ `Number()`** ใช้ `BigInt(v.slice(0,-1))`
+- ยกเว้น: ค่าของระบบ (gas, nonce, เลข block, timestamp, ยอด native) ยังเป็น `number` ปกติ
+  **นี่คือหนี้ทางเทคนิคที่รู้อยู่** — native ยังติดเพดาน 2^53 (ดูหัวข้อ 9)
+
+### API ในโปรแกรม (18 ตัว)
+
+```
+readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
+runProgram(target, functionName, input, { value })      เรียกโปรแกรมอื่น
+transferNative(to, amount)                              โอนเหรียญหลักจากโปรแกรม
+setMetadata(field, value) / emit(name, data)
+keccak256(value) / ecrecover(value, signature)
+ThisAddress() / ThisBalance() / BalanceOf(addr) / IsProgram(addr) / MetadataOf(addr, field) / BlockNumber()
+Date        เวลาของ block (Date.now() ได้ค่าเดียวกันทุก tx ใน block)
+Math        random() ผูกกับ tx hash → รันซ้ำได้ผลเดิม
+```
+
+**เพิ่ม API ใหม่ต้องแก้ 3 ที่**: `PROGRAM_API_NAMES`, `createProgramApi()` (ทั้งคู่ใน `virtualmachine.js`) และ `PROGRAM_API` ใน `autoreview.js` — ถ้าลืมที่สาม autoreview จะปฏิเสธโค้ดที่ใช้ API ใหม่ว่า "ไม่รู้จัก"
+
+---
+
+## 4. ภายใน virtualmachine.js
+
+4 class ในไฟล์เดียว:
+
+| class | หน้าที่ |
+|---|---|
+| `VirtualMachine` | เจ้าของ option / DB, เมธอดสาธารณะทั้งหมด, สร้าง Block และ Transaction |
+| `Block` | ชุด tx ที่จะ commit พร้อมกัน — คิดค่า hash, ประกอบ header/body, เขียน history |
+| `Transaction` | tx หนึ่งใบ: cache การอ่าน, สะสม writes, นับค่าแก๊ส, รองรับ rollback ของกิ่ง |
+| `Compiler` | แปลง string โค้ด → ฟังก์ชันที่เรียกได้ (`parse` + `compile`) |
+
+### Compiler ทำงานยังไง (ส่วนที่แก้พลาดง่ายที่สุด)
+
+`Compiler.parse()` ใช้ regex ไม่ใช่ AST:
+1. ปฏิเสธถ้าเจอ `import`/`export` ขึ้นต้นบรรทัด
+2. `PROGRAM_WRAPPER_PATTERN` ดึงเนื้อในฟังก์ชันครอบออกมาเป็น `body`
+3. `RETURN_EXPORT_PATTERN` จับ `return { … }` **ท้ายสุด** → รายชื่อ export แล้วตัดบรรทัดนั้นออกจาก body
+4. เก็บชื่อผู้สมัคร (`candidateNames`) จาก `function ชื่อ(` และ `const/let ชื่อ =` (ตัวหลังคือที่ทำให้ modifier ใช้ได้)
+
+แล้วรันด้วย
+```js
+new Function("api", `"use strict";\nconst { readDB, writeDB, … } = api;\n${body}\n;return { … };`)
+```
+→ API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) แต่ **global ของ host realm ยังเอื้อมถึง** (ดูข้อจำกัดข้อ 1 ในหัวข้อ 11)
+
+`isTopLevelDeclaration()` ใช้ trick ที่ควรรู้ก่อนแก้: ต่อ `let <ชื่อ>;` เข้าท้ายโค้ดแล้วคอมไพล์
+ถ้า V8 ฟ้อง `'<ชื่อ>' has already been declared` = ชื่อนั้นถูกประกาศในระดับบนสุดจริง — ตรวจได้โดยไม่ต้องรันโค้ด
+ผลลัพธ์ compile ถูก cache ตาม string โค้ด (`#cache`)
+
+### วงจรชีวิตของ tx หนึ่งใบ
+
+```
+POST /sendtx
+  → verifyTransaction()         ตรวจลายเซ็น → sender มาจากลายเซ็นเท่านั้น (ห้ามเชื่อ tx.from)
+  → reviewProgram(code)         เฉพาะ action deploy
+  → simulate(vm, verified)      รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400 ทันที
+  → mempool.add()               rate limit + โควตา + ลำดับ nonce
+  ⏱ ทุก BLOCK_MS (3 วินาที)
+  → vm.createBlock() → mempool.take(block) → block.commit()
+```
+
+`take()` เรียง tx ด้วย `sortPendingTransactions` (gasPrice มาก่อน) แล้วเช็ค `block.checkTransaction()` ทีละใบ
+
+### เมธอดที่น่าจะต้องใช้
+
+```js
+// tx 5 ประเภท
+vm.deploy({ programUuid?, code, context, initInput, value, metadata, nonce, gasLimit, gasPrice })
+vm.init({ programUuid, context, … })      // ทีมงานอนุมัติ → รัน initialization
+vm.reject({ programUuid, context, … })    // ปฏิเสธ + คืนเงิน
+vm.call({ programUuid, functionName, input, context, value, … })
+vm.transfer({ from, to, amount, … })
+vm.setMetadata({ metadata, context, … })
+
+// อ่านข้อมูล
+vm.read(dbKey) / vm.listKeys(prefix, opts) / vm.listEntries(prefix, opts)
+vm.getBlock(n) / vm.getBlockBody(n) / vm.getBlockByHash(h) / vm.listBlocks(opts) / vm.latestBlockNumber()
+vm.getTransaction(hashOrDigest)           // รับได้ทั้ง VM hash และ EIP-712 digest
+vm.listTransactionsOf(addr, opts)         // tx ที่ address ส่งออก
+vm.listTransactionsTo(addr, opts)         // ใครมา interact (รวม runProgram ซ้อนชั้น)
+vm.listEvents({ program, name, limit, start, reverse })
+vm.listProgramStorage(addr, opts) / vm.nativeBalanceOf(addr) / vm.getMetadata(addr) / vm.resolveNamespace(name)
+
+// query อ่านค่าโดยไม่เสียแก๊ส (readOnly: true, ไม่ commit)
+vm.query({ programUuid, functionName, input, context, value })
+
+// ย้อนหลัง / กู้ระบบ  (ต้องเปิด recordHistory)
+vm.stateAt(blockNumber, dbKey)            // ค่าของ key นั้น ณ block นั้น — อ่าน DB ≤3 ครั้ง
+vm.snapshotAt(blockNumber, prefix)        // ทั้ง prefix ณ block นั้น
+vm.replayBlock(n, { verify })             // รัน block ซ้ำจาก blockbody → receipt เต็ม + เทียบ hash
+vm.rebuildFrom(targetBlock, { verify })   // ย้อน state กลับไป block นั้นแล้วรันใหม่ทั้งหมด
+vm.getBlockUndo(n)                        // รายชื่อ key ที่ block นั้นแตะ
+
+// ตรวจก่อนรับ
+vm.checkTransaction({ from, nonce })      // → { ok, expectedNonce, reason }
+vm.applyGenesis(obj) / vm.genesisHash() / vm.checkGenesis(obj)
+```
+
+### Block
+
+```js
+const block = vm.createBlock({ timestamp, feeRecipient, number?, parentHash?, checkChain?, recordBlocks?, recordHistory? });
+block.call(request)                       // และ deploy / init / reject / transfer / setMetadata
+block.checkTransaction(request)           // เช็คโควตา + nonce ก่อนใส่จริง
+block.header() / block.body() / block.hashes() / block.txHashes()
+block.receipt({ number })                 // receipt ของทุก tx
+block.writes()                            // writes สุดท้าย (1 รายการต่อ key) + history
+block.commit()                            // เขียนทีเดียวผ่าน db.writeKeys (atomic)
+```
+
+### ค่าแก๊ส
+
+```
+call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · price 1
+```
+ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` ส่งมาเองได้
+เผาทิ้ง `burnPercent` (server ใช้ 50) → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient`
+
+### พฤติกรรมที่ล็อกไว้แล้ว (เทสต์คุมอยู่ — อย่าทำให้พัง)
+
+- ไม่มีอะไรลง DB จนกว่าจะ `commit()`
+- timeout / DB พัง / แก๊สหมด → ทั้ง tx ล้ม โปรแกรม `catch` ไม่ได้
+- `runProgram` ปลายทางล้มแล้วผู้เรียก catch → writes + event ของกิ่งนั้นถูกย้อน
+- **nonce ผิด / เกินโควตา / timeout → ไม่เข้า block ไม่กิน nonce ไม่เสียแก๊ส** (`accepted: false`)
+- **โปรแกรม throw / เงินไม่พอ → เข้า block กิน nonce เสียแก๊ส** (`status: "throw"`, `accepted: true`)
+- `parentHash` ต่อกันเสมอ · เลข block ซ้ำไม่ได้ · timestamp ต้องมากกว่า block ก่อน
+- tx ซ้ำ (hash เดิม) เข้าไม่ได้ · rejected tx ไม่เขียนทับ `tx:<hash>` ของใบที่สำเร็จ
+- เวลาและ `Math.random()` ผูกกับ block + tx hash → replay ได้ผลเดิมเป๊ะ
+- error ของ V8 ถูก sanitize ก่อนเก็บ (ข้อความจริงไปอยู่ใน `debug` ซึ่ง**ไม่ถูกบันทึกลง DB**) เพื่อให้ replay ตรง
+- address เป็นตัวพิมพ์เล็กเสมอ · `origin = sender` สำหรับ tx ของ user
+
+---
+
+## 5. key ใน DB ทั้งหมด
+
+LMDB เก็บเป็น key/value แบน key เป็น string คั่นด้วย `:` ค่าเป็น JSON
+
+### state ของ address / โปรแกรม
+```
+pending:<id>                        โปรแกรมที่ deploy แล้วรอ init  { code, context, initInput, metadata, value }
+<id>:code                           โค้ด (string escape แล้ว)
+<id>:context                        { sender, origin } ตอน deploy
+<id>:this                           address ของตัวเอง — ใช้เช็คว่า address นี้เป็นโปรแกรม
+<id>:storage:<a>:<b>:…              ข้อมูลของโปรแกรม (ส่วนที่ map() สร้าง, URI-encode ต่อ part)
+<addr>:nonce                        ลำดับ tx ถัดไป
+<addr>:native:received|sended|consumed    ตัวนับสะสม เพิ่มได้อย่างเดียว
+<addr>:metadata:<field>             namespace / description / type / creator / createdAt
+namespace:<name>                    ชื่อ → address (ห้ามซ้ำทั้งระบบ)
+```
+
+**ยอดคงเหลือ = received − sended − consumed** (`consumed` = ค่าแก๊สที่จ่ายไป) ไม่มี key ที่เก็บยอดสุทธิ
+ออกแบบให้ทุกค่าเพิ่มทางเดียว เพื่อให้ tx ที่ไม่เกี่ยวกันไม่แย่ง key เดียวกัน
+
+### chain / ดัชนี
+```
+block:<n>              header (เลข n เติมศูนย์ 12 หลัก ทุก key ที่มีเลข block)
+blockbody:<n>          tx ดิบทุกใบ [{ action, method, request }] → replay สร้าง state ใหม่ได้ทั้งหมด
+blockundo:<n>          รายชื่อ key ที่ block นั้นแตะ
+blockhash:<hash>       hash → เลข block
+latestblock            เลข block ล่าสุด
+tx:<vmhash>            { hash, digest, blockNumber, index, action, status, from, nonce }
+sigtx:<digest>         EIP-712 digest → vm hash (ทำให้ค้นด้วย hash ที่ user เซ็นได้)
+txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้"
+event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
+history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before }
+0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
+```
+
+`txto` ที่ `callIdx > 0` คือการถูกเรียกแบบซ้อนชั้นผ่าน `runProgram` และมี `depth` + `via` เพิ่ม
+(นี่คือสิ่งที่ทำให้ explorer เห็นว่าโทเคนถูก `transferFrom` จากตลาด)
+
+`history:` ออกแบบให้ `stateAt(block, key)` ทำงานด้วยการ seek ครั้งเดียว:
+หา `history:<key>:<n'>` ตัวแรกที่ `n' > block` ถ้าไม่มี = ค่าปัจจุบัน ถ้ามี = ค่า `before` ของตัวนั้น
+→ ไม่ต้องไล่ย้อนทีละ block **ข้อมูลของ chain เอง (block/ดัชนี) ไม่เก็บ history** เพราะสร้างใหม่จาก body ได้
+
+`maxKeySize: 1000` ตั้งไว้เพราะ `history:` ต้องเอา key ไปซ้อนเป็น prefix
+
+ดูขนาดจริง: block ที่มี 100 tx เต็ม ≈ 190 KB / 664 key
+
+---
+
+## 6. ลายเซ็น (EIP-712)
+
+```js
+import { signTransaction, verifyTransaction, buildTypedData, hashTypedData, addressOf } from "programvm/signature.js";
+
+const tx = { chainId: 1, action: "call", from, to: program, method: "transfer",
+             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: 1 };
+const signature = signTransaction(tx, privateKey);       // ฝั่ง wallet
+const { action, method, sender, hash, request } = verifyTransaction({ tx, signature });  // ฝั่ง server
+vm[method](request);
+```
+
+- domain `{ name: "ProgramVM", version: "1", chainId }`
+- field ที่เซ็น **ลำดับห้ามสลับ**: `action, from, to, method, input, value, nonce, gasLimit, gasPrice`
+- `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
+- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject`
+  → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata`)
+- `sender` มาจากการ recover ลายเซ็น**เท่านั้น** `tx.from` ใช้เทียบอย่างเดียว
+
+### tx มี 2 hash ค้นได้ทั้งคู่
+| | มาจาก | ใช้ |
+|---|---|---|
+| `hash` | VM คำนวณจาก request | key ใน DB, `txHashes` ของ block |
+| `digest` | EIP-712 ที่ user เซ็น | สิ่งที่ wallet แสดงให้ user เห็น — **ควรโชว์ตัวนี้เป็นเลขที่ tx** |
+
+`GET /tx/:x` และ `vm.getTransaction(x)` รับได้ทั้งสอง (ผ่าน `sigtx:`)
+
+---
+
+## 7. HTTP API (server.js)
+
+ทุก response เป็น JSON · BigInt ถูก serialize เป็น `"123n"` · CORS เปิดกว้าง (`*`)
+`limit` สูงสุด 200 (ค่าตั้งต้น 20) · **รูปแบบ response ละเอียดอยู่ใน `EXPLORER-SPEC.md` หัวข้อ 4**
+
+### อ่าน
+| endpoint | คืน |
+|---|---|
+| `GET /genesis` | `{ hash, chainId, latest, pending, burned }` — explorer poll ทุก 3 วิ |
+| `GET /blocks?before&limit` | header ย้อนหลัง |
+| `GET /block/latest` | header ล่าสุด |
+| `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
+| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` |
+| `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น |
+| `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
+| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events |
+| `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
+| `GET /program/:a/groups` | `{ total, groups: [{ name, count }] }` — ⚠️ นับได้สูงสุด 5,000 key |
+| `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
+| `GET /name/:ns` | namespace → address |
+| `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) |
+| `GET /events?program&name&limit` | event |
+| `GET /pending` | `{ size, transactions }` |
+| `GET /sync?from` | `[{ header, body }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
+| `GET /` หรือ `/explorer` | หน้า explorer |
+
+### เขียน
+```
+POST /sendtx   { tx, signature }
+  200 → { queued: true, hash, sender, simulation }
+  400 → { queued: false, error | issues | simulation }      ลายเซ็นผิด / autoreview ไม่ผ่าน / simulate ล้ม / คิวไม่รับ
+
+POST /query    { programUuid, functionName, input, context?, value? }
+  200 → { status: "success", result, gasUsed, events, calls, loadValues, afterValues, readOnly: true }
+  400 → ผลที่ status ไม่ใช่ success
+```
+
+`/sendtx` **คืน error ก่อนเข้าคิวเสมอ** ถ้า simulate ไม่ผ่าน (user จะไม่เสียเวลารอใบที่ล้มแน่ ๆ)
+`simulate` รันบน state ปัจจุบันของ DB ไม่นับผลของใบที่รออยู่ในคิว → เป็นการ "ประเมิน" ไม่ใช่รับประกัน
+
+---
+
+## 8. Explorer (`public/explorer.html`)
+
+ไฟล์เดียว 414 บรรทัด ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
+HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `GET /` ของ `server.js`
+
+### โครง
+- routing ด้วย `location.hash` → `render()` แยกไปที่ `home()` / `block(n)` / `tx(h)` / `address(a)`
+- helper เล็ก ๆ: `esc` `cut` `num` `when` `ago` `copy` `addr` `txLink` `panel` `table` `kv`
+  **`num()` คือตัวแปลง `"123n"` → ตัวเลขอ่านง่าย — ทุกค่าที่มาจากโปรแกรมต้องผ่านตัวนี้**
+- ธีม: น้ำเงินโหมดมืด `--bg:#070b16` `--panel:#0d1424` `--accent:#5b9dff`
+- responsive: class `hide-sm` ซ่อนคอลัมน์รองบนมือถือ, แถบแท็บเลื่อนได้แนวนอน
+- ทุก address / hash คลิกได้ + มีปุ่มคัดลอก (`⧉`)
+- poll `/genesis` ทุก 3 วินาที อัปเดตเลข block กับขนาดคิวที่หัวเว็บ
+
+### หน้า address / โปรแกรม — แท็บ
+`tabs(groups)` + `tabState[location.hash]` จำแท็บที่เลือกต่อ URL
+
+| แท็บ | เนื้อหา |
+|---|---|
+| ถูกเรียกใช้ / รับเข้า | `interactions` (รวมซ้อนชั้น มี badge "ซ้อนชั้น N") |
+| ส่งออก | `transactions` |
+| เรียกใช้โปรแกรม | ฟอร์ม interact — เลือกฟังก์ชัน, input JSON, value |
+| event | event ของโปรแกรม |
+| ข้อมูล | storage พร้อม chip จัดกลุ่ม + pagination |
+| โค้ด | source |
+
+### storage ที่มีหลายร้อย key
+`storageView` เก็บ state ไว้นอก render loop:
+1. `loadGroups()` → `/groups` ได้ chip พร้อมจำนวน (`balances 128`, `owner 1`)
+2. กด chip → `loadStorage(addr, prefix)` → `/storage?prefix=…&limit=50`
+3. "แสดงเพิ่ม 50 รายการ" → ส่ง `start=<next cursor>` แล้ว append
+
+**กับดักที่เคยเจอ 2 ข้อ — อย่าทำพัง:**
+- `loadStorage` เขียน `#storage-box` ตรง ๆ แต่ตอนโหลดครั้งแรก element ยังไม่มี → ต้องมี `if (box)` กัน
+- key ที่เป็น "ใบเดี่ยว" (`owner`, `supply`) ไม่มีลูก → ค้นด้วย prefix + `:` จะไม่เจอ
+  `server.js` จึง `vm.read(base + group)` ตรง ๆ ก่อนแล้วเอามาต่อหัว (`leaf` / `head` ใน route `/storage`)
+
+### wallet connect
+`eth_requestAccounts` → `eth_signTypedData_v4` → `POST /sendtx`
+`callableOf(code)` อ่านชื่อฟังก์ชันจาก `return { … }` ท้ายโค้ดด้วย regex
+`runQuery()` ไม่ต้องต่อ wallet · `runWrite()` ต้องเซ็น แล้วเด้งไปหน้า tx หลัง 2.5 วิ
+
+⚠️ `canonical()` ในหน้าเว็บ**ต้องตรงกับ `canonicalJson()` ใน VM เป๊ะ ๆ** (เรียง key, bigint → `"123n"`)
+ไม่ตรง = digest ไม่ตรง = ลายเซ็นใช้ไม่ได้ทุกใบ
+
+---
+
+## 9. autoreview — ตรวจโค้ดแทนคน
+
+`src/core/autoreview.js` อยู่ได้ด้วยตัวเอง (ต้องการแค่ `acorn`) ยกไปใช้ที่ไหนก็ได้
+
+```js
+import { reviewProgram } from "./src/core/autoreview.js";
+const r = reviewProgram(code);     // { ok, issues: [{ line, column, message }], message }
+```
+
+**ทำงานที่ `/sendtx` ก่อนเข้า VM** ไม่ใช่ข้างใน VM (VM มี option `autoReview` แยกไว้ด้วยแต่ `server.js` ไม่เปิด)
+
+หลักการคือ **บัญชีขาว** — อนุญาตเฉพาะที่ระบุ ที่เหลือปฏิเสธหมด จึงไม่ต้องไล่ห้าม `process` / `fetch` / `eval` ทีละตัว
+
+| ห้าม | เหตุผล |
+|---|---|
+| identifier ที่ไม่รู้จัก (`process`, `require`, `globalThis`, `fetch`, `eval`, `Function`) | ไม่อยู่ในบัญชีขาว |
+| `.constructor` `.prototype` `.__proto__` `.caller` `.arguments` `.stack` | ประตูหนีออกจาก sandbox / ไม่ deterministic |
+| `obj[key]` (computed member) | หลบการตรวจชื่อ property ได้ |
+| `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | ไม่ deterministic หรือหนีขอบเขต |
+| `new` ที่ไม่ใช่ `Error` / `Date` | — |
+| getter / setter / method ใน object literal | — |
+| `.repeat` `.padStart` `.padEnd` `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | สร้างข้อมูลใหญ่ด้วยคำสั่งเดียว หรือผลต่างกันตาม locale/engine |
+| ชื่อที่ขึ้นต้น `__` | — |
+| เมธอดของ global ที่ไม่อยู่ใน `ALLOWED_MEMBERS` | เช่น `Object.defineProperty`, `Math.sin` |
+
+ตรวจจริงผ่าน HTTP:
+```
+code: function program() { function evil(p) { return process.env } return { evil } }
+→ 400 { "error": "โค้ดไม่ผ่านการตรวจ",
+        "issues": [{ "line": 2, "message": "'process' ไม่รู้จัก (ใช้ได้เฉพาะ API ของ VM และตัวแปรที่ประกาศเอง)" }] }
+```
+
+**ข้อจำกัดที่ต้องเข้าใจ**: autoreview กันโค้ด *ที่เขียนตรง ๆ* ว่าอันตราย แต่ไม่ใช่ sandbox
+ถ้ามีช่องที่หลุด (`ALLOWED_NODES` เพิ่มชนิดใหม่โดยไม่คิด, ช่องของ V8 เอง) โปรแกรมยังเข้าถึง global ของ Node ได้
+และกัน `while(true)` ที่ไม่แตะ DB ไม่ได้ — มีแค่ `timeoutMs` คุมอยู่
+
+---
+
+## 10. เทสต์
+
+`test/` 44 ไฟล์ · 550 เคส · `node --test` ล้วน ไม่มี framework
+`test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
+
+ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
+
+| ไฟล์ | คุม |
+|---|---|
+| `09-determinism` | รันซ้ำได้ผลเดิม (เคยพังเพราะ `init` เขียน `createdAt` จากนาฬิกาจริง — ต้องส่ง `timestamp` คงที่) |
+| `26-signature` `27-metamask-compat` | EIP-712 ตรงกับ `ethers` |
+| `30-block-body-replay` `34-history-replay` | replay / stateAt / rebuildFrom |
+| `31-chain-safety` | parentHash, block ซ้ำ, timestamp ถอยหลัง, tx ซ้ำ |
+| `33-limits-admin` | โควตา tx ต่อ block / ต่อ user, สิทธิ์ init/reject |
+| `38-reentrancy` | reentrancy + pattern ปลอดภัย |
+| `40-bigint` | โหมด BigInt ทั้งระบบ |
+| `43-autoreview` | กฎทุกข้อของตัวตรวจ |
+| `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
+
+**ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
+`scripts/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
+
+---
+
+## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
+
+### บล็อกการเปิดให้คนนอก deploy
+1. **ไม่มี sandbox จริง** — โปรแกรมรันด้วย `new Function` ใน process เดียวกับ server
+   `node:vm` ถูกใช้แค่จับเวลา ไม่ได้ใช้แยก context จริง
+   autoreview ช่วยกรองได้มาก แต่เป็นชั้นเดียวและไม่ใช่ขอบเขตการรันจริง
+   ทางเลือกที่คุยไว้: QuickJS (wasm, แยกจริง + นับขั้นได้), worker thread (แยกครึ่ง), เข้ม autoreview ต่อ (ถูกสุด อ่อนสุด)
+2. **gas ยังไม่นับขั้น** — `while(true) {}` ที่ไม่แตะ DB กินได้เต็ม `timeoutMs` (30 วิ) โดยเสียแก๊สเท่าเดิม
+   ต้องแก้: ฉีดตัวนับเข้าไปใน loop/call ทุกจุด (หรือย้ายไป QuickJS ที่นับ instruction ได้)
+3. ค่ากลางในหน่วยความจำยังไม่จำกัด — `maxValueSize` กันเฉพาะตอนเขียน / return / emit
+
+### บล็อกการมี node ที่สอง
+4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) แต่รอข้อ 2 ก่อน
+   ไม่งั้น node สองตัวจะได้ผลต่างกันเมื่อเจอโปรแกรมที่วนนานต่างกัน
+
+### ค้างคาที่รู้อยู่
+5. **tx ที่ถูกปฏิเสธไม่เข้า block เลย** (nonce ผิด / โควตาเต็ม / timeout) → explorer แสดงไม่ได้ว่าเคยมีใบนี้
+   เป็นการตัดสินใจเชิงออกแบบ ต้องเลือกว่าจะเก็บเป็น "tx ที่ล้ม" ใน chain หรือเก็บ log นอก chain
+6. **native / gas ยังเป็น `number`** ติดเพดาน 2^53 ส่วนค่าในโปรแกรมเป็น BigInt แล้ว — ทำพร้อมข้อ 2
+7. `/program/:a/groups` นับได้สูงสุด 5,000 key (hard-coded ใน `server.js`)
+8. แท็บ interactions / event ยังไม่มี pagination (ต่างจากแท็บ storage ที่มีแล้ว)
+9. **explorer ยังไม่เคยถูกเทสต์ในเบราว์เซอร์จริงหรือกับ MetaMask จริง** — เทสต์ที่ใช้ jsdom ถูกถอดออกเพราะค้าง
+   `jsdom` ยังค้างอยู่ใน dependencies ลบได้
+10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
+11. `src/node/routes.js` (Fastify) ไม่ได้ถูกใช้ — ซ้ำซ้อนกับ `server.js`
+12. `client/` ซ้ำกับ `program-sdk/` บางส่วน
+
+### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
+**ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
+ของจริงต้องเซ็นฝั่ง client เท่านั้น (explorer ทำถูกแล้ว — ใช้ `eth_signTypedData_v4`)
+**private key ต้องไม่เดินทางไปถึง server เลย** ส่วน `/sendtx` ต้องรับแค่ `{ tx, signature }` (ซึ่งทำถูกอยู่แล้ว)
+
+### เมื่อถึงเวลา
+rollback เร็ว · merkle tree จริง · factory (โปรแกรมสร้างโปรแกรม) · การอัปเกรดโปรแกรม ·
+มาตรฐานโทเคน · ตัด history เก่า / snapshot · หน้า holders ใน explorer
+
+---
+
+## 12. เอกสารอื่นในโปรเจค
+
+| ไฟล์ | เนื้อหา |
+|---|---|
+| `README.md` | ภาพรวมสั้น + โครงสร้าง + วิธีเริ่ม |
+| `CHECKPOINT.md` | สถานะ, ค่าตั้งต้นที่แนะนำสำหรับ production, ตัวเลข performance ที่วัดจริง |
+| `EXPLORER-SPEC.md` | สเปคฝั่ง API consumer — **รูปแบบ response ของทุก endpoint อยู่ที่นี่** อ่านก่อนทำ frontend |
+| `program-sdk/README.md` | สำหรับคนนอกที่จะเขียนโปรแกรม + testkit |
+| `program-sdk/patterns/SAFE-PATTERNS.md` | pattern กัน reentrancy และข้อผิดพลาดที่เจอบ่อย |
+
+ลำดับการอ่านที่แนะนำ: **ไฟล์นี้** → `EXPLORER-SPEC.md` (ถ้าทำ frontend) หรือ comment หัว `virtualmachine.js` (ถ้าทำ VM) → `CHECKPOINT.md`

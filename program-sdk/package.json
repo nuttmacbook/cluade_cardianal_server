@@ -1,0 +1,13 @@
+{
+  "name": "my-vm-program",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "เขียนโปรแกรมสำหรับรันบน Program VM",
+  "scripts": {
+    "test": "node --test \"**/*.test.js\"",
+    "deploy": "node deploy.js hello-world/hello.program.js"
+  },
+  "dependencies": {
+    "programvm": "github:example-org/programvm#v1.0.0"
+  }
+}

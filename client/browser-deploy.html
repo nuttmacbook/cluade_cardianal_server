@@ -1,0 +1,55 @@
+<!-- deploy ด้วย MetaMask: ไม่มี private key ในโค้ดเลย -->
+<input type="file" id="file" accept=".js">
+<button id="deploy">Deploy</button>
+<pre id="log"></pre>
+
+<script type="module">
+const CHAIN_ID = 1;
+const DOMAIN = { name: "ProgramVM", version: "1", chainId: CHAIN_ID };
+const TYPES = {
+  Transaction: [
+    { name: "action", type: "string" }, { name: "from", type: "address" },
+    { name: "to", type: "string" }, { name: "method", type: "string" },
+    { name: "input", type: "string" }, { name: "value", type: "uint256" },
+    { name: "nonce", type: "uint256" }, { name: "gasLimit", type: "uint256" },
+    { name: "gasPrice", type: "uint256" },
+  ],
+};
+
+/** input + code ถูกรวมเป็น string เดียวแบบ canonical (เรียงชื่อ key) ก่อนเซ็น */
+const canonical = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+};
+
+document.getElementById("deploy").onclick = async () => {
+  const [from] = await ethereum.request({ method: "eth_requestAccounts" });
+  const code = await document.getElementById("file").files[0].text();   // อ่านไฟล์ดิบ ๆ
+
+  const { nonce } = await (await fetch(`/nonce/${from}`)).json();
+  const tx = {
+    chainId: CHAIN_ID, action: "deploy", from: from.toLowerCase(), to: "", method: "",
+    input: { supply: 1000 }, code, value: 0, nonce, gasLimit: 200000, gasPrice: 1,
+  };
+
+  const message = {
+    action: tx.action, from: tx.from, to: tx.to, method: tx.method,
+    input: canonical({ input: tx.input, code: tx.code }),   // ← โค้ดอยู่ในนี้
+    value: tx.value, nonce: tx.nonce, gasLimit: tx.gasLimit, gasPrice: tx.gasPrice,
+  };
+
+  const signature = await ethereum.request({
+    method: "eth_signTypedData_v4",
+    params: [from, JSON.stringify({ domain: DOMAIN, types: TYPES, primaryType: "Transaction", message })],
+  });
+
+  const result = await (await fetch("/sendtx", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tx, signature }),   // ส่ง tx เต็ม ๆ ไปด้วย server จะประกอบ message เองแล้วตรวจ
+  })).json();
+  document.getElementById("log").textContent = JSON.stringify(result, null, 2);
+};
+</script>

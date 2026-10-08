@@ -1,0 +1,39 @@
+{
+  "name": "programvm",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./core": "./src/core/virtualmachine.js",
+    "./db.js": "./src/storage/db.js",
+    "./signature.js": "./src/crypto/signature.js",
+    "./mempool.js": "./src/node/mempool.js",
+    "./sync.js": "./src/node/sync.js",
+    "./routes.js": "./src/node/routes.js",
+    "./autoreview.js": "./src/core/autoreview.js",
+    "./simulate.js": "./src/node/simulate.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "demo": "node scripts/demo.js",
+    "examples": "node scripts/examples.js",
+    "start": "node server.js",
+    "seed": "node scripts/seed.js",
+    "demo:market": "node scripts/demo-market.js",
+    "demo:chain": "node scripts/demo-chain.js"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.0.0",
+    "acorn": "^8.0.0",
+    "jsdom": "^30.1.1",
+    "lmdb": "^3.0.0"
+  },
+  "devDependencies": {
+    "ethers": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23"
+  },
+  "main": "index.js"
+}

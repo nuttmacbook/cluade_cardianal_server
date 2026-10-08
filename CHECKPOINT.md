@@ -1,0 +1,117 @@
+# Checkpoint 5
+
+สถานะ: เสถียร — เทสต์ 550 เคสผ่านทั้งหมด (`npm install` แล้ว `npm test`)
+
+| ไฟล์ | บรรทัด | sha256 (16 ตัวแรก) |
+|---|---|---|
+| virtualmachine.js | ~2,000 | ca8737c988554f0a |
+| db.js | 160 | 640235038481add0 |
+| signature.js | 200 | 0032ca5d2f5685bd |
+| mempool.js | 160 | 39c0ef6fe71850f7 |
+
+## ไฟล์ในระบบ
+
+```
+src/core/virtualmachine.js   VM, Transaction, Block, Compiler
+src/storage/db.js            DB (LMDB) + MemoryDB
+src/crypto/signature.js      EIP-712 บน secp256k1
+src/node/mempool.js          คิว tx: rate limit, TTL, เรียงตาม gasPrice
+src/node/sync.js             node ผู้อ่าน + syncRoute()
+src/node/routes.js           endpoint ครบชุด + startMiner()
+index.js                     จุดเข้าเดียว
+scripts/                     demo.js, examples.js
+client/ program-sdk/ test/   ตัวอย่างผู้ใช้, ชุดเขียนโปรแกรม, เทสต์ 44 ไฟล์
+```
+
+## ตั้งค่าที่แนะนำสำหรับของจริง
+
+```js
+const vm = new VirtualMachine(new DB("./data", { mapSize: 100 * 1024 ** 3 }), {
+  chainId: 1,
+  requireNonce: true, chargeGas: true, deriveProgramAddress: true, forceOriginFromSender: true,
+  recordTransactions: true, recordBlocks: true, recordHistory: true,
+  bigintValues: true,
+  gas: { call: 100, read: 100, write: 500, byte: 1, event: 200, hash: 100, recover: 3000, code: 10, price: 1 },
+  feeRecipient: MINER, burnPercent: 50,
+  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000,
+  maxCodeSize: 64 * 1024, maxKeySize: 1000, maxValueSize: 64 * 1024,
+  admins: [ADMIN],
+});
+const mempool = new Mempool(vm, { maxPerSender: 16, maxSize: 5000, ttlMs: 5 * 60_000, rateLimit: 60 });
+```
+
+## tx ที่มี
+
+| action | เมธอด | หมายเหตุ |
+|---|---|---|
+| call | `vm.call` | แนบ `value` ได้ |
+| deploy | `vm.deploy` | แนบ `value` / `metadata` ได้, address = keccak256(deployer + nonce) |
+| init / reject | `vm.init` / `vm.reject` | ทีมงานเซ็น, จำกัดด้วย `admins` |
+| transfer | `vm.transfer` | โอน native ไม่เรียกโปรแกรม |
+| metadata | `vm.setMetadata` | namespace / description ของตัวเอง |
+
+## API ในโปรแกรม (16 ตัว)
+
+```
+readDB / writeDB / deleteDB / map
+runProgram(target, method, input, { value })
+transferNative / setMetadata / emit
+keccak256 / ecrecover
+ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
+Date (เวลาของ block) / Math (random แบบ deterministic)
+```
+
+โครงสร้างโปรแกรม: ฟังก์ชันครอบตัวเดียว + `return { … }` ท้ายฟังก์ชัน รองรับ modifier (const ที่เป็นฟังก์ชัน)
+
+## key ใน DB
+
+```
+pending:<id> | <id>:code | <id>:context | <id>:this | <id>:storage:<a>:<b>
+<addr>:nonce | <addr>:native:received|sended|consumed | <addr>:metadata:<field>
+namespace:<name> | <addr>:txn:<nonce>:<txhash>
+block:<n> | blockbody:<n> | blockundo:<n> | blockhash:<hash> | latestblock
+tx:<txhash> | sigtx:<digest> | history:<dbKey>:<n>
+0x000…000:native:received   (เงินที่ถูกเผา)
+```
+
+## ตัวเลขที่วัดจริง
+
+| | |
+|---|---|
+| ปิด block 100 tx | 61ms |
+| `replayBlock` block เก่า | 67ms คงที่ทุกระยะ |
+| `stateAt` | อ่าน DB ≤3 ครั้ง |
+| `rebuildFrom(150)` จาก 300 block | 1.4s |
+| ขนาดต่อ block (100 tx เต็ม) | ~190 KB / 664 key |
+| deploy โค้ด 1.4 KB | 13,960 gas |
+| call ธรรมดา | ~1,300 gas |
+
+## พฤติกรรมที่ล็อกไว้
+
+- ไม่มีอะไรลง DB จนกว่าจะ commit
+- timeout / DB พัง / แก๊สหมด → ทั้ง tx ล้ม โปรแกรม catch ไม่ได้
+- `runProgram` ปลายทางล้มแล้ว catch → writes กับ event ของกิ่งนั้นถูกย้อน
+- nonce ผิด → ไม่เข้า block ไม่กิน nonce ไม่เสียค่าแก๊ส
+- tx ที่ล้มจากโปรแกรม → เข้า block กิน nonce และเสียค่าแก๊ส
+- เกินเพดาน block → `LIMIT_EXCEEDED` ไม่เข้า block
+- เวลาและ `Math.random()` ผูกกับ block + tx hash จึงรันซ้ำได้ผลเดิม
+- address เป็นตัวพิมพ์เล็กเสมอ, `origin = sender` สำหรับ tx ของ user
+
+## ⚠️ ที่ยังไม่ได้ทำ
+
+**ก่อนเปิดให้คนนอก deploy**
+- ไม่มี sandbox — โปรแกรมเข้าถึง global ของ Node ได้
+- ค่ากลางในหน่วยความจำยังไม่ถูกจำกัด (`maxValueSize` กันเฉพาะตอนเขียน / return / emit)
+
+**ก่อนมี node ที่สอง**
+- node ผู้อ่านพร้อมแล้ว (`sync.js`) เหลือ gas แบบนับขั้นเพื่อปิดช่อง `while(true)` ที่ไม่แตะ DB
+
+**งานครึ่งวันก่อนรันจริง**
+- ต่อ `mempool.js` / `server/routes.js` เข้ากับ API จริง
+- เปิด `recordHistory` + `bigintValues` แล้วล้าง DB เริ่มใหม่
+- ทดสอบลายเซ็นกับ MetaMask จริง
+
+**เมื่อถึงเวลา**
+- rollback เร็ว, merkle tree
+- factory (โปรแกรมสร้างโปรแกรม), การอัปเกรดโปรแกรม, มาตรฐานโทเคน
+- native เป็น BigInt (ทำพร้อม gas แบบนับขั้น), ตัด history เก่า / snapshot
