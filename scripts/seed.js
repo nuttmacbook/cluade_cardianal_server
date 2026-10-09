@@ -52,6 +52,22 @@ await confirm(await send({ action: "metadata", input: { namespace: "alice", desc
 await confirm(await send({ action: "call", to: address, method: "transfer", input: { to: "0x1234567890123456789012345678901234567890", amount: "7n" } }));
 await confirm(await send({ action: "call", to: address, method: "approve", input: { spender: BOB, amount: "300000000n" } }));
 
+// multiTransfer: 1 หน่วยเล็กสุดให้ 60 กระเป๋าใน tx เดียว (ผู้ถือเกิน 1 หน้า → ทดสอบการแบ่งหน้า)
+const holders = Array.from({ length: 60 }, (_, i) => `0x${(0xa000 + i).toString(16).padStart(40, "0")}`);
+await confirm(await send({ action: "call", to: address, method: "multiTransfer", gasLimit: 2_000_000,
+  input: { transfers: holders.map((to) => ({ to, amount: "1n" })) } }));
+
+// โปรแกรมที่เรียกโปรแกรมอื่น (trace 2 ชั้น พร้อม input / result ของแต่ละชั้น)
+const RELAY = `function program() {
+  function check(params) { return runProgram(params.input.token, "balanceOf", { who: params.input.who }) }
+  return { check }
+}`;
+const relayHash = await send({ action: "deploy", code: RELAY, input: {} });
+await confirm(relayHash);
+const relay = (await get(`/tx/${relayHash}/receipt`)).result?.programUuid;
+await confirm(await send({ action: "init", to: relay }));
+await confirm(await send({ action: "call", to: relay, method: "check", input: { token: address, who: BOB } }));
+
 console.log("\nยอดของ bob:", JSON.stringify((await post("/query", { programUuid: address, functionName: "balanceOf", input: { who: BOB } })).result));
 console.log("event:", JSON.stringify((await get(`/events?program=${address}`)).map((e) => e.name)));
 console.log("block ล่าสุด:", (await get("/block/latest")).number);

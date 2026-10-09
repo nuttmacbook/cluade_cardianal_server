@@ -55,9 +55,9 @@ export const TOKEN_PROGRAM = `function program() {
   function allowance(params) { return readDB(map("allowance", params.input.owner, params.input.spender)) || 0n }
 
   function move(from, to, amount) {
-    if (amount <= 0n) throw new Error("จำนวนต้องมากกว่า 0")
+    if (amount <= 0n) throw new Error("amount must be greater than 0")
     const balance = readDB(map("balances", from)) || 0n
-    if (balance < amount) throw new Error("ยอดไม่พอ")
+    if (balance < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance - amount)
     writeDB(map("balances", to), (readDB(map("balances", to)) || 0n) + amount)
     emit("Transfer", { from: from, to: to, amount: amount })
@@ -74,7 +74,7 @@ export const TOKEN_PROGRAM = `function program() {
       move(params.context.sender, item.to, item.amount)
       count = count + 1n
     }
-    if (count === 0n) throw new Error("ไม่มีรายการโอน")
+    if (count === 0n) throw new Error("no transfers")
     return count
   }
 
@@ -87,7 +87,7 @@ export const TOKEN_PROGRAM = `function program() {
   function transferFrom(params) {
     const spender = params.context.sender
     const allowed = readDB(map("allowance", params.input.from, spender)) || 0n
-    if (allowed < params.input.amount) throw new Error("วงเงินไม่พอ")
+    if (allowed < params.input.amount) throw new Error("insufficient allowance")
     writeDB(map("allowance", params.input.from, spender), allowed - params.input.amount)
     move(params.input.from, params.input.to, params.input.amount)
     return true

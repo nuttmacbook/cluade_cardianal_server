@@ -76,7 +76,7 @@ export function storageMap(vm, address, name, { limit = 50, start } = {}) {
 /** อ่านค่าของ key เดียว (ใส่ครบทุกชั้น) */
 export function storageGet(vm, address, parts) {
   if (!parts.length || parts.length > MAX_KEY_PARTS || parts.some((part) => part === "")) {
-    return { status: 400, body: { error: `ต้องใส่ key 1–${MAX_KEY_PARTS} ชั้น และห้ามเว้นว่าง` } };
+    return { status: 400, body: { error: `Enter 1–${MAX_KEY_PARTS} key parts, none empty` } };
   }
   const dbKey = storageKey(lower(address), parts.length === 1 ? parts[0] : map(...parts));
   const value = vm.read(dbKey);
@@ -193,7 +193,7 @@ const bigOf = (value) => { try { return BigInt(String(value ?? 0).replace(/n$/, 
 
 /** ผู้ถือ token: อ่านจาก balances:<address> ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย */
 export function pageHolders(vm, program, paging) {
-  if (!tokenInfo(vm, program)) return { status: 404, body: { error: "not a standard token" } };
+  if (!tokenInfo(vm, program)) return { status: 404, body: { error: "Not a standard token" } };
   const prefix = `${baseOf(program)}balances${SEP}`;
   const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
   const truncated = keys.length > PAGE_SCAN;
