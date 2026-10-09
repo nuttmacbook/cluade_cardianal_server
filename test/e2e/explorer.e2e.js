@@ -261,7 +261,7 @@ test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้น
       await page.setViewportSize({ width, height: 800 });
       for (const [hash, action] of pages) {
         await open(hash);
-        if (action) { if (action.includes("storage-panel")) await page.click("#view button.tab:has-text('Storage')"); await page.click(action); }
+        if (action) { if (action.includes("storage-panel")) await page.click("#view button.tab:has-text('Storage')"); await page.click(action); if (action.includes("data-tab")) await page.waitForSelector(`${action}.on`); }
         const problems = await page.evaluate(() => {
           const vw = document.documentElement.clientWidth;
           const found = [];

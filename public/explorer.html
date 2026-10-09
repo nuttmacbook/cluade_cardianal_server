@@ -383,9 +383,9 @@ const paged = (path, id, limit = 20) => api(`${path}${path.includes("?") ? "&" :
   .catch(() => ({ items: [], total: 0, page: 1, pages: 1, limit }));
 
 // ---------- home ----------
-async function home() {
+async function home(draw = el) {
   const [info, blocks, pending] = await Promise.all([api("/genesis"), paged("/blocks/page", "blocks", 15), api("/pending")]);
-  el(panel("Overview", `<div class="stats">
+  draw(panel("Overview", `<div class="stats">
       <div class="stat"><b>${num(info.latest ?? 0)}</b><span>Latest block</span></div>
       <div class="stat"><b>${num(pending.size)}</b><span>Pending txs</span></div>
       <div class="stat"><b>${num(info.burned)}</b><span>Burned coins</span></div>
@@ -402,12 +402,12 @@ async function home() {
 }
 
 // ---------- block ----------
-async function block(number) {
+async function block(number, draw = el) {
   const data = await api(`/block/${number}?full=1`);
   const header = data.header ?? data;
-  if (!header?.number) return el(panel("Block not found", `<div class="empty">${esc(data.error ?? "Block not found")}</div>`));
+  if (!header?.number) return draw(panel("Block not found", `<div class="empty">${esc(data.error ?? "Block not found")}</div>`));
   const txs = slicePage(data.transactions ?? [], pageOf("txs"));
-  el(panel(`<span class="ico blk"></span>Block #${header.number}`, kv([
+  draw(panel(`<span class="ico blk"></span>Block #${header.number}`, kv([
       ["Time", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>`],
       ["Hash", full(header.hash)],
       ["Parent block", header.parentHash ? `<span class="mono full"><a onclick="go('#block/${header.number - 1}')">${esc(header.parentHash)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">First block</span>'],
@@ -449,10 +449,10 @@ function traceView(trace) {
     }).join("")}</div>`;
 }
 
-async function tx(hash) {
+async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
-  if (r.error && !r.hash) return el(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
-  el(panel("Transaction", kv([
+  if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  draw(panel("Transaction", kv([
       ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
       ["Tx hash", full(r.hash)],
       r.digest && ["Signed hash", full(r.digest)],
@@ -730,7 +730,7 @@ function pickTab(id) {
 }
 
 // ---------- address / program ----------
-async function address(value) {
+async function address(value, draw = el) {
   const [data, tokens] = await Promise.all([api(`/address/${value}?limit=1`), api(`/address/${value}/tokens`).catch(() => [])]);
   const program = data.isProgram ? await api(`/program/${value}?limit=1`) : null;
   const [incoming, outgoing, events, holders] = await Promise.all([
@@ -790,7 +790,7 @@ async function address(value) {
   }
 
   const meta = data.metadata ?? {};
-  el(panel(data.isProgram ? "Program" : "Address", kv([
+  draw(panel(data.isProgram ? "Program" : "Address", kv([
       ["Address", `<span class="mono full">${icon(data.address, true)}${esc(data.address)}</span>${copy(data.address)}`],
       ["Information", `<div class="info" id="meta-info">${avatar(meta)}${meta.namespace ? `<span class="tag">${esc(meta.namespace)}</span>` : '<span class="dim">No name set</span>'}</div>`],
       meta.description && ["Description", esc(meta.description)],
@@ -878,15 +878,19 @@ async function search() {
 }
 
 /** soft = redraw in place (page / tab change) without the loading placeholder, keeping the scroll position */
+let renderSeq = 0;
 async function render(soft) {
   const [kind, value] = location.hash.slice(1).split("/");
   const y = scrollY;
+  const seq = ++renderSeq;
+  // only the newest render may draw: a slower earlier one (another page / tab / page number) is dropped
+  const draw = (html) => { if (seq === renderSeq) el(html); };
   if (!soft) document.getElementById("view").innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
-  if (kind === "block") await block(value);
-  else if (kind === "tx") await tx(value);
-  else if (kind === "address") await address(value);
-  else await home();
-  if (soft) scrollTo(0, y);
+  if (kind === "block") await block(value, draw);
+  else if (kind === "tx") await tx(value, draw);
+  else if (kind === "address") await address(value, draw);
+  else await home(draw);
+  if (soft && seq === renderSeq) scrollTo(0, y);
 }
 
 addEventListener("hashchange", () => render());
@@ -897,6 +901,6 @@ setInterval(async () => {
   document.getElementById("tick").textContent = `block ${info.latest ?? 0} · ${info.pending} pending`;
   document.getElementById("wbtn").textContent = wallet ? cut(wallet) : "Connect wallet";
   // refresh the home page only while it shows the newest blocks and nothing is being typed
-  if (!location.hash && pageOf("blocks") === 1 && !document.activeElement?.matches("#view input")) home();
+  if (!location.hash && pageOf("blocks") === 1 && !document.activeElement?.matches("#view input")) { const seq = renderSeq; home((html) => { if (seq === renderSeq && !location.hash) el(html); }); }
 }, 3000);
 </script></body></html>
