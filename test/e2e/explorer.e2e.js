@@ -199,7 +199,7 @@ test("ข้อมูลแบบ { } อยู่ในกรอบดำแบ
   await open(`#tx/${last.hash}`);
   assert.ok(await page.locator("#view pre.json").count() >= 2);
   const bg = await page.locator("#view pre.json").first().evaluate((el) => getComputedStyle(el).backgroundColor);
-  assert.equal(bg, "rgb(11, 15, 25)");
+  assert.equal(bg, "rgb(4, 5, 13)");
   assert.match(await page.locator("#view pre.json").first().textContent(), /^\{\n  "/);
   // แถว block มีไอคอนกล่อง + เลข block ของ tx
   const blockRow = page.locator("#view tr", { hasText: /^block/ }).first();
@@ -246,5 +246,47 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   const after = (await get(`/program/${address}/storage?prefix=balances`)).items;
   const bobAfter = after.find((s) => s.key[1] === BOB.toLowerCase()).value;
   assert.equal(BigInt(bobAfter.slice(0, -1)) - BigInt(bobBefore.slice(0, -1)), 7n);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้นจอหรือถูกตัด · มือถือแสดงตารางเป็นการ์ดที่มีชื่อคอลัมน์", async () => {
+  const { address: token } = await get("/name/mytoken");
+  const [last] = (await get(`/address/${ME}`)).transactions;
+  const pages = [["#", null], [`#tx/${last.hash}`, null], [`#address/${BOB}`, null],
+    [`#address/${token}`, "#view button.tab:has-text('เรียกใช้โปรแกรม')"], [`#address/${token}`, "#storage-panel [data-sub=storage]"]];
+  const original = page.viewportSize();
+  try {
+    for (const width of [180, 240, 360, 768, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const [hash, action] of pages) {
+        await open(hash);
+        if (action) { if (action.includes("storage-panel")) await page.click("#view button.tab:has-text('ข้อมูล')"); await page.click(action); }
+        const problems = await page.evaluate(() => {
+          const vw = document.documentElement.clientWidth;
+          const found = [];
+          if (document.documentElement.scrollWidth > vw + 1) found.push(`หน้าเลื่อนข้าง ${document.documentElement.scrollWidth}`);
+          const scrolls = (el) => { for (let a = el.parentElement; a; a = a.parentElement) {
+            if (/(auto|scroll)/.test(getComputedStyle(a).overflowX) && a.scrollWidth > a.clientWidth + 1) return true; } return false; };
+          for (const el of document.querySelectorAll("header *, #view *")) {
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            const box = el.closest(".panel, header")?.getBoundingClientRect() ?? { left: 0, right: vw };
+            if ((r.right > Math.min(box.right, vw) + 1 || r.left < Math.max(box.left, 0) - 1) && !scrolls(el)) found.push(`${el.tagName} "${el.textContent.trim().slice(0, 30)}"`);
+          }
+          return found.slice(0, 5);
+        });
+        assert.deepEqual(problems, [], `${width}px ${hash} ${action ?? ""}`);
+      }
+    }
+    // มือถือ: ตาราง block ล่าสุดเป็นการ์ด แต่ละช่องมีชื่อคอลัมน์
+    await page.setViewportSize({ width: 180, height: 800 });
+    await open("#");
+    const cell = page.locator("#view table.grid tbody td").first();
+    assert.equal(await cell.getAttribute("data-label"), "block");
+    assert.equal(await cell.evaluate((td) => getComputedStyle(td).display), "grid");
+    assert.equal(await page.locator("#view table.grid thead th").first().isVisible(), false);
+  } finally {
+    await page.setViewportSize(original ?? { width: 1280, height: 720 });
+  }
   assert.deepEqual(pageErrors, []);
 });

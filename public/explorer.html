@@ -1,62 +1,70 @@
 <!doctype html>
-<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070814">
 <title>Program VM Explorer</title>
 <style>
 :root{
-  --bg:#fafafa;--panel:#fff;--line:#e8e8ea;--text:#17171a;--dim:#71717a;--soft:#f4f4f5;
-  --ok:#15803d;--ok-bg:#f0fdf4;--bad:#b91c1c;--bad-bg:#fef2f2;--accent:#1d4ed8;--prog:#7c3aed;--radius:10px;
+  /* ธีมโทนมืด: ดำ · น้ำเงิน · ม่วง (ใช้ธีมเดียวทั้งโหมดสว่างและมืดของเครื่อง) */
+  color-scheme:dark;
+  --bg:#070814;--panel:#0e1026;--line:#22264a;--text:#e8e9ff;--dim:#8e93c2;--soft:#161a3a;
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
+  --grad:linear-gradient(135deg,#3b5bdb 0%,#7c3aed 100%);--radius:12px;
 }
-@media (prefers-color-scheme:dark){:root{
-  --bg:#070b16;--panel:#0d1424;--line:#1b2740;--text:#e6ecf8;--dim:#7e8ca8;--soft:#111b2e;
-  --ok:#4ade80;--ok-bg:#0d2019;--bad:#f87171;--bad-bg:#24131a;--accent:#5b9dff;--prog:#b794ff;}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 ui-sans-serif,system-ui,"Noto Sans Thai",sans-serif;-webkit-font-smoothing:antialiased}
-header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+html{background:var(--bg)}
+body{margin:0;min-width:0;background:radial-gradient(1200px 520px at 15% -10%,rgba(76,91,219,.20),transparent 60%),
+  radial-gradient(900px 480px at 100% 0%,rgba(124,58,237,.18),transparent 60%) no-repeat,var(--bg);color:var(--text);font:14px/1.65 ui-sans-serif,system-ui,"Noto Sans Thai",sans-serif;-webkit-font-smoothing:antialiased}
+header{position:sticky;top:0;z-index:5;background:rgba(7,8,20,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .bar{max-width:1120px;margin:0 auto;padding:14px 24px;display:flex;gap:18px;align-items:center}
-.brand{font-weight:650;letter-spacing:-.01em;cursor:pointer;white-space:nowrap}
+.brand{font-weight:700;letter-spacing:-.01em;cursor:pointer;white-space:nowrap;background:linear-gradient(90deg,#9db4ff,#c4a5ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand span{-webkit-text-fill-color:var(--dim)}
 .brand span{color:var(--dim);font-weight:400;font-size:12px;margin-left:8px}
-input{flex:1;min-width:180px;background:var(--panel);border:1px solid var(--line);color:var(--text);
+input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);color:var(--text);
   padding:9px 14px;border-radius:var(--radius);font:inherit;outline:none}
-input:focus{border-color:var(--accent)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(167,139,250,.18)}
 main{max-width:1120px;margin:0 auto;padding:24px;display:grid;gap:18px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;min-width:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.25)}
 .panel>h2{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--dim);margin:0;padding:14px 18px;border-bottom:1px solid var(--line);text-transform:uppercase}
-.panel>.body{padding:4px 0}.panel>.pad{padding:18px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line)}
+.panel>.body{padding:4px 0}.pad{padding:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:1px;background:var(--line)}
 .stat{background:var(--panel);padding:18px}
-.stat b{display:block;font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
+.stat b{display:block;font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.2;overflow-wrap:anywhere}
 .stat span{color:var(--dim);font-size:12px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th{text-align:left;padding:9px 18px;color:var(--dim);font-weight:500;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--line)}
 td{padding:11px 18px;border-bottom:1px solid var(--line)}
 tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--soft)}
 .kv td:first-child{color:var(--dim);width:190px;font-size:13px}
+.kv td{overflow-wrap:anywhere}
+/* ตารางกว้างกว่าจอ → เลื่อนในกรอบตาราง (ไม่ดันทั้งหน้า) */
+.twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 a{color:var(--accent);text-decoration:none;cursor:pointer}a:hover{text-decoration:underline}
 .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
 .dim{color:var(--dim)}
 .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:500;border:1px solid var(--line);background:var(--soft)}
+.tag{border-color:var(--line);background:var(--soft)}
 .tag.ok{color:var(--ok);background:var(--ok-bg);border-color:transparent}
 .tag.bad{color:var(--bad);background:var(--bad-bg);border-color:transparent}
 .copy{border:0;background:none;color:var(--dim);cursor:pointer;padding:0 4px;font-size:12px;opacity:.55}
 .copy:hover{opacity:1;color:var(--accent)}
-pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-size:12.5px;margin:0;
+pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;font-size:12.5px;margin:0;
   font-family:ui-monospace,Menlo,monospace;line-height:1.6}
-.trace{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;line-height:1.9}
+.trace{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;line-height:1.9;overflow-x:auto}
 .empty{padding:28px 18px;text-align:center;color:var(--dim);font-size:13px}
 .nav{display:flex;gap:14px;justify-content:space-between;color:var(--dim);font-size:13px}
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--grad);color:#fff;
   padding:9px 18px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
 .tabs{display:flex;gap:4px;padding:10px 14px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 .tab{border:0;background:none;color:var(--dim);font:inherit;font-size:13px;padding:7px 14px;border-radius:999px;cursor:pointer;white-space:nowrap}
 .tab:hover{background:var(--soft);color:var(--text)}
-.tab.on{background:var(--text);color:var(--bg);font-weight:500}
+.tab.on{background:var(--grad);color:#fff;font-weight:500;box-shadow:0 4px 14px rgba(124,58,237,.35)}
 .tab b{font-weight:500;opacity:.6;margin-left:5px}
 .btn{border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:13px;
   padding:8px 16px;border-radius:999px;cursor:pointer;white-space:nowrap}
-.btn:hover{border-color:var(--accent);color:var(--accent)}
-.btn.solid{background:var(--text);color:var(--bg);border-color:transparent;font-weight:500}
+.btn:hover{border-color:var(--accent-2);color:var(--accent-2)}
+.btn.solid{background:var(--grad);color:#fff;border-color:transparent;font-weight:500}
+.btn.solid:hover{color:#fff;filter:brightness(1.12)}
 .btn:disabled{opacity:.45;cursor:default}
 .form{display:grid;gap:12px}
 .form label{display:grid;gap:6px;font-size:12.5px;color:var(--dim)}
@@ -64,7 +72,7 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
   padding:9px 12px;border-radius:8px;font:inherit;font-size:13px;width:100%}
 .form textarea{font-family:ui-monospace,Menlo,monospace;min-height:84px;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.out{background:#0b0f19;color:#d8dee9;border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
+.out{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 /* ไอคอนหน้า address: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ = โปรแกรม (มีโค้ด) */
@@ -76,19 +84,19 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
 .sub{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
 #storage-panel .pad{padding:14px 18px}
 /* ข้อมูลแบบ { } ทุกจุด: กรอบดำ จัดรูปแบบเหมือน JSON (ดำทั้งโหมดสว่างและมืด) */
-.json{background:#0b0f19;color:#d8dee9;border:1px solid #1f2937;border-radius:8px;padding:10px 14px;margin:0;
+.json{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:0;
   font:12.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;text-align:left}
 td .json{min-width:220px}
-.json .k{color:#7dd3fc}.json .s{color:#a5e3a1}.json .n{color:#fbbf24}.json .b{color:#f0abfc}.json .p{color:#64748b}
+.json .k,.out .k{color:#93b4ff}.json .s,.out .s{color:#a5e3a1}.json .n,.out .n{color:#fbbf24}.json .b,.out .b{color:#d8b4fe}.json .p,.out .p{color:#5b6190}
 /* key หลายชั้น: badge ขอบสี่เหลี่ยมต่อกัน */
 .kchips{display:inline-flex;flex-wrap:wrap;gap:0;vertical-align:middle}
 .kchip{font:12px/1.5 ui-monospace,Menlo,monospace;border:1px solid var(--line);background:var(--soft);padding:1px 8px;margin-right:-1px;border-radius:0;white-space:nowrap}
 .kchip:first-child{border-radius:4px 0 0 4px;font-weight:600}.kchip:last-child{border-radius:0 4px 4px 0;margin-right:0}
 .kchip:only-child{border-radius:4px}
 /* ไอคอนแก๊ส (ไฟ) / block (กล่อง) */
-.ico.gas{opacity:1;color:#d97706;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E")}
+.ico.gas{opacity:1;color:#fbbf24;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E")}
 .ico.blk{opacity:1;color:var(--accent);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 3 7v10l9 5 9-5V7zm0 2.3L18.7 8 12 11.7 5.3 8zM5 9.7l6 3.3v6.6l-6-3.3zm8 9.9V13l6-3.3v6.6z'/%3E%3C/svg%3E")}
-.ico.coin{opacity:1;color:#ca8a04;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E")}
+.ico.coin{opacity:1;color:#facc15;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E")}
 .getkeys{display:grid;gap:8px;max-width:640px}
 .getkeys .krow{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:center}
 .getkeys .krow span{color:var(--dim);font-size:12.5px}
@@ -97,13 +105,56 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
   .brand{width:100%}
+  .bar input{flex:1 1 150px}
   main{padding:14px;gap:14px}
   td,th{padding:10px 12px}
   .kv td:first-child{width:118px;font-size:12px}
-  .stats{grid-template-columns:repeat(2,1fr)}
   .stat b{font-size:20px}
   table{font-size:13px}
-  .hide-sm{display:none}
+}
+/* มือถือ: ตารางข้อมูลกลายเป็นการ์ด แถวละใบ · ทุกคอลัมน์มีชื่อกำกับ (data-label มาจากหัวตาราง) */
+@media(max-width:640px){
+  header{position:static}
+  .tabs{flex-wrap:wrap;overflow:visible}
+  .btn{white-space:normal;text-align:center}
+  table.grid,table.grid>tbody{display:block}
+  table.grid>thead{display:block;border-bottom:1px solid var(--line)}
+  table.grid>thead>tr{display:block}
+  table.grid>thead th{display:none}
+  table.grid>thead th:has(select){display:block;border:0}
+  table.grid>thead th select{max-width:100%}
+  table.grid>tbody>tr{display:block;padding:10px 14px;border-bottom:1px solid var(--line)}
+  table.grid>tbody>tr:last-child{border-bottom:0}
+  table.grid>tbody>tr>td{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;align-items:baseline;padding:3px 0;border:0;text-align:left!important}
+  table.grid>tbody>tr>td::before{content:attr(data-label);color:var(--dim);font-size:11px;letter-spacing:.03em;text-transform:uppercase;overflow-wrap:anywhere}
+  table.grid>tbody>tr>td>.cv{min-width:0;overflow-wrap:anywhere}
+  td .json{min-width:0}
+  .kchip{white-space:normal;word-break:break-all}
+  .trace{white-space:pre-wrap;overflow-wrap:anywhere}
+  .kv,.kv>tbody{display:block}
+  .kv tr{display:block;padding:9px 14px;border-bottom:1px solid var(--line)}
+  .kv tr:last-child{border-bottom:0}
+  .kv td{display:block;padding:0;border:0}
+  .kv td:first-child{width:auto;font-size:11.5px;margin-bottom:2px}
+  .getkeys .krow{grid-template-columns:1fr;gap:4px}
+  .getkeys .krow>span:empty{display:none}
+}
+/* จอเล็กมาก (≥180px): ชื่อคอลัมน์อยู่บนค่า · ระยะขอบแคบลง */
+@media(max-width:360px){
+  body{font-size:13px}
+  .bar{padding:10px 8px;gap:8px}
+  .bar input,.bar .btn{flex:1 1 100%}
+  main{padding:8px;gap:10px}
+  .panel>h2{padding:12px}
+  .pad,#storage-panel .pad{padding:12px}
+  .sub,.tabs{padding:8px}
+  .tab{padding:6px 10px}
+  table.grid>tbody>tr{padding:10px 12px}
+  table.grid>tbody>tr>td{grid-template-columns:1fr;gap:0}
+  .kv tr{padding:8px 12px}
+  .stat{padding:12px}
+  .json,pre,.out{padding:8px 10px;font-size:11.5px}
+  .mono{font-size:11.5px}
 }
 </style></head><body>
 <header><div class="bar">
@@ -174,10 +225,27 @@ function copyText(value) {
 const panel = (title, inner, pad) => `<section class="panel"><h2>${title}</h2><div class="${pad ? "pad" : "body"}">${inner}</div></section>`;
 const more = (label, handler) => `<div class="pad" style="border-top:1px solid var(--line)"><button class="btn" onclick="${handler}">${label}</button></div>`;
 const table = (head, rows) => (rows.length
-  ? `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
+  ? `<div class="twrap"><table class="grid"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
   : '<div class="empty">ไม่มีข้อมูล</div>');
 const kv = (pairs) => `<table class="kv"><tbody>${pairs.filter(Boolean).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`;
-const el = (html) => { document.getElementById("view").innerHTML = html; decorate(); };
+const el = (html) => { const view = document.getElementById("view"); view.innerHTML = html; labelCells(view); decorate(); };
+
+/** มือถือแสดงตารางเป็นการ์ด: ใส่ชื่อคอลัมน์ให้ทุกช่อง (data-label) และห่อค่าไว้ใน .cv */
+function labelCells(root) {
+  for (const t of root.querySelectorAll("table.grid")) {
+    const labels = [...t.querySelectorAll(":scope>thead th")].map((th) => (th.querySelector("select") ? "key" : th.textContent.trim()));
+    for (const tr of t.querySelectorAll(":scope>tbody>tr")) {
+      [...tr.children].forEach((td, i) => {
+        td.dataset.label = labels[i] ?? "";
+        if (td.firstElementChild?.classList.contains("cv")) return;
+        const cv = document.createElement("div");
+        cv.className = "cv";
+        cv.append(...td.childNodes);
+        td.append(cv);
+      });
+    }
+  }
+}
 
 /** ใส่ไอคอนให้ทุก address ในหน้า: มีโค้ด = โปรแกรม (คอมพิวเตอร์) · ไม่มี = กระเป๋าผู้ใช้ (คน) */
 const kinds = new Map();   // address → true (โปรแกรม) · จำเฉพาะโปรแกรม เพราะกระเป๋าเปล่าอาจถูก deploy ทีหลัง
@@ -410,6 +478,7 @@ function drawStorage() {
   const box = document.getElementById("storage-panel");
   if (!box) return;
   box.innerHTML = storageInner();
+  labelCells(box);
   decorate(box);
 }
 
