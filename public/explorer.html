@@ -97,6 +97,21 @@ td .json{min-width:220px}
 .ico.gas{opacity:1;color:#fbbf24;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E")}
 .ico.blk{opacity:1;color:var(--accent);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 3 7v10l9 5 9-5V7zm0 2.3L18.7 8 12 11.7 5.3 8zM5 9.7l6 3.3v6.6l-6-3.3zm8 9.9V13l6-3.3v6.6z'/%3E%3C/svg%3E")}
 .ico.coin{opacity:1;color:#facc15;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E")}
+/* metadata: ไอคอนสี่เหลี่ยมจัตุรัส + ลิงก์ออกไปข้างนอก */
+.avatar{display:inline-grid;place-items:center;width:32px;height:32px;flex:0 0 auto;border-radius:8px;overflow:hidden;
+  background:var(--grad);color:#fff;font-weight:700;font-size:15px;vertical-align:middle;border:1px solid var(--line)}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.avatar.lg{width:56px;height:56px;border-radius:12px;font-size:24px}
+.info{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+.links{display:flex;gap:8px;flex-wrap:wrap}
+.ext{display:inline-flex;flex-wrap:wrap;column-gap:6px;align-items:baseline;border:1px solid var(--line);background:var(--soft);border-radius:14px;padding:3px 12px;
+  font-size:12.5px;max-width:100%}
+.ext span{min-width:0;overflow-wrap:anywhere}
+.ext:hover{border-color:var(--accent-2);text-decoration:none}
+.ext b{font-weight:500;color:var(--dim);white-space:nowrap}
+.btn.sm{padding:4px 12px;font-size:12px}
+.metaform{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start}
+@media(max-width:640px){.metaform{grid-template-columns:1fr}}
 .getkeys{display:grid;gap:8px;max-width:640px}
 .getkeys .krow{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:center}
 .getkeys .krow span{color:var(--dim);font-size:12.5px}
@@ -213,6 +228,27 @@ function units(raw, decimals) {
   return `${sign}${(abs / base).toLocaleString("en-US")}${frac ? "." + frac : ""}`;
 }
 const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
+/** ลิงก์ภายนอกที่ปลอดภัย: http(s) / mailto / tel · email ล้วนเป็น mailto: · อย่างอื่นไม่ทำเป็นลิงก์ */
+function safeHref(value) {
+  const v = String(value ?? "").trim();
+  if (/^https?:\/\/[^\s]+$/i.test(v) || /^(mailto|tel):[^\s]+$/i.test(v)) return v;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return `mailto:${v}`;
+  return null;
+}
+const isImage = (v) => typeof v === "string" && (/^https?:\/\/\S+$/i.test(v) || /^data:image\/(png|jpe?g|gif|webp|svg\+xml)[;,]/i.test(v));
+/** ไอคอนจาก metadata.icon: รูป (url / data:image) เป็นสี่เหลี่ยมจัตุรัส · ข้อความสั้น (emoji) อยู่ในกรอบ · ไม่มี = ตัวอักษรแรกของชื่อ */
+function avatar(meta = {}, big) {
+  const cls = `avatar${big ? " lg" : ""}`;
+  if (isImage(meta.icon)) return `<span class="${cls}"><img src="${attr(meta.icon)}" alt="icon" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.textContent='?'"></span>`;
+  const text = typeof meta.icon === "string" && meta.icon.trim() ? [...meta.icon.trim()].slice(0, 2).join("") : (meta.namespace?.[0] ?? "?").toUpperCase();
+  return `<span class="${cls}">${esc(text)}</span>`;
+}
+const extLink = (label, value) => {
+  const href = safeHref(value);
+  const shown = esc(String(value).replace(/^mailto:/i, ""));
+  return href ? `<a class="ext" href="${attr(href)}" target="_blank" rel="noopener noreferrer nofollow"><b>${label}</b><span>${shown} ↗</span></a>`
+    : `<span class="ext"><b>${label}</b><span>${shown}</span></span>`;
+};
 const plain = (v) => (v ? `<span class="mono">${esc(cut(v, 14, 10))}${copy(v)}</span>` : '<span class="dim">—</span>');
 const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${s === "success" ? "สำเร็จ" : s === "throw" ? "ล้มเหลว" : s}</span>`;
 
@@ -620,10 +656,14 @@ async function address(value) {
     groups.push({ id: "code", label: "โค้ด", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
   }
 
+  const meta = data.metadata ?? {};
+  if (metaEdit && metaEdit !== data.address) metaEdit = null;
   el(panel(data.isProgram ? "โปรแกรม" : "address", kv([
       ["address", `<span class="mono">${icon(data.address, true)}${esc(cut(data.address, 16, 10))}</span>${copy(data.address)}`],
-      data.metadata?.namespace && ["ชื่อ", `<span class="tag">${esc(data.metadata.namespace)}</span>`],
-      data.metadata?.description && ["คำอธิบาย", esc(data.metadata.description)],
+      ["information", `<div class="info" id="meta-info">${avatar(meta)}${meta.namespace ? `<span class="tag">${esc(meta.namespace)}</span>` : '<span class="dim">ยังไม่ได้ตั้งชื่อ</span>'}
+        ${program ? "" : `<button class="btn sm" onclick="editMeta('${data.address}')">${metaEdit === data.address ? "ปิดการแก้ไข" : "แก้ไข metadata"}</button>`}</div>`],
+      meta.description && ["คำอธิบาย", esc(meta.description)],
+      (meta.url || meta.contact) && ["links", `<div class="links">${meta.url ? extLink("url", meta.url) : ""}${meta.contact ? extLink("contact", meta.contact) : ""}</div>`],
       ["ยอดคงเหลือ", `<b>${num(data.native.balance)}</b>`],
       ["รับ / ส่ง / ค่าแก๊ส", `${num(data.native.received)} · ${num(data.native.sended)} · ${num(data.native.consumed)}`],
       ["nonce", data.nonce],
@@ -631,7 +671,70 @@ async function address(value) {
         <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],
       program && ["ผู้สร้าง", addr(data.metadata.creator)],
       program && ["สร้างเมื่อ", when(data.metadata.createdAt)],
-    ])) + tabs(groups));
+    ])) + (metaEdit === data.address && !program ? metaPanel(data) : "") + tabs(groups));
+}
+
+// ---------- ตั้ง metadata เอง (เซ็นด้วย wallet) ----------
+//   ตั้งได้เฉพาะ address ของ wallet ที่เชื่อมต่อ (VM ใช้ผู้เซ็นเป็น address เสมอ)
+//   โปรแกรมไม่มีปุ่มแก้ไข: metadata ของโปรแกรมตั้งจากโค้ด (setMetadata) เช่นส่ง icon / url มาตอน deploy token
+const META_FIELDS = [
+  ["icon", "icon (ลิงก์รูป https:// · data:image · หรือ emoji)", "https://…/logo.png"],
+  ["namespace", "namespace (ชื่อห้ามซ้ำ)", "mytoken"],
+  ["description", "คำอธิบาย", ""],
+  ["url", "url (เว็บไซต์)", "https://…"],
+  ["contact", "contact (อีเมล / ลิงก์ติดต่อ)", "team@example.com หรือ https://t.me/…"],
+];
+let metaEdit = null;
+let metaSource = {};
+function editMeta(address) { metaEdit = metaEdit === address ? null : address; render(); }
+
+function metaPanel(data) {
+  metaSource = data.metadata ?? {};
+  const isOwner = wallet === data.address;
+  return panel("แก้ไข metadata", `<div class="metaform">
+      <div id="meta-preview">${avatar(metaSource, true)}</div>
+      <div class="form">
+        <div class="row">${wallet ? `<span class="tag ${isOwner ? "ok" : "bad"}">${isOwner ? "แก้ไขได้" : "wallet นี้แก้ไม่ได้"}</span> ${addr(wallet)}`
+          : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>'}
+          <span class="dim">แก้ได้เฉพาะเจ้าของ address นี้ (wallet ที่เซ็น) · ช่องที่ลบให้ว่างจะถูกลบออก</span></div>
+        ${META_FIELDS.map(([field, label, hint]) => `<label>${label}<input id="meta-${field}" value="${attr(metaSource[field] ?? "")}" placeholder="${attr(hint)}"
+          spellcheck="false" ${field === "icon" ? 'oninput="previewIcon()"' : ""}></label>`).join("")}
+        <div class="row"><button class="btn solid" onclick="saveMeta('${data.address}')">บันทึก (ส่ง transaction)</button></div>
+        <div class="out" id="meta-out">ยังไม่ได้บันทึก</div>
+      </div></div>`, true);
+}
+
+function previewIcon() {
+  const icon = document.getElementById("meta-icon").value.trim();
+  document.getElementById("meta-preview").innerHTML = avatar({ ...metaSource, icon }, true);
+}
+
+/** ส่งเฉพาะช่องที่เปลี่ยน · ช่องที่ล้างให้ว่าง = null (ลบ) */
+function metaChanges() {
+  const changes = {};
+  for (const [field] of META_FIELDS) {
+    const value = document.getElementById(`meta-${field}`).value.trim();
+    const before = metaSource[field] ?? "";
+    if (value === String(before)) continue;
+    changes[field] = value === "" ? null : value;
+  }
+  return changes;
+}
+
+async function saveMeta(address) {
+  const out = (v) => { document.getElementById("meta-out").innerHTML = typeof v === "string" ? esc(v) : jsonHtml(v); };
+  try {
+    const changes = metaChanges();
+    if (!Object.keys(changes).length) return out("ไม่มีช่องที่เปลี่ยน");
+    if (changes.icon && !isImage(changes.icon) && [...changes.icon].length > 2) return out("icon ต้องเป็นลิงก์รูป https:// หรือ data:image/… (หรือ emoji 1 ตัว)");
+    for (const field of ["url", "contact"]) if (changes[field] && !safeHref(changes[field])) return out(`${field} ต้องเป็นลิงก์ https:// · mailto: · tel: หรืออีเมล`);
+    if (!wallet) await connect(false);
+    if (wallet !== address) return out("ตั้ง metadata ได้เฉพาะ address ของ wallet ที่เชื่อมต่อ");
+    out("รอเซ็นใน wallet…");
+    const result = await sendTx({ action: "metadata", input: changes });
+    out(result);
+    if (result.queued) setTimeout(() => { metaEdit = null; go(`#tx/${result.hash}`); }, 2500);
+  } catch (error) { out(`ผิดพลาด: ${error.message}`); }
 }
 
 async function search() {

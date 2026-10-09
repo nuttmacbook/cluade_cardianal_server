@@ -36,7 +36,10 @@ async function confirm(hash, timeoutMs = 30_000) {
   throw new Error(`รอ tx ${hash} นานเกินไป (server ปิด block อยู่หรือเปล่า)`);
 }
 
-const deployHash = await send({ action: "deploy", code: CODE, input: { name: "My Token", ticker: "MTK", decimals: "6n", supply: "1000000000000n", namespace: "mytoken" } });   // 1,000,000 MTK
+// ไอคอน + links ของโปรแกรมตั้งจากโค้ดตอน init (ผู้ใช้ตั้ง metadata ได้เฉพาะ address ของตัวเอง)
+const ICON = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b5bdb"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><text x="32" y="42" font-size="28" font-family="sans-serif" font-weight="700" text-anchor="middle" fill="#fff">M</text></svg>');
+const deployHash = await send({ action: "deploy", code: CODE, input: { name: "My Token", ticker: "MTK", decimals: "6n", supply: "1000000000000n", namespace: "mytoken",
+  icon: ICON, url: "https://mytoken.example", contact: "mailto:team@mytoken.example", description: "เหรียญตัวอย่าง 6 decimals" } });   // 1,000,000 MTK
 const deployed = await confirm(deployHash);
 const receipt = await get(`/tx/${deployHash}/receipt`);
 const address = receipt.result?.programUuid ?? receipt.result;

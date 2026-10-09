@@ -24,7 +24,7 @@ export const TOKEN_FUNCTIONS = ["name", "ticker", "decimals", "totalSupply", "ba
 export const TOKEN_EVENTS = ["Transfer", "Approval"];
 
 /**
- * โปรแกรม token ตามมาตรฐาน — input ตอน deploy: { name, ticker, decimals, supply, namespace? }
+ * โปรแกรม token ตามมาตรฐาน — input ตอน deploy: { name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }
  * supply เป็นหน่วยเล็กสุด (6 decimals + supply 1_000_000_000_000n = 1,000,000 เหรียญ)
  */
 export const TOKEN_PROGRAM = `function program() {
@@ -37,6 +37,11 @@ export const TOKEN_PROGRAM = `function program() {
     writeDB("owner", owner)
     writeDB(map("balances", owner), params.input.supply)
     if (params.input.namespace) setMetadata("namespace", params.input.namespace)
+    // metadata ของโปรแกรมตั้งได้จากโค้ดเท่านั้น: icon / url / contact / description ส่งมาตอน deploy ได้
+    if (params.input.icon) setMetadata("icon", params.input.icon)
+    if (params.input.url) setMetadata("url", params.input.url)
+    if (params.input.contact) setMetadata("contact", params.input.contact)
+    if (params.input.description) setMetadata("description", params.input.description)
     emit("Transfer", { from: "${ZERO_ADDRESS}", to: owner, amount: params.input.supply })
   }
 

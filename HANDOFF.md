@@ -440,9 +440,22 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 ### มาตรฐาน token (`src/standards/token.js` · เทสต์ `48-token-standard`)
 ฟังก์ชัน `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom` + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
 mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(code)` ตรวจจาก `return { … }` + `emit(` ในโค้ด
-`TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals)
+`TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals) · input ตอน deploy: `{ name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }`
 เหรียญที่ถือ = ดัชนี `holding:` (บอกว่าโปรแกรมไหน) + `balanceOf` ตอนเปิดหน้า (ยอดจริง) → ยอด 0 ไม่แสดง
 ไม่เก็บยอดสะสมจาก event เพราะ rebuild block แล้วจะนับซ้ำ · โปรแกรมที่ emit Transfer แต่ไม่ผ่านมาตรฐานไม่ถูกแสดง
+
+### metadata ในหน้า address / โปรแกรม
+| แถว | มาจาก | แสดง |
+|---|---|---|
+| information | `icon` + `namespace` | ไอคอนสี่เหลี่ยมจัตุรัส (`avatar()`: รูป https:// หรือ data:image · emoji · ไม่มี = ตัวแรกของชื่อ) + ชื่อ |
+| คำอธิบาย | `description` | ข้อความ |
+| links | `url` + `contact` | ลิงก์ออกไปข้างนอก (`target=_blank rel=noopener noreferrer nofollow`) |
+
+- `safeHref()` ยอมเฉพาะ `https?://` · `mailto:` · `tel:` และอีเมลล้วน (→ `mailto:`) อย่างอื่นแสดงเป็นข้อความ ไม่ทำลิงก์ (กัน `javascript:`)
+- ปุ่ม "แก้ไข metadata" มีเฉพาะหน้ากระเป๋า: ฟอร์ม icon / namespace / คำอธิบาย / url / contact → `sendTx({ action: "metadata", input })`
+  ส่งเฉพาะช่องที่เปลี่ยน · ช่องที่ล้างว่าง = `null` (ลบ) · wallet ต้องเป็น address ของหน้านั้น (VM ใช้ผู้เซ็นเป็น address เสมอ)
+- โปรแกรมไม่มีปุ่มแก้ไข (ผู้ใช้เลือกไว้ 9 ต.ค.: ตั้งได้เฉพาะของตัวเอง) → metadata ของโปรแกรมตั้งจากโค้ดด้วย `setMetadata`
+  `TOKEN_PROGRAM` รับ `icon` / `url` / `contact` / `description` ใน input ตอน deploy (seed ใช้ไอคอน data:image)
 
 ### ไอคอน address
 ทุก address ที่ผ่าน `addr()` มีไอคอน: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ (สีม่วง) = โปรแกรม
