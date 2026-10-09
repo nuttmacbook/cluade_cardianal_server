@@ -381,7 +381,7 @@ test("address ย่อเป็น 0x + 4 ตัวหน้า … 4 ตัว
   assert.deepEqual(pageErrors, []);
 });
 
-test("trace การเรียกโปรแกรม: แผนผังกล่องเลขลำดับเล็ก ๆ + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
+test("trace การเรียกโปรแกรม: แผนผังต้นไม้กล่องเลขลำดับเล็ก ๆ อยู่กึ่งกลาง + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
   let relay;
   for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
@@ -395,7 +395,9 @@ test("trace การเรียกโปรแกรม: แผนผังก
   const [w, h] = await nodes.nth(0).evaluate((n) => [n.offsetWidth, n.offsetHeight]);
   assert.ok(w <= 32 && h <= 32, `กล่องเล็ก (${w}×${h})`);
   const [a, b] = await Promise.all([nodes.nth(0).boundingBox(), nodes.nth(1).boundingBox()]);
-  assert.ok(b.x > a.x && b.y > a.y, "ชั้นที่ลึกกว่าอยู่ขวาและล่าง");
+  assert.ok(b.y > a.y && Math.abs(b.x - a.x) < 1, "ต้นไม้บนลงล่าง: call ที่ถูกเรียกอยู่ใต้ผู้เรียกตรงกลาง");
+  const [wrap, start] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#view .flow .node.start").boundingBox()]);
+  assert.ok(Math.abs(start.x + start.width / 2 - (wrap.x + wrap.width / 2)) <= 2, "แผนผังอยู่กึ่งกลางกรอบ");
   const [flow, side] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#call-detail").boundingBox()]);
   assert.ok(side.x >= flow.x + flow.width && side.y < flow.y + flow.height, "จอกว้าง: รายละเอียดอยู่ข้างขวาแผนผัง");
   assert.ok(Math.abs(side.height - flow.height) <= 1, `กล่องรายละเอียดสูงเท่าแผนผัง (${side.height} vs ${flow.height})`);

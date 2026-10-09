@@ -137,13 +137,13 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 /* diagram left, details right (stacked on narrow screens) · the detail card is exactly as tall as the diagram:
    contain:size keeps its content out of the row height, the row stretches it, longer details scroll inside */
 .calls-body{display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);grid-auto-rows:minmax(200px,auto);gap:16px;align-items:stretch}
-.calls-body .flowwrap{max-height:70vh;overflow:auto}
+.calls-body .flowwrap{max-height:70vh;overflow:auto;min-width:200px;display:flex;flex-direction:column}
 #call-detail{contain:size;overflow:auto;min-width:0;border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;background:var(--bg)}
 #call-detail.fail{border-left-color:var(--bad)}
 #call-detail .call{border:0;background:transparent}
-@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto}.calls-body .flowwrap{max-height:none;overflow-y:visible}
+@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto}.calls-body .flowwrap{max-height:none;overflow-y:visible;min-width:0}
   #call-detail{contain:none;overflow:visible}}
-.flow{position:relative}
+.flow{position:relative;margin:auto;flex:none}
 .flow .links{position:absolute;inset:0;pointer-events:none;overflow:visible}
 .flow .links path{fill:none;stroke:var(--accent-2);stroke-width:1.5;opacity:.7}
 .flow .links path.fail{stroke:var(--bad)}
@@ -450,11 +450,11 @@ async function block(number, draw = el) {
 }
 
 // ---------- transaction ----------
-//   Program calls = a small diagram: one numbered box per call (order only), arrows from caller to callee in the order the calls happened
+//   Program calls = a small top-down tree: one numbered box per call (order only), arrows from caller to callee
 //   clicking a box shows that call's details (input / value / result or error / gas) below the diagram
 let traceCalls = [];
 let traceNames = {};
-const flowSize = () => (innerWidth <= 260 ? { row: 30, indent: 22, box: 24, h: 24 } : { row: 34, indent: 30, box: 28, h: 28 });
+const flowSize = () => (innerWidth <= 260 ? { row: 40, slot: 32, box: 24, h: 24 } : { row: 46, slot: 40, box: 28, h: 28 });
 
 /** parent of each call = the nearest earlier call one level shallower (calls arrive in depth-first order) */
 function traceParents(trace) {
@@ -473,25 +473,36 @@ function traceView(trace, sender, names = {}) {
   const failed = trace.filter((c) => c.status !== "success").length;
   const deepest = Math.max(...trace.map((c) => c.depth));
   const parents = traceParents(trace);
-  const { row, indent, box, h } = flowSize();
-  // row 0 = the wallet that sent the tx · row i+1 = call i, shifted right by its depth + 1
-  const x = (depth) => (depth + 1) * indent;
-  const y = (rowNo) => rowNo * row + 6;
-  const width = x(deepest) + box + 6, height = y(trace.length) + h + 6;
+  const { row, slot, box, h } = flowSize();
+  // top-down tree: the tx sender on top, each call one level below its caller, siblings left → right in call order
+  // every leaf takes one column (slot); a caller sits centred over its first and last callee
+  const kids = trace.map(() => []), roots = [];
+  parents.forEach((p, i) => (p < 0 ? roots : kids[p]).push(i));
+  const col = new Array(trace.length);
+  let leaves = 0;
+  const place = (i) => {
+    for (const k of kids[i]) place(k);
+    col[i] = kids[i].length ? (col[kids[i][0]] + col[kids[i].at(-1)]) / 2 : leaves++;
+  };
+  roots.forEach(place);
+  const rootCol = roots.length ? (col[roots[0]] + col[roots.at(-1)]) / 2 : 0;
+  const x = (c) => c * slot + (slot - box) / 2 + 4;
+  const y = (level) => level * row + 6;
+  const width = Math.max(leaves, 1) * slot + 8, height = y(deepest + 1) + h + 6;
   const arrows = trace.map((c, i) => {
     const from = parents[i];
-    const px = (from < 0 ? 0 : x(trace[from].depth)) + box / 2, py = y(from + 1) + h;
-    const cy = y(i + 1) + h / 2;
-    return `<path class="${c.status === "success" ? "" : "fail"}" d="M${px} ${py} V${cy} H${x(c.depth) - 3}" marker-end="url(#arrow${c.status === "success" ? "" : "-bad"})"/>`;
+    const px = x(from < 0 ? rootCol : col[from]) + box / 2, py = y(from < 0 ? 0 : trace[from].depth + 1) + h;
+    const cx = x(col[i]) + box / 2, cy = y(c.depth + 1), mid = cy - (row - h) / 2;
+    return `<path class="${c.status === "success" ? "" : "fail"}" d="M${px} ${py} V${mid} H${cx} V${cy - 3}" marker-end="url(#arrow${c.status === "success" ? "" : "-bad"})"/>`;
   }).join("");
   const label = (a) => names[String(a).toLowerCase()] ?? a;
   const boxes = trace.map((c, i) => {
     const ok = c.status === "success";
     return `<button class="node ${ok ? "" : "fail"} ${i === 0 ? "on" : ""}" data-call="${i}" onclick="pickCall(${i})"
-        style="left:${x(c.depth)}px;top:${y(i + 1)}px;width:${box}px;height:${h}px"
+        style="left:${x(col[i])}px;top:${y(c.depth + 1)}px;width:${box}px;height:${h}px"
         title="#${i + 1} ${attr(label(c.program))}.${attr(c.method)}()${ok ? "" : " (failed)"}">${i + 1}</button>`;
   }).join("");
-  const start = `<div class="node start" style="left:0;top:${y(0)}px;width:${box}px;height:${h}px" title="Sent by ${attr(label(sender))}">tx</div>`;
+  const start = `<div class="node start" style="left:${x(rootCol)}px;top:${y(0)}px;width:${box}px;height:${h}px" title="Sent by ${attr(label(sender))}">tx</div>`;
   return `<div class="calls">
     <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""} · click a box for its details</div>
     <div class="calls-body">
