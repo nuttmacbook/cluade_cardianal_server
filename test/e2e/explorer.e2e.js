@@ -398,6 +398,7 @@ test("trace การเรียกโปรแกรม: แผนผังก
   assert.ok(b.x > a.x && b.y > a.y, "ชั้นที่ลึกกว่าอยู่ขวาและล่าง");
   const [flow, side] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#call-detail").boundingBox()]);
   assert.ok(side.x >= flow.x + flow.width && side.y < flow.y + flow.height, "จอกว้าง: รายละเอียดอยู่ข้างขวาแผนผัง");
+  assert.ok(Math.abs(side.height - flow.height) <= 1, `กล่องรายละเอียดสูงเท่าแผนผัง (${side.height} vs ${flow.height})`);
 
   // เริ่มต้นโชวรายละเอียดของ #1 เท่านั้น
   const detail = page.locator("#call-detail");

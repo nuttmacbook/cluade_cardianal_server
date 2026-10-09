@@ -134,11 +134,15 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .call-path{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-top:6px;min-width:0}
 /* call diagram: boxes placed by order (row) and depth (indent), svg arrows underneath */
 .flowwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
-/* diagram left, details right (stacked on narrow screens) · long diagrams scroll inside, the detail card stays in view */
-.calls-body{display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);gap:16px;align-items:start}
+/* diagram left, details right (stacked on narrow screens) · the detail card is exactly as tall as the diagram:
+   contain:size keeps its content out of the row height, the row stretches it, longer details scroll inside */
+.calls-body{display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);grid-auto-rows:minmax(200px,auto);gap:16px;align-items:stretch}
 .calls-body .flowwrap{max-height:70vh;overflow:auto}
-#call-detail{position:sticky;top:12px;min-width:0}
-@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr)}.calls-body .flowwrap{max-height:none;overflow-y:visible}#call-detail{position:static}}
+#call-detail{contain:size;overflow:auto;min-width:0;border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;background:var(--bg)}
+#call-detail.fail{border-left-color:var(--bad)}
+#call-detail .call{border:0;background:transparent}
+@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto}.calls-body .flowwrap{max-height:none;overflow-y:visible}
+  #call-detail{contain:none;overflow:visible}}
 .flow{position:relative}
 .flow .links{position:absolute;inset:0;pointer-events:none;overflow:visible}
 .flow .links path{fill:none;stroke:var(--accent-2);stroke-width:1.5;opacity:.7}
@@ -499,7 +503,7 @@ function traceView(trace, sender, names = {}) {
         </defs>${arrows}</svg>
       ${start}${boxes}
     </div></div>
-    <div id="call-detail">${callDetail(0)}</div>
+    <div id="call-detail" class="${trace[0]?.status === "success" ? "" : "fail"}">${callDetail(0)}</div>
     </div>
   </div>`;
 }
@@ -529,6 +533,8 @@ function pickCall(i) {
   for (const node of document.querySelectorAll(".flow .node[data-call]")) node.classList.toggle("on", Number(node.dataset.call) === i);
   const box = document.getElementById("call-detail");
   box.innerHTML = callDetail(i);
+  box.classList.toggle("fail", traceCalls[i]?.status !== "success");
+  box.scrollTop = 0;
   labelCells(box);
   decorate(box);
 }
