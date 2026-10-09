@@ -130,7 +130,24 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 /* call trace: one card per call, indented by depth */
 .calls{display:grid;gap:8px;padding:14px 18px}
 .calls-sum{font-size:12.5px;color:var(--dim)}
-.call{margin-left:calc(min(var(--d),8) * clamp(4px,2.5vw,24px));border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;padding:8px 12px;background:var(--bg);min-width:0}
+.call{border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;padding:10px 14px;background:var(--bg);min-width:0}
+.call-path{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-top:6px;min-width:0}
+/* call diagram: boxes placed by order (row) and depth (indent), svg arrows underneath */
+.flowwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+.flow{position:relative}
+.flow .links{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.flow .links path{fill:none;stroke:var(--accent-2);stroke-width:1.5;opacity:.7}
+.flow .links path.fail{stroke:var(--bad)}
+.flow .links .head{fill:var(--accent-2);stroke:none;opacity:1}.flow .links .head.bad{fill:var(--bad)}
+.node{position:absolute;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:4px 10px;text-align:left;
+  background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;color:var(--text);font:inherit;font-size:12.5px;line-height:1.35;cursor:pointer;overflow:hidden}
+.node:hover{border-color:var(--accent-2)}
+.node.fail{border-left-color:var(--bad)}
+.node.on{background:var(--soft);border-color:var(--accent-2);box-shadow:0 0 0 2px rgba(167,139,250,.35)}
+.node.start{cursor:default;border-left-color:var(--dim);background:transparent}
+.node .n-top,.node .n-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .n-sub{color:var(--dim);font-size:12px}
+.node .okc{color:var(--ok)}
 .call.fail{border-left-color:var(--bad)}
 .call-h{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;min-width:0}
 .call-h .mono{overflow-wrap:anywhere}
@@ -194,7 +211,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .stat{padding:12px}
   .json,pre,.out{padding:8px 10px;font-size:11.5px}
   .calls,.pager{padding:10px 12px}
-  .call{padding:6px 8px}
+  .call{padding:8px 10px}
   .mono{font-size:11.5px}
 }
 </style></head><body>
@@ -426,33 +443,101 @@ async function block(number, draw = el) {
 }
 
 // ---------- transaction ----------
-/** program calls: one card per call, indented by depth · caller → program.method(), input, value, result / error, gas */
-function traceView(trace) {
+//   Program calls = a small diagram: one box per call, arrows from caller to callee in the order the calls happened
+//   clicking a box shows that call's details (input / value / result or error / gas) below the diagram
+let traceCalls = [];
+let traceNames = {};
+const flowSize = () => (innerWidth <= 260 ? { row: 48, indent: 12, box: 132, h: 38 }
+  : innerWidth <= 420 ? { row: 52, indent: 20, box: 168, h: 40 } : { row: 58, indent: 34, box: 220, h: 44 });
+
+/** parent of each call = the nearest earlier call one level shallower (calls arrive in depth-first order) */
+function traceParents(trace) {
+  const stack = [];
+  return trace.map((c, i) => {
+    stack.length = c.depth;
+    const parent = c.depth ? stack[c.depth - 1] ?? -1 : -1;
+    stack[c.depth] = i;
+    return parent;
+  });
+}
+
+function traceView(trace, sender, names = {}) {
+  traceCalls = trace;
+  traceNames = names;
   const failed = trace.filter((c) => c.status !== "success").length;
   const deepest = Math.max(...trace.map((c) => c.depth));
-  const io = (label, inner) => `<div class="io"><span class="lbl">${label}</span>${inner}</div>`;
-  const empty = (v) => v === null || v === undefined || (isObject(v) && !Array.isArray(v) && !Object.keys(v).length);
+  const parents = traceParents(trace);
+  const { row, indent, box, h } = flowSize();
+  // row 0 = the wallet that sent the tx · row i+1 = call i, shifted right by its depth + 1
+  const x = (depth) => (depth + 1) * indent;
+  const y = (rowNo) => rowNo * row + 6;
+  const width = x(deepest) + box + 6, height = y(trace.length) + h + 6;
+  const arrows = trace.map((c, i) => {
+    const from = parents[i];
+    const px = (from < 0 ? 0 : x(trace[from].depth)) + 16, py = y(from + 1) + h;
+    const cy = y(i + 1) + h / 2;
+    return `<path class="${c.status === "success" ? "" : "fail"}" d="M${px} ${py} V${cy} H${x(c.depth) - 3}" marker-end="url(#arrow${c.status === "success" ? "" : "-bad"})"/>`;
+  }).join("");
+  const label = (a) => esc(names[String(a).toLowerCase()] ?? cut(a));
+  const boxes = trace.map((c, i) => {
+    const ok = c.status === "success";
+    return `<button class="node ${ok ? "" : "fail"} ${i === 0 ? "on" : ""}" data-call="${i}" onclick="pickCall(${i})"
+        style="left:${x(c.depth)}px;top:${y(i + 1)}px;width:${box}px;height:${h}px" title="${attr(c.program)}.${attr(c.method)}()">
+        <span class="n-top"><b>#${i + 1}</b> <span class="${ok ? "okc" : "bad"}">${ok ? "✓" : "✗"}</span> <span class="mono">${esc(c.method)}()</span></span>
+        <span class="n-sub">${icon(c.program)}${label(c.program)}</span></button>`;
+  }).join("");
+  const start = `<div class="node start" style="left:0;top:${y(0)}px;width:${box}px;height:${h}px">
+      <span class="n-top dim">Sent by</span><span class="n-sub">${icon(sender)}${label(sender)}</span></div>`;
   return `<div class="calls">
-    <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""}</div>
-    ${trace.map((c, i) => {
-      const ok = c.status === "success";
-      return `<div class="call ${ok ? "" : "fail"}" style="--d:${c.depth}">
-        <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span>
-          <span class="dim">#${i + 1} · depth ${c.depth}</span>
-          ${addr(c.from)}<span class="dim">→</span>${addr(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
-        <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
-          ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
-        <div class="call-b">
-          ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
-          ${ok ? io("Result", empty(c.result) ? `<span class="dim mono">${c.result === null || c.result === undefined ? "null" : "{}"}</span>` : anyValue(c.result))
-               : io("Error", `<span class="tag bad">${esc(c.error?.code ?? "ERROR")}</span> <span class="bad">${esc(c.error?.message ?? "")}</span>`)}
-        </div></div>`;
-    }).join("")}</div>`;
+    <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""} · click a box for its details</div>
+    <div class="flowwrap"><div class="flow" style="width:${width}px;height:${height}px">
+      <svg class="links" width="${width}" height="${height}" aria-hidden="true">
+        <defs>
+          <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="head"/></marker>
+          <marker id="arrow-bad" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="head bad"/></marker>
+        </defs>${arrows}</svg>
+      ${start}${boxes}
+    </div></div>
+    <div id="call-detail">${callDetail(0)}</div>
+  </div>`;
+}
+
+/** details of one call: caller → program.method(), gas, value, origin, input, result or error */
+function callDetail(i) {
+  const c = traceCalls[i];
+  if (!c) return "";
+  const ok = c.status === "success";
+  const io = (lbl, inner) => `<div class="io"><span class="lbl">${lbl}</span>${inner}</div>`;
+  const empty = (v) => v === null || v === undefined || (isObject(v) && !Array.isArray(v) && !Object.keys(v).length);
+  const name = (a) => (traceNames[String(a).toLowerCase()] ? ` <span class="dim">(${esc(traceNames[String(a).toLowerCase()])})</span>` : "");
+  return `<div class="call ${ok ? "" : "fail"}">
+    <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
+      <b>Call #${i + 1}</b><span class="dim">depth ${c.depth}</span></div>
+    <div class="call-path">${addr(c.from)}${name(c.from)} <span class="dim">→</span> ${addr(c.program)}${name(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
+    <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
+      ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
+    <div class="call-b">
+      ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
+      ${ok ? io("Result", empty(c.result) ? `<span class="dim mono">${c.result === null || c.result === undefined ? "null" : "{}"}</span>` : anyValue(c.result))
+           : io("Error", `<span class="tag bad">${esc(c.error?.code ?? "ERROR")}</span> <span class="bad">${esc(c.error?.message ?? "")}</span>`)}
+    </div></div>`;
+}
+
+function pickCall(i) {
+  for (const node of document.querySelectorAll(".flow .node[data-call]")) node.classList.toggle("on", Number(node.dataset.call) === i);
+  const box = document.getElementById("call-detail");
+  box.innerHTML = callDetail(i);
+  labelCells(box);
+  decorate(box);
 }
 
 async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
   if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  // namespace of every address in the diagram (box labels read better as names)
+  const names = {};
+  const inTrace = [...new Set((r.trace ?? []).flatMap((c) => [c.program, c.from]).concat(r.from ?? []).map((a) => String(a).toLowerCase()))].slice(0, 30);
+  await Promise.all(inTrace.map((a) => api(`/address/${a}?limit=1`).then((d) => { if (d.metadata?.namespace) names[a] = d.metadata.namespace; }).catch(() => {})));
   draw(panel("Transaction", kv([
       ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
       ["Tx hash", full(r.hash)],
@@ -469,7 +554,7 @@ async function tx(hash, draw = el) {
       ["Result", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
     ]))
     + (r.input && Object.keys(r.input).length ? panel("Input", json(r.input), true) : "")
-    + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace)) : "")
+    + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace, r.from, names)) : "")
     + (r.events?.length ? panel(`Events (${r.events.length})`, table(["Name", "Program", "Data"], r.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${addr(e.program)}</td>
          <td>${json(e.data)}</td></tr>`))) : "")

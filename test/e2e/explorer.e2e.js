@@ -381,17 +381,27 @@ test("address ย่อเป็น 0x + 4 ตัวหน้า … 4 ตัว
   assert.deepEqual(pageErrors, []);
 });
 
-test("trace การเรียกโปรแกรม: ทุกชั้นมี caller → program.method, input, result, gas", async () => {
+test("trace การเรียกโปรแกรม: แผนผังกล่อง + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
   let relay;
   for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
   }
   await open(`#tx/${relay.hash}`);
-  const calls = page.locator("#view .call");
-  assert.equal(await calls.count(), 2);
-  assert.match(await calls.nth(0).textContent(), /depth 0[\s\S]*\.check\(\)[\s\S]*Gas[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
-  assert.match(await calls.nth(1).textContent(), /depth 1[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
-  const [a, b] = await Promise.all([calls.nth(0).boundingBox(), calls.nth(1).boundingBox()]);
-  assert.ok(b.x > a.x, "ชั้นที่ลึกกว่าเยื้องเข้าไป");
+  const nodes = page.locator("#view .flow .node[data-call]");
+  assert.equal(await nodes.count(), 2);
+  assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // กล่องผู้ส่ง tx
+  assert.equal(await page.locator("#view .flow svg path[marker-end]").count(), 2);     // ลูกศร ผู้ส่ง→#1 และ #1→#2
+  assert.match(await nodes.nth(0).textContent(), /#1[\s\S]*check\(\)/);
+  assert.match(await nodes.nth(1).textContent(), /#2[\s\S]*balanceOf\(\)[\s\S]*mytoken/); // ชื่อ namespace แทน address
+  const [a, b] = await Promise.all([nodes.nth(0).boundingBox(), nodes.nth(1).boundingBox()]);
+  assert.ok(b.x > a.x && b.y > a.y, "ชั้นที่ลึกกว่าอยู่ขวาและล่าง");
+
+  // เริ่มต้นโชวรายละเอียดของ #1 เท่านั้น
+  const detail = page.locator("#call-detail");
+  assert.equal(await page.locator("#view .call").count(), 1);
+  assert.match(await detail.textContent(), /Call #1[\s\S]*\.check\(\)[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
+  await nodes.nth(1).click();
+  assert.match(await detail.textContent(), /Call #2[\s\S]*depth 1[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
+  assert.equal(await page.locator("#view .flow .node.on").getAttribute("data-call"), "1");
   assert.deepEqual(pageErrors, []);
 });
