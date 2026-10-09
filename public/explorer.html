@@ -130,7 +130,31 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 /* call trace: one card per call, indented by depth */
 .calls{display:grid;gap:8px;padding:14px 18px}
 .calls-sum{font-size:12.5px;color:var(--dim)}
-.call{margin-left:calc(min(var(--d),8) * clamp(4px,2.5vw,24px));border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;padding:8px 12px;background:var(--bg);min-width:0}
+.call{border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;padding:10px 14px;background:var(--bg);min-width:0}
+.call-path{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-top:6px;min-width:0}
+/* call diagram: boxes placed by order (row) and depth (indent), svg arrows underneath */
+.flowwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+/* diagram left, details right (stacked on narrow screens) · the detail card is exactly as tall as the diagram:
+   contain:size keeps its content out of the row height, the row stretches it, longer details scroll inside */
+.calls-body{display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);grid-auto-rows:minmax(200px,auto);gap:16px;align-items:stretch}
+.calls-body .flowwrap{max-height:70vh;overflow:auto;min-width:200px;display:flex;flex-direction:column}
+#call-detail{contain:size;overflow:auto;min-width:0;border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;background:var(--bg)}
+#call-detail.fail{border-left-color:var(--bad)}
+#call-detail .call{border:0;background:transparent}
+@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto}.calls-body .flowwrap{max-height:none;overflow-y:visible;min-width:0}
+  #call-detail{contain:none;overflow:visible}}
+.flow{position:relative;margin:auto;flex:none}
+.flow .links{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.flow .links path{fill:none;stroke:var(--accent-2);stroke-width:1.5;opacity:.7}
+.flow .links path.fail{stroke:var(--bad)}
+.flow .links .head{fill:var(--accent-2);stroke:none;opacity:1}.flow .links .head.bad{fill:var(--bad)}
+.node{position:absolute;display:flex;align-items:center;justify-content:center;padding:0;
+  background:var(--panel);border:1.5px solid var(--accent-2);border-radius:7px;color:var(--text);font:inherit;font-size:12.5px;font-weight:600;line-height:1;cursor:pointer}
+.node:hover{background:var(--soft)}
+.node.fail{border-color:var(--bad);color:var(--bad)}
+.node.on{background:var(--accent-2);border-color:var(--accent-2);color:#fff;box-shadow:0 0 0 3px rgba(167,139,250,.3)}
+.node.fail.on{background:var(--bad);border-color:var(--bad)}
+.node.start{cursor:default;border-color:var(--dim);border-style:dashed;background:transparent;color:var(--dim);font-weight:500;font-size:11px}
 .call.fail{border-left-color:var(--bad)}
 .call-h{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;min-width:0}
 .call-h .mono{overflow-wrap:anywhere}
@@ -194,7 +218,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .stat{padding:12px}
   .json,pre,.out{padding:8px 10px;font-size:11.5px}
   .calls,.pager{padding:10px 12px}
-  .call{padding:6px 8px}
+  .call{padding:8px 10px}
   .mono{font-size:11.5px}
 }
 </style></head><body>
@@ -426,33 +450,113 @@ async function block(number, draw = el) {
 }
 
 // ---------- transaction ----------
-/** program calls: one card per call, indented by depth · caller → program.method(), input, value, result / error, gas */
-function traceView(trace) {
+//   Program calls = a small top-down tree: one numbered box per call (order only), arrows from caller to callee
+//   clicking a box shows that call's details (input / value / result or error / gas) below the diagram
+let traceCalls = [];
+let traceNames = {};
+const flowSize = () => (innerWidth <= 260 ? { row: 40, slot: 32, box: 24, h: 24 } : { row: 46, slot: 40, box: 28, h: 28 });
+
+/** parent of each call = the nearest earlier call one level shallower (calls arrive in depth-first order) */
+function traceParents(trace) {
+  const stack = [];
+  return trace.map((c, i) => {
+    stack.length = c.depth;
+    const parent = c.depth ? stack[c.depth - 1] ?? -1 : -1;
+    stack[c.depth] = i;
+    return parent;
+  });
+}
+
+function traceView(trace, sender, names = {}) {
+  traceCalls = trace;
+  traceNames = names;
   const failed = trace.filter((c) => c.status !== "success").length;
   const deepest = Math.max(...trace.map((c) => c.depth));
-  const io = (label, inner) => `<div class="io"><span class="lbl">${label}</span>${inner}</div>`;
-  const empty = (v) => v === null || v === undefined || (isObject(v) && !Array.isArray(v) && !Object.keys(v).length);
+  const parents = traceParents(trace);
+  const { row, slot, box, h } = flowSize();
+  // top-down tree: the tx sender on top, each call one level below its caller, siblings left → right in call order
+  // every leaf takes one column (slot); a caller sits centred over its first and last callee
+  const kids = trace.map(() => []), roots = [];
+  parents.forEach((p, i) => (p < 0 ? roots : kids[p]).push(i));
+  const col = new Array(trace.length);
+  let leaves = 0;
+  const place = (i) => {
+    for (const k of kids[i]) place(k);
+    col[i] = kids[i].length ? (col[kids[i][0]] + col[kids[i].at(-1)]) / 2 : leaves++;
+  };
+  roots.forEach(place);
+  const rootCol = roots.length ? (col[roots[0]] + col[roots.at(-1)]) / 2 : 0;
+  const x = (c) => c * slot + (slot - box) / 2 + 4;
+  const y = (level) => level * row + 6;
+  const width = Math.max(leaves, 1) * slot + 8, height = y(deepest + 1) + h + 6;
+  const arrows = trace.map((c, i) => {
+    const from = parents[i];
+    const px = x(from < 0 ? rootCol : col[from]) + box / 2, py = y(from < 0 ? 0 : trace[from].depth + 1) + h;
+    const cx = x(col[i]) + box / 2, cy = y(c.depth + 1), mid = cy - (row - h) / 2;
+    return `<path class="${c.status === "success" ? "" : "fail"}" d="M${px} ${py} V${mid} H${cx} V${cy - 3}" marker-end="url(#arrow${c.status === "success" ? "" : "-bad"})"/>`;
+  }).join("");
+  const label = (a) => names[String(a).toLowerCase()] ?? a;
+  const boxes = trace.map((c, i) => {
+    const ok = c.status === "success";
+    return `<button class="node ${ok ? "" : "fail"} ${i === 0 ? "on" : ""}" data-call="${i}" onclick="pickCall(${i})"
+        style="left:${x(col[i])}px;top:${y(c.depth + 1)}px;width:${box}px;height:${h}px"
+        title="#${i + 1} ${attr(label(c.program))}.${attr(c.method)}()${ok ? "" : " (failed)"}">${i + 1}</button>`;
+  }).join("");
+  const start = `<div class="node start" style="left:${x(rootCol)}px;top:${y(0)}px;width:${box}px;height:${h}px" title="Sent by ${attr(label(sender))}">tx</div>`;
   return `<div class="calls">
-    <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""}</div>
-    ${trace.map((c, i) => {
-      const ok = c.status === "success";
-      return `<div class="call ${ok ? "" : "fail"}" style="--d:${c.depth}">
-        <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span>
-          <span class="dim">#${i + 1} · depth ${c.depth}</span>
-          ${addr(c.from)}<span class="dim">→</span>${addr(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
-        <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
-          ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
-        <div class="call-b">
-          ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
-          ${ok ? io("Result", empty(c.result) ? `<span class="dim mono">${c.result === null || c.result === undefined ? "null" : "{}"}</span>` : anyValue(c.result))
-               : io("Error", `<span class="tag bad">${esc(c.error?.code ?? "ERROR")}</span> <span class="bad">${esc(c.error?.message ?? "")}</span>`)}
-        </div></div>`;
-    }).join("")}</div>`;
+    <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""} · click a box for its details</div>
+    <div class="calls-body">
+    <div class="flowwrap"><div class="flow" style="width:${width}px;height:${height}px">
+      <svg class="links" width="${width}" height="${height}" aria-hidden="true">
+        <defs>
+          <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="head"/></marker>
+          <marker id="arrow-bad" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="head bad"/></marker>
+        </defs>${arrows}</svg>
+      ${start}${boxes}
+    </div></div>
+    <div id="call-detail" class="${trace[0]?.status === "success" ? "" : "fail"}">${callDetail(0)}</div>
+    </div>
+  </div>`;
+}
+
+/** details of one call: caller → program.method(), gas, value, origin, input, result or error */
+function callDetail(i) {
+  const c = traceCalls[i];
+  if (!c) return "";
+  const ok = c.status === "success";
+  const io = (lbl, inner) => `<div class="io"><span class="lbl">${lbl}</span>${inner}</div>`;
+  const empty = (v) => v === null || v === undefined || (isObject(v) && !Array.isArray(v) && !Object.keys(v).length);
+  const name = (a) => (traceNames[String(a).toLowerCase()] ? ` <span class="dim">(${esc(traceNames[String(a).toLowerCase()])})</span>` : "");
+  return `<div class="call ${ok ? "" : "fail"}">
+    <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
+      <b>Call #${i + 1}</b><span class="dim">depth ${c.depth}</span></div>
+    <div class="call-path">${addr(c.from)}${name(c.from)} <span class="dim">→</span> ${addr(c.program)}${name(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
+    <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
+      ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
+    <div class="call-b">
+      ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
+      ${ok ? io("Result", empty(c.result) ? `<span class="dim mono">${c.result === null || c.result === undefined ? "null" : "{}"}</span>` : anyValue(c.result))
+           : io("Error", `<span class="tag bad">${esc(c.error?.code ?? "ERROR")}</span> <span class="bad">${esc(c.error?.message ?? "")}</span>`)}
+    </div></div>`;
+}
+
+function pickCall(i) {
+  for (const node of document.querySelectorAll(".flow .node[data-call]")) node.classList.toggle("on", Number(node.dataset.call) === i);
+  const box = document.getElementById("call-detail");
+  box.innerHTML = callDetail(i);
+  box.classList.toggle("fail", traceCalls[i]?.status !== "success");
+  box.scrollTop = 0;
+  labelCells(box);
+  decorate(box);
 }
 
 async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
   if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  // namespace of every address in the diagram (box labels read better as names)
+  const names = {};
+  const inTrace = [...new Set((r.trace ?? []).flatMap((c) => [c.program, c.from]).concat(r.from ?? []).map((a) => String(a).toLowerCase()))].slice(0, 30);
+  await Promise.all(inTrace.map((a) => api(`/address/${a}?limit=1`).then((d) => { if (d.metadata?.namespace) names[a] = d.metadata.namespace; }).catch(() => {})));
   draw(panel("Transaction", kv([
       ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
       ["Tx hash", full(r.hash)],
@@ -469,7 +573,7 @@ async function tx(hash, draw = el) {
       ["Result", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
     ]))
     + (r.input && Object.keys(r.input).length ? panel("Input", json(r.input), true) : "")
-    + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace)) : "")
+    + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace, r.from, names)) : "")
     + (r.events?.length ? panel(`Events (${r.events.length})`, table(["Name", "Program", "Data"], r.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${addr(e.program)}</td>
          <td>${json(e.data)}</td></tr>`))) : "")

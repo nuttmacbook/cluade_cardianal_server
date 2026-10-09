@@ -381,17 +381,33 @@ test("address ย่อเป็น 0x + 4 ตัวหน้า … 4 ตัว
   assert.deepEqual(pageErrors, []);
 });
 
-test("trace การเรียกโปรแกรม: ทุกชั้นมี caller → program.method, input, result, gas", async () => {
+test("trace การเรียกโปรแกรม: แผนผังต้นไม้กล่องเลขลำดับเล็ก ๆ อยู่กึ่งกลาง + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
   let relay;
   for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
   }
   await open(`#tx/${relay.hash}`);
-  const calls = page.locator("#view .call");
-  assert.equal(await calls.count(), 2);
-  assert.match(await calls.nth(0).textContent(), /depth 0[\s\S]*\.check\(\)[\s\S]*Gas[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
-  assert.match(await calls.nth(1).textContent(), /depth 1[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
-  const [a, b] = await Promise.all([calls.nth(0).boundingBox(), calls.nth(1).boundingBox()]);
-  assert.ok(b.x > a.x, "ชั้นที่ลึกกว่าเยื้องเข้าไป");
+  const nodes = page.locator("#view .flow .node[data-call]");
+  assert.equal(await nodes.count(), 2);
+  assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // กล่องผู้ส่ง tx
+  assert.equal(await page.locator("#view .flow svg path[marker-end]").count(), 2);     // ลูกศร ผู้ส่ง→#1 และ #1→#2
+  assert.deepEqual(await nodes.allTextContents(), ["1", "2"]);                         // กล่องโชวแค่เลขลำดับ
+  const [w, h] = await nodes.nth(0).evaluate((n) => [n.offsetWidth, n.offsetHeight]);
+  assert.ok(w <= 32 && h <= 32, `กล่องเล็ก (${w}×${h})`);
+  const [a, b] = await Promise.all([nodes.nth(0).boundingBox(), nodes.nth(1).boundingBox()]);
+  assert.ok(b.y > a.y && Math.abs(b.x - a.x) < 1, "ต้นไม้บนลงล่าง: call ที่ถูกเรียกอยู่ใต้ผู้เรียกตรงกลาง");
+  const [wrap, start] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#view .flow .node.start").boundingBox()]);
+  assert.ok(Math.abs(start.x + start.width / 2 - (wrap.x + wrap.width / 2)) <= 2, "แผนผังอยู่กึ่งกลางกรอบ");
+  const [flow, side] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#call-detail").boundingBox()]);
+  assert.ok(side.x >= flow.x + flow.width && side.y < flow.y + flow.height, "จอกว้าง: รายละเอียดอยู่ข้างขวาแผนผัง");
+  assert.ok(Math.abs(side.height - flow.height) <= 1, `กล่องรายละเอียดสูงเท่าแผนผัง (${side.height} vs ${flow.height})`);
+
+  // เริ่มต้นโชวรายละเอียดของ #1 เท่านั้น
+  const detail = page.locator("#call-detail");
+  assert.equal(await page.locator("#view .call").count(), 1);
+  assert.match(await detail.textContent(), /Call #1[\s\S]*\.check\(\)[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
+  await nodes.nth(1).click();
+  assert.match(await detail.textContent(), /Call #2[\s\S]*depth 1[\s\S]*mytoken[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
+  assert.equal(await page.locator("#view .flow .node.on").getAttribute("data-call"), "1");
   assert.deepEqual(pageErrors, []);
 });
