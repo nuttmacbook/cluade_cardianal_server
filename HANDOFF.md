@@ -404,19 +404,28 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 | ส่งออก | `transactions` |
 | เรียกใช้โปรแกรม | ฟอร์ม interact — เลือกฟังก์ชัน, input JSON, value |
 | event | event ของโปรแกรม |
-| ข้อมูล | storage พร้อม chip จัดกลุ่ม + pagination |
+| ข้อมูล | storage แยกตามจำนวนชั้นของ key: variable / contract / get storage (ดูด้านล่าง) |
 | โค้ด | source |
 
-### storage ที่มีหลายร้อย key
-`storageView` เก็บ state ไว้นอก render loop:
-1. `loadGroups()` → `/groups` ได้ chip พร้อมจำนวน (`balances 128`, `owner 1`)
-2. กด chip → `loadStorage(addr, prefix)` → `/storage?prefix=…&limit=50`
-3. "แสดงเพิ่ม 50 รายการ" → ส่ง `start=<next cursor>` แล้ว append
+### แถบ "ข้อมูล" ของโปรแกรม
+แยก key ตามจำนวนชั้น (`src/node/explorer-api.js` · เทสต์ `47-explorer-storage`)
 
-**กับดักที่เคยเจอ 2 ข้อ — อย่าทำพัง:**
-- `loadStorage` เขียน `#storage-box` ตรง ๆ แต่ตอนโหลดครั้งแรก element ยังไม่มี → ต้องมี `if (box)` กัน
-- key ที่เป็น "ใบเดี่ยว" (`owner`, `supply`) ไม่มีลูก → ค้นด้วย prefix + `:` จะไม่เจอ
-  `server.js` จึง `vm.read(base + group)` ตรง ๆ ก่อนแล้วเอามาต่อหัว (`leaf` / `head` ใน route `/storage`)
+| แถบย่อย | key | แสดง | API |
+|---|---|---|---|
+| variable | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
+| contract ▾ | 2 ชั้น (`balances:<address>`) | dropdown key แรก → list key ที่ 2 + ค่า ทีละ 50 | `/program/:a/map?name=&start=` (cursor) |
+| get storage | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · dropdown key แรก + ช่องกรอก key 2, 3 + ปุ่ม `+` เพิ่มชั้น → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
+
+- `layout` ไล่ key ไม่เกิน 20,000 ตัว (`SCAN_LIMIT`) เกินแล้วตอบ `truncated: true` และหน้าเว็บบอกว่านับไม่ครบ
+- กลุ่มเดียวกันมีทั้ง 2 และ 3 ชั้นได้ (`mixed:a` กับ `mixed:a:b`) → ขึ้นทั้งใน contract และ get storage
+- `storageView` จำแถบ / key ที่เลือก / ผลที่อ่านไว้ ตราบที่ยังอยู่โปรแกรมเดิม · `readKeys()` เก็บค่าที่พิมพ์ก่อนวาดใหม่ (กด `+` แล้วค่าไม่หาย)
+- dropdown อยู่ในปุ่มแถบ contract: แตะ dropdown จากแถบอื่น → `enterContract()` สลับแถบโดยไม่วาด dropdown ใหม่ (วาดใหม่แล้ว dropdown จะปิดเอง)
+- `/program/:a/groups` และ `/program/:a/storage` เดิมยังอยู่ (หน้าเว็บไม่ได้ใช้แล้ว)
+
+### ไอคอน address
+ทุก address ที่ผ่าน `addr()` มีไอคอน: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ (สีม่วง) = โปรแกรม
+วัดจาก "มีโค้ดที่ address นั้น" (`<address>:code`) หรือ deploy แล้วรอ init (`pending:<address>`)
+`decorate()` ถูกเรียกทุกครั้งที่วาดหน้า รวบ address ที่ยังไม่รู้ไปถาม `/is-program?addresses=a,b,c` ทีเดียว (ครั้งละ ≤ 200) · จำไว้เฉพาะตัวที่เป็นโปรแกรม
 
 ### wallet connect
 `eth_requestAccounts` → `eth_signTypedData_v4` → `POST /sendtx`

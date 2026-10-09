@@ -4,11 +4,11 @@
 <style>
 :root{
   --bg:#fafafa;--panel:#fff;--line:#e8e8ea;--text:#17171a;--dim:#71717a;--soft:#f4f4f5;
-  --ok:#15803d;--ok-bg:#f0fdf4;--bad:#b91c1c;--bad-bg:#fef2f2;--accent:#1d4ed8;--radius:10px;
+  --ok:#15803d;--ok-bg:#f0fdf4;--bad:#b91c1c;--bad-bg:#fef2f2;--accent:#1d4ed8;--prog:#7c3aed;--radius:10px;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#070b16;--panel:#0d1424;--line:#1b2740;--text:#e6ecf8;--dim:#7e8ca8;--soft:#111b2e;
-  --ok:#4ade80;--ok-bg:#0d2019;--bad:#f87171;--bad-bg:#24131a;--accent:#5b9dff;}}
+  --ok:#4ade80;--ok-bg:#0d2019;--bad:#f87171;--bad-bg:#24131a;--accent:#5b9dff;--prog:#b794ff;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 ui-sans-serif,system-ui,"Noto Sans Thai",sans-serif;-webkit-font-smoothing:antialiased}
 header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
@@ -67,6 +67,22 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
 .out{background:var(--soft);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* ไอคอนหน้า address: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ = โปรแกรม (มีโค้ด) */
+.ico{display:inline-block;width:14px;height:14px;margin-right:5px;vertical-align:-2px;background:currentColor;opacity:0;
+  -webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat}
+.ico.person{opacity:.75;color:var(--dim);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='7.5' r='4.5'/%3E%3Cpath d='M3 22c0-5 4-8.5 9-8.5s9 3.5 9 8.5z'/%3E%3C/svg%3E")}
+.ico.program{opacity:1;color:var(--prog);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 3h20v14H2zM4.5 5.5v9h15v-9z' fill-rule='evenodd'/%3E%3Cpath d='M8 21h8v-2h-2.5v-2h-3v2H8z'/%3E%3C/svg%3E")}
+.ico.big{width:18px;height:18px;vertical-align:-3px}
+.sub{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
+.sub .tab select{background:transparent;color:inherit;border:0;font:inherit;font-weight:500;padding:0 2px;margin-left:4px;cursor:pointer}
+.sub .tab select option{color:var(--text);background:var(--panel)}
+.keys{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.keys select,.keys input{background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:8px;font:inherit;font-size:13px}
+.keys input{flex:1 1 150px;min-width:120px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.keys .sep{color:var(--dim)}
+#storage-panel .pad{padding:14px 18px}
+.form .keys select,.form .keys input{width:auto}
+.form .keys select{flex:0 1 auto;max-width:100%}
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
   .brand{width:100%}
@@ -90,6 +106,7 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
 const api = (p, o) => fetch(location.origin + p, o).then((r) => r.json());
 const go = (hash) => { location.hash = hash; render(); };
 const esc = (v) => String(v ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+const attr = (v) => esc(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");   // ค่าใน attribute (key ใน storage มาจากโปรแกรม)
 const cut = (v, head = 10, tail = 8) => (typeof v === "string" && v.length > head + tail + 2 ? v.slice(0, head) + "…" + v.slice(-tail) : v ?? "—");
 const num = (v) => (typeof v === "string" && /^-?\d+n$/.test(v) ? BigInt(v.slice(0, -1)).toLocaleString("en-US")
   : typeof v === "number" ? v.toLocaleString("en-US") : v ?? "—");
@@ -99,7 +116,9 @@ const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000);
 
 /** ทุก address และ hash คลิกได้ + ก๊อปปี้ได้ */
 const copy = (value) => `<button class="copy" title="คัดลอก" onclick="event.stopPropagation();copyText('${value}')">⧉</button>`;
-const addr = (a, label) => (a ? `<span class="mono"><a onclick="go('#address/${a}')">${esc(label ?? cut(a))}</a>${copy(a)}</span>` : '<span class="dim">—</span>');
+const icon = (a, big) => `<span class="ico${big ? " big" : ""}" data-ico="${attr(String(a).toLowerCase())}"></span>`;
+const addr = (a, label) => (a ? `<span class="mono">${icon(a)}<a onclick="go('#address/${a}')">${esc(label ?? cut(a))}</a>${copy(a)}</span>` : '<span class="dim">—</span>');
+const isAddress = (v) => typeof v === "string" && /^0x[0-9a-f]{40}$/i.test(v);
 const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
 const plain = (v) => (v ? `<span class="mono">${esc(cut(v, 14, 10))}${copy(v)}</span>` : '<span class="dim">—</span>');
 const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${s === "success" ? "สำเร็จ" : s === "throw" ? "ล้มเหลว" : s}</span>`;
@@ -116,7 +135,24 @@ const table = (head, rows) => (rows.length
   ? `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
   : '<div class="empty">ไม่มีข้อมูล</div>');
 const kv = (pairs) => `<table class="kv"><tbody>${pairs.filter(Boolean).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`;
-const el = (html) => { document.getElementById("view").innerHTML = html; };
+const el = (html) => { document.getElementById("view").innerHTML = html; decorate(); };
+
+/** ใส่ไอคอนให้ทุก address ในหน้า: มีโค้ด = โปรแกรม (คอมพิวเตอร์) · ไม่มี = กระเป๋าผู้ใช้ (คน) */
+const kinds = new Map();   // address → true (โปรแกรม) · จำเฉพาะโปรแกรม เพราะกระเป๋าเปล่าอาจถูก deploy ทีหลัง
+async function decorate(root = document) {
+  const marks = [...root.querySelectorAll("[data-ico]")];
+  const unknown = [...new Set(marks.map((m) => m.dataset.ico).filter((a) => !kinds.has(a)))];
+  for (let i = 0; i < unknown.length; i += 200) {
+    const flags = await api(`/is-program?addresses=${unknown.slice(i, i + 200).join(",")}`).catch(() => ({}));
+    for (const [address, program] of Object.entries(flags)) if (program) kinds.set(address, true);
+  }
+  for (const mark of marks) {
+    const program = kinds.get(mark.dataset.ico) === true;
+    mark.classList.toggle("program", program);
+    mark.classList.toggle("person", !program);
+    mark.title = program ? "โปรแกรม (มีโค้ด)" : "กระเป๋าผู้ใช้";
+  }
+}
 
 const txRow = (t, columns) => `<tr>${columns.map((c) => `<td>${c}</td>`).join("")}</tr>`;
 const actionTag = (a) => `<span class="tag">${a}</span>`;
@@ -178,7 +214,7 @@ async function tx(hash) {
     ]))
     + (r.input && Object.keys(r.input).length ? panel("input", `<pre>${esc(JSON.stringify(r.input, null, 2))}</pre>`, true) : "")
     + (r.trace?.length ? panel("การเรียกโปรแกรม", `<div class="pad trace">${r.trace.map((c) =>
-        `${"│  ".repeat(c.depth)}${c.status === "success" ? "✓" : "✗"} <a onclick="go('#address/${c.program}')">${cut(c.program)}</a>.${esc(c.method)}`).join("\n")}</div>`) : "")
+        `${"│  ".repeat(c.depth)}${c.status === "success" ? "✓" : "✗"} ${icon(c.program)}<a onclick="go('#address/${c.program}')">${cut(c.program)}</a>.${esc(c.method)}`).join("\n")}</div>`) : "")
     + (r.events?.length ? panel("event", table(["ชื่อ", "โปรแกรม", "ข้อมูล"], r.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${addr(e.program)}</td>
          <td class="mono">${esc(JSON.stringify(e.data))}</td></tr>`))) : "")
@@ -297,39 +333,134 @@ async function runWrite(program) {
   } catch (error) { show(`ผิดพลาด: ${error.message}`); }
 }
 
-// ---------- ข้อมูลในโปรแกรม (รองรับหลายร้อย key) ----------
-let storageView = { total: 0, groups: [], items: [], next: null, prefix: "", address: null };
+// ---------- ข้อมูลในโปรแกรม: แยกตามจำนวนชั้นของ key ----------
+//   variable     key 1 ชั้น (owner, price)          → แสดงทุกตัวพร้อมค่า
+//   contract     key 2 ชั้น (balances:<address>)    → เลือก key แรกจาก dropdown แล้ว list key ที่ 2 + ค่า
+//   get storage  key 3 ชั้นขึ้นไป (allow:<a>:<b>)   → ไม่ list · กรอก key ทีละชั้นแล้วอ่านค่าทีละตัว
+let storageView = { address: null, layout: null, sub: "variable", map: "", items: [], next: null, get: { name: "", parts: ["", ""] }, results: [] };
 
-async function loadGroups(address) {
-  const info = await api(`/program/${address}/groups`).catch(() => ({ total: 0, groups: [] }));
-  storageView = { ...storageView, address, total: info.total, groups: info.groups, items: [], next: null, prefix: "" };
+/** ค่าใน storage: "123n" → 123 · address → ลิงก์ · object → JSON */
+const value = (v) => (isAddress(v) ? addr(v) : v !== null && typeof v === "object"
+  ? `<span class="mono">${esc(JSON.stringify(v))}</span>` : `<span class="mono">${esc(num(v))}</span>`);
+const keyCell = (k) => (isAddress(k) ? addr(k) : `<span class="mono">${esc(k)}</span>`);
+
+/** โหลดทุกครั้งที่วาดหน้าโปรแกรม (ข้อมูลเปลี่ยนทุก block) · ถ้ายังเป็นโปรแกรมเดิมจะคงแถบ / key ที่เลือก / ผลที่อ่านไว้ */
+async function loadLayout(address) {
+  const layout = await api(`/program/${address}/layout`).catch(() => ({ variables: [], maps: [], deep: [], scanned: 0 }));
+  const same = storageView.address === address;
+  const sub = same ? storageView.sub
+    : layout.variables.length ? "variable" : layout.maps.length ? "contract" : layout.deep.length ? "get" : "variable";
+  const map = same && layout.maps.some((m) => m.name === storageView.map) ? storageView.map : layout.maps[0]?.name ?? "";
+  storageView = { address, layout, sub, map, items: [], next: null,
+    get: same ? storageView.get : { name: layout.deep[0]?.name ?? "", parts: ["", ""] }, results: same ? storageView.results : [] };
+  if (map) await loadMap(false, false);
 }
 
-async function loadStorage(address, prefix = "", append = false) {
-  const start = append && storageView.next ? `&start=${encodeURIComponent(storageView.next)}` : "";
-  const page = await api(`/program/${address}/storage?limit=50&prefix=${encodeURIComponent(prefix)}${start}`);
-  storageView = { ...storageView, address, prefix,
-    items: append ? [...storageView.items, ...page.items] : page.items, next: page.next };
-  const box = document.getElementById("storage-box");   // ยังไม่ถูกวาดตอนโหลดครั้งแรก
-  if (box) box.innerHTML = storageBody();
+async function loadMap(append, redraw = true) {
+  const { address, map, next } = storageView;
+  const start = append && next ? `&start=${encodeURIComponent(next)}` : "";
+  const page = await api(`/program/${address}/map?limit=50&name=${encodeURIComponent(map)}${start}`);
+  storageView.items = append ? [...storageView.items, ...page.items] : page.items;
+  storageView.next = page.next;
+  if (redraw) drawStorage();
+}
+
+function drawStorage() {
+  const box = document.getElementById("storage-panel");
+  if (!box) return;
+  box.innerHTML = storageInner();
+  decorate(box);
+}
+
+function pickSub(sub) { readKeys(); storageView.sub = sub; drawStorage(); }
+
+/** แตะ dropdown ของ contract ตอนอยู่แถบอื่น → สลับมา contract โดยไม่วาด dropdown ใหม่ (ไม่งั้นมันจะปิดเอง) */
+function enterContract() {
+  if (storageView.sub === "contract") return;
+  readKeys();
+  storageView.sub = "contract";
+  document.querySelectorAll("#storage-panel .sub .tab").forEach((t) => t.classList.toggle("on", t.dataset.sub === "contract"));
+  const box = document.getElementById("storage-box");
+  box.innerHTML = storageBody();
+  decorate(box);
+}
+async function pickMap(name) { storageView.sub = "contract"; storageView.map = name; storageView.items = []; await loadMap(false); }
+
+/** เก็บค่าที่พิมพ์ไว้ก่อนวาดใหม่ (กด + / สลับแถบ แล้วช่องกรอกไม่หาย) */
+function readKeys() {
+  const name = document.getElementById("gk-name");
+  if (!name) return;
+  storageView.get.name = name.value;
+  storageView.get.parts = [...document.querySelectorAll(".gk-part")].map((input) => input.value);
+}
+function addKey() { readKeys(); storageView.get.parts.push(""); drawStorage(); document.querySelector(".gk-part:last-of-type")?.focus(); }
+function dropKey() { readKeys(); if (storageView.get.parts.length > 2) storageView.get.parts.pop(); drawStorage(); }
+
+async function readStorage() {
+  readKeys();
+  const { name, parts } = storageView.get;
+  const keys = [name, ...parts.map((p) => p.trim())];
+  if (keys.some((k) => !k)) return alert("กรอก key ให้ครบทุกช่อง");
+  const query = keys.map((k) => `key=${encodeURIComponent(k)}`).join("&");
+  const result = await api(`/program/${storageView.address}/get?${query}`);
+  storageView.results = [result.error ? { key: keys, error: result.error } : result, ...storageView.results].slice(0, 20);
+  drawStorage();
 }
 
 function storageBody() {
-  const { items, next, total, prefix } = storageView;
-  const rows = items.map((s) => `<tr><td class="mono">${esc(s.key.join(" / "))}</td><td class="mono">${num(s.value)}</td></tr>`);
-  return table(["key", "ค่า"], rows)
-    + `<div class="pad row dim" style="border-top:1px solid var(--line);font-size:12.5px">
-        แสดง ${items.length} จาก ${prefix ? "กลุ่มนี้" : `${total} รายการ`}
-        ${next ? `<button class="btn" onclick="loadStorage('${storageView.address}','${prefix}',true)">แสดงเพิ่ม 50 รายการ</button>` : ""}
-       </div>`;
+  const { layout, sub } = storageView;
+  if (!layout) return '<div class="empty">กำลังโหลด…</div>';
+  const note = layout.truncated ? `<div class="pad dim" style="font-size:12.5px">นับจาก ${num(layout.scanned)} key แรกเท่านั้น (มีมากกว่านี้)</div>` : "";
+
+  if (sub === "variable") {
+    return table(["key", "ค่า"], layout.variables.map((v) => `<tr><td class="mono">${esc(v.key)}</td><td>${value(v.value)}</td></tr>`)) + note;
+  }
+
+  if (sub === "contract") {
+    if (!layout.maps.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 2 ชั้น</div>';
+    const { items, next, map } = storageView;
+    const total = layout.maps.find((m) => m.name === map)?.count ?? items.length;
+    return table([`${esc(map)} / key`, "ค่า"], items.map((i) => `<tr><td>${keyCell(i.key)}</td><td>${value(i.value)}</td></tr>`))
+      + `<div class="pad row dim" style="border-top:1px solid var(--line);font-size:12.5px">
+          แสดง ${num(items.length)} จาก ${num(total)} รายการ
+          ${next ? `<button class="btn" onclick="loadMap(true)">แสดงเพิ่ม 50 รายการ</button>` : ""}
+         </div>` + note;
+  }
+
+  // get storage
+  const { name, parts } = storageView.get;
+  const names = layout.deep.map((d) => d.name);
+  if (!names.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 3 ชั้นขึ้นไป</div>';
+  const inputs = parts.map((p, i) => `<span class="sep">/</span><input class="gk-part" placeholder="key ${i + 2}" value="${attr(p)}"
+      onkeydown="if(event.key==='Enter')readStorage()" spellcheck="false">`).join("");
+  const results = storageView.results.map((r) => `<tr><td class="mono">${esc(r.key.join(" / "))}</td><td>${
+    r.error ? `<span class="tag bad">${esc(r.error)}</span>` : r.exists ? value(r.value) : '<span class="dim">ไม่มีค่า (ยังไม่เคยถูกเขียน)</span>'}</td></tr>`);
+  return `<div class="pad form">
+      <div class="keys">
+        <select id="gk-name" title="key แรก">${names.map((n) => `<option value="${attr(n)}" ${n === name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        ${inputs}
+        <button class="btn" onclick="addKey()" title="เพิ่มช่อง key">+</button>
+        ${parts.length > 2 ? '<button class="btn" onclick="dropKey()" title="ลบช่อง key สุดท้าย">−</button>' : ""}
+        <button class="btn solid" onclick="readStorage()">อ่านค่า</button>
+      </div>
+      <span class="dim" style="font-size:12.5px">${layout.deep.map((d) => `${esc(d.name)}: ${num(d.count)} key · ลึก ${d.depth} ชั้น`).join(" · ")}</span>
+    </div>` + (results.length ? table(["key", "ค่า"], results) : "") + note;
 }
 
-function storagePanel(address) {
-  const chips = [{ name: "ทั้งหมด", value: "", count: storageView.total },
-    ...storageView.groups.map((g) => ({ name: g.name, value: g.name, count: g.count }))];
-  return `<div class="pad" style="padding-bottom:0">
-      <div class="row">${chips.map((c) => `<button class="tab ${storageView.prefix === c.value ? "on" : ""}"
-        onclick="loadStorage('${address}','${c.value}')">${esc(c.name)}<b>${c.count}</b></button>`).join("")}</div>
+const storagePanel = () => `<div id="storage-panel">${storageInner()}</div>`;
+
+function storageInner() {
+  const { layout, sub, map } = storageView;
+  const maps = layout?.maps ?? [];
+  const count = (n) => `<b>${num(n)}</b>`;
+  const select = maps.length
+    ? `<select title="key แรก" onclick="event.stopPropagation()" onfocus="enterContract()" onchange="pickMap(this.value)">${maps.map((m) =>
+        `<option value="${attr(m.name)}" ${m.name === map ? "selected" : ""}>${esc(m.name)} (${num(m.count)})</option>`).join("")}</select>`
+    : "";
+  return `<div class="sub">
+      <button class="tab ${sub === "variable" ? "on" : ""}" data-sub="variable" onclick="pickSub('variable')">variable${count(layout?.variables.length ?? 0)}</button>
+      <span class="tab ${sub === "contract" ? "on" : ""}" data-sub="contract"><span role="button" tabindex="0" onclick="pickSub('contract')">contract</span>${select}</span>
+      <button class="tab ${sub === "get" ? "on" : ""}" data-sub="get" onclick="pickSub('get')">get storage</button>
     </div>
     <div id="storage-box">${storageBody()}</div>`;
 }
@@ -349,10 +480,7 @@ function pickTab(id) { tabState[location.hash] = id; render(); }
 async function address(value) {
   const data = await api(`/address/${value}`);
   const program = data.isProgram ? await api(`/program/${value}`) : null;
-  if (program && (storageView.address !== program.address || !storageView.items.length)) {
-    await loadGroups(program.address);
-    await loadStorage(program.address, storageView.prefix ?? "");   // storagePanel() จะวาดทีเดียว
-  }
+  if (program) await loadLayout(program.address);
   const incoming = program?.interactions ?? data.incoming ?? [];
 
   const inRows = incoming.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
@@ -376,12 +504,12 @@ async function address(value) {
       body: table(["ชื่อ", "ข้อมูล", "tx", "block"], program.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td class="mono">${esc(JSON.stringify(e.data))}</td>
          <td>${txLink(e.txHash)}</td><td class="hide-sm"><a onclick="go('#block/${e.blockNumber}')">#${e.blockNumber}</a></td></tr>`)) });
-    groups.push({ id: "storage", label: "ข้อมูล", count: storageView.total, body: storagePanel(program.address) });
+    groups.push({ id: "storage", label: "ข้อมูล", count: storageView.layout?.scanned, body: storagePanel() });
     groups.push({ id: "code", label: "โค้ด", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
   }
 
   el(panel(data.isProgram ? "โปรแกรม" : "address", kv([
-      ["address", `<span class="mono">${esc(cut(data.address, 16, 10))}</span>${copy(data.address)}`],
+      ["address", `<span class="mono">${icon(data.address, true)}${esc(cut(data.address, 16, 10))}</span>${copy(data.address)}`],
       data.metadata?.namespace && ["ชื่อ", `<span class="tag">${esc(data.metadata.namespace)}</span>`],
       data.metadata?.description && ["คำอธิบาย", esc(data.metadata.description)],
       ["ยอดคงเหลือ", `<b>${num(data.native.balance)}</b>`],
