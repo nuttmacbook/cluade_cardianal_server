@@ -290,3 +290,54 @@ test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้น
   }
   assert.deepEqual(pageErrors, []);
 });
+
+test("metadata: information (ไอคอนสี่เหลี่ยม + namespace) และ links (url / contact เปิดออกไปข้างนอก) · โปรแกรมไม่มีปุ่มแก้ไข", async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { address: token } = await get("/name/mytoken");
+  await open(`#address/${token}`);
+  const info = page.locator("#meta-info");
+  assert.match(await info.locator(".avatar img").getAttribute("src"), /^data:image\/svg\+xml/);
+  const box = await info.locator(".avatar").boundingBox();
+  assert.equal(Math.round(box.width), Math.round(box.height));                      // สี่เหลี่ยมจัตุรัส
+  assert.match(await info.textContent(), /mytoken/);
+  assert.equal(await info.locator("button").count(), 0);                             // โปรแกรมตั้ง metadata จากโค้ดเท่านั้น
+  const links = page.locator("#view a.ext");
+  assert.equal(await links.count(), 2);
+  assert.equal(await links.nth(0).getAttribute("href"), "https://mytoken.example");
+  assert.equal(await links.nth(1).getAttribute("href"), "mailto:team@mytoken.example");
+  for (let i = 0; i < 2; i += 1) {
+    assert.equal(await links.nth(i).getAttribute("target"), "_blank");
+    assert.match(await links.nth(i).getAttribute("rel"), /noopener/);
+  }
+  assert.deepEqual(pageErrors, []);
+});
+
+test("metadata: เจ้าของกระเป๋ากดตั้งค่าเองได้ (เซ็นด้วย wallet) · ลิงก์อันตรายไม่ถูกส่ง · กระเป๋าคนอื่นแก้ไม่ได้", async () => {
+  await open(`#address/${BOB}`);
+  await page.click("#meta-info button");
+  await page.fill("#meta-url", "https://bob.example");
+  await page.click("button:has-text('บันทึก (ส่ง transaction)')");
+  await page.waitForFunction(() => /ได้เฉพาะ address ของ wallet/.test(document.getElementById("meta-out").textContent));
+
+  await open(`#address/${ME}`);
+  await page.click("#meta-info button:has-text('แก้ไข metadata')");
+  await page.fill("#meta-url", "javascript:alert(1)");
+  await page.click("button:has-text('บันทึก (ส่ง transaction)')");
+  assert.match(await page.locator("#meta-out").textContent(), /url ต้องเป็นลิงก์/);
+
+  await page.fill("#meta-url", "https://me.example");
+  await page.fill("#meta-contact", "me@example.com");
+  await page.fill("#meta-icon", "🦊");
+  assert.equal((await page.locator("#meta-preview .avatar").textContent()).trim(), "🦊");
+  const nonce = (await get(`/address/${ME}`)).nonce;
+  await page.click("button:has-text('บันทึก (ส่ง transaction)')");
+  await page.waitForFunction(() => location.hash.startsWith("#tx/"), null, { timeout: 15_000 });
+  for (let i = 0; i < 50 && (await get(`/address/${ME}`)).nonce === nonce; i += 1) await wait(200);
+  const meta = (await get(`/address/${ME}`)).metadata;
+  assert.deepEqual({ url: meta.url, contact: meta.contact, icon: meta.icon, namespace: meta.namespace },
+    { url: "https://me.example", contact: "me@example.com", icon: "🦊", namespace: "alice" });   // ช่องที่ไม่เปลี่ยนไม่ถูกส่ง
+
+  await open(`#address/${ME}`);
+  assert.equal(await page.locator("#view a.ext").nth(1).getAttribute("href"), "mailto:me@example.com");
+  assert.deepEqual(pageErrors, []);
+});

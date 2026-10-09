@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN_PROGRAM, checkTokenStandard, unescapeCode, ZERO_ADDRESS } from "../src/standards/token.js";
 import { tokenInfo, tokenHoldings } from "../src/node/explorer-api.js";
+import { reviewProgram } from "../src/core/autoreview.js";
 
 /* มาตรฐาน token (name / ticker / decimals + event Transfer / Approval) และรายการเหรียญที่ address ถือ (นับจาก event Transfer) */
 
@@ -33,6 +34,7 @@ function chain() {
 
 test("TOKEN_PROGRAM ผ่านมาตรฐาน · โปรแกรมที่ขาดฟังก์ชัน / event ไม่ผ่าน และบอกว่าขาดอะไร", () => {
   assert.deepEqual(checkTokenStandard(TOKEN_PROGRAM), { ok: true, missing: [] });
+  assert.deepEqual(reviewProgram(TOKEN_PROGRAM).issues, []);   // deploy ผ่าน /sendtx ได้ (autoreview)
   const noEvents = TOKEN_PROGRAM.replace(/emit\("Approval"[^\n]*\n/, "");
   assert.deepEqual(checkTokenStandard(noEvents).missing, ["event Approval"]);
   const noTicker = TOKEN_PROGRAM.replace("name, ticker, decimals,", "name, decimals,");
@@ -48,6 +50,19 @@ test("token 6 decimals: name / ticker / decimals / totalSupply อ่านไ�
   const [mint] = vm.listEvents({ program: T, name: "Transfer" });
   assert.deepEqual(mint.data, { from: ZERO_ADDRESS, to: OWNER, amount: "1000000000000n" });
   assert.equal(tokenInfo(vm, OWNER), null);   // ไม่ใช่โปรแกรม
+});
+
+test("token: icon / url / contact / description ที่ส่งมาตอน deploy กลายเป็น metadata ของโปรแกรม", () => {
+  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true });
+  const context = { sender: OWNER, origin: OWNER };
+  for (const res of [
+    vm.deploy({ programUuid: T, code: TOKEN_PROGRAM, context, initInput: { name: "A", ticker: "A", decimals: "6n", supply: "1n",
+      icon: "https://a.test/a.png", url: "https://a.test", contact: "team@a.test" } }),
+  ]) vm.commit(res.writes);
+  vm.commit(vm.init({ programUuid: T }).writes);
+  const meta = vm.getMetadata(T);
+  assert.deepEqual({ icon: meta.icon, url: meta.url, contact: meta.contact, description: meta.description },
+    { icon: "https://a.test/a.png", url: "https://a.test", contact: "team@a.test", description: undefined });
 });
 
 test("transfer / approve / transferFrom emit Transfer + Approval และยอดถูกต้องตามหน่วยเล็กสุด", () => {
