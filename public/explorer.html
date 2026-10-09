@@ -64,7 +64,7 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
   padding:9px 12px;border-radius:8px;font:inherit;font-size:13px;width:100%}
 .form textarea{font-family:ui-monospace,Menlo,monospace;min-height:84px;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.out{background:var(--soft);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
+.out{background:#0b0f19;color:#d8dee9;border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 /* ไอคอนหน้า address: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ = โปรแกรม (มีโค้ด) */
@@ -74,15 +74,26 @@ pre{background:var(--soft);border-radius:8px;padding:14px;overflow:auto;font-siz
 .ico.program{opacity:1;color:var(--prog);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 3h20v14H2zM4.5 5.5v9h15v-9z' fill-rule='evenodd'/%3E%3Cpath d='M8 21h8v-2h-2.5v-2h-3v2H8z'/%3E%3C/svg%3E")}
 .ico.big{width:18px;height:18px;vertical-align:-3px}
 .sub{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
-.sub .tab select{background:transparent;color:inherit;border:0;font:inherit;font-weight:500;padding:0 2px;margin-left:4px;cursor:pointer}
-.sub .tab select option{color:var(--text);background:var(--panel)}
-.keys{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.keys select,.keys input{background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:8px;font:inherit;font-size:13px}
-.keys input{flex:1 1 150px;min-width:120px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
-.keys .sep{color:var(--dim)}
 #storage-panel .pad{padding:14px 18px}
-.form .keys select,.form .keys input{width:auto}
-.form .keys select{flex:0 1 auto;max-width:100%}
+/* ข้อมูลแบบ { } ทุกจุด: กรอบดำ จัดรูปแบบเหมือน JSON (ดำทั้งโหมดสว่างและมืด) */
+.json{background:#0b0f19;color:#d8dee9;border:1px solid #1f2937;border-radius:8px;padding:10px 14px;margin:0;
+  font:12.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;text-align:left}
+td .json{min-width:220px}
+.json .k{color:#7dd3fc}.json .s{color:#a5e3a1}.json .n{color:#fbbf24}.json .b{color:#f0abfc}.json .p{color:#64748b}
+/* key หลายชั้น: badge ขอบสี่เหลี่ยมต่อกัน */
+.kchips{display:inline-flex;flex-wrap:wrap;gap:0;vertical-align:middle}
+.kchip{font:12px/1.5 ui-monospace,Menlo,monospace;border:1px solid var(--line);background:var(--soft);padding:1px 8px;margin-right:-1px;border-radius:0;white-space:nowrap}
+.kchip:first-child{border-radius:4px 0 0 4px;font-weight:600}.kchip:last-child{border-radius:0 4px 4px 0;margin-right:0}
+.kchip:only-child{border-radius:4px}
+/* ไอคอนแก๊ส (ไฟ) / block (กล่อง) */
+.ico.gas{opacity:1;color:#d97706;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E")}
+.ico.blk{opacity:1;color:var(--accent);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 3 7v10l9 5 9-5V7zm0 2.3L18.7 8 12 11.7 5.3 8zM5 9.7l6 3.3v6.6l-6-3.3zm8 9.9V13l6-3.3v6.6z'/%3E%3C/svg%3E")}
+.ico.coin{opacity:1;color:#ca8a04;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E")}
+.getkeys{display:grid;gap:8px;max-width:640px}
+.getkeys .krow{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:center}
+.getkeys .krow span{color:var(--dim);font-size:12.5px}
+.getkeys select,.getkeys input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:8px;font:12.5px ui-monospace,Menlo,monospace}
+th select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px;padding:3px 6px;text-transform:none;letter-spacing:0}
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
   .brand{width:100%}
@@ -119,6 +130,37 @@ const copy = (value) => `<button class="copy" title="คัดลอก" onclick
 const icon = (a, big) => `<span class="ico${big ? " big" : ""}" data-ico="${attr(String(a).toLowerCase())}"></span>`;
 const addr = (a, label) => (a ? `<span class="mono">${icon(a)}<a onclick="go('#address/${a}')">${esc(label ?? cut(a))}</a>${copy(a)}</span>` : '<span class="dim">—</span>');
 const isAddress = (v) => typeof v === "string" && /^0x[0-9a-f]{40}$/i.test(v);
+
+/** ข้อมูล { } / [ ] → กรอบดำแบบ JSON มีสี · "123n" แสดงเป็นตัวเลข */
+function jsonHtml(v, depth = 0) {
+  const pad = "  ".repeat(depth + 1), end = "  ".repeat(depth);
+  if (typeof v === "string" && /^-?\d+n$/.test(v)) return `<span class="n">${esc(v.slice(0, -1))}</span>`;
+  if (typeof v === "string") return `<span class="s">"${esc(v)}"</span>`;
+  if (typeof v === "number") return `<span class="n">${v}</span>`;
+  if (v === null || typeof v === "boolean" || v === undefined) return `<span class="b">${v ?? null}</span>`;
+  if (Array.isArray(v)) return v.length ? `<span class="p">[</span>\n${v.map((x) => pad + jsonHtml(x, depth + 1)).join('<span class="p">,</span>\n')}\n${end}<span class="p">]</span>` : '<span class="p">[]</span>';
+  const keys = Object.keys(v);
+  return keys.length ? `<span class="p">{</span>\n${keys.map((k) => `${pad}<span class="k">"${esc(k)}"</span><span class="p">:</span> ${jsonHtml(v[k], depth + 1)}`).join('<span class="p">,</span>\n')}\n${end}<span class="p">}</span>` : '<span class="p">{}</span>';
+}
+const json = (v) => `<pre class="json">${jsonHtml(v)}</pre>`;
+const isObject = (v) => v !== null && typeof v === "object";
+/** ค่าทั่วไป: object → กรอบ JSON · address → ลิงก์ · ตัวเลข → คั่นหลัก */
+const anyValue = (v) => (isObject(v) ? json(v) : isAddress(v) ? addr(v) : `<span class="mono">${esc(num(v))}</span>`);
+/** key หลายชั้น ["allowance","0xab…","0xcd…"] → badge ต่อกัน */
+const keyChips = (parts) => `<span class="kchips">${parts.map((p) =>
+  `<span class="kchip" title="${attr(p)}">${esc(isAddress(p) ? cut(p, 8, 6) : p)}</span>`).join("")}</span>`;
+const gas = (v) => `<span class="mono" style="white-space:nowrap"><span class="ico gas" title="แก๊ส"></span>${num(v)}</span>`;
+const blockNo = (n) => (n === undefined || n === null ? '<span class="dim">—</span>'
+  : `<span style="white-space:nowrap"><span class="ico blk" title="block"></span><a onclick="go('#block/${n}')">${num(n)}</a></span>`);
+/** ยอด token: หน่วยเล็กสุด "1500000n" + decimals 6 → "1.5" */
+function units(raw, decimals) {
+  const value = BigInt(String(raw ?? "0").replace(/n$/, "") || "0");
+  const d = Number(String(decimals ?? "0").replace(/n$/, "")) || 0;
+  if (!d) return value.toLocaleString("en-US");
+  const base = 10n ** BigInt(d), sign = value < 0n ? "-" : "", abs = value < 0n ? -value : value;
+  const frac = (abs % base).toString().padStart(d, "0").replace(/0+$/, "");
+  return `${sign}${(abs / base).toLocaleString("en-US")}${frac ? "." + frac : ""}`;
+}
 const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
 const plain = (v) => (v ? `<span class="mono">${esc(cut(v, 14, 10))}${copy(v)}</span>` : '<span class="dim">—</span>');
 const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${s === "success" ? "สำเร็จ" : s === "throw" ? "ล้มเหลว" : s}</span>`;
@@ -165,11 +207,11 @@ async function home() {
       <div class="stat"><b>${num(info.burned)}</b><span>เหรียญที่ถูกเผา</span></div>
       <div class="stat"><b>${info.chainId}</b><span>chain id</span></div></div>`)
     + panel("block ล่าสุด", table(["block", "เวลา", "tx", "ผลลัพธ์", "แก๊ส", "ผู้ปิด block"], blocks.map((b) => txRow(b, [
-        `<a onclick="go('#block/${b.number}')">#${b.number}</a>`,
+        blockNo(b.number),
         `<span title="${when(b.timestamp)}">${ago(b.timestamp)}</span>`,
         num(b.txCount),
         b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : '<span class="dim">ว่าง</span>',
-        num(b.gasUsed), addr(b.feeRecipient),
+        gas(b.gasUsed), addr(b.feeRecipient),
       ]))))
     + (pending.size ? panel("รอในคิว", table(["hash", "ผู้ส่ง", "ประเภท", "nonce"], pending.transactions.map((t) =>
         txRow(t, [plain(t.hash), addr(t.sender), actionTag(t.action), t.nonce])))) : ""));
@@ -179,19 +221,20 @@ async function block(number) {
   const data = await api(`/block/${number}?full=1`);
   const header = data.header ?? data;
   const txs = data.transactions ?? [];
-  el(panel(`block #${header.number}`, kv([
+  if (!header?.number) return el(panel("ไม่พบ block", `<div class="empty">${esc(data.error ?? "ไม่พบ block")}</div>`));
+  el(panel(`<span class="ico blk"></span>block #${header.number}`, kv([
       ["เวลา", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>`],
       ["hash", plain(header.hash)],
       ["block ก่อนหน้า", header.parentHash ? `<span class="mono"><a onclick="go('#block/${header.number - 1}')">${cut(header.parentHash, 14, 10)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">block แรก</span>'],
       ["stateRoot", plain(header.stateRoot)],
       ["ผู้ปิด block", addr(header.feeRecipient)],
       ["จำนวน tx", `${num(header.txCount)} <span class="dim">(สำเร็จ ${header.successCount} · ล้มเหลว ${header.failedCount})</span>`],
-      ["ค่าแก๊สรวม", `${num(header.gasUsed)} <span class="dim">· ค่าธรรมเนียม ${num(header.fee)}</span>`],
+      ["ค่าแก๊สรวม", `${gas(header.gasUsed)} <span class="dim">· ค่าธรรมเนียม ${num(header.fee)}</span>`],
     ]))
     + panel(`transactions (${txs.length})`, table(["#", "hash", "ประเภท", "จาก", "ถึง", "ฟังก์ชัน", "สถานะ", "แก๊ส"], txs.map((t) =>
         txRow(t, [t.index, txLink(t.hash), actionTag(t.action), addr(t.from), addr(t.to),
           t.method ? `<span class="mono">${esc(t.method)}</span>` : '<span class="dim">—</span>',
-          state(t.status), num(t.gasUsed)]))))
+          state(t.status), gas(t.gasUsed)]))))
     + `<div class="nav"><a onclick="go('#block/${header.number - 1}')">← block ก่อนหน้า</a>
         <a onclick="go('#block/${header.number + 1}')">block ถัดไป →</a></div>`);
 }
@@ -208,18 +251,19 @@ async function tx(hash) {
       ["ถึง", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],
       r.method && ["ฟังก์ชัน", `<span class="mono">${esc(r.method)}</span>`],
       ["nonce", r.nonce ?? "—"],
-      ["ค่าแก๊ส", `${num(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
+      ["ค่าแก๊ส", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
+      ["block", blockNo(r.blockNumber)],
       ["เวลา", when(r.timestamp)],
-      ["ผลลัพธ์", `<span class="mono">${esc(JSON.stringify(r.result))}</span>`],
+      ["ผลลัพธ์", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
     ]))
-    + (r.input && Object.keys(r.input).length ? panel("input", `<pre>${esc(JSON.stringify(r.input, null, 2))}</pre>`, true) : "")
+    + (r.input && Object.keys(r.input).length ? panel("input", json(r.input), true) : "")
     + (r.trace?.length ? panel("การเรียกโปรแกรม", `<div class="pad trace">${r.trace.map((c) =>
         `${"│  ".repeat(c.depth)}${c.status === "success" ? "✓" : "✗"} ${icon(c.program)}<a onclick="go('#address/${c.program}')">${cut(c.program)}</a>.${esc(c.method)}`).join("\n")}</div>`) : "")
     + (r.events?.length ? panel("event", table(["ชื่อ", "โปรแกรม", "ข้อมูล"], r.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${addr(e.program)}</td>
-         <td class="mono">${esc(JSON.stringify(e.data))}</td></tr>`))) : "")
+         <td>${json(e.data)}</td></tr>`))) : "")
     + (r.stateChanges?.length ? panel("ข้อมูลที่เปลี่ยน", table(["โปรแกรม", "key", "ค่าใหม่"], r.stateChanges.map((s) =>
-        `<tr><td>${addr(s.program)}</td><td class="mono">${esc(s.key.join(" / "))}</td><td class="mono">${num(s.after)}</td></tr>`))) : "")
+        `<tr><td>${addr(s.program)}</td><td>${keyChips(s.key)}</td><td>${s.after === undefined ? '<span class="dim">ถูกลบ</span>' : anyValue(s.after)}</td></tr>`))) : "")
     + (r.nativeChanges?.length ? panel("ยอดเหรียญที่เปลี่ยน", table(["address", "ช่อง", "ค่าใหม่"], r.nativeChanges.map((n) =>
         `<tr><td>${addr(n.address)}</td><td class="dim">${n.field}</td><td class="mono">${num(n.after)}</td></tr>`))) : ""));
 }
@@ -312,7 +356,7 @@ const readForm = () => ({
   input: JSON.parse(document.getElementById("args").value || "{}"),
   value: Number(document.getElementById("val").value || 0),
 });
-const show = (data) => { document.getElementById("out").textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2); };
+const show = (data) => { document.getElementById("out").innerHTML = typeof data === "string" ? esc(data) : jsonHtml(data); };
 
 async function runQuery(program) {
   try {
@@ -334,14 +378,11 @@ async function runWrite(program) {
 }
 
 // ---------- ข้อมูลในโปรแกรม: แยกตามจำนวนชั้นของ key ----------
-//   variable     key 1 ชั้น (owner, price)          → แสดงทุกตัวพร้อมค่า
-//   contract     key 2 ชั้น (balances:<address>)    → เลือก key แรกจาก dropdown แล้ว list key ที่ 2 + ค่า
-//   get storage  key 3 ชั้นขึ้นไป (allow:<a>:<b>)   → ไม่ list · กรอก key ทีละชั้นแล้วอ่านค่าทีละตัว
-let storageView = { address: null, layout: null, sub: "variable", map: "", items: [], next: null, get: { name: "", parts: ["", ""] }, results: [] };
+//   program info  key 1 ชั้น (owner, price)          → แสดงทุกตัวพร้อมค่า
+//   storage       key 2 ชั้น (balances:<address>)    → dropdown key แรกที่หัวตาราง → list key ที่ 2 + ค่า
+//   get storage   key 3 ชั้นขึ้นไป (allowance:<a>:<b>) → ไม่ list · กรอก key ทีละชั้น (แนวตั้ง กด + เพิ่มชั้น) แล้วอ่านค่าทีละตัว
+let storageView = { address: null, layout: null, sub: "info", map: "", items: [], next: null, get: { name: "", parts: ["", ""] }, results: [] };
 
-/** ค่าใน storage: "123n" → 123 · address → ลิงก์ · object → JSON */
-const value = (v) => (isAddress(v) ? addr(v) : v !== null && typeof v === "object"
-  ? `<span class="mono">${esc(JSON.stringify(v))}</span>` : `<span class="mono">${esc(num(v))}</span>`);
 const keyCell = (k) => (isAddress(k) ? addr(k) : `<span class="mono">${esc(k)}</span>`);
 
 /** โหลดทุกครั้งที่วาดหน้าโปรแกรม (ข้อมูลเปลี่ยนทุก block) · ถ้ายังเป็นโปรแกรมเดิมจะคงแถบ / key ที่เลือก / ผลที่อ่านไว้ */
@@ -349,7 +390,7 @@ async function loadLayout(address) {
   const layout = await api(`/program/${address}/layout`).catch(() => ({ variables: [], maps: [], deep: [], scanned: 0 }));
   const same = storageView.address === address;
   const sub = same ? storageView.sub
-    : layout.variables.length ? "variable" : layout.maps.length ? "contract" : layout.deep.length ? "get" : "variable";
+    : layout.variables.length ? "info" : layout.maps.length ? "storage" : layout.deep.length ? "get" : "info";
   const map = same && layout.maps.some((m) => m.name === storageView.map) ? storageView.map : layout.maps[0]?.name ?? "";
   storageView = { address, layout, sub, map, items: [], next: null,
     get: same ? storageView.get : { name: layout.deep[0]?.name ?? "", parts: ["", ""] }, results: same ? storageView.results : [] };
@@ -373,18 +414,7 @@ function drawStorage() {
 }
 
 function pickSub(sub) { readKeys(); storageView.sub = sub; drawStorage(); }
-
-/** แตะ dropdown ของ contract ตอนอยู่แถบอื่น → สลับมา contract โดยไม่วาด dropdown ใหม่ (ไม่งั้นมันจะปิดเอง) */
-function enterContract() {
-  if (storageView.sub === "contract") return;
-  readKeys();
-  storageView.sub = "contract";
-  document.querySelectorAll("#storage-panel .sub .tab").forEach((t) => t.classList.toggle("on", t.dataset.sub === "contract"));
-  const box = document.getElementById("storage-box");
-  box.innerHTML = storageBody();
-  decorate(box);
-}
-async function pickMap(name) { storageView.sub = "contract"; storageView.map = name; storageView.items = []; await loadMap(false); }
+async function pickMap(name) { storageView.map = name; storageView.items = []; await loadMap(false); }
 
 /** เก็บค่าที่พิมพ์ไว้ก่อนวาดใหม่ (กด + / สลับแถบ แล้วช่องกรอกไม่หาย) */
 function readKeys() {
@@ -393,7 +423,12 @@ function readKeys() {
   storageView.get.name = name.value;
   storageView.get.parts = [...document.querySelectorAll(".gk-part")].map((input) => input.value);
 }
-function addKey() { readKeys(); storageView.get.parts.push(""); drawStorage(); document.querySelector(".gk-part:last-of-type")?.focus(); }
+function addKey() {
+  readKeys();
+  storageView.get.parts.push("");
+  drawStorage();
+  [...document.querySelectorAll(".gk-part")].at(-1)?.focus();
+}
 function dropKey() { readKeys(); if (storageView.get.parts.length > 2) storageView.get.parts.pop(); drawStorage(); }
 
 async function readStorage() {
@@ -412,55 +447,57 @@ function storageBody() {
   if (!layout) return '<div class="empty">กำลังโหลด…</div>';
   const note = layout.truncated ? `<div class="pad dim" style="font-size:12.5px">นับจาก ${num(layout.scanned)} key แรกเท่านั้น (มีมากกว่านี้)</div>` : "";
 
-  if (sub === "variable") {
-    return table(["key", "ค่า"], layout.variables.map((v) => `<tr><td class="mono">${esc(v.key)}</td><td>${value(v.value)}</td></tr>`)) + note;
+  if (sub === "info") {
+    return table(["key", "ค่า"], layout.variables.map((v) => `<tr><td>${keyChips([v.key])}</td><td>${anyValue(v.value)}</td></tr>`)) + note;
   }
 
-  if (sub === "contract") {
+  if (sub === "storage") {
     if (!layout.maps.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 2 ชั้น</div>';
     const { items, next, map } = storageView;
     const total = layout.maps.find((m) => m.name === map)?.count ?? items.length;
-    return table([`${esc(map)} / key`, "ค่า"], items.map((i) => `<tr><td>${keyCell(i.key)}</td><td>${value(i.value)}</td></tr>`))
+    // dropdown key แรกอยู่ที่หัวตาราง แทนข้อความ "<ชื่อ key> / key"
+    const select = `<select id="map-name" title="key แรก" onchange="pickMap(this.value)">${layout.maps.map((m) =>
+      `<option value="${attr(m.name)}" ${m.name === map ? "selected" : ""}>${esc(m.name)} (${num(m.count)})</option>`).join("")}</select>`;
+    return table([select, "ค่า"], items.map((i) => `<tr><td>${keyCell(i.key)}</td><td>${anyValue(i.value)}</td></tr>`))
       + `<div class="pad row dim" style="border-top:1px solid var(--line);font-size:12.5px">
           แสดง ${num(items.length)} จาก ${num(total)} รายการ
           ${next ? `<button class="btn" onclick="loadMap(true)">แสดงเพิ่ม 50 รายการ</button>` : ""}
          </div>` + note;
   }
 
-  // get storage
+  // get storage: key เรียงลงมาแนวตั้ง กด + เพิ่มชั้นต่อด้านล่าง
   const { name, parts } = storageView.get;
   const names = layout.deep.map((d) => d.name);
   if (!names.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 3 ชั้นขึ้นไป</div>';
-  const inputs = parts.map((p, i) => `<span class="sep">/</span><input class="gk-part" placeholder="key ${i + 2}" value="${attr(p)}"
-      onkeydown="if(event.key==='Enter')readStorage()" spellcheck="false">`).join("");
-  const results = storageView.results.map((r) => `<tr><td class="mono">${esc(r.key.join(" / "))}</td><td>${
-    r.error ? `<span class="tag bad">${esc(r.error)}</span>` : r.exists ? value(r.value) : '<span class="dim">ไม่มีค่า (ยังไม่เคยถูกเขียน)</span>'}</td></tr>`);
-  return `<div class="pad form">
-      <div class="keys">
-        <select id="gk-name" title="key แรก">${names.map((n) => `<option value="${attr(n)}" ${n === name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-        ${inputs}
-        <button class="btn" onclick="addKey()" title="เพิ่มช่อง key">+</button>
-        ${parts.length > 2 ? '<button class="btn" onclick="dropKey()" title="ลบช่อง key สุดท้าย">−</button>' : ""}
-        <button class="btn solid" onclick="readStorage()">อ่านค่า</button>
+  const rows = parts.map((p, i) => `<label class="krow"><span>key ${i + 2}</span><input class="gk-part" placeholder="key ${i + 2}" value="${attr(p)}"
+      onkeydown="if(event.key==='Enter')readStorage()" spellcheck="false"></label>`).join("");
+  const results = storageView.results.map((r) => `<tr><td>${keyChips(r.key)}</td><td>${
+    r.error ? `<span class="tag bad">${esc(r.error)}</span>` : r.exists ? anyValue(r.value) : '<span class="dim">ไม่มีค่า (ยังไม่เคยถูกเขียน)</span>'}</td></tr>`);
+  return `<div class="pad">
+      <div class="getkeys">
+        <label class="krow"><span>key 1</span><select id="gk-name">${names.map((n) =>
+          `<option value="${attr(n)}" ${n === name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+        ${rows}
+        <div class="krow"><span></span><div class="row">
+          <button class="btn" onclick="addKey()" title="เพิ่มช่อง key">+ key</button>
+          ${parts.length > 2 ? '<button class="btn" onclick="dropKey()" title="ลบช่อง key สุดท้าย">− key</button>' : ""}
+          <button class="btn solid" onclick="readStorage()">อ่านค่า</button>
+        </div></div>
+        <div class="krow"><span></span><span>${layout.deep.map((d) => `${esc(d.name)}: ${num(d.count)} key · ลึก ${d.depth} ชั้น`).join(" · ")}</span></div>
       </div>
-      <span class="dim" style="font-size:12.5px">${layout.deep.map((d) => `${esc(d.name)}: ${num(d.count)} key · ลึก ${d.depth} ชั้น`).join(" · ")}</span>
     </div>` + (results.length ? table(["key", "ค่า"], results) : "") + note;
 }
 
 const storagePanel = () => `<div id="storage-panel">${storageInner()}</div>`;
 
 function storageInner() {
-  const { layout, sub, map } = storageView;
-  const maps = layout?.maps ?? [];
+  const { layout, sub } = storageView;
   const count = (n) => `<b>${num(n)}</b>`;
-  const select = maps.length
-    ? `<select title="key แรก" onclick="event.stopPropagation()" onfocus="enterContract()" onchange="pickMap(this.value)">${maps.map((m) =>
-        `<option value="${attr(m.name)}" ${m.name === map ? "selected" : ""}>${esc(m.name)} (${num(m.count)})</option>`).join("")}</select>`
-    : "";
+  const tab = (id, label, n) => `<button class="tab ${sub === id ? "on" : ""}" data-sub="${id}" onclick="pickSub('${id}')">${label}${n === undefined ? "" : count(n)}</button>`;
   return `<div class="sub">
-      <button class="tab ${sub === "variable" ? "on" : ""}" data-sub="variable" onclick="pickSub('variable')">variable${count(layout?.variables.length ?? 0)}</button>
-      <span class="tab ${sub === "contract" ? "on" : ""}" data-sub="contract"><span role="button" tabindex="0" onclick="pickSub('contract')">contract</span>${select}</span>
-      <button class="tab ${sub === "get" ? "on" : ""}" data-sub="get" onclick="pickSub('get')">get storage</button>
+      ${tab("info", "program info", layout?.variables.length ?? 0)}
+      ${tab("storage", "storage", layout?.maps.reduce((sum, m) => sum + m.count, 0) ?? 0)}
+      ${tab("get", "get storage")}
     </div>
     <div id="storage-box">${storageBody()}</div>`;
 }
@@ -478,7 +515,7 @@ function tabs(groups) {
 function pickTab(id) { tabState[location.hash] = id; render(); }
 
 async function address(value) {
-  const data = await api(`/address/${value}`);
+  const [data, tokens] = await Promise.all([api(`/address/${value}`), api(`/address/${value}/tokens`).catch(() => [])]);
   const program = data.isProgram ? await api(`/program/${value}`) : null;
   if (program) await loadLayout(program.address);
   const incoming = program?.interactions ?? data.incoming ?? [];
@@ -486,13 +523,19 @@ async function address(value) {
   const inRows = incoming.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
       t.depth ? ` <span class="tag" title="ถูกเรียกผ่านโปรแกรมอื่น">ซ้อนชั้น ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
     <td class="mono hide-sm">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
-    <td class="hide-sm"><a onclick="go('#block/${t.blockNumber}')">#${t.blockNumber}</a></td>
+    <td class="hide-sm">${blockNo(t.blockNumber)}</td>
     <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
   const outRows = data.transactions.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>
-    <td class="hide-sm">${t.nonce}</td><td>${state(t.status)}</td><td class="hide-sm">${num(t.gasUsed)}</td>
+    <td class="hide-sm">${t.nonce}</td><td>${state(t.status)}</td><td class="hide-sm">${gas(t.gasUsed)}</td>
     <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
 
+  // เหรียญที่ถือ: นับจาก event Transfer ที่ส่งมาถึง address นี้ · ยอด 0 ไม่แสดง
+  const tokenRows = tokens.map((t) => `<tr><td><span class="ico coin"></span><b>${esc(t.ticker)}</b></td>
+    <td>${addr(t.address, t.name)}</td><td class="mono" style="text-align:right">${units(t.balance, t.decimals)}</td>
+    <td class="dim hide-sm">${num(t.decimals)}</td></tr>`);
   const groups = [
+    ...(tokens.length ? [{ id: "tokens", label: "เหรียญที่ถือ", count: tokens.length,
+      body: table(["เหรียญ", "โปรแกรม", "ยอด", "decimals"], tokenRows) }] : []),
     { id: "in", label: program ? "ถูกเรียกใช้" : "รับเข้า", count: incoming.length,
       body: table(["hash", "จาก", "ประเภท", "ฟังก์ชัน", "สถานะ", "block", "เวลา"], inRows) },
     { id: "out", label: "ส่งออก", count: data.transactions.length,
@@ -502,8 +545,8 @@ async function address(value) {
     groups.push({ id: "interact", label: "เรียกใช้โปรแกรม", body: interactPanel(program) });
     groups.push({ id: "event", label: "event", count: program.events.length,
       body: table(["ชื่อ", "ข้อมูล", "tx", "block"], program.events.map((e) =>
-        `<tr><td><span class="tag">${esc(e.name)}</span></td><td class="mono">${esc(JSON.stringify(e.data))}</td>
-         <td>${txLink(e.txHash)}</td><td class="hide-sm"><a onclick="go('#block/${e.blockNumber}')">#${e.blockNumber}</a></td></tr>`)) });
+        `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${json(e.data)}</td>
+         <td>${txLink(e.txHash)}</td><td class="hide-sm">${blockNo(e.blockNumber)}</td></tr>`)) });
     groups.push({ id: "storage", label: "ข้อมูล", count: storageView.layout?.scanned, body: storagePanel() });
     groups.push({ id: "code", label: "โค้ด", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
   }
@@ -515,6 +558,8 @@ async function address(value) {
       ["ยอดคงเหลือ", `<b>${num(data.native.balance)}</b>`],
       ["รับ / ส่ง / ค่าแก๊ส", `${num(data.native.received)} · ${num(data.native.sended)} · ${num(data.native.consumed)}`],
       ["nonce", data.nonce],
+      program?.token && ["token", `<span class="ico coin"></span><b>${esc(program.token.name)}</b> <span class="tag">${esc(program.token.ticker)}</span>
+        <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],
       program && ["ผู้สร้าง", addr(data.metadata.creator)],
       program && ["สร้างเมื่อ", when(data.metadata.createdAt)],
     ])) + tabs(groups));

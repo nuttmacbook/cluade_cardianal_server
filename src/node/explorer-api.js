@@ -1,13 +1,14 @@
 /**
  * ข้อมูลที่ explorer ใช้แสดง storage ของโปรแกรม แยกตามจำนวนชั้นของ key
  *
- *   key 1 ชั้น   owner, price, supply          → แถบ variable   (แสดงทุกตัวพร้อมค่า)
- *   key 2 ชั้น   balances:<address>, items:<id> → แถบ contract    (เลือก key แรกจาก dropdown แล้ว list key ที่ 2)
+ *   key 1 ชั้น   owner, price, supply          → แถบ program info (แสดงทุกตัวพร้อมค่า)
+ *   key 2 ชั้น   balances:<address>, items:<id> → แถบ storage     (เลือก key แรกจาก dropdown แล้ว list key ที่ 2)
  *   key 3+ ชั้น  allow:<owner>:<spender>        → แถบ get storage (ไม่ list · กรอก key เองแล้วอ่านทีละตัว)
  *
  * แยกจาก server.js เพื่อให้เทสต์เรียกตรงกับ VM ได้โดยไม่ต้องเปิด server
  */
 import { storageKey, map } from "../core/virtualmachine.js";
+import { checkTokenStandard } from "../standards/token.js";
 
 const SEP = ":";
 export const SCAN_LIMIT = 20_000;   // ไล่ key ไม่เกินเท่านี้ต่อครั้ง (เกินแล้วตอบ truncated: true)
@@ -88,4 +89,36 @@ export function programFlags(vm, addresses) {
     const address = lower(value);
     return [address, vm.read(`${address}${SEP}code`) !== undefined || vm.read(`pending${SEP}${address}`) !== undefined];
   }));
+}
+
+// ---------- token ----------
+
+/** ข้อมูล token ตามมาตรฐาน (src/standards/token.js) · ไม่ใช่ token → null */
+export function tokenInfo(vm, program) {
+  const address = lower(program);
+  const code = vm.read(`${address}${SEP}code`);
+  if (code === undefined || !checkTokenStandard(code).ok) return null;
+  const read = (functionName, input = {}) => {
+    const result = vm.query({ programUuid: address, functionName, input });
+    return result.status === "success" ? result.result : null;
+  };
+  return { address, name: read("name"), ticker: read("ticker"), decimals: read("decimals"), totalSupply: read("totalSupply") };
+}
+
+/**
+ * เหรียญที่ address นี้ถืออยู่: รายชื่อโปรแกรมมาจาก event Transfer ที่ส่งมาถึง address นี้ (ดัชนี holding:)
+ * ยอดอ่านจาก balanceOf ของโปรแกรม · ยอด 0 ไม่แสดง
+ */
+export function tokenHoldings(vm, address) {
+  const who = lower(address);
+  const tokens = [];
+  for (const { program } of vm.listHoldings(who)) {
+    const info = tokenInfo(vm, program);
+    if (!info) continue;
+    const result = vm.query({ programUuid: program, functionName: "balanceOf", input: { who } });
+    const balance = result.status === "success" ? result.result : null;
+    if (balance === null || /^0n?$/.test(String(balance))) continue;
+    tokens.push({ ...info, balance });
+  }
+  return tokens;
 }

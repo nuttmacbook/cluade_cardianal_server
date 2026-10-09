@@ -30,6 +30,9 @@ import net from "node:net";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import * as sign from "../src/crypto/signature.js";
+import { TOKEN_PROGRAM } from "../src/standards/token.js";
+
+const UNIT = 10n ** 6n;   // token 6 decimals: 1 เหรียญ = 1,000,000 หน่วย
 
 // ============================================================================
 //  ตัวเลือก
@@ -76,40 +79,7 @@ const DEPLOY_PLAN = [
 ];
 
 const PROGRAMS = {
-  token: `function program() {
-  function initialization(params) {
-    writeDB("owner", params.context.sender)
-    writeDB("name", params.input.name)
-    writeDB("supply", params.input.supply)
-    writeDB(map("balances", params.context.sender), params.input.supply)
-    setMetadata("namespace", params.input.name)
-    emit("Minted", { to: params.context.sender, amount: params.input.supply })
-  }
-  function balanceOf(params) { return readDB(map("balances", params.input.who)) || 0n }
-  function allowanceOf(params) { return readDB(map("allow", params.input.owner, params.input.spender)) || 0n }
-  function move(from, to, amount) {
-    if (amount <= 0n) throw new Error("จำนวนต้องมากกว่า 0")
-    const balance = readDB(map("balances", from)) || 0n
-    if (balance < amount) throw new Error("ยอดไม่พอ")
-    writeDB(map("balances", from), balance - amount)
-    writeDB(map("balances", to), (readDB(map("balances", to)) || 0n) + amount)
-    emit("Transfer", { from: from, to: to, amount: amount })
-  }
-  function transfer(params) { move(params.context.sender, params.input.to, params.input.amount); return true }
-  function approve(params) {
-    writeDB(map("allow", params.context.sender, params.input.spender), params.input.amount)
-    emit("Approval", { owner: params.context.sender, spender: params.input.spender, amount: params.input.amount })
-    return true
-  }
-  function transferFrom(params) {
-    const allowed = readDB(map("allow", params.input.from, params.context.sender)) || 0n
-    if (allowed < params.input.amount) throw new Error("วงเงินไม่พอ")
-    writeDB(map("allow", params.input.from, params.context.sender), allowed - params.input.amount)
-    move(params.input.from, params.input.to, params.input.amount)
-    return true
-  }
-  return { balanceOf, allowanceOf, transfer, approve, transferFrom }
-}`,
+  token: TOKEN_PROGRAM,   // มาตรฐาน token (src/standards/token.js) · 6 decimals
 
   market: `function program() {
   function initialization(params) {
@@ -375,7 +345,8 @@ function tokenTransferJob(wallet, token) {
   return () => {
     const balance = tokenBalance(token.address, wallet.address);
     const to = other(wallet);
-    const amount = token.owner === wallet ? BigInt(randomInt(500, 5_000)) : BigInt(randomInt(1, Number(balance < 1000n ? balance : 1000n)));
+    const wanted = token.owner === wallet ? BigInt(randomInt(500, 5_000)) * UNIT : BigInt(randomInt(1, 1_000)) * UNIT / 10n;
+    const amount = wanted < balance ? wanted : balance;
     addToken(token.address, wallet.address, -amount);
     addToken(token.address, to.address, amount);
     return send(wallet, { action: "call", to: token.address, method: "transfer", input: { to: to.address, amount: `${amount}n` } }, "call token.transfer");
@@ -406,10 +377,10 @@ function actionFor(wallet) {
 
     if (balance > 0n && !approved) add(4, () => {
       state.allowances.add(`${wallet.address}:${market.address}`);
-      return send(wallet, { action: "call", to: market.token, method: "approve", input: { spender: market.address, amount: "1000000000n" } }, "call token.approve");
+      return send(wallet, { action: "call", to: market.token, method: "approve", input: { spender: market.address, amount: `${1_000_000_000n * UNIT}n` } }, "call token.approve");
     });
     add(2, async () => {
-      const price = BigInt(randomInt(50, 2_000));
+      const price = BigInt(randomInt(50, 2_000)) * UNIT;
       const hash = await send(wallet, { action: "call", to: market.address, method: "list", input: { price: `${price}n`, name: pick(["เก้าอี้", "โคมไฟ", "หนังสือ", "รองเท้า", "กระเป๋า", "นาฬิกา"]) } }, "call market.list");
       if (hash) state.pendingListings.push({ hash, market: market.address, seller: wallet.address, price });
     });
@@ -452,7 +423,7 @@ function deployJob(kind, owner, slotIndex) {
   programCount += 1;
   const name = `${OPTIONS.seed}-${kind}-${programCount}`;
   const tokens = programsOf("token");
-  const input = kind === "token" ? { name, supply: "1000000n" }
+  const input = kind === "token" ? { name: `Token ${programCount}`, ticker: `TK${programCount}`, decimals: "6n", supply: `${1_000_000n * UNIT}n`, namespace: name }
     : kind === "market" ? { name, token: tokens.length ? pick(tokens).address : null, treasury: TREASURY, feeBps: "250n" }
     : { name, question: `คำถามที่ ${programCount}`, options: ["ใช่", "ไม่ใช่", "ไม่แน่ใจ"] };
   if (kind === "market" && !input.token) return null;     // ยังไม่มีโทเคนให้ตลาดใช้ → เลื่อนไปก่อน
