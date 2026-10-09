@@ -14,7 +14,8 @@ import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
-import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings } from "./src/node/explorer-api.js";
+import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
+  pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -64,7 +65,9 @@ const ROUTES = {
     for (let n = from; n > 0 && list.length < limitOf(query); n -= 1) { const b = vm.getBlock(n); if (b) list.push(b); }
     return list;
   },
-  "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "ยังไม่มี block" },
+  // แบบแบ่งหน้า: ?page=<เลขหน้า>&limit=<ต่อหน้า> → { items, total, page, pages, limit, truncated }
+  "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
+  "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "No blocks yet" },
   "/pending": () => ({ size: mempool.size, transactions: mempool.list() }),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
@@ -75,18 +78,18 @@ const ROUTES = {
 const DYNAMIC = [
   [/^\/block\/(\d+)$/, (m, query) => {
     const header = vm.getBlock(Number(m[1]));
-    if (!header) return { status: 404, body: { error: "ไม่พบ block" } };
+    if (!header) return { status: 404, body: { error: "Block not found" } };
     if (query.get("full") !== "1") return header;
     try { return vm.replayBlock(Number(m[1])); } catch (error) { return { status: 409, body: { error: error.message, header } }; }
   }],
   [/^\/tx\/([^/]+)\/receipt$/, (m) => {
     const found = vm.getTransaction(m[1]);
-    if (!found) return { status: 404, body: { error: "ไม่พบ tx" } };
+    if (!found) return { status: 404, body: { error: "Transaction not found" } };
     try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber }; }
     catch (error) { return { status: 409, body: { error: error.message, tx: found } }; }
   }],
   [/^\/tx\/([^/]+)$/, (m) => vm.getTransaction(m[1])
-    ?? (mempool.has(m[1]) ? { status: "pending", hash: m[1] } : { status: 404, body: { error: "ไม่พบ tx" } })],
+    ?? (mempool.has(m[1]) ? { status: "pending", hash: m[1] } : { status: 404, body: { error: "Transaction not found" } })],
   [/^\/address\/([^/]+)$/, (m, query) => ({
     address: lower(m[1]), native: vm.nativeBalanceOf(m[1]),
     nonce: vm.checkTransaction({ from: m[1], nonce: -1 }).expectedNonce,
@@ -96,7 +99,7 @@ const DYNAMIC = [
   })],
   [/^\/program\/([^/]+)$/, (m, query) => {
     const code = vm.read(`${lower(m[1])}:code`);
-    if (!code) return { status: 404, body: { error: "ไม่พบโปรแกรม (อาจยังไม่ได้ init)" } };
+    if (!code) return { status: 404, body: { error: "Program not found (it may not be initialized yet)" } };
     return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: vm.getMetadata(m[1]),
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),
       interactions: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
@@ -133,7 +136,12 @@ const DYNAMIC = [
   // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
   // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
   [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
-  [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "ไม่ใช่ token ตามมาตรฐาน" } }],
+  [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "Not a standard token" } }],
+  [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
+  [/^\/address\/([^/]+)\/incoming$/, (m, query) => pageTransactionsTo(vm, m[1], pageOf(query))],
+  [/^\/program\/([^/]+)\/events$/, (m, query) => pageEvents(vm, m[1], pageOf(query), query.get("name") ?? "")],
+  [/^\/program\/([^/]+)\/entries$/, (m, query) => pageStorageMap(vm, m[1], query.get("name") ?? "", pageOf(query))],
+  [/^\/token\/([^/]+)\/holders$/, (m, query) => pageHolders(vm, m[1], pageOf(query))],
   [/^\/program\/([^/]+)\/layout$/, (m) => storageLayout(vm, m[1])],
   [/^\/program\/([^/]+)\/map$/, (m, query) => storageMap(vm, m[1], query.get("name") ?? "", { limit: Math.min(Number(query.get("limit")) || 50, 200), start: query.get("start") || undefined })],
   [/^\/program\/([^/]+)\/get$/, (m, query) => storageGet(vm, m[1], query.getAll("key"))],
@@ -176,7 +184,7 @@ function handlePost(url, body) {
     const result = vm.query(body ?? {});
     return result.status === "success" ? result : { status: 400, body: result };
   }
-  return { status: 404, body: { error: "ไม่พบ endpoint" } };
+  return { status: 404, body: { error: "Endpoint not found" } };
 }
 
 const send = (response, status, data) => {
@@ -199,14 +207,14 @@ export const server = http.createServer(async (request, response) => {
       const ip = request.socket.remoteAddress ?? "unknown";
       if (!postLimiter.allow(ip)) {
         response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
-        return send(response, 429, { error: "เรียกถี่เกินกำหนด ลองใหม่ภายหลัง" });
+        return send(response, 429, { error: "Too many requests, try again later" });
       }
       result = handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
     } else if (ROUTES[url.pathname]) {
       result = ROUTES[url.pathname](url.searchParams);
     } else {
       const found = DYNAMIC.map(([pattern, handler]) => [pattern.exec(url.pathname), handler]).find(([match]) => match);
-      result = found ? found[1](found[0], url.searchParams) : { status: 404, body: { error: "ไม่พบ endpoint" } };
+      result = found ? found[1](found[0], url.searchParams) : { status: 404, body: { error: "Endpoint not found" } };
     }
     if (result?.status && result?.body) return send(response, result.status, result.body);
     return send(response, 200, result);

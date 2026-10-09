@@ -127,7 +127,7 @@ test("server: POST เกิน RATE_LIMIT ต่อ IP → 429 พร้อม 
   const res = await post("/sendtx", {});
   assert.equal(res.status, 429);
   assert.ok(Number(res.headers.get("retry-after")) >= 1);
-  assert.match((await res.json()).error, /ถี่เกินกำหนด/);
+  assert.match((await res.json()).error, /Too many requests/);
 });
 
 test("server: GET ไม่ถูกจำกัด", async () => {

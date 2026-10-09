@@ -4,3 +4,4 @@ data/
 *.mdb
 .DS_Store
 simulate-report*.json
+scenario-report*.json

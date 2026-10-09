@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070814">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070814">
 <title>Program VM Explorer</title>
 <style>
 :root{
-  /* ธีมโทนมืด: ดำ · น้ำเงิน · ม่วง (ใช้ธีมเดียวทั้งโหมดสว่างและมืดของเครื่อง) */
+  /* dark theme: black · blue · purple (same theme for light and dark OS mode) */
   color-scheme:dark;
   --bg:#070814;--panel:#0e1026;--line:#22264a;--text:#e8e9ff;--dim:#8e93c2;--soft:#161a3a;
   --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
@@ -35,7 +35,7 @@ td{padding:11px 18px;border-bottom:1px solid var(--line)}
 tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--soft)}
 .kv td:first-child{color:var(--dim);width:190px;font-size:13px}
 .kv td{overflow-wrap:anywhere}
-/* ตารางกว้างกว่าจอ → เลื่อนในกรอบตาราง (ไม่ดันทั้งหน้า) */
+/* tables wider than the screen scroll inside their frame */
 .twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 a{color:var(--accent);text-decoration:none;cursor:pointer}a:hover{text-decoration:underline}
 .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
@@ -75,7 +75,7 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
 .out{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-/* ไอคอนหน้า address: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ = โปรแกรม (มีโค้ด) */
+/* address icons: person = user wallet · computer = program (has code) */
 .ico{display:inline-block;width:14px;height:14px;margin-right:5px;vertical-align:-2px;background:currentColor;opacity:0;
   -webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat}
 .ico.person{opacity:.75;color:var(--dim);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='7.5' r='4.5'/%3E%3Cpath d='M3 22c0-5 4-8.5 9-8.5s9 3.5 9 8.5z'/%3E%3C/svg%3E")}
@@ -83,21 +83,21 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
 .ico.big{width:18px;height:18px;vertical-align:-3px}
 .sub{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
 #storage-panel .pad{padding:14px 18px}
-/* ข้อมูลแบบ { } ทุกจุด: กรอบดำ จัดรูปแบบเหมือน JSON (ดำทั้งโหมดสว่างและมืด) */
+/* every { } value: black JSON box */
 .json{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:0;
   font:12.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;text-align:left}
 td .json{min-width:220px}
 .json .k,.out .k{color:#93b4ff}.json .s,.out .s{color:#a5e3a1}.json .n,.out .n{color:#fbbf24}.json .b,.out .b{color:#d8b4fe}.json .p,.out .p{color:#5b6190}
-/* key หลายชั้น: badge ขอบสี่เหลี่ยมต่อกัน */
+/* multi-part keys: joined badges */
 .kchips{display:inline-flex;flex-wrap:wrap;gap:0;vertical-align:middle}
 .kchip{font:12px/1.5 ui-monospace,Menlo,monospace;border:1px solid var(--line);background:var(--soft);padding:1px 8px;margin-right:-1px;border-radius:0;white-space:nowrap}
 .kchip:first-child{border-radius:4px 0 0 4px;font-weight:600}.kchip:last-child{border-radius:0 4px 4px 0;margin-right:0}
 .kchip:only-child{border-radius:4px}
-/* ไอคอนแก๊ส (ไฟ) / block (กล่อง) */
+/* gas (bolt) / block (cube) / coin icons */
 .ico.gas{opacity:1;color:#fbbf24;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2 4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E")}
 .ico.blk{opacity:1;color:var(--accent);--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 3 7v10l9 5 9-5V7zm0 2.3L18.7 8 12 11.7 5.3 8zM5 9.7l6 3.3v6.6l-6-3.3zm8 9.9V13l6-3.3v6.6z'/%3E%3C/svg%3E")}
 .ico.coin{opacity:1;color:#facc15;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z'/%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3C/svg%3E")}
-/* metadata: ไอคอนสี่เหลี่ยมจัตุรัส + ลิงก์ออกไปข้างนอก */
+/* metadata: square icon + external links */
 .avatar{display:inline-grid;place-items:center;width:32px;height:32px;flex:0 0 auto;border-radius:8px;overflow:hidden;
   background:var(--grad);color:#fff;font-weight:700;font-size:15px;vertical-align:middle;border:1px solid var(--line)}
 .avatar img{width:100%;height:100%;object-fit:cover;display:block}
@@ -117,6 +117,30 @@ td .json{min-width:220px}
 .getkeys .krow span{color:var(--dim);font-size:12.5px}
 .getkeys select,.getkeys input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:8px;font:12.5px ui-monospace,Menlo,monospace}
 th select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px;padding:3px 6px;text-transform:none;letter-spacing:0}
+/* pagination: page numbers + prev / next + jump to page */
+.pager{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim)}
+.pages{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.pg{min-width:32px;height:30px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px;font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
+.pg:hover:not(:disabled){border-color:var(--accent-2);color:var(--accent-2)}
+.pg.on{background:var(--grad);border-color:transparent;color:#fff;font-weight:600}
+.pg:disabled{opacity:.4;cursor:default}
+.gap{padding:0 2px}
+.jump{display:flex;gap:4px;align-items:center}
+.jump input{flex:none;width:72px;padding:5px 8px;border-radius:8px;font-size:12.5px}
+/* call trace: one card per call, indented by depth */
+.calls{display:grid;gap:8px;padding:14px 18px}
+.calls-sum{font-size:12.5px;color:var(--dim)}
+.call{margin-left:calc(min(var(--d),8) * clamp(4px,2.5vw,24px));border:1px solid var(--line);border-left:3px solid var(--accent-2);border-radius:8px;padding:8px 12px;background:var(--bg);min-width:0}
+.call.fail{border-left-color:var(--bad)}
+.call-h{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;min-width:0}
+.call-h .mono{overflow-wrap:anywhere}
+.call-m{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--dim);margin-top:4px}
+.call-b{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;margin-top:8px}
+.io .tag{max-width:100%;overflow-wrap:anywhere}
+.io{min-width:0}.io .lbl{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+.bad{color:var(--bad)}
+.full{overflow-wrap:anywhere;word-break:break-all}
+.share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
   .brand{width:100%}
@@ -127,7 +151,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .stat b{font-size:20px}
   table{font-size:13px}
 }
-/* มือถือ: ตารางข้อมูลกลายเป็นการ์ด แถวละใบ · ทุกคอลัมน์มีชื่อกำกับ (data-label มาจากหัวตาราง) */
+/* phones: each table row becomes a card, every cell labelled from its column header (data-label) */
 @media(max-width:640px){
   header{position:static}
   .tabs{flex-wrap:wrap;overflow:visible}
@@ -154,7 +178,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .getkeys .krow{grid-template-columns:1fr;gap:4px}
   .getkeys .krow>span:empty{display:none}
 }
-/* จอเล็กมาก (≥180px): ชื่อคอลัมน์อยู่บนค่า · ระยะขอบแคบลง */
+/* very small screens (down to 180px): labels above values, tighter padding */
 @media(max-width:360px){
   body{font-size:13px}
   .bar{padding:10px 8px;gap:8px}
@@ -169,35 +193,41 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .kv tr{padding:8px 12px}
   .stat{padding:12px}
   .json,pre,.out{padding:8px 10px;font-size:11.5px}
+  .calls,.pager{padding:10px 12px}
+  .call{padding:6px 8px}
   .mono{font-size:11.5px}
 }
 </style></head><body>
 <header><div class="bar">
   <div class="brand" onclick="go('')">Program VM<span id="tick"></span></div>
-  <input id="q" placeholder="ค้นหา block / tx / address / ชื่อ" onkeydown="if(event.key==='Enter')search()">
-  <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>
+  <input id="q" placeholder="Search block / tx / address / name" onkeydown="if(event.key==='Enter')search()">
+  <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>
 </div></header>
 <main id="view"></main>
-<div class="toast" id="toast">คัดลอกแล้ว</div>
+<div class="toast" id="toast">Copied</div>
 <script>
 const api = (p, o) => fetch(location.origin + p, o).then((r) => r.json());
 const go = (hash) => { location.hash = hash; render(); };
 const esc = (v) => String(v ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-const attr = (v) => esc(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");   // ค่าใน attribute (key ใน storage มาจากโปรแกรม)
-const cut = (v, head = 10, tail = 8) => (typeof v === "string" && v.length > head + tail + 2 ? v.slice(0, head) + "…" + v.slice(-tail) : v ?? "—");
+const attr = (v) => esc(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");   // attribute values (storage keys come from programs)
+/** shortened form wherever space is tight: 0x1234…abcd (4 characters each side) */
+const cut = (v) => (typeof v !== "string" ? v ?? "—"
+  : /^0x[0-9a-f]{9,}$/i.test(v) ? `${v.slice(0, 6)}…${v.slice(-4)}`
+  : v.length > 20 ? `${v.slice(0, 10)}…${v.slice(-8)}` : v);
 const num = (v) => (typeof v === "string" && /^-?\d+n$/.test(v) ? BigInt(v.slice(0, -1)).toLocaleString("en-US")
   : typeof v === "number" ? v.toLocaleString("en-US") : v ?? "—");
-const when = (t) => (t ? new Date(t).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "medium" }) : "—");
+const when = (t) => (t ? new Date(t).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "medium" }) : "—");
 const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000);
-  return s < 60 ? `${s | 0} วินาทีที่แล้ว` : s < 3600 ? `${s / 60 | 0} นาทีที่แล้ว` : `${s / 3600 | 0} ชั่วโมงที่แล้ว`; };
+  return s < 60 ? `${s | 0} sec ago` : s < 3600 ? `${s / 60 | 0} min ago` : s < 86400 ? `${s / 3600 | 0} hr ago` : `${s / 86400 | 0} days ago`; };
+const plural = (n, word) => `${num(n)} ${word}${n === 1 ? "" : "s"}`;
 
-/** ทุก address และ hash คลิกได้ + ก๊อปปี้ได้ */
-const copy = (value) => `<button class="copy" title="คัดลอก" onclick="event.stopPropagation();copyText('${value}')">⧉</button>`;
+/** every address and hash is clickable and copyable */
+const copy = (value) => `<button class="copy" title="Copy" onclick="event.stopPropagation();copyText('${value}')">⧉</button>`;
 const icon = (a, big) => `<span class="ico${big ? " big" : ""}" data-ico="${attr(String(a).toLowerCase())}"></span>`;
-const addr = (a, label) => (a ? `<span class="mono">${icon(a)}<a onclick="go('#address/${a}')">${esc(label ?? cut(a))}</a>${copy(a)}</span>` : '<span class="dim">—</span>');
+const addr = (a, label) => (a ? `<span class="mono">${icon(a)}<a onclick="go('#address/${a}')" title="${attr(a)}">${esc(label ?? cut(a))}</a>${copy(a)}</span>` : '<span class="dim">—</span>');
 const isAddress = (v) => typeof v === "string" && /^0x[0-9a-f]{40}$/i.test(v);
 
-/** ข้อมูล { } / [ ] → กรอบดำแบบ JSON มีสี · "123n" แสดงเป็นตัวเลข */
+/** { } / [ ] values → coloured JSON box · "123n" shown as a number */
 function jsonHtml(v, depth = 0) {
   const pad = "  ".repeat(depth + 1), end = "  ".repeat(depth);
   if (typeof v === "string" && /^-?\d+n$/.test(v)) return `<span class="n">${esc(v.slice(0, -1))}</span>`;
@@ -210,25 +240,26 @@ function jsonHtml(v, depth = 0) {
 }
 const json = (v) => `<pre class="json">${jsonHtml(v)}</pre>`;
 const isObject = (v) => v !== null && typeof v === "object";
-/** ค่าทั่วไป: object → กรอบ JSON · address → ลิงก์ · ตัวเลข → คั่นหลัก */
+/** any value: object → JSON box · address → link · number → thousands separators */
 const anyValue = (v) => (isObject(v) ? json(v) : isAddress(v) ? addr(v) : `<span class="mono">${esc(num(v))}</span>`);
-/** key หลายชั้น ["allowance","0xab…","0xcd…"] → badge ต่อกัน */
+/** multi-part key ["allowance","0xab…","0xcd…"] → joined badges */
 const keyChips = (parts) => `<span class="kchips">${parts.map((p) =>
-  `<span class="kchip" title="${attr(p)}">${esc(isAddress(p) ? cut(p, 8, 6) : p)}</span>`).join("")}</span>`;
-const gas = (v) => `<span class="mono" style="white-space:nowrap"><span class="ico gas" title="แก๊ส"></span>${num(v)}</span>`;
+  `<span class="kchip" title="${attr(p)}">${esc(isAddress(p) ? cut(p) : p)}</span>`).join("")}</span>`;
+const gas = (v) => `<span class="mono" style="white-space:nowrap"><span class="ico gas" title="Gas"></span>${num(v)}</span>`;
 const blockNo = (n) => (n === undefined || n === null ? '<span class="dim">—</span>'
-  : `<span style="white-space:nowrap"><span class="ico blk" title="block"></span><a onclick="go('#block/${n}')">${num(n)}</a></span>`);
-/** ยอด token: หน่วยเล็กสุด "1500000n" + decimals 6 → "1.5" */
+  : `<span style="white-space:nowrap"><span class="ico blk" title="Block"></span><a onclick="go('#block/${n}')">${num(n)}</a></span>`);
+const toBig = (raw) => { try { return BigInt(String(raw ?? "0").replace(/n$/, "") || "0"); } catch { return 0n; } };
+/** token amount: smallest unit "1500000n" + decimals 6 → "1.5" */
 function units(raw, decimals) {
-  const value = BigInt(String(raw ?? "0").replace(/n$/, "") || "0");
+  const value = toBig(raw);
   const d = Number(String(decimals ?? "0").replace(/n$/, "")) || 0;
   if (!d) return value.toLocaleString("en-US");
   const base = 10n ** BigInt(d), sign = value < 0n ? "-" : "", abs = value < 0n ? -value : value;
   const frac = (abs % base).toString().padStart(d, "0").replace(/0+$/, "");
   return `${sign}${(abs / base).toLocaleString("en-US")}${frac ? "." + frac : ""}`;
 }
-const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
-/** ลิงก์ภายนอกที่ปลอดภัย: http(s) / mailto / tel · email ล้วนเป็น mailto: · อย่างอื่นไม่ทำเป็นลิงก์ */
+const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')" title="${attr(h)}">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
+/** safe external link: http(s) / mailto / tel · a bare email becomes mailto: · anything else is not a link */
 function safeHref(value) {
   const v = String(value ?? "").trim();
   if (/^https?:\/\/[^\s]+$/i.test(v) || /^(mailto|tel):[^\s]+$/i.test(v)) return v;
@@ -236,7 +267,7 @@ function safeHref(value) {
   return null;
 }
 const isImage = (v) => typeof v === "string" && (/^https?:\/\/\S+$/i.test(v) || /^data:image\/(png|jpe?g|gif|webp|svg\+xml)[;,]/i.test(v));
-/** ไอคอนจาก metadata.icon: รูป (url / data:image) เป็นสี่เหลี่ยมจัตุรัส · ข้อความสั้น (emoji) อยู่ในกรอบ · ไม่มี = ตัวอักษรแรกของชื่อ */
+/** icon from metadata.icon: image (url / data:image) as a square · short text (emoji) in a frame · none = first letter of the name */
 function avatar(meta = {}, big) {
   const cls = `avatar${big ? " lg" : ""}`;
   if (isImage(meta.icon)) return `<span class="${cls}"><img src="${attr(meta.icon)}" alt="icon" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.textContent='?'"></span>`;
@@ -249,8 +280,11 @@ const extLink = (label, value) => {
   return href ? `<a class="ext" href="${attr(href)}" target="_blank" rel="noopener noreferrer nofollow"><b>${label}</b><span>${shown} ↗</span></a>`
     : `<span class="ext"><b>${label}</b><span>${shown}</span></span>`;
 };
-const plain = (v) => (v ? `<span class="mono">${esc(cut(v, 14, 10))}${copy(v)}</span>` : '<span class="dim">—</span>');
-const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${s === "success" ? "สำเร็จ" : s === "throw" ? "ล้มเหลว" : s}</span>`;
+/** hash in a table → short · on a detail page → full (wraps on small screens) */
+const plain = (v) => (v ? `<span class="mono" title="${attr(v)}">${esc(cut(v))}${copy(v)}</span>` : '<span class="dim">—</span>');
+const full = (v) => (v ? `<span class="mono full">${esc(v)}${copy(v)}</span>` : '<span class="dim">—</span>');
+const STATUS = { success: "Success", throw: "Failed", pending: "Pending" };
+const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${STATUS[s] ?? esc(s)}</span>`;
 
 function copyText(value) {
   navigator.clipboard?.writeText(value);
@@ -259,14 +293,13 @@ function copyText(value) {
 }
 
 const panel = (title, inner, pad) => `<section class="panel"><h2>${title}</h2><div class="${pad ? "pad" : "body"}">${inner}</div></section>`;
-const more = (label, handler) => `<div class="pad" style="border-top:1px solid var(--line)"><button class="btn" onclick="${handler}">${label}</button></div>`;
 const table = (head, rows) => (rows.length
   ? `<div class="twrap"><table class="grid"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
-  : '<div class="empty">ไม่มีข้อมูล</div>');
+  : '<div class="empty">No data</div>');
 const kv = (pairs) => `<table class="kv"><tbody>${pairs.filter(Boolean).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</tbody></table>`;
 const el = (html) => { const view = document.getElementById("view"); view.innerHTML = html; labelCells(view); decorate(); };
 
-/** มือถือแสดงตารางเป็นการ์ด: ใส่ชื่อคอลัมน์ให้ทุกช่อง (data-label) และห่อค่าไว้ใน .cv */
+/** phones show tables as cards: label every cell from its column (data-label) and wrap the value in .cv */
 function labelCells(root) {
   for (const t of root.querySelectorAll("table.grid")) {
     const labels = [...t.querySelectorAll(":scope>thead th")].map((th) => (th.querySelector("select") ? "key" : th.textContent.trim()));
@@ -283,8 +316,8 @@ function labelCells(root) {
   }
 }
 
-/** ใส่ไอคอนให้ทุก address ในหน้า: มีโค้ด = โปรแกรม (คอมพิวเตอร์) · ไม่มี = กระเป๋าผู้ใช้ (คน) */
-const kinds = new Map();   // address → true (โปรแกรม) · จำเฉพาะโปรแกรม เพราะกระเป๋าเปล่าอาจถูก deploy ทีหลัง
+/** icon for every address on the page: has code = program (computer) · otherwise user wallet (person) */
+const kinds = new Map();   // address → true (program) · only programs are cached, an empty wallet may be deployed to later
 async function decorate(root = document) {
   const marks = [...root.querySelectorAll("[data-ico]")];
   const unknown = [...new Set(marks.map((m) => m.dataset.ico).filter((a) => !kinds.has(a)))];
@@ -296,80 +329,154 @@ async function decorate(root = document) {
     const program = kinds.get(mark.dataset.ico) === true;
     mark.classList.toggle("program", program);
     mark.classList.toggle("person", !program);
-    mark.title = program ? "โปรแกรม (มีโค้ด)" : "กระเป๋าผู้ใช้";
+    mark.title = program ? "Program (has code)" : "User wallet";
   }
 }
 
 const txRow = (t, columns) => `<tr>${columns.map((c) => `<td>${c}</td>`).join("")}</tr>`;
-const actionTag = (a) => `<span class="tag">${a}</span>`;
+const actionTag = (a) => `<span class="tag">${esc(a)}</span>`;
 
-async function home() {
-  const [info, blocks, pending] = await Promise.all([api("/genesis"), api("/blocks?limit=12"), api("/pending")]);
-  el(panel("ภาพรวม", `<div class="stats">
-      <div class="stat"><b>${num(info.latest ?? 0)}</b><span>block ล่าสุด</span></div>
-      <div class="stat"><b>${num(pending.size)}</b><span>tx รอในคิว</span></div>
-      <div class="stat"><b>${num(info.burned)}</b><span>เหรียญที่ถูกเผา</span></div>
-      <div class="stat"><b>${info.chainId}</b><span>chain id</span></div></div>`)
-    + panel("block ล่าสุด", table(["block", "เวลา", "tx", "ผลลัพธ์", "แก๊ส", "ผู้ปิด block"], blocks.map((b) => txRow(b, [
+// ---------- pagination ----------
+//   every long list is fetched one page at a time: { items, total, page, pages, limit }
+//   page numbers are remembered per page of the explorer (location.hash) and per list
+const pageState = {};
+const pageKey = (id) => `${location.hash}|${id}`;
+const pageOf = (id) => pageState[pageKey(id)] ?? 1;
+function setPage(id, page) {
+  const n = Math.floor(Number(page));
+  if (!Number.isFinite(n) || n < 1) return;
+  pageState[pageKey(id)] = n;
+  render(true);
+}
+/** client-side paging for lists that arrive whole (txs of one block, tokens held) */
+function slicePage(list, page, limit = 25) {
+  const pages = Math.max(1, Math.ceil(list.length / limit));
+  const current = Math.min(Math.max(page, 1), pages);
+  return { items: list.slice((current - 1) * limit, current * limit), total: list.length, page: current, pages, limit };
+}
+/** page numbers to show: first, last, and two around the current page · gaps become "…" */
+function pageNumbers(page, pages) {
+  const set = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2].filter((n) => n >= 1 && n <= pages));
+  const list = [...set].sort((a, b) => a - b);
+  return list.flatMap((n, i) => (i && n - list[i - 1] > 1 ? ["…", n] : [n]));
+}
+/** pager below a list · handler is a call with $ for the page number, e.g. "setPage('in',$)" */
+function pager(res, handler) {
+  if (!res || !res.total) return "";
+  const from = (res.page - 1) * res.limit + 1, to = Math.min(res.page * res.limit, res.total);
+  const call = (n) => handler.replace("$", n);
+  const info = `<span>Showing ${num(from)}–${num(to)} of ${num(res.total)}${res.truncated ? "+" : ""}</span>`;
+  if (res.pages <= 1) return `<div class="pager">${info}</div>`;
+  const buttons = pageNumbers(res.page, res.pages).map((n) => (n === "…" ? '<span class="gap">…</span>'
+    : `<button class="pg ${n === res.page ? "on" : ""}" onclick="${call(n)}" ${n === res.page ? 'aria-current="page"' : ""}>${num(n)}</button>`)).join("");
+  return `<div class="pager">${info}
+    <div class="pages">
+      <button class="pg" title="Previous page" onclick="${call(res.page - 1)}" ${res.page <= 1 ? "disabled" : ""}>‹</button>
+      ${buttons}
+      <button class="pg" title="Next page" onclick="${call(res.page + 1)}" ${res.page >= res.pages ? "disabled" : ""}>›</button>
+    </div>
+    <div class="jump"><span>Go to</span><input type="number" min="1" max="${res.pages}" placeholder="page" aria-label="Page number"
+        onkeydown="if(event.key==='Enter'){${call("Math.min(" + res.pages + ",this.value)")}}">
+      <button class="pg" onclick="${call("Math.min(" + res.pages + ",this.previousElementSibling.value)")}">Go</button></div>
+  </div>`;
+}
+const paged = (path, id, limit = 20) => api(`${path}${path.includes("?") ? "&" : "?"}page=${pageOf(id)}&limit=${limit}`)
+  .catch(() => ({ items: [], total: 0, page: 1, pages: 1, limit }));
+
+// ---------- home ----------
+async function home(draw = el) {
+  const [info, blocks, pending] = await Promise.all([api("/genesis"), paged("/blocks/page", "blocks", 15), api("/pending")]);
+  draw(panel("Overview", `<div class="stats">
+      <div class="stat"><b>${num(info.latest ?? 0)}</b><span>Latest block</span></div>
+      <div class="stat"><b>${num(pending.size)}</b><span>Pending txs</span></div>
+      <div class="stat"><b>${num(info.burned)}</b><span>Burned coins</span></div>
+      <div class="stat"><b>${info.chainId}</b><span>Chain ID</span></div></div>`)
+    + panel("Latest blocks", table(["Block", "Age", "Txs", "Result", "Gas", "Fee recipient"], blocks.items.map((b) => txRow(b, [
         blockNo(b.number),
         `<span title="${when(b.timestamp)}">${ago(b.timestamp)}</span>`,
         num(b.txCount),
-        b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : '<span class="dim">ว่าง</span>',
+        b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : '<span class="dim">Empty</span>',
         gas(b.gasUsed), addr(b.feeRecipient),
-      ]))))
-    + (pending.size ? panel("รอในคิว", table(["hash", "ผู้ส่ง", "ประเภท", "nonce"], pending.transactions.map((t) =>
+      ]))) + pager(blocks, "setPage('blocks',$)"))
+    + (pending.size ? panel("Pending", table(["Hash", "Sender", "Type", "Nonce"], pending.transactions.slice(0, 50).map((t) =>
         txRow(t, [plain(t.hash), addr(t.sender), actionTag(t.action), t.nonce])))) : ""));
 }
 
-async function block(number) {
+// ---------- block ----------
+async function block(number, draw = el) {
   const data = await api(`/block/${number}?full=1`);
   const header = data.header ?? data;
-  const txs = data.transactions ?? [];
-  if (!header?.number) return el(panel("ไม่พบ block", `<div class="empty">${esc(data.error ?? "ไม่พบ block")}</div>`));
-  el(panel(`<span class="ico blk"></span>block #${header.number}`, kv([
-      ["เวลา", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>`],
-      ["hash", plain(header.hash)],
-      ["block ก่อนหน้า", header.parentHash ? `<span class="mono"><a onclick="go('#block/${header.number - 1}')">${cut(header.parentHash, 14, 10)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">block แรก</span>'],
-      ["stateRoot", plain(header.stateRoot)],
-      ["ผู้ปิด block", addr(header.feeRecipient)],
-      ["จำนวน tx", `${num(header.txCount)} <span class="dim">(สำเร็จ ${header.successCount} · ล้มเหลว ${header.failedCount})</span>`],
-      ["ค่าแก๊สรวม", `${gas(header.gasUsed)} <span class="dim">· ค่าธรรมเนียม ${num(header.fee)}</span>`],
+  if (!header?.number) return draw(panel("Block not found", `<div class="empty">${esc(data.error ?? "Block not found")}</div>`));
+  const txs = slicePage(data.transactions ?? [], pageOf("txs"));
+  draw(panel(`<span class="ico blk"></span>Block #${header.number}`, kv([
+      ["Time", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>`],
+      ["Hash", full(header.hash)],
+      ["Parent block", header.parentHash ? `<span class="mono full"><a onclick="go('#block/${header.number - 1}')">${esc(header.parentHash)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">First block</span>'],
+      ["State root", full(header.stateRoot)],
+      ["Fee recipient", addr(header.feeRecipient, header.feeRecipient)],
+      ["Transactions", `${num(header.txCount)} <span class="dim">(${header.successCount} succeeded · ${header.failedCount} failed)</span>`],
+      ["Gas used", `${gas(header.gasUsed)} <span class="dim">· fee ${num(header.fee)}</span>`],
     ]))
-    + panel(`transactions (${txs.length})`, table(["#", "hash", "ประเภท", "จาก", "ถึง", "ฟังก์ชัน", "สถานะ", "แก๊ส"], txs.map((t) =>
+    + panel(`Transactions (${num(txs.total)})`, table(["#", "Hash", "Type", "From", "To", "Method", "Status", "Gas"], txs.items.map((t) =>
         txRow(t, [t.index, txLink(t.hash), actionTag(t.action), addr(t.from), addr(t.to),
           t.method ? `<span class="mono">${esc(t.method)}</span>` : '<span class="dim">—</span>',
-          state(t.status), gas(t.gasUsed)]))))
-    + `<div class="nav"><a onclick="go('#block/${header.number - 1}')">← block ก่อนหน้า</a>
-        <a onclick="go('#block/${header.number + 1}')">block ถัดไป →</a></div>`);
+          state(t.status), gas(t.gasUsed)]))) + pager(txs, "setPage('txs',$)"))
+    + `<div class="nav"><a onclick="go('#block/${header.number - 1}')">← Previous block</a>
+        <a onclick="go('#block/${header.number + 1}')">Next block →</a></div>`);
 }
 
-async function tx(hash) {
+// ---------- transaction ----------
+/** program calls: one card per call, indented by depth · caller → program.method(), input, value, result / error, gas */
+function traceView(trace) {
+  const failed = trace.filter((c) => c.status !== "success").length;
+  const deepest = Math.max(...trace.map((c) => c.depth));
+  const io = (label, inner) => `<div class="io"><span class="lbl">${label}</span>${inner}</div>`;
+  const empty = (v) => v === null || v === undefined || (isObject(v) && !Array.isArray(v) && !Object.keys(v).length);
+  return `<div class="calls">
+    <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""}</div>
+    ${trace.map((c, i) => {
+      const ok = c.status === "success";
+      return `<div class="call ${ok ? "" : "fail"}" style="--d:${c.depth}">
+        <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span>
+          <span class="dim">#${i + 1} · depth ${c.depth}</span>
+          ${addr(c.from)}<span class="dim">→</span>${addr(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
+        <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
+          ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
+        <div class="call-b">
+          ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
+          ${ok ? io("Result", empty(c.result) ? `<span class="dim mono">${c.result === null || c.result === undefined ? "null" : "{}"}</span>` : anyValue(c.result))
+               : io("Error", `<span class="tag bad">${esc(c.error?.code ?? "ERROR")}</span> <span class="bad">${esc(c.error?.message ?? "")}</span>`)}
+        </div></div>`;
+    }).join("")}</div>`;
+}
+
+async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
-  if (r.error && !r.hash) return el(panel("ไม่พบ transaction", `<div class="empty">${esc(r.error)}</div>`));
-  el(panel("transaction", kv([
-      ["สถานะ", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
-      ["hash ของระบบ", plain(r.hash)],
-      r.digest && ["hash ที่ผู้ใช้เซ็น", plain(r.digest)],
-      ["ประเภท", actionTag(r.action)],
-      ["จาก", addr(r.from, r.from)],
-      ["ถึง", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],
-      r.method && ["ฟังก์ชัน", `<span class="mono">${esc(r.method)}</span>`],
-      ["nonce", r.nonce ?? "—"],
-      ["ค่าแก๊ส", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
-      ["block", blockNo(r.blockNumber)],
-      ["เวลา", when(r.timestamp)],
-      ["ผลลัพธ์", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
+  if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  draw(panel("Transaction", kv([
+      ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
+      ["Tx hash", full(r.hash)],
+      r.digest && ["Signed hash", full(r.digest)],
+      ["Type", actionTag(r.action)],
+      ["From", addr(r.from, r.from)],
+      ["To", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],
+      r.method && ["Method", `<span class="mono">${esc(r.method)}</span>`],
+      ["Value", `<span class="mono">${num(r.value ?? 0)}</span>`],
+      ["Nonce", r.nonce ?? "—"],
+      ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
+      ["Block", blockNo(r.blockNumber)],
+      ["Time", when(r.timestamp)],
+      ["Result", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
     ]))
-    + (r.input && Object.keys(r.input).length ? panel("input", json(r.input), true) : "")
-    + (r.trace?.length ? panel("การเรียกโปรแกรม", `<div class="pad trace">${r.trace.map((c) =>
-        `${"│  ".repeat(c.depth)}${c.status === "success" ? "✓" : "✗"} ${icon(c.program)}<a onclick="go('#address/${c.program}')">${cut(c.program)}</a>.${esc(c.method)}`).join("\n")}</div>`) : "")
-    + (r.events?.length ? panel("event", table(["ชื่อ", "โปรแกรม", "ข้อมูล"], r.events.map((e) =>
+    + (r.input && Object.keys(r.input).length ? panel("Input", json(r.input), true) : "")
+    + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace)) : "")
+    + (r.events?.length ? panel(`Events (${r.events.length})`, table(["Name", "Program", "Data"], r.events.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${addr(e.program)}</td>
          <td>${json(e.data)}</td></tr>`))) : "")
-    + (r.stateChanges?.length ? panel("ข้อมูลที่เปลี่ยน", table(["โปรแกรม", "key", "ค่าใหม่"], r.stateChanges.map((s) =>
-        `<tr><td>${addr(s.program)}</td><td>${keyChips(s.key)}</td><td>${s.after === undefined ? '<span class="dim">ถูกลบ</span>' : anyValue(s.after)}</td></tr>`))) : "")
-    + (r.nativeChanges?.length ? panel("ยอดเหรียญที่เปลี่ยน", table(["address", "ช่อง", "ค่าใหม่"], r.nativeChanges.map((n) =>
-        `<tr><td>${addr(n.address)}</td><td class="dim">${n.field}</td><td class="mono">${num(n.after)}</td></tr>`))) : ""));
+    + (r.stateChanges?.length ? panel(`State changes (${r.stateChanges.length})`, table(["Program", "Key", "New value"], r.stateChanges.map((s) =>
+        `<tr><td>${addr(s.program)}</td><td>${keyChips(s.key)}</td><td>${s.after === undefined ? '<span class="dim">Deleted</span>' : anyValue(s.after)}</td></tr>`))) : "")
+    + (r.nativeChanges?.length ? panel(`Balance changes (${r.nativeChanges.length})`, table(["Address", "Field", "New value"], r.nativeChanges.map((n) =>
+        `<tr><td>${addr(n.address)}</td><td class="dim">${esc(n.field)}</td><td class="mono">${num(n.after)}</td></tr>`))) : ""));
 }
 
 // ---------- wallet ----------
@@ -381,7 +488,7 @@ const TX_TYPE = [
 ];
 let wallet = null;
 
-/** canonical JSON แบบเดียวกับฝั่ง VM (เรียง key, bigint เป็น "123n") */
+/** canonical JSON, same as the VM (sorted keys, bigint as "123n") */
 function canonical(value) {
   if (typeof value === "bigint") return JSON.stringify(`${value}n`);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -391,7 +498,7 @@ function canonical(value) {
   return JSON.stringify(value ?? null);
 }
 
-/** input + code ที่ถูกเซ็น — ต้องตรงกับ buildTypedData() ใน signature.js (string 0x… hex เป็นตัวพิมพ์เล็กทั้งค่าและ key) */
+/** signed input + code — must match buildTypedData() in signature.js (0x… hex strings lower-cased, values and keys) */
 function signingInput(tx) {
   const lower = (v) => (typeof v === "string" && /^0x[0-9a-f]+$/i.test(v) ? v.toLowerCase() : v);
   const deep = (v) => (Array.isArray(v) ? v.map(deep)
@@ -399,16 +506,16 @@ function signingInput(tx) {
   return canonical({ input: deep(tx.input ?? {}), code: tx.code ?? null });
 }
 
-/** rerender = false ตอนถูกเรียกระหว่างส่ง tx — วาดหน้าใหม่ตอนนั้นจะลบช่องผลลัพธ์ (#out) ทิ้ง */
+/** rerender = false while sending a tx — redrawing would remove the result box (#out) */
 async function connect(rerender = true) {
-  if (!window.ethereum) throw new Error("ไม่พบ wallet — ติดตั้ง MetaMask ก่อน");
+  if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
   const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
   wallet = account.toLowerCase();
-  document.getElementById("wbtn").textContent = cut(wallet, 6, 4);
-  if (rerender) render();
+  document.getElementById("wbtn").textContent = cut(wallet);
+  if (rerender) render(true);
 }
 
-/** เซ็นแล้วส่งขึ้น chain — คืนผลจาก /sendtx */
+/** sign and send to the chain — returns the /sendtx response */
 async function sendTx(fields) {
   if (!wallet) await connect(false);
   const info = await api("/genesis");
@@ -429,29 +536,31 @@ async function sendTx(fields) {
   return api("/sendtx", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx, signature }) });
 }
 
-/** ชื่อฟังก์ชันที่เรียกได้ อ่านจาก return { … } ท้ายโค้ด */
+/** callable function names, read from the final return { … } of the code */
 function callableOf(code) {
   const match = /return\s*\{([^}]*)\}\s*;?\s*\}\s*$/.exec(code.replace(/\\n/g, "\n"));
   return match ? match[1].split(",").map((n) => n.trim()).filter(Boolean) : [];
 }
 
+const walletRow = (note) => `<div class="row">
+    ${wallet ? `<span class="tag ok">Connected</span> ${addr(wallet)}`
+             : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>'}
+    <span class="dim">${note}</span>
+  </div>`;
+
 function interactPanel(program) {
   const names = callableOf(program.code);
   const options = names.map((n) => `<option>${esc(n)}</option>`).join("");
   return `<div class="pad form">
+    ${walletRow("Sending a transaction needs a wallet; reading does not")}
+    <label>Function<select id="fn">${options || "<option>No callable functions</option>"}</select></label>
+    <label>Input (JSON)<textarea id="args" spellcheck="false">{}</textarea></label>
+    <label>Attached value<input id="val" value="0" inputmode="numeric"></label>
     <div class="row">
-      ${wallet ? `<span class="tag ok">เชื่อมต่อแล้ว</span> ${addr(wallet, cut(wallet))}`
-               : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>'}
-      <span class="dim">ส่ง tx ต้องเชื่อมต่อ ส่วนการอ่านค่าไม่ต้อง</span>
+      <button class="btn" onclick="runQuery('${program.address}')">Read (no gas)</button>
+      <button class="btn solid" onclick="runWrite('${program.address}')">Send transaction</button>
     </div>
-    <label>ฟังก์ชัน<select id="fn">${options || "<option>ไม่มีฟังก์ชันที่เรียกได้</option>"}</select></label>
-    <label>input (JSON)<textarea id="args" spellcheck="false">{}</textarea></label>
-    <label>เงินที่แนบไป (value)<input id="val" value="0" inputmode="numeric"></label>
-    <div class="row">
-      <button class="btn" onclick="runQuery('${program.address}')">อ่านค่า (ไม่เสียค่าแก๊ส)</button>
-      <button class="btn solid" onclick="runWrite('${program.address}')">ส่ง transaction</button>
-    </div>
-    <div class="out" id="out">ผลลัพธ์จะแสดงที่นี่</div>
+    <div class="out" id="out">The result will appear here</div>
   </div>`;
 }
 
@@ -465,48 +574,50 @@ const show = (data) => { document.getElementById("out").innerHTML = typeof data 
 async function runQuery(program) {
   try {
     const { functionName, input } = readForm();
-    show("กำลังอ่าน…");
+    show("Reading…");
     show(await api("/query", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ programUuid: program, functionName, input }) }));
-  } catch (error) { show(`ผิดพลาด: ${error.message}`); }
+  } catch (error) { show(`Error: ${error.message}`); }
 }
 
 async function runWrite(program) {
   try {
     const { functionName, input, value } = readForm();
-    show("รอเซ็นใน wallet…");
+    show("Waiting for the wallet signature…");
     const result = await sendTx({ action: "call", to: program, method: functionName, input, value });
     show(result);
     if (result.queued) setTimeout(() => go(`#tx/${result.hash}`), 2500);
-  } catch (error) { show(`ผิดพลาด: ${error.message}`); }
+  } catch (error) { show(`Error: ${error.message}`); }
 }
 
-// ---------- ข้อมูลในโปรแกรม: แยกตามจำนวนชั้นของ key ----------
-//   program info  key 1 ชั้น (owner, price)          → แสดงทุกตัวพร้อมค่า
-//   storage       key 2 ชั้น (balances:<address>)    → dropdown key แรกที่หัวตาราง → list key ที่ 2 + ค่า
-//   get storage   key 3 ชั้นขึ้นไป (allowance:<a>:<b>) → ไม่ list · กรอก key ทีละชั้น (แนวตั้ง กด + เพิ่มชั้น) แล้วอ่านค่าทีละตัว
-let storageView = { address: null, layout: null, sub: "info", map: "", items: [], next: null, get: { name: "", parts: ["", ""] }, results: [] };
+// ---------- program storage, split by how many parts the key has ----------
+//   Variables  1-part keys (owner, price)                → all shown with values
+//   Maps       2-part keys (balances:<address>)          → pick the first key in the column header → paged list of second keys + values
+//   Lookup     3+ part keys (allowance:<a>:<b>)          → not listed · type each key part (stacked, + adds a part) and read one value
+let storageView = { address: null, layout: null, sub: "info", map: "", entries: null, page: 1, get: { name: "", parts: ["", ""] }, results: [] };
+const MAP_PAGE = 25;
 
 const keyCell = (k) => (isAddress(k) ? addr(k) : `<span class="mono">${esc(k)}</span>`);
 
-/** โหลดทุกครั้งที่วาดหน้าโปรแกรม (ข้อมูลเปลี่ยนทุก block) · ถ้ายังเป็นโปรแกรมเดิมจะคงแถบ / key ที่เลือก / ผลที่อ่านไว้ */
+/** reloaded on every draw of a program page (data changes every block) · same program keeps the chosen tab / key / page / lookups */
 async function loadLayout(address) {
   const layout = await api(`/program/${address}/layout`).catch(() => ({ variables: [], maps: [], deep: [], scanned: 0 }));
   const same = storageView.address === address;
   const sub = same ? storageView.sub
     : layout.variables.length ? "info" : layout.maps.length ? "storage" : layout.deep.length ? "get" : "info";
   const map = same && layout.maps.some((m) => m.name === storageView.map) ? storageView.map : layout.maps[0]?.name ?? "";
-  storageView = { address, layout, sub, map, items: [], next: null,
+  storageView = { address, layout, sub, map, entries: null, page: same && map === storageView.map ? storageView.page : 1,
     get: same ? storageView.get : { name: layout.deep[0]?.name ?? "", parts: ["", ""] }, results: same ? storageView.results : [] };
-  if (map) await loadMap(false, false);
+  if (map) await loadMap(storageView.page, false);
 }
 
-async function loadMap(append, redraw = true) {
-  const { address, map, next } = storageView;
-  const start = append && next ? `&start=${encodeURIComponent(next)}` : "";
-  const page = await api(`/program/${address}/map?limit=50&name=${encodeURIComponent(map)}${start}`);
-  storageView.items = append ? [...storageView.items, ...page.items] : page.items;
-  storageView.next = page.next;
+async function loadMap(page = 1, redraw = true) {
+  const view = storageView;   // a newer page load may replace storageView while this one waits
+  const wanted = Math.max(1, Math.floor(Number(page)) || 1);
+  const entries = await api(`/program/${view.address}/entries?name=${encodeURIComponent(view.map)}&page=${wanted}&limit=${MAP_PAGE}`)
+    .catch(() => null) ?? { items: [], total: 0, page: 1, pages: 1, limit: MAP_PAGE };
+  view.entries = entries;
+  view.page = entries.page ?? 1;
   if (redraw) drawStorage();
 }
 
@@ -519,9 +630,9 @@ function drawStorage() {
 }
 
 function pickSub(sub) { readKeys(); storageView.sub = sub; drawStorage(); }
-async function pickMap(name) { storageView.map = name; storageView.items = []; await loadMap(false); }
+async function pickMap(name) { storageView.map = name; await loadMap(1); }
 
-/** เก็บค่าที่พิมพ์ไว้ก่อนวาดใหม่ (กด + / สลับแถบ แล้วช่องกรอกไม่หาย) */
+/** keep what was typed before redrawing (pressing + or switching tabs keeps the inputs) */
 function readKeys() {
   const name = document.getElementById("gk-name");
   if (!name) return;
@@ -540,7 +651,7 @@ async function readStorage() {
   readKeys();
   const { name, parts } = storageView.get;
   const keys = [name, ...parts.map((p) => p.trim())];
-  if (keys.some((k) => !k)) return alert("กรอก key ให้ครบทุกช่อง");
+  if (keys.some((k) => !k)) return alert("Fill in every key part");
   const query = keys.map((k) => `key=${encodeURIComponent(k)}`).join("&");
   const result = await api(`/program/${storageView.address}/get?${query}`);
   storageView.results = [result.error ? { key: keys, error: result.error } : result, ...storageView.results].slice(0, 20);
@@ -549,48 +660,44 @@ async function readStorage() {
 
 function storageBody() {
   const { layout, sub } = storageView;
-  if (!layout) return '<div class="empty">กำลังโหลด…</div>';
-  const note = layout.truncated ? `<div class="pad dim" style="font-size:12.5px">นับจาก ${num(layout.scanned)} key แรกเท่านั้น (มีมากกว่านี้)</div>` : "";
+  if (!layout) return '<div class="empty">Loading…</div>';
+  const note = layout.truncated ? `<div class="pad dim" style="font-size:12.5px">Counted from the first ${num(layout.scanned)} keys only (there are more)</div>` : "";
 
   if (sub === "info") {
-    return table(["key", "ค่า"], layout.variables.map((v) => `<tr><td>${keyChips([v.key])}</td><td>${anyValue(v.value)}</td></tr>`)) + note;
+    return table(["Key", "Value"], layout.variables.map((v) => `<tr><td>${keyChips([v.key])}</td><td>${anyValue(v.value)}</td></tr>`)) + note;
   }
 
   if (sub === "storage") {
-    if (!layout.maps.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 2 ชั้น</div>';
-    const { items, next, map } = storageView;
-    const total = layout.maps.find((m) => m.name === map)?.count ?? items.length;
-    // dropdown key แรกอยู่ที่หัวตาราง แทนข้อความ "<ชื่อ key> / key"
-    const select = `<select id="map-name" title="key แรก" onchange="pickMap(this.value)">${layout.maps.map((m) =>
+    if (!layout.maps.length) return '<div class="empty">No 2-part keys</div>';
+    const { entries, map } = storageView;
+    // the first-key dropdown sits in the column header
+    const select = `<select id="map-name" title="First key" onchange="pickMap(this.value)">${layout.maps.map((m) =>
       `<option value="${attr(m.name)}" ${m.name === map ? "selected" : ""}>${esc(m.name)} (${num(m.count)})</option>`).join("")}</select>`;
-    return table([select, "ค่า"], items.map((i) => `<tr><td>${keyCell(i.key)}</td><td>${anyValue(i.value)}</td></tr>`))
-      + `<div class="pad row dim" style="border-top:1px solid var(--line);font-size:12.5px">
-          แสดง ${num(items.length)} จาก ${num(total)} รายการ
-          ${next ? `<button class="btn" onclick="loadMap(true)">แสดงเพิ่ม 50 รายการ</button>` : ""}
-         </div>` + note;
+    return table([select, "Value"], (entries?.items ?? []).map((i) => `<tr><td>${keyCell(i.key)}</td><td>${anyValue(i.value)}</td></tr>`))
+      + pager(entries, "loadMap($)") + note;
   }
 
-  // get storage: key เรียงลงมาแนวตั้ง กด + เพิ่มชั้นต่อด้านล่าง
+  // lookup: key parts stacked vertically, + adds a part below
   const { name, parts } = storageView.get;
   const names = layout.deep.map((d) => d.name);
-  if (!names.length) return '<div class="empty">ไม่มีข้อมูลที่เป็น key 3 ชั้นขึ้นไป</div>';
-  const rows = parts.map((p, i) => `<label class="krow"><span>key ${i + 2}</span><input class="gk-part" placeholder="key ${i + 2}" value="${attr(p)}"
+  if (!names.length) return '<div class="empty">No keys with 3 or more parts</div>';
+  const rows = parts.map((p, i) => `<label class="krow"><span>Key ${i + 2}</span><input class="gk-part" placeholder="key ${i + 2}" value="${attr(p)}"
       onkeydown="if(event.key==='Enter')readStorage()" spellcheck="false"></label>`).join("");
   const results = storageView.results.map((r) => `<tr><td>${keyChips(r.key)}</td><td>${
-    r.error ? `<span class="tag bad">${esc(r.error)}</span>` : r.exists ? anyValue(r.value) : '<span class="dim">ไม่มีค่า (ยังไม่เคยถูกเขียน)</span>'}</td></tr>`);
+    r.error ? `<span class="tag bad">${esc(r.error)}</span>` : r.exists ? anyValue(r.value) : '<span class="dim">No value (never written)</span>'}</td></tr>`);
   return `<div class="pad">
       <div class="getkeys">
-        <label class="krow"><span>key 1</span><select id="gk-name">${names.map((n) =>
+        <label class="krow"><span>Key 1</span><select id="gk-name">${names.map((n) =>
           `<option value="${attr(n)}" ${n === name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
         ${rows}
         <div class="krow"><span></span><div class="row">
-          <button class="btn" onclick="addKey()" title="เพิ่มช่อง key">+ key</button>
-          ${parts.length > 2 ? '<button class="btn" onclick="dropKey()" title="ลบช่อง key สุดท้าย">− key</button>' : ""}
-          <button class="btn solid" onclick="readStorage()">อ่านค่า</button>
+          <button class="btn" onclick="addKey()" title="Add a key part">+ key</button>
+          ${parts.length > 2 ? '<button class="btn" onclick="dropKey()" title="Remove the last key part">− key</button>' : ""}
+          <button class="btn solid" onclick="readStorage()">Read value</button>
         </div></div>
-        <div class="krow"><span></span><span>${layout.deep.map((d) => `${esc(d.name)}: ${num(d.count)} key · ลึก ${d.depth} ชั้น`).join(" · ")}</span></div>
+        <div class="krow"><span></span><span>${layout.deep.map((d) => `${esc(d.name)}: ${plural(d.count, "key")} · ${d.depth} parts deep`).join(" · ")}</span></div>
       </div>
-    </div>` + (results.length ? table(["key", "ค่า"], results) : "") + note;
+    </div>` + (results.length ? table(["Key", "Value"], results) : "") + note;
 }
 
 const storagePanel = () => `<div id="storage-panel">${storageInner()}</div>`;
@@ -600,108 +707,131 @@ function storageInner() {
   const count = (n) => `<b>${num(n)}</b>`;
   const tab = (id, label, n) => `<button class="tab ${sub === id ? "on" : ""}" data-sub="${id}" onclick="pickSub('${id}')">${label}${n === undefined ? "" : count(n)}</button>`;
   return `<div class="sub">
-      ${tab("info", "program info", layout?.variables.length ?? 0)}
-      ${tab("storage", "storage", layout?.maps.reduce((sum, m) => sum + m.count, 0) ?? 0)}
-      ${tab("get", "get storage")}
+      ${tab("info", "Variables", layout?.variables.length ?? 0)}
+      ${tab("storage", "Maps", layout?.maps.reduce((sum, m) => sum + m.count, 0) ?? 0)}
+      ${tab("get", "Lookup")}
     </div>
     <div id="storage-box">${storageBody()}</div>`;
 }
 
-// ---------- แท็บ ----------
+// ---------- tabs ----------
 let tabState = {};
 function tabs(groups) {
   const key = location.hash;
   const active = tabState[key] ?? groups.find((g) => g.body)?.id ?? groups[0].id;
-  const head = groups.map((g) => `<button class="tab ${g.id === active ? "on" : ""}" onclick="pickTab('${g.id}')">${g.label}${
-    g.count === undefined ? "" : `<b>${g.count}</b>`}</button>`).join("");
+  const head = groups.map((g) => `<button class="tab ${g.id === active ? "on" : ""}" data-tab="${g.id}" onclick="pickTab('${g.id}')">${g.label}${
+    g.count === undefined ? "" : `<b>${num(g.count)}</b>`}</button>`).join("");
   const current = groups.find((g) => g.id === active) ?? groups[0];
   return `<section class="panel"><div class="tabs scroll">${head}</div><div class="${current.pad ? "pad" : "body"}">${current.body}</div></section>`;
 }
-function pickTab(id) { tabState[location.hash] = id; render(); }
+function pickTab(id) {
+  if (document.querySelector("button.tab.on[data-tab]")?.dataset.tab === id) return;   // already open: keep what was typed
+  tabState[location.hash] = id;
+  render(true);
+}
 
-async function address(value) {
-  const [data, tokens] = await Promise.all([api(`/address/${value}`), api(`/address/${value}/tokens`).catch(() => [])]);
-  const program = data.isProgram ? await api(`/program/${value}`) : null;
-  if (program) await loadLayout(program.address);
-  const incoming = program?.interactions ?? data.incoming ?? [];
+// ---------- address / program ----------
+async function address(value, draw = el) {
+  const [data, tokens] = await Promise.all([api(`/address/${value}?limit=1`), api(`/address/${value}/tokens`).catch(() => [])]);
+  const program = data.isProgram ? await api(`/program/${value}?limit=1`) : null;
+  const [incoming, outgoing, events, holders] = await Promise.all([
+    paged(`/address/${value}/incoming`, "in"),
+    paged(`/address/${value}/txs`, "out"),
+    program ? paged(`/program/${value}/events`, "events") : null,
+    program?.token ? paged(`/token/${value}/holders`, "holders", 25) : null,
+    program ? loadLayout(program.address) : null,
+  ]);
 
-  const inRows = incoming.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
-      t.depth ? ` <span class="tag" title="ถูกเรียกผ่านโปรแกรมอื่น">ซ้อนชั้น ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
-    <td class="mono hide-sm">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
-    <td class="hide-sm">${blockNo(t.blockNumber)}</td>
+  const inRows = incoming.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
+      t.depth ? ` <span class="tag" title="Called through another program">Nested · depth ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
+    <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
+    <td>${blockNo(t.blockNumber)}</td>
     <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
-  const outRows = data.transactions.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>
-    <td class="hide-sm">${t.nonce}</td><td>${state(t.status)}</td><td class="hide-sm">${gas(t.gasUsed)}</td>
+  const outRows = outgoing.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>
+    <td>${t.nonce}</td><td>${state(t.status)}</td><td>${gas(t.gasUsed)}</td>
     <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
 
-  // เหรียญที่ถือ: นับจาก event Transfer ที่ส่งมาถึง address นี้ · ยอด 0 ไม่แสดง
-  const tokenRows = tokens.map((t) => `<tr><td><span class="ico coin"></span><b>${esc(t.ticker)}</b></td>
+  // tokens held: found from Transfer events sent to this address · zero balances hidden
+  const held = slicePage(tokens, pageOf("tokens"));
+  const tokenRows = held.items.map((t) => `<tr><td><span class="ico coin"></span><b>${esc(t.ticker)}</b></td>
     <td>${addr(t.address, t.name)}</td><td class="mono" style="text-align:right">${units(t.balance, t.decimals)}</td>
-    <td class="dim hide-sm">${num(t.decimals)}</td></tr>`);
+    <td class="dim">${num(t.decimals)}</td></tr>`);
   const groups = [
-    ...(tokens.length ? [{ id: "tokens", label: "เหรียญที่ถือ", count: tokens.length,
-      body: table(["เหรียญ", "โปรแกรม", "ยอด", "decimals"], tokenRows) }] : []),
-    { id: "in", label: program ? "ถูกเรียกใช้" : "รับเข้า", count: incoming.length,
-      body: table(["hash", "จาก", "ประเภท", "ฟังก์ชัน", "สถานะ", "block", "เวลา"], inRows) },
-    { id: "out", label: "ส่งออก", count: data.transactions.length,
-      body: table(["hash", "ประเภท", "nonce", "สถานะ", "แก๊ส", "เวลา"], outRows) },
+    ...(tokens.length ? [{ id: "tokens", label: "Tokens", count: tokens.length,
+      body: table(["Token", "Program", "Balance", "Decimals"], tokenRows) + pager(held, "setPage('tokens',$)") }] : []),
   ];
+  if (holders) {
+    const supply = toBig(program.token.totalSupply);
+    const holderRows = holders.items.map((h, i) => {
+      const share = supply > 0n ? Number((toBig(h.balance) * 1_000_000n) / supply) / 10_000 : 0;
+      return `<tr><td class="dim">${num((holders.page - 1) * holders.limit + i + 1)}</td><td>${addr(h.address)}</td>
+        <td class="mono" style="text-align:right">${units(h.balance, program.token.decimals)}</td>
+        <td class="mono"><span class="share" style="width:${Math.max(2, Math.min(60, share * 0.6))}px"></span>${share.toFixed(4)}%</td></tr>`;
+    });
+    groups.push({ id: "holders", label: "Holders", count: holders.total,
+      body: table(["Rank", "Address", "Balance", "Share"], holderRows) + pager(holders, "setPage('holders',$)") });
+  }
+  groups.push(
+    { id: "in", label: program ? "Calls" : "Incoming", count: incoming.total,
+      body: table(["Hash", "From", "Type", "Method", "Status", "Block", "Age"], inRows) + pager(incoming, "setPage('in',$)") },
+    { id: "out", label: "Outgoing", count: outgoing.total,
+      body: table(["Hash", "Type", "Nonce", "Status", "Gas", "Age"], outRows) + pager(outgoing, "setPage('out',$)") },
+  );
   if (program) {
-    groups.push({ id: "interact", label: "เรียกใช้โปรแกรม", body: interactPanel(program) });
-    groups.push({ id: "event", label: "event", count: program.events.length,
-      body: table(["ชื่อ", "ข้อมูล", "tx", "block"], program.events.map((e) =>
+    groups.push({ id: "interact", label: "Interact", body: interactPanel(program) });
+    groups.push({ id: "event", label: "Events", count: events.total,
+      body: table(["Name", "Data", "Tx", "Block"], events.items.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${json(e.data)}</td>
-         <td>${txLink(e.txHash)}</td><td class="hide-sm">${blockNo(e.blockNumber)}</td></tr>`)) });
-    groups.push({ id: "storage", label: "ข้อมูล", count: storageView.layout?.scanned, body: storagePanel() });
-    groups.push({ id: "code", label: "โค้ด", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
+         <td>${txLink(e.txHash)}</td><td>${blockNo(e.blockNumber)}</td></tr>`)) + pager(events, "setPage('events',$)") });
+    groups.push({ id: "storage", label: "Storage", count: storageView.layout?.scanned, body: storagePanel() });
+    groups.push({ id: "code", label: "Code", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
+  } else {
+    // a wallet sets its own metadata (signed by that wallet) · a program's metadata comes from its code (setMetadata)
+    groups.push({ id: "meta", label: "Edit metadata", body: metaPanel(data) });
   }
 
   const meta = data.metadata ?? {};
-  if (metaEdit && metaEdit !== data.address) metaEdit = null;
-  el(panel(data.isProgram ? "โปรแกรม" : "address", kv([
-      ["address", `<span class="mono">${icon(data.address, true)}${esc(cut(data.address, 16, 10))}</span>${copy(data.address)}`],
-      ["information", `<div class="info" id="meta-info">${avatar(meta)}${meta.namespace ? `<span class="tag">${esc(meta.namespace)}</span>` : '<span class="dim">ยังไม่ได้ตั้งชื่อ</span>'}
-        ${program ? "" : `<button class="btn sm" onclick="editMeta('${data.address}')">${metaEdit === data.address ? "ปิดการแก้ไข" : "แก้ไข metadata"}</button>`}</div>`],
-      meta.description && ["คำอธิบาย", esc(meta.description)],
-      (meta.url || meta.contact) && ["links", `<div class="links">${meta.url ? extLink("url", meta.url) : ""}${meta.contact ? extLink("contact", meta.contact) : ""}</div>`],
-      ["ยอดคงเหลือ", `<b>${num(data.native.balance)}</b>`],
-      ["รับ / ส่ง / ค่าแก๊ส", `${num(data.native.received)} · ${num(data.native.sended)} · ${num(data.native.consumed)}`],
-      ["nonce", data.nonce],
-      program?.token && ["token", `<span class="ico coin"></span><b>${esc(program.token.name)}</b> <span class="tag">${esc(program.token.ticker)}</span>
+  draw(panel(data.isProgram ? "Program" : "Address", kv([
+      ["Address", `<span class="mono full">${icon(data.address, true)}${esc(data.address)}</span>${copy(data.address)}`],
+      ["Information", `<div class="info" id="meta-info">${avatar(meta)}${meta.namespace ? `<span class="tag">${esc(meta.namespace)}</span>` : '<span class="dim">No name set</span>'}</div>`],
+      meta.description && ["Description", esc(meta.description)],
+      (meta.url || meta.contact) && ["Links", `<div class="links">${meta.url ? extLink("url", meta.url) : ""}${meta.contact ? extLink("contact", meta.contact) : ""}</div>`],
+      ["Balance", `<b>${num(data.native.balance)}</b>`],
+      ["Received / sent / gas paid", `${num(data.native.received)} · ${num(data.native.sended)} · ${num(data.native.consumed)}`],
+      ["Nonce", data.nonce],
+      program?.token && ["Token", `<span class="ico coin"></span><b>${esc(program.token.name)}</b> <span class="tag">${esc(program.token.ticker)}</span>
         <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],
-      program && ["ผู้สร้าง", addr(data.metadata.creator)],
-      program && ["สร้างเมื่อ", when(data.metadata.createdAt)],
-    ])) + (metaEdit === data.address && !program ? metaPanel(data) : "") + tabs(groups));
+      program && ["Creator", addr(data.metadata.creator)],
+      program && ["Created", when(data.metadata.createdAt)],
+    ])) + tabs(groups));
 }
 
-// ---------- ตั้ง metadata เอง (เซ็นด้วย wallet) ----------
-//   ตั้งได้เฉพาะ address ของ wallet ที่เชื่อมต่อ (VM ใช้ผู้เซ็นเป็น address เสมอ)
-//   โปรแกรมไม่มีปุ่มแก้ไข: metadata ของโปรแกรมตั้งจากโค้ด (setMetadata) เช่นส่ง icon / url มาตอน deploy token
+// ---------- edit metadata (signed by the wallet) ----------
+//   only the connected wallet's own address can be edited (the VM always uses the signer as the address)
+//   programs have no edit tab: their metadata is set from code (setMetadata), e.g. icon / url passed to a token at deploy
 const META_FIELDS = [
-  ["icon", "icon (ลิงก์รูป https:// · data:image · หรือ emoji)", "https://…/logo.png"],
-  ["namespace", "namespace (ชื่อห้ามซ้ำ)", "mytoken"],
-  ["description", "คำอธิบาย", ""],
-  ["url", "url (เว็บไซต์)", "https://…"],
-  ["contact", "contact (อีเมล / ลิงก์ติดต่อ)", "team@example.com หรือ https://t.me/…"],
+  ["icon", "Icon (image link https:// · data:image · or an emoji)", "https://…/logo.png"],
+  ["namespace", "Namespace (must be unique)", "mytoken"],
+  ["description", "Description", ""],
+  ["url", "URL (website)", "https://…"],
+  ["contact", "Contact (email / contact link)", "team@example.com or https://t.me/…"],
 ];
-let metaEdit = null;
 let metaSource = {};
-function editMeta(address) { metaEdit = metaEdit === address ? null : address; render(); }
 
 function metaPanel(data) {
   metaSource = data.metadata ?? {};
   const isOwner = wallet === data.address;
-  return panel("แก้ไข metadata", `<div class="metaform">
+  return `<div class="pad"><div class="metaform">
       <div id="meta-preview">${avatar(metaSource, true)}</div>
       <div class="form">
-        <div class="row">${wallet ? `<span class="tag ${isOwner ? "ok" : "bad"}">${isOwner ? "แก้ไขได้" : "wallet นี้แก้ไม่ได้"}</span> ${addr(wallet)}`
-          : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">เชื่อมต่อ wallet</button>'}
-          <span class="dim">แก้ได้เฉพาะเจ้าของ address นี้ (wallet ที่เซ็น) · ช่องที่ลบให้ว่างจะถูกลบออก</span></div>
+        <div class="row">${wallet ? `<span class="tag ${isOwner ? "ok" : "bad"}">${isOwner ? "You can edit" : "This wallet cannot edit"}</span> ${addr(wallet)}`
+          : '<button class="btn solid" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>'}
+          <span class="dim">Only the owner of this address (the signing wallet) can edit · clearing a field removes it</span></div>
         ${META_FIELDS.map(([field, label, hint]) => `<label>${label}<input id="meta-${field}" value="${attr(metaSource[field] ?? "")}" placeholder="${attr(hint)}"
           spellcheck="false" ${field === "icon" ? 'oninput="previewIcon()"' : ""}></label>`).join("")}
-        <div class="row"><button class="btn solid" onclick="saveMeta('${data.address}')">บันทึก (ส่ง transaction)</button></div>
-        <div class="out" id="meta-out">ยังไม่ได้บันทึก</div>
-      </div></div>`, true);
+        <div class="row"><button class="btn solid" onclick="saveMeta('${data.address}')">Save (send transaction)</button></div>
+        <div class="out" id="meta-out">Not saved yet</div>
+      </div></div></div>`;
 }
 
 function previewIcon() {
@@ -709,7 +839,7 @@ function previewIcon() {
   document.getElementById("meta-preview").innerHTML = avatar({ ...metaSource, icon }, true);
 }
 
-/** ส่งเฉพาะช่องที่เปลี่ยน · ช่องที่ล้างให้ว่าง = null (ลบ) */
+/** send only changed fields · a cleared field = null (removed) */
 function metaChanges() {
   const changes = {};
   for (const [field] of META_FIELDS) {
@@ -725,16 +855,16 @@ async function saveMeta(address) {
   const out = (v) => { document.getElementById("meta-out").innerHTML = typeof v === "string" ? esc(v) : jsonHtml(v); };
   try {
     const changes = metaChanges();
-    if (!Object.keys(changes).length) return out("ไม่มีช่องที่เปลี่ยน");
-    if (changes.icon && !isImage(changes.icon) && [...changes.icon].length > 2) return out("icon ต้องเป็นลิงก์รูป https:// หรือ data:image/… (หรือ emoji 1 ตัว)");
-    for (const field of ["url", "contact"]) if (changes[field] && !safeHref(changes[field])) return out(`${field} ต้องเป็นลิงก์ https:// · mailto: · tel: หรืออีเมล`);
+    if (!Object.keys(changes).length) return out("Nothing changed");
+    if (changes.icon && !isImage(changes.icon) && [...changes.icon].length > 2) return out("Icon must be an https:// image link, a data:image/… URI, or one emoji");
+    for (const field of ["url", "contact"]) if (changes[field] && !safeHref(changes[field])) return out(`${field} must be an https://, mailto: or tel: link, or an email address`);
     if (!wallet) await connect(false);
-    if (wallet !== address) return out("ตั้ง metadata ได้เฉพาะ address ของ wallet ที่เชื่อมต่อ");
-    out("รอเซ็นใน wallet…");
+    if (wallet !== address) return out("You can only set metadata for the connected wallet's own address");
+    out("Waiting for the wallet signature…");
     const result = await sendTx({ action: "metadata", input: changes });
     out(result);
-    if (result.queued) setTimeout(() => { metaEdit = null; go(`#tx/${result.hash}`); }, 2500);
-  } catch (error) { out(`ผิดพลาด: ${error.message}`); }
+    if (result.queued) setTimeout(() => go(`#tx/${result.hash}`), 2500);
+  } catch (error) { out(`Error: ${error.message}`); }
 }
 
 async function search() {
@@ -745,25 +875,33 @@ async function search() {
   if (/^0x[0-9a-fA-F]{40}$/.test(value)) return go(`#address/${value}`);
   const found = await api(`/name/${encodeURIComponent(value)}`);
   if (found.address) return go(`#address/${found.address}`);
-  el(panel("ไม่พบข้อมูล", `<div class="empty">ไม่พบ "${esc(value)}" — ลองใส่เลข block, tx hash, address หรือชื่อ</div>`));
+  el(panel("Nothing found", `<div class="empty">Nothing matches "${esc(value)}" — try a block number, tx hash, address or name</div>`));
 }
 
-function render() {
+/** soft = redraw in place (page / tab change) without the loading placeholder, keeping the scroll position */
+let renderSeq = 0;
+async function render(soft) {
   const [kind, value] = location.hash.slice(1).split("/");
-  document.getElementById("view").innerHTML = '<div class="panel"><div class="empty">กำลังโหลด…</div></div>';
-  if (kind === "block") return block(value);
-  if (kind === "tx") return tx(value);
-  if (kind === "address") return address(value);
-  return home();
+  const y = scrollY;
+  const seq = ++renderSeq;
+  // only the newest render may draw: a slower earlier one (another page / tab / page number) is dropped
+  const draw = (html) => { if (seq === renderSeq) el(html); };
+  if (!soft) document.getElementById("view").innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
+  if (kind === "block") await block(value, draw);
+  else if (kind === "tx") await tx(value, draw);
+  else if (kind === "address") await address(value, draw);
+  else await home(draw);
+  if (soft && seq === renderSeq) scrollTo(0, y);
 }
 
-addEventListener("hashchange", render);
+addEventListener("hashchange", () => render());
 render();
 setInterval(async () => {
   const info = await api("/genesis").catch(() => null);
   if (!info) return;
-  document.getElementById("tick").textContent = `block ${info.latest ?? 0} · คิว ${info.pending}`;
-  document.getElementById("wbtn").textContent = wallet ? cut(wallet, 6, 4) : "เชื่อมต่อ wallet";
-  if (!location.hash) home();
+  document.getElementById("tick").textContent = `block ${info.latest ?? 0} · ${info.pending} pending`;
+  document.getElementById("wbtn").textContent = wallet ? cut(wallet) : "Connect wallet";
+  // refresh the home page only while it shows the newest blocks and nothing is being typed
+  if (!location.hash && pageOf("blocks") === 1 && !document.activeElement?.matches("#view input")) { const seq = renderSeq; home((html) => { if (seq === renderSeq && !location.hash) el(html); }); }
 }, 3000);
 </script></body></html>

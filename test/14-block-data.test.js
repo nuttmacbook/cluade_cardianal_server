@@ -63,6 +63,11 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
     assert.deepEqual(result.events, []);
     delete result.events;
     delete result.debug;
+    for (const call of result.calls) {   // input / value / result / gas ของแต่ละ call ทดสอบแยกใน 16-transfer-flow
+      assert.equal(call.input.from ?? "alice", "alice");
+      assert.equal(typeof call.gasUsed, "number");
+      for (const field of ["input", "value", "gasStart", "result", "gasUsed"]) delete call[field];
+    }
   }
   assert.deepEqual(summary, {
     timestamp: T,

@@ -829,21 +829,22 @@ export class Transaction {
 
   // ---------- log การเรียก ----------
 
-  startCall({ depth, programUuid, functionName, context }) {
-    const record = { depth, programUuid, functionName, ...pickContext(context), status: STATUS.RUNNING };
+  startCall({ depth, programUuid, functionName, context, input, value = 0, gasStart = this.gasUsed }) {
+    const record = { depth, programUuid, functionName, ...pickContext(context), input, value, gasStart, status: STATUS.RUNNING };
     this.calls.push(record);
     return record;
   }
 
-  static finishCall(record, error) {
+  static finishCall(record, error, gasUsed) {
     record.status = error ? STATUS.THROW : STATUS.SUCCESS;
+    if (gasUsed !== undefined) record.gasUsed = gasUsed - record.gasStart;
     if (error) record.error = { code: error.code, message: error.message };
   }
 
   /** ปิด call ที่ยังค้างทั้งหมดเป็น throw — ใช้ตอน timeout ที่หยุดทุกชั้นพร้อมกัน */
   closeRunningCalls(error) {
     for (const record of this.calls) {
-      if (record.status === STATUS.RUNNING) Transaction.finishCall(record, error);
+      if (record.status === STATUS.RUNNING) Transaction.finishCall(record, error, this.gasUsed);
     }
   }
 
@@ -1176,6 +1177,10 @@ export class VirtualMachine {
         method: call.functionName,
         from: call.sender,
         origin: call.origin,
+        input: call.input ?? null,
+        value: call.value ?? 0,
+        result: call.result ?? null,
+        gasUsed: call.gasUsed ?? null,
         status: call.status,
         error: call.error ?? null,
       })),
@@ -1773,8 +1778,9 @@ export class VirtualMachine {
     const program = this.loadProgram(tx, programUuid, code);
     if (!isInit && !program.exports.includes(functionName)) fail(ERRORS.notCallable, functionName);
 
+    const gasStart = tx.gasUsed;
     tx.useGas(tx.gas.call);
-    const record = tx.startCall({ depth, programUuid, functionName, context });
+    const record = tx.startCall({ depth, programUuid, functionName, context, input, value, gasStart });
 
     try {
       const api = this.createProgramApi(tx, { programUuid, context, depth });
@@ -1786,13 +1792,14 @@ export class VirtualMachine {
       };
       const result = this.invokeProgram(tx, program, api, functionName, params, depth);
       tx.assertAlive(); // DB พังแต่โปรแกรม catch ไว้ → ยัง throw
-      Transaction.finishCall(record);
+      record.result = result;
+      Transaction.finishCall(record, undefined, tx.gasUsed);
       return result;
     } catch (err) {
       const error = VMError.fromProgram(err);
       // timeout จริงออกมาที่ชั้นนอกสุดเท่านั้น (catch ของชั้นในไม่ได้ทำงาน) → ปิดทุก call ที่ค้างที่นี่
       if (depth === 0 && error.code === TIMEOUT) tx.closeRunningCalls(error);
-      else Transaction.finishCall(record, error);
+      else Transaction.finishCall(record, error, tx.gasUsed);
       throw error;
     }
   }

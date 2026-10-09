@@ -76,7 +76,7 @@ export function storageMap(vm, address, name, { limit = 50, start } = {}) {
 /** อ่านค่าของ key เดียว (ใส่ครบทุกชั้น) */
 export function storageGet(vm, address, parts) {
   if (!parts.length || parts.length > MAX_KEY_PARTS || parts.some((part) => part === "")) {
-    return { status: 400, body: { error: `ต้องใส่ key 1–${MAX_KEY_PARTS} ชั้น และห้ามเว้นว่าง` } };
+    return { status: 400, body: { error: `Enter 1–${MAX_KEY_PARTS} key parts, none empty` } };
   }
   const dbKey = storageKey(lower(address), parts.length === 1 ? parts[0] : map(...parts));
   const value = vm.read(dbKey);
@@ -121,4 +121,85 @@ export function tokenHoldings(vm, address) {
     tokens.push({ ...info, balance });
   }
   return tokens;
+}
+
+// ---------- แบ่งหน้า (explorer กดเลขหน้า / ข้ามหน้าได้) ----------
+
+export const PAGE_SCAN = 50_000;   // นับ key ไม่เกินเท่านี้ต่อรายการ (เกินแล้วตอบ truncated: true)
+export const MAX_PAGE_SIZE = 100;
+
+/** อ่าน page / limit จาก query string · page เริ่มที่ 1 */
+export function pageOf(query) {
+  const limit = Math.min(Math.max(Number(query?.get?.("limit")) || 20, 1), MAX_PAGE_SIZE);
+  const page = Math.max(Math.floor(Number(query?.get?.("page"))) || 1, 1);
+  return { page, limit };
+}
+
+/** ตัดหน้า: items ของหน้านั้น + จำนวนทั้งหมด · page เกินหน้าสุดท้าย → หน้าสุดท้าย */
+export function slicePage(list, { page = 1, limit = 20 } = {}, { truncated = false } = {}) {
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const current = Math.min(Math.max(page, 1), pages);
+  return { items: list.slice((current - 1) * limit, current * limit), total, page: current, pages, limit, truncated };
+}
+
+/** key ใต้ prefix แบบแบ่งหน้า (ใหม่ไปเก่า) → อ่านค่าเฉพาะ key ของหน้านั้น */
+function pageEntries(vm, prefix, paging, { sort } = {}) {
+  const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1, reverse: true });
+  const truncated = keys.length > PAGE_SCAN;
+  const list = keys.slice(0, PAGE_SCAN);
+  if (sort) list.sort(sort);
+  const result = slicePage(list, paging, { truncated });
+  return { ...result, items: result.items.map((dbKey) => vm.read(dbKey)) };
+}
+
+/** header ของ block ใหม่ไปเก่า · คำนวณจากเลข block จึงไม่ต้องไล่ key */
+export function pageBlocks(vm, { page = 1, limit = 20 } = {}) {
+  const total = vm.latestBlockNumber() ?? 0;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const current = Math.min(Math.max(page, 1), pages);
+  const items = [];
+  for (let n = total - (current - 1) * limit; n > 0 && items.length < limit; n -= 1) {
+    const block = vm.getBlock(n);
+    if (block) items.push(block);
+  }
+  return { items, total, page: current, pages, limit, truncated: false };
+}
+
+/** tx ที่ address นี้ส่ง · nonce ใน key ไม่ได้เติม 0 ข้างหน้า จึงเรียงด้วยตัวเลขของ nonce (มากไปน้อย) */
+export function pageTransactionsOf(vm, address, paging) {
+  const nonceOf = (dbKey) => Number(dbKey.split(SEP)[2]);
+  return pageEntries(vm, `${lower(address)}${SEP}txn${SEP}`, paging, { sort: (a, b) => nonceOf(b) - nonceOf(a) });
+}
+
+/** tx ที่เข้ามาหา address นี้ (ได้รับเงิน / โปรแกรมถูกเรียก) */
+export const pageTransactionsTo = (vm, address, paging) => pageEntries(vm, `txto${SEP}${lower(address)}${SEP}`, paging);
+
+/** event ที่โปรแกรม emit · name = เฉพาะชื่อนั้น */
+export const pageEvents = (vm, program, paging, name = "") =>
+  pageEntries(vm, `event${SEP}${lower(program)}${SEP}${name ? `${name}${SEP}` : ""}`, paging);
+
+/** รายการใน key 2 ชั้นของกลุ่ม name แบบแบ่งหน้า (ข้าม key 3 ชั้นขึ้นไป) */
+export function pageStorageMap(vm, address, name, paging) {
+  const prefix = `${baseOf(address)}${encodeURIComponent(name)}${SEP}`;
+  const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
+  const truncated = keys.length > PAGE_SCAN;
+  const list = keys.slice(0, PAGE_SCAN).filter((dbKey) => !dbKey.slice(prefix.length).includes(SEP));
+  const result = slicePage(list, paging, { truncated });
+  return { name, ...result, items: result.items.map((dbKey) => ({ key: decodeURIComponent(dbKey.slice(prefix.length)), value: vm.read(dbKey) })) };
+}
+
+const bigOf = (value) => { try { return BigInt(String(value ?? 0).replace(/n$/, "")); } catch { return 0n; } };
+
+/** ผู้ถือ token: อ่านจาก balances:<address> ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย */
+export function pageHolders(vm, program, paging) {
+  if (!tokenInfo(vm, program)) return { status: 404, body: { error: "Not a standard token" } };
+  const prefix = `${baseOf(program)}balances${SEP}`;
+  const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
+  const truncated = keys.length > PAGE_SCAN;
+  const holders = keys.slice(0, PAGE_SCAN)
+    .map((dbKey) => ({ address: decodeURIComponent(dbKey.slice(prefix.length)), balance: vm.read(dbKey) }))
+    .filter(({ address, balance }) => !address.includes(SEP) && bigOf(balance) > 0n)
+    .sort((a, b) => { const d = bigOf(b.balance) - bigOf(a.balance); return d > 0n ? 1 : d < 0n ? -1 : a.address.localeCompare(b.address); });
+  return slicePage(holders, paging, { truncated });
 }

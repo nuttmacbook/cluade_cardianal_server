@@ -12,6 +12,8 @@
  *   transfer({ to, amount })                 → true
  *   approve({ spender, amount })             → true
  *   transferFrom({ from, to, amount })       → true   (ใช้วงเงินที่ from approve ไว้ให้ผู้เรียก)
+ * ฟังก์ชันเสริม (ไม่บังคับในมาตรฐาน)
+ *   multiTransfer({ transfers: [{ to, amount }, …] }) → จำนวนรายการ   โอนหลายกระเป๋าใน tx เดียว (Transfer ต่อรายการ)
  * event ที่ต้อง emit
  *   Transfer { from, to, amount }      ทุกครั้งที่ยอดย้าย · ตอนสร้างเหรียญใช้ from = ZERO_ADDRESS
  *   Approval { owner, spender, amount } ทุกครั้งที่ตั้งวงเงิน
@@ -53,9 +55,9 @@ export const TOKEN_PROGRAM = `function program() {
   function allowance(params) { return readDB(map("allowance", params.input.owner, params.input.spender)) || 0n }
 
   function move(from, to, amount) {
-    if (amount <= 0n) throw new Error("จำนวนต้องมากกว่า 0")
+    if (amount <= 0n) throw new Error("amount must be greater than 0")
     const balance = readDB(map("balances", from)) || 0n
-    if (balance < amount) throw new Error("ยอดไม่พอ")
+    if (balance < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance - amount)
     writeDB(map("balances", to), (readDB(map("balances", to)) || 0n) + amount)
     emit("Transfer", { from: from, to: to, amount: amount })
@@ -64,6 +66,16 @@ export const TOKEN_PROGRAM = `function program() {
   function transfer(params) {
     move(params.context.sender, params.input.to, params.input.amount)
     return true
+  }
+
+  function multiTransfer(params) {
+    let count = 0n
+    for (const item of params.input.transfers) {
+      move(params.context.sender, item.to, item.amount)
+      count = count + 1n
+    }
+    if (count === 0n) throw new Error("no transfers")
+    return count
   }
 
   function approve(params) {
@@ -75,13 +87,13 @@ export const TOKEN_PROGRAM = `function program() {
   function transferFrom(params) {
     const spender = params.context.sender
     const allowed = readDB(map("allowance", params.input.from, spender)) || 0n
-    if (allowed < params.input.amount) throw new Error("วงเงินไม่พอ")
+    if (allowed < params.input.amount) throw new Error("insufficient allowance")
     writeDB(map("allowance", params.input.from, spender), allowed - params.input.amount)
     move(params.input.from, params.input.to, params.input.amount)
     return true
   }
 
-  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, approve, transferFrom }
+  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom }
 }`;
 
 /** โค้ดที่ VM เก็บไว้มี \\n เป็นตัวอักษร (escape แบบ JSON) → คืนเป็นโค้ดปกติ */
