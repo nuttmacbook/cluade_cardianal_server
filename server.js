@@ -14,7 +14,7 @@ import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
-import { storageLayout, storageMap, storageGet, programFlags } from "./src/node/explorer-api.js";
+import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -82,7 +82,7 @@ const DYNAMIC = [
   [/^\/tx\/([^/]+)\/receipt$/, (m) => {
     const found = vm.getTransaction(m[1]);
     if (!found) return { status: 404, body: { error: "ไม่พบ tx" } };
-    try { return vm.replayBlock(found.blockNumber).transactions[found.index]; }
+    try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber }; }
     catch (error) { return { status: 409, body: { error: error.message, tx: found } }; }
   }],
   [/^\/tx\/([^/]+)$/, (m) => vm.getTransaction(m[1])
@@ -100,7 +100,7 @@ const DYNAMIC = [
     return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: vm.getMetadata(m[1]),
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),
       interactions: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
-      events: vm.listEvents({ program: m[1], limit: limitOf(query) }) };
+      events: vm.listEvents({ program: m[1], limit: limitOf(query) }), token: tokenInfo(vm, m[1]) };
   }],
   [/^\/program\/([^/]+)\/storage$/, (m, query) => {
     const address = lower(m[1]);
@@ -131,6 +131,9 @@ const DYNAMIC = [
     return { total, groups: [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) };
   }],
   // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
+  // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
+  [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
+  [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "ไม่ใช่ token ตามมาตรฐาน" } }],
   [/^\/program\/([^/]+)\/layout$/, (m) => storageLayout(vm, m[1])],
   [/^\/program\/([^/]+)\/map$/, (m, query) => storageMap(vm, m[1], query.get("name") ?? "", { limit: Math.min(Number(query.get("limit")) || 50, 200), start: query.get("start") || undefined })],
   [/^\/program\/([^/]+)\/get$/, (m, query) => storageGet(vm, m[1], query.getAll("key"))],

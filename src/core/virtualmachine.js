@@ -213,7 +213,7 @@ const INIT_FUNCTION = "initialization";
 const KEY = { SEPARATOR: ":", PENDING: "pending", CODE: "code", CONTEXT: "context", STORAGE: "storage", THIS: "this", NONCE: "nonce", NATIVE: "native", TXN: "txn",
   METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", TX_TO: "txto",
   BLOCK: "block", BLOCK_BODY: "blockbody", BLOCK_HASH: "blockhash", LATEST_BLOCK: "latestblock", TX: "tx", GENESIS: "genesis",
-  HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx" };
+  HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding" };
 const PROGRAM_API_NAMES = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
   "keccak256", "ecrecover",
@@ -302,6 +302,7 @@ export const pickContext = ({ sender, origin }) => ({ sender, origin });
 // ---------- address ----------
 
 /** address ของ wallet / program เป็นตัวพิมพ์เล็กเสมอ */
+const isWalletAddress = (value) => typeof value === "string" && /^0x[0-9a-f]{40}$/i.test(value);
 export const normalizeAddress = (value) => (typeof value === "string" ? value.toLowerCase() : value);
 
 /** string รูปแบบ 0x… hex → ตัวพิมพ์เล็ก, string อื่นไม่เปลี่ยน */
@@ -450,6 +451,8 @@ export const eventKey = (program, name, number, txIndex, eventIndex) =>
     String(number).padStart(BLOCK_NUMBER_WIDTH, "0"),
     String(txIndex).padStart(4, "0"),
     String(eventIndex).padStart(4, "0"));
+/** ดัชนี "address นี้เคยได้รับเหรียญจากโปรแกรมนี้" (จาก event Transfer) — ยอดจริงอ่านจาก balanceOf ของโปรแกรม */
+export const holdingKey = (address, program) => joinKey(KEY.HOLDING, address, program);
 export const blockUndoKey = (number) => joinKey(KEY.BLOCK_UNDO, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 
 /** ค่าก่อนเปลี่ยนของ key หนึ่ง ณ block หนึ่ง — เรียงตาม key จึงค้นย้อนหลังได้ด้วยการ seek ครั้งเดียว */
@@ -532,6 +535,7 @@ export function decodeDbKey(dbKey) {
     return { kind: KEY.HISTORY, dbKey: rest.slice(0, -1).join(KEY.SEPARATOR), number };
   }
   if (head === KEY.NAMESPACE) return { kind: KEY.NAMESPACE, name: rest.join(KEY.SEPARATOR) };
+  if (head === KEY.HOLDING) return { kind: KEY.HOLDING, address: rest[0], program: rest[1] };
   if (dbKey === KEY.LATEST_BLOCK) return { kind: KEY.LATEST_BLOCK };
 
   const [kind, ...parts] = rest;
@@ -1374,6 +1378,11 @@ export class VirtualMachine {
     if (!entry) return null;
     const record = entry.from === null ? null : this.read(txnKey(entry.from, entry.nonce, entry.hash)) ?? null;
     return { ...entry, record };
+  }
+
+  /** โปรแกรม token ที่ address นี้เคยได้รับเหรียญ (จาก event Transfer) */
+  listHoldings(address, { limit = 200 } = {}) {
+    return this.listEntries(`${joinKey(KEY.HOLDING, normalizeAddress(address))}${KEY.SEPARATOR}`, { limit }).map((entry) => entry.value);
   }
 
   /** รายการ tx ของ address (ใหม่ไปเก่า) */
@@ -2323,6 +2332,14 @@ export class Block {
           dbKey: eventKey(event.program, event.name, this.#number, index, event.index),
           value: { ...event, blockNumber: this.#number, txIndex: index, txHash: hash, timestamp: this.#timestamp },
         });
+        // event Transfer ของ token → จำว่า address ปลายทางถือเหรียญของโปรแกรมนี้ (ยอดจริงอ่านจาก balanceOf ตอนแสดง)
+        if (event.name === "Transfer" && result.status === STATUS.SUCCESS) {
+          for (const holder of [event.data?.to, event.data?.from]) {
+            if (!isWalletAddress(holder) || /^0x0{40}$/i.test(holder)) continue;
+            writes.push({ type: WRITE.PUT, dbKey: holdingKey(normalizeAddress(holder), event.program),
+              value: { program: event.program, lastBlock: this.#number } });
+          }
+        }
       }
     });
     return writes;

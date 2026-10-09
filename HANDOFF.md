@@ -293,6 +293,7 @@ tx:<vmhash>            { hash, digest, blockNumber, index, action, status, from,
 sigtx:<digest>         EIP-712 digest → vm hash (ทำให้ค้นด้วย hash ที่ user เซ็นได้)
 txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้"
 event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
+holding:<addr>:<program>   ดัชนี "address นี้เคยได้/ส่งเหรียญของโปรแกรมนี้" จาก event Transfer (from/to) ของ tx ที่สำเร็จ · ต้อง recordBlocks
 history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before }
 0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
 ```
@@ -352,9 +353,11 @@ vm[method](request);
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
 | `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` |
-| `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น |
+| `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
-| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events |
+| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน) |
+| `GET /address/:a/tokens` | เหรียญที่ถือ `[{ address, name, ticker, decimals, totalSupply, balance }]` · ยอด 0 ไม่แสดง |
+| `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 ถ้าไม่ใช่ token |
 | `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
 | `GET /program/:a/groups` | `{ total, groups: [{ name, count }] }` — ⚠️ นับได้สูงสุด 5,000 key |
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
@@ -400,11 +403,12 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 
 | แท็บ | เนื้อหา |
 |---|---|
+| เหรียญที่ถือ | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
 | ถูกเรียกใช้ / รับเข้า | `interactions` (รวมซ้อนชั้น มี badge "ซ้อนชั้น N") |
 | ส่งออก | `transactions` |
 | เรียกใช้โปรแกรม | ฟอร์ม interact — เลือกฟังก์ชัน, input JSON, value |
 | event | event ของโปรแกรม |
-| ข้อมูล | storage แยกตามจำนวนชั้นของ key: variable / contract / get storage (ดูด้านล่าง) |
+| ข้อมูล | storage แยกตามจำนวนชั้นของ key: program info / storage / get storage (ดูด้านล่าง) |
 | โค้ด | source |
 
 ### แถบ "ข้อมูล" ของโปรแกรม
@@ -412,15 +416,27 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 
 | แถบย่อย | key | แสดง | API |
 |---|---|---|---|
-| variable | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
-| contract ▾ | 2 ชั้น (`balances:<address>`) | dropdown key แรก → list key ที่ 2 + ค่า ทีละ 50 | `/program/:a/map?name=&start=` (cursor) |
-| get storage | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · dropdown key แรก + ช่องกรอก key 2, 3 + ปุ่ม `+` เพิ่มชั้น → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
+| program info | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
+| storage | 2 ชั้น (`balances:<address>`) | dropdown key แรกอยู่ที่หัวคอลัมน์แรกของตาราง → list key ที่ 2 + ค่า ทีละ 50 | `/program/:a/map?name=&start=` (cursor) |
+| get storage | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · ฟอร์มแนวตั้ง: key 1 dropdown, key 2, 3… ช่องละบรรทัด · `+ key` / `− key` → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
 
 - `layout` ไล่ key ไม่เกิน 20,000 ตัว (`SCAN_LIMIT`) เกินแล้วตอบ `truncated: true` และหน้าเว็บบอกว่านับไม่ครบ
-- กลุ่มเดียวกันมีทั้ง 2 และ 3 ชั้นได้ (`mixed:a` กับ `mixed:a:b`) → ขึ้นทั้งใน contract และ get storage
+- กลุ่มเดียวกันมีทั้ง 2 และ 3 ชั้นได้ (`mixed:a` กับ `mixed:a:b`) → ขึ้นทั้งใน storage และ get storage
 - `storageView` จำแถบ / key ที่เลือก / ผลที่อ่านไว้ ตราบที่ยังอยู่โปรแกรมเดิม · `readKeys()` เก็บค่าที่พิมพ์ก่อนวาดใหม่ (กด `+` แล้วค่าไม่หาย)
-- dropdown อยู่ในปุ่มแถบ contract: แตะ dropdown จากแถบอื่น → `enterContract()` สลับแถบโดยไม่วาด dropdown ใหม่ (วาดใหม่แล้ว dropdown จะปิดเอง)
 - `/program/:a/groups` และ `/program/:a/storage` เดิมยังอยู่ (หน้าเว็บไม่ได้ใช้แล้ว)
+
+### การแสดงค่า
+- ค่าที่เป็น object/array ทุกที่ (input, ผลลัพธ์, event, ค่าใน storage) → `json(v)` กล่องดำ `pre.json` ลงสีแบบ JSON · `"123n"` แสดงเป็นตัวเลข
+- key หลายชั้น → `keyChips(parts)` badge สี่เหลี่ยมต่อกัน (แทน `a / b / c`)
+- ค่าแก๊ส `gas(v)` มีไอคอนสายฟ้า · เลข block `blockNo(n)` มีไอคอนกล่อง (ลิงก์ไปหน้า block)
+- ยอดเหรียญ `units(raw, decimals)` · ค่าที่มาจาก storage ต้องผ่าน `attr()`/`esc()` เสมอ (key มาจากโปรแกรม)
+
+### มาตรฐาน token (`src/standards/token.js` · เทสต์ `48-token-standard`)
+ฟังก์ชัน `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom` + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
+mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(code)` ตรวจจาก `return { … }` + `emit(` ในโค้ด
+`TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals)
+เหรียญที่ถือ = ดัชนี `holding:` (บอกว่าโปรแกรมไหน) + `balanceOf` ตอนเปิดหน้า (ยอดจริง) → ยอด 0 ไม่แสดง
+ไม่เก็บยอดสะสมจาก event เพราะ rebuild block แล้วจะนับซ้ำ · โปรแกรมที่ emit Transfer แต่ไม่ผ่านมาตรฐานไม่ถูกแสดง
 
 ### ไอคอน address
 ทุก address ที่ผ่าน `addr()` มีไอคอน: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ (สีม่วง) = โปรแกรม

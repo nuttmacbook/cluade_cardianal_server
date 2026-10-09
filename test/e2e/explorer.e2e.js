@@ -77,7 +77,9 @@ test("หน้าแรก: ภาพรวม + รายการ block", asy
   await open("");
   const text = await view();
   assert.match(text, /block ล่าสุด/);
-  assert.equal(await page.locator("#view a", { hasText: /^#1$/ }).count(), 1);
+  assert.equal(await page.locator("#view a", { hasText: /^1$/ }).count(), 1);
+  assert.ok(await page.locator("#view .ico.blk").count() >= 1);                  // เลข block มีไอคอนกล่อง
+  assert.ok(await page.locator("#view .ico.gas").count() >= 1);                  // ค่าแก๊สมีไอคอนไฟ
   assert.deepEqual(pageErrors, []);
 });
 
@@ -114,9 +116,9 @@ test("ค้นหาด้วยชื่อ → หน้าโปรแกร
   assert.match(await view(), /Transfer/);
 
   await tab("ข้อมูล");
-  assert.match(await page.locator("#storage-box").textContent(), /owner/);          // variable: key 1 ชั้น
-  await page.click("#storage-panel [data-sub=contract] [role=button]");
-  await page.waitForFunction(() => document.getElementById("storage-box").textContent.includes("balances / key"));
+  assert.match(await page.locator("#storage-box").textContent(), /owner/);          // program info: key 1 ชั้น
+  await page.click("#storage-panel [data-sub=storage]");
+  await page.waitForSelector("#storage-box #map-name");
 
   await tab("โค้ด");
   assert.match(await view(), /function program\(\)/);
@@ -131,45 +133,79 @@ test("ไอคอน address: โปรแกรม = คอมพิวเต�
   await page.waitForSelector("#view .ico.big.person");
   await open("#block/2");
   await page.waitForSelector("#view .ico.person");
-  assert.equal(await page.locator("#view .ico:not(.person):not(.program)").count(), 0);
+  assert.equal(await page.locator("#view .ico[data-ico]:not(.person):not(.program)").count(), 0);
   assert.deepEqual(pageErrors, []);
 });
 
-test("แถบข้อมูล: variable / contract (dropdown key แรก) / get storage (กรอก key ทีละชั้น + ปุ่ม +)", async () => {
+test("แถบข้อมูล: program info / storage (dropdown ที่หัวตาราง) / get storage (key แนวตั้ง + ปุ่ม +)", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("ข้อมูล");
-  await page.click("#storage-panel .tab:has-text('variable')");                    // แถบที่เลือกไว้จากเทสต์ก่อนถูกจำไว้
-  assert.match(await page.locator("#storage-box").textContent(), /owner/);
-  await page.waitForSelector("#storage-box .ico.person");                          // ค่า owner เป็น address         // ค่า owner เป็น address
+  await page.click("#storage-panel [data-sub=info]");                              // แถบที่เลือกไว้จากเทสต์ก่อนถูกจำไว้
+  const info = await page.locator("#storage-box").textContent();
+  for (const key of ["owner", "name", "ticker", "decimals", "totalSupply"]) assert.match(info, new RegExp(key));
+  await page.waitForSelector("#storage-box .ico.person");                          // ค่า owner เป็น address
+  assert.ok(await page.locator("#storage-box .kchip").count() >= 5);              // key เป็น badge
 
-  await page.click("#storage-panel [data-sub=contract] [role=button]");
-  await page.waitForFunction(() => document.getElementById("storage-box").textContent.includes("balances / key"));
-  assert.match(await page.locator("#storage-box").textContent(), /แสดง \d+ จาก \d+ รายการ/);
-  assert.equal(await page.locator("#storage-box tbody tr").count() >= 3, true);
+  await page.click("#storage-panel [data-sub=storage]");
+  await page.waitForSelector("#storage-box thead #map-name");                      // dropdown อยู่ที่หัวตาราง
+  assert.deepEqual(await page.locator("#map-name option").allTextContents(), ["balances (3)"]);
+  assert.match(await page.locator("#storage-box").textContent(), /แสดง 3 จาก 3 รายการ/);
 
-  await page.click("#storage-panel .tab:has-text('get storage')");
-  assert.equal(await page.locator("#gk-name option").allTextContents().then((o) => o.join()), "allowance");
+  await page.click("#storage-panel [data-sub=get]");
+  assert.deepEqual(await page.locator("#gk-name option").allTextContents(), ["allowance"]);
   const parts = page.locator(".gk-part");
   await parts.nth(0).fill(wallet.address);                                        // ตัวพิมพ์ผสม
   await parts.nth(1).fill(BOB);
   await page.click("button[title='เพิ่มช่อง key']");
   assert.equal(await parts.count(), 3);
+  const [y1, y2] = await Promise.all([parts.nth(1).boundingBox(), parts.nth(2).boundingBox()]);
+  assert.ok(y2.y > y1.y, "ช่อง key เรียงลงมาแนวตั้ง");
   assert.equal(await parts.nth(0).inputValue(), wallet.address);                  // กด + แล้วค่าที่กรอกไม่หาย
   await page.click("button[title='ลบช่อง key สุดท้าย']");
   assert.equal(await parts.count(), 2);
-  await page.click("text=อ่านค่า");
-  await page.waitForFunction(() => /allowance \/ 0x/.test(document.getElementById("storage-box").textContent));
-  assert.match(await page.locator("#storage-box").textContent(), /300/);
+  await page.click("#storage-box button:has-text('อ่านค่า')");
+  await page.waitForSelector("#storage-box tbody .kchips");
+  assert.equal(await page.locator("#storage-box tbody tr:first-child .kchip").count(), 3);
+  assert.match(await page.locator("#storage-box tbody").textContent(), /300,000,000/);
 
   await parts.nth(1).fill("0x0000000000000000000000000000000000000001");
   await parts.nth(1).press("Enter");
   await page.waitForFunction(() => document.getElementById("storage-box").textContent.includes("ไม่มีค่า"));
+  assert.deepEqual(pageErrors, []);
+});
 
-  // แตะ dropdown ของ contract จากแถบอื่น → สลับไป contract ทันที
-  await page.focus("#storage-panel [data-sub=contract] select");
-  await page.waitForFunction(() => document.getElementById("storage-box").textContent.includes("balances / key"));
-  assert.equal(await page.locator("#storage-panel [data-sub=contract].on").count(), 1);
+test("เหรียญที่ถือ: นับจาก event Transfer · ยอดแสดงตาม decimals (6) · ข้อมูล token บนหน้าโปรแกรม", async () => {
+  await open(`#address/${BOB}`);
+  await page.waitForSelector("#view button.tab.on:has-text('เหรียญที่ถือ')");        // แถบแรกของกระเป๋าที่มีเหรียญ
+  const text = await view();
+  assert.match(text, /MTK/);
+  assert.match(text, /1,200\.5(?!\d)/);                                          // 1_200_500_000 หน่วย ÷ 10^6
+
+  await open(`#address/${ME}`);
+  assert.match(await view(), /998,799\.499993/);
+
+  const { address } = await get("/name/mytoken");
+  await open(`#address/${address}`);
+  assert.match(await view(), /My Token/);
+  assert.match(await view(), /6 decimals/);
+  assert.match(await view(), /supply 1,000,000(?!\.)/);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("ข้อมูลแบบ { } อยู่ในกรอบดำแบบ JSON (input / event ของหน้า tx)", async () => {
+  const { address } = await get("/name/mytoken");
+  const [last] = (await get(`/address/${ME}`)).transactions;
+  await open(`#tx/${last.hash}`);
+  assert.ok(await page.locator("#view pre.json").count() >= 2);
+  const bg = await page.locator("#view pre.json").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  assert.equal(bg, "rgb(11, 15, 25)");
+  assert.match(await page.locator("#view pre.json").first().textContent(), /^\{\n  "/);
+  // แถว block มีไอคอนกล่อง + เลข block ของ tx
+  const blockRow = page.locator("#view tr", { hasText: /^block/ }).first();
+  assert.equal(await blockRow.locator(".ico.blk").count(), 1);
+  assert.equal(await blockRow.locator("a").textContent(), String((await get(`/tx/${last.hash}`)).blockNumber));
+  assert.ok(address);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -181,9 +217,9 @@ test("อ่านค่าโปรแกรมจากฟอร์ม (ไม
   await page.fill("#args", JSON.stringify({ who: ME }));
   await page.click("text=อ่านค่า (ไม่เสียค่าแก๊ส)");
   await page.waitForFunction(() => document.getElementById("out").textContent.includes('"status"'));
-  const out = JSON.parse(await page.locator("#out").innerText());
+  const out = JSON.parse(await page.locator("#out").innerText());                 // แสดงเป็น JSON (ตัวเลข bigint ไม่มี n)
   assert.equal(out.status, "success");
-  assert.match(out.result, /^\d+n$/);
+  assert.equal(typeof out.result, "number");
 });
 
 test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้าเว็บผ่าน /sendtx และเข้า block (address ใน input เป็นตัวพิมพ์ผสม)", async () => {
