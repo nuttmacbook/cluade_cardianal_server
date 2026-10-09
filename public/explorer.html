@@ -134,6 +134,11 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .call-path{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-top:6px;min-width:0}
 /* call diagram: boxes placed by order (row) and depth (indent), svg arrows underneath */
 .flowwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+/* diagram left, details right (stacked on narrow screens) · long diagrams scroll inside, the detail card stays in view */
+.calls-body{display:grid;grid-template-columns:fit-content(40%) minmax(0,1fr);gap:16px;align-items:start}
+.calls-body .flowwrap{max-height:70vh;overflow:auto}
+#call-detail{position:sticky;top:12px;min-width:0}
+@media(max-width:720px){.calls-body{grid-template-columns:minmax(0,1fr)}.calls-body .flowwrap{max-height:none;overflow-y:visible}#call-detail{position:static}}
 .flow{position:relative}
 .flow .links{position:absolute;inset:0;pointer-events:none;overflow:visible}
 .flow .links path{fill:none;stroke:var(--accent-2);stroke-width:1.5;opacity:.7}
@@ -485,6 +490,7 @@ function traceView(trace, sender, names = {}) {
   const start = `<div class="node start" style="left:0;top:${y(0)}px;width:${box}px;height:${h}px" title="Sent by ${attr(label(sender))}">tx</div>`;
   return `<div class="calls">
     <div class="calls-sum">${plural(trace.length, "call")} · max depth ${deepest}${failed ? ` · <span class="bad">${failed} failed</span>` : ""} · click a box for its details</div>
+    <div class="calls-body">
     <div class="flowwrap"><div class="flow" style="width:${width}px;height:${height}px">
       <svg class="links" width="${width}" height="${height}" aria-hidden="true">
         <defs>
@@ -494,6 +500,7 @@ function traceView(trace, sender, names = {}) {
       ${start}${boxes}
     </div></div>
     <div id="call-detail">${callDetail(0)}</div>
+    </div>
   </div>`;
 }
 
