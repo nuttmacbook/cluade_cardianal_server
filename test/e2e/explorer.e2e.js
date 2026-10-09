@@ -381,7 +381,7 @@ test("address ย่อเป็น 0x + 4 ตัวหน้า … 4 ตัว
   assert.deepEqual(pageErrors, []);
 });
 
-test("trace การเรียกโปรแกรม: แผนผังกล่อง + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
+test("trace การเรียกโปรแกรม: แผนผังกล่องเลขลำดับเล็ก ๆ + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
   let relay;
   for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
@@ -391,8 +391,9 @@ test("trace การเรียกโปรแกรม: แผนผังก
   assert.equal(await nodes.count(), 2);
   assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // กล่องผู้ส่ง tx
   assert.equal(await page.locator("#view .flow svg path[marker-end]").count(), 2);     // ลูกศร ผู้ส่ง→#1 และ #1→#2
-  assert.match(await nodes.nth(0).textContent(), /#1[\s\S]*check\(\)/);
-  assert.match(await nodes.nth(1).textContent(), /#2[\s\S]*balanceOf\(\)[\s\S]*mytoken/); // ชื่อ namespace แทน address
+  assert.deepEqual(await nodes.allTextContents(), ["1", "2"]);                         // กล่องโชวแค่เลขลำดับ
+  const [w, h] = await nodes.nth(0).evaluate((n) => [n.offsetWidth, n.offsetHeight]);
+  assert.ok(w <= 32 && h <= 32, `กล่องเล็ก (${w}×${h})`);
   const [a, b] = await Promise.all([nodes.nth(0).boundingBox(), nodes.nth(1).boundingBox()]);
   assert.ok(b.x > a.x && b.y > a.y, "ชั้นที่ลึกกว่าอยู่ขวาและล่าง");
 
@@ -401,7 +402,7 @@ test("trace การเรียกโปรแกรม: แผนผังก
   assert.equal(await page.locator("#view .call").count(), 1);
   assert.match(await detail.textContent(), /Call #1[\s\S]*\.check\(\)[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
   await nodes.nth(1).click();
-  assert.match(await detail.textContent(), /Call #2[\s\S]*depth 1[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
+  assert.match(await detail.textContent(), /Call #2[\s\S]*depth 1[\s\S]*mytoken[\s\S]*\.balanceOf\(\)[\s\S]*Origin/);
   assert.equal(await page.locator("#view .flow .node.on").getAttribute("data-call"), "1");
   assert.deepEqual(pageErrors, []);
 });
