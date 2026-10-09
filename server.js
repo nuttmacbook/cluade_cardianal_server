@@ -14,7 +14,8 @@ import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
-import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings } from "./src/node/explorer-api.js";
+import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
+  pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -64,6 +65,8 @@ const ROUTES = {
     for (let n = from; n > 0 && list.length < limitOf(query); n -= 1) { const b = vm.getBlock(n); if (b) list.push(b); }
     return list;
   },
+  // แบบแบ่งหน้า: ?page=<เลขหน้า>&limit=<ต่อหน้า> → { items, total, page, pages, limit, truncated }
+  "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "ยังไม่มี block" },
   "/pending": () => ({ size: mempool.size, transactions: mempool.list() }),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
@@ -134,6 +137,11 @@ const DYNAMIC = [
   // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
   [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
   [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "ไม่ใช่ token ตามมาตรฐาน" } }],
+  [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
+  [/^\/address\/([^/]+)\/incoming$/, (m, query) => pageTransactionsTo(vm, m[1], pageOf(query))],
+  [/^\/program\/([^/]+)\/events$/, (m, query) => pageEvents(vm, m[1], pageOf(query), query.get("name") ?? "")],
+  [/^\/program\/([^/]+)\/entries$/, (m, query) => pageStorageMap(vm, m[1], query.get("name") ?? "", pageOf(query))],
+  [/^\/token\/([^/]+)\/holders$/, (m, query) => pageHolders(vm, m[1], pageOf(query))],
   [/^\/program\/([^/]+)\/layout$/, (m) => storageLayout(vm, m[1])],
   [/^\/program\/([^/]+)\/map$/, (m, query) => storageMap(vm, m[1], query.get("name") ?? "", { limit: Math.min(Number(query.get("limit")) || 50, 200), start: query.get("start") || undefined })],
   [/^\/program\/([^/]+)\/get$/, (m, query) => storageGet(vm, m[1], query.getAll("key"))],

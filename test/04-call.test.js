@@ -9,7 +9,7 @@ test("call: เรียกฟังก์ชันที่ export ได้ �
   activate("counter", COUNTER, { initInput: { start: 1 } });
   const res = ok(callAs("alice", "counter", "add", { amount: 4 }));
   assert.equal(res.result, 5);
-  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", status: "success" }]);
+  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", input: { amount: 4 }, value: 0, gasStart: 0, result: 5, gasUsed: 702, status: "success" }]);
 });
 
 test("call: ฟังก์ชัน internal เรียกจากในโปรแกรมได้ แต่เรียกจากข้างนอกไม่ได้ และไม่ถูกบันทึกใน calls", () => {

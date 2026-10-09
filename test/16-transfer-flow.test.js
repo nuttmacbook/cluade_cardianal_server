@@ -388,16 +388,18 @@ test("block เท่ากับรันทีละ tx แล้ว commit �
 //  ข้อจำกัดของข้อมูลสำหรับ explorer
 // ---------------------------------------------------------------------------
 
-test("⚠️ calls ไม่มี input / result ของการเรียกซ้อน — ไม่รู้จำนวนเงินของแต่ละเส้น", () => {
+test("calls มี input / value / result / gasUsed ของการเรียกซ้อนทุกชั้น — เห็นจำนวนเงินของแต่ละเส้น", () => {
   const vm = setup();
   const res = vm.call(routeTx(["swapab", "swapbc"], 50), { timestamp: T });
 
-  assert.deepEqual(Object.keys(res.calls[1]), ["depth", "programUuid", "functionName", "sender", "origin", "status"]);
-  assert.equal(res.calls[1].input, undefined);
-  assert.equal(res.calls[1].result, undefined);
-
-  // จำนวนเงินของ tx ชั้นนอกสุดรู้ได้จาก input / result ของ tx เท่านั้น
+  assert.deepEqual(Object.keys(res.calls[1]), ["depth", "programUuid", "functionName", "sender", "origin", "input", "value", "gasStart", "status", "result", "gasUsed"]);
+  for (const call of res.calls) {
+    assert.equal(typeof call.input, "object");
+    assert.notEqual(call.result, undefined);
+    assert.ok(call.gasUsed > 0);
+  }
+  // gas ของชั้นนอกรวมของชั้นในไว้แล้ว
+  assert.ok(res.calls[0].gasUsed >= res.calls[1].gasUsed + res.calls[2].gasUsed);
+  assert.ok(res.calls[0].gasUsed <= res.gasUsed);
   assert.equal(res.result, 300);
-  // ส่วนของแต่ละเส้นต้องเดาจากยอดสุทธิ ซึ่งหักลบกันไปแล้ว: alice รับ tokenB 100 แล้วจ่ายออก 100 เหลือ 0
-  assert.equal(res.afterValues.find((v) => v.dbKey === bal("tokenb", "alice")).afterValue, 0);
 });

@@ -12,6 +12,8 @@
  *   transfer({ to, amount })                 → true
  *   approve({ spender, amount })             → true
  *   transferFrom({ from, to, amount })       → true   (ใช้วงเงินที่ from approve ไว้ให้ผู้เรียก)
+ * ฟังก์ชันเสริม (ไม่บังคับในมาตรฐาน)
+ *   multiTransfer({ transfers: [{ to, amount }, …] }) → จำนวนรายการ   โอนหลายกระเป๋าใน tx เดียว (Transfer ต่อรายการ)
  * event ที่ต้อง emit
  *   Transfer { from, to, amount }      ทุกครั้งที่ยอดย้าย · ตอนสร้างเหรียญใช้ from = ZERO_ADDRESS
  *   Approval { owner, spender, amount } ทุกครั้งที่ตั้งวงเงิน
@@ -66,6 +68,16 @@ export const TOKEN_PROGRAM = `function program() {
     return true
   }
 
+  function multiTransfer(params) {
+    let count = 0n
+    for (const item of params.input.transfers) {
+      move(params.context.sender, item.to, item.amount)
+      count = count + 1n
+    }
+    if (count === 0n) throw new Error("ไม่มีรายการโอน")
+    return count
+  }
+
   function approve(params) {
     writeDB(map("allowance", params.context.sender, params.input.spender), params.input.amount)
     emit("Approval", { owner: params.context.sender, spender: params.input.spender, amount: params.input.amount })
@@ -81,7 +93,7 @@ export const TOKEN_PROGRAM = `function program() {
     return true
   }
 
-  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, approve, transferFrom }
+  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom }
 }`;
 
 /** โค้ดที่ VM เก็บไว้มี \\n เป็นตัวอักษร (escape แบบ JSON) → คืนเป็นโค้ดปกติ */

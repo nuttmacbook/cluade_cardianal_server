@@ -82,7 +82,7 @@ test("receipt: call ธรรมดา (อ่าน อย่างเดีย
   assert.equal(receipt.status, "success");
   assert.equal(receipt.result, 1000);
   assert.deepEqual(receipt.stateChanges, []);
-  assert.deepEqual(receipt.trace, [{ depth: 0, program: "token", method: "balanceOf", from: "alice", origin: "alice", status: "success", error: null }]);
+  assert.deepEqual(receipt.trace, [{ depth: 0, program: "token", method: "balanceOf", from: "alice", origin: "alice", input: { account: "alice" }, value: 0, result: 1000, gasUsed: GAS.call + GAS.read, status: "success", error: null }]);
   assert.equal(receipt.gasUsed, GAS.call + GAS.read);
   assert.deepEqual(receipt.nativeChanges, [
     { address: "alice", field: "consumed", after: receipt.fee },
@@ -172,8 +172,8 @@ test("receipt: เรียกข้ามโปรแกรม (shop → token)
 
   assert.equal(receipt.index, 3);
   assert.deepEqual(receipt.trace, [
-    { depth: 0, program: "shop", method: "buy", from: "alice", origin: "alice", status: "success", error: null },
-    { depth: 1, program: "token", method: "transferFrom", from: "shop", origin: "alice", status: "success", error: null },
+    { depth: 0, program: "shop", method: "buy", from: "alice", origin: "alice", input: {}, value: 0, result: 1, gasUsed: 550, status: "success", error: null },
+    { depth: 1, program: "token", method: "transferFrom", from: "shop", origin: "alice", input: { from: "alice", to: "shop", amount: 100 }, value: 0, result: { from: "alice", to: "shop", amount: 100 }, gasUsed: 290, status: "success", error: null },
   ]);
   assert.deepEqual(receipt.stateChanges.map((c) => `${c.program}/${c.key.join("/")} = ${c.after}`), [
     "token/allowance/alice/shop = 400",
@@ -237,7 +237,7 @@ test("receipt: OUT_OF_GAS และ TIMEOUT", () => {
     { action: "call" },
   );
   assert.equal(timeout.error.code, "TIMEOUT");
-  assert.deepEqual(timeout.trace, [{ depth: 0, program: "faulty", method: "spin", from: "alice", origin: "alice", status: "throw", error: { code: "TIMEOUT", message: "โปรแกรมทำงานเกินเวลาที่กำหนด" } }]);
+  assert.deepEqual(timeout.trace, [{ depth: 0, program: "faulty", method: "spin", from: "alice", origin: "alice", input: {}, value: 0, result: null, gasUsed: 150, status: "throw", error: { code: "TIMEOUT", message: "โปรแกรมทำงานเกินเวลาที่กำหนด" } }]);
 });
 
 test("receipt: เดา action เองได้เมื่อไม่ได้ระบุ", () => {
