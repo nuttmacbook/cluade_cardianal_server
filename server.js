@@ -14,6 +14,7 @@ import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
+import { storageLayout, storageMap, storageGet, programFlags } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -66,6 +67,7 @@ const ROUTES = {
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "ยังไม่มี block" },
   "/pending": () => ({ size: mempool.size, transactions: mempool.list() }),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
+  "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance }),
 };
@@ -128,6 +130,10 @@ const DYNAMIC = [
     }
     return { total, groups: [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) };
   }],
+  // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
+  [/^\/program\/([^/]+)\/layout$/, (m) => storageLayout(vm, m[1])],
+  [/^\/program\/([^/]+)\/map$/, (m, query) => storageMap(vm, m[1], query.get("name") ?? "", { limit: Math.min(Number(query.get("limit")) || 50, 200), start: query.get("start") || undefined })],
+  [/^\/program\/([^/]+)\/get$/, (m, query) => storageGet(vm, m[1], query.getAll("key"))],
   [/^\/nonce\/([^/]+)$/, (m) => ({ address: lower(m[1]), nonce: mempool.nextNonce(m[1]) })],
   [/^\/name\/([^/]+)$/, (m) => ({ namespace: lower(m[1]), address: vm.resolveNamespace(m[1]) })],
   [/^\/state\/([^/]+)$/, (m, query) => {

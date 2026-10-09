@@ -25,7 +25,13 @@ const CODE = `function program() {
     return true
   }
 
-  return { balanceOf, transfer }
+  function approve(params) {
+    writeDB(map("allowance", params.context.sender, params.input.spender), params.input.amount)
+    emit("Approval", { owner: params.context.sender, spender: params.input.spender, amount: params.input.amount })
+    return true
+  }
+
+  return { balanceOf, transfer, approve }
 }`;
 
 const post = (path, body) => fetch(API + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -66,6 +72,7 @@ await confirm(await send({ action: "transfer", to: BOB, value: 50_000 }));
 await confirm(await send({ action: "call", to: address, method: "transfer", input: { to: BOB, amount: 1200 } }));
 await confirm(await send({ action: "metadata", input: { namespace: "alice", description: "ผู้ใช้คนแรก" } }));
 await confirm(await send({ action: "call", to: address, method: "transfer", input: { to: "0x1234567890123456789012345678901234567890", amount: 7 } }));
+await confirm(await send({ action: "call", to: address, method: "approve", input: { spender: BOB, amount: 300 } }));
 
 console.log("\nยอดของ bob:", JSON.stringify((await post("/query", { programUuid: address, functionName: "balanceOf", input: { who: BOB } })).result));
 console.log("event:", JSON.stringify((await get(`/events?program=${address}`)).map((e) => e.name)));
