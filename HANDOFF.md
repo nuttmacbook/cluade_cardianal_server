@@ -366,6 +366,23 @@ vm[method](request);
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions }` |
 | `GET /sync?from` | `[{ header, body }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
+
+**แบบแบ่งหน้า** (explorer ใช้ทุกรายการยาว) · `?page=<เริ่ม 1>&limit=<≤100, ค่าเริ่ม 20>` → `{ items, total, page, pages, limit, truncated }`
+page เกินหน้าสุดท้าย → ได้หน้าสุดท้าย · นับ key ไม่เกิน 50,000 ตัวต่อรายการ (`PAGE_SCAN`) เกินแล้ว `truncated: true`
+โค้ดอยู่ `src/node/explorer-api.js` (`pageOf` `slicePage` `page*`) · เทสต์ `49-explorer-paging`
+
+| endpoint | รายการ |
+|---|---|
+| `GET /blocks/page` | header ใหม่ไปเก่า (คำนวณจากเลข block ไม่ไล่ key) |
+| `GET /address/:a/txs` | tx ที่ address ส่ง · **เรียงด้วยเลข nonce** (key `txn` ไม่ได้เติม 0 ข้างหน้า เรียงตามตัวอักษรจะผิดตั้งแต่ nonce 10) |
+| `GET /address/:a/incoming` | tx ที่เข้ามาหา (ดัชนี `txto:` รวมการเรียกซ้อนชั้น) |
+| `GET /program/:a/events?name` | event ใหม่ไปเก่า |
+| `GET /program/:a/entries?name` | key 2 ชั้นของกลุ่ม `name` (ข้าม key 3 ชั้น) |
+| `GET /token/:a/holders` | ผู้ถือจาก `balances:<address>` ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย · 404 ถ้าไม่ใช่ token |
+
+**trace ใน receipt** (`/tx/:h/receipt` → `trace[]`): `{ depth, program, method, from, origin, input, value, result, gasUsed, status, error }`
+`input` / `value` / `result` / `gasUsed` เพิ่มเมื่อ 9 ต.ค. (เก็บใน `tx.calls` ตอนรัน ไม่ได้เขียนลง DB และไม่เข้า hash ของ block)
+`gasUsed` ของชั้นนอกรวมของชั้นในแล้ว · ข้อความ error ของ server เป็นภาษาอังกฤษ (ข้อความ error จาก VM / โปรแกรมยังเป็นไทยตามเดิม)
 | `GET /` หรือ `/explorer` | หน้า explorer |
 
 ### เขียน
@@ -386,11 +403,16 @@ POST /query    { programUuid, functionName, input, context?, value? }
 
 ## 8. Explorer (`public/explorer.html`)
 
-ไฟล์เดียว 414 บรรทัด ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
+ไฟล์เดียว ~900 บรรทัด **ภาษาอังกฤษทั้งหน้า** (เทสต์ e2e ตรวจว่าไม่มีอักษรไทยนอกจากข้อมูลของผู้ใช้) ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
 HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `GET /` ของ `server.js`
 
 ### โครง
-- routing ด้วย `location.hash` → `render()` แยกไปที่ `home()` / `block(n)` / `tx(h)` / `address(a)`
+- routing ด้วย `location.hash` → `render(soft)` แยกไปที่ `home()` / `block(n)` / `tx(h)` / `address(a)`
+  `soft` = วาดใหม่ในที่เดิม (เปลี่ยนหน้า / แท็บ) ไม่ขึ้น Loading และคงตำแหน่ง scroll
+  ทุก render มีเลขลำดับ (`renderSeq`) — มีแค่ render ล่าสุดที่วาดได้ (กันหน้าเก่าที่โหลดช้ามาทับหน้าใหม่)
+- `cut()` ย่อ address / hash เป็น `0x1234…abcd` (4 ตัวหน้า 4 ตัวหลัง) ในตาราง · หน้ารายละเอียดแสดงเต็มด้วย `full()` (ตัดบรรทัดบนจอเล็ก)
+- แบ่งหน้า: `pager(res, "setPage('id',$)")` ใต้ทุกรายการยาว → ปุ่มเลขหน้า (หน้าแรก / สุดท้าย / ±2 รอบหน้าปัจจุบัน) + ‹ › + ช่อง Go to
+  `pageState[hash|id]` จำเลขหน้าต่อหน้า explorer และต่อรายการ · รายการที่มาทั้งก้อน (tx ใน block, เหรียญที่ถือ) ตัดหน้าในเบราว์เซอร์ (`slicePage`)
 - helper เล็ก ๆ: `esc` `cut` `num` `when` `ago` `copy` `addr` `txLink` `panel` `table` `kv`
   **`num()` คือตัวแปลง `"123n"` → ตัวเลขอ่านง่าย — ทุกค่าที่มาจากโปรแกรมต้องผ่านตัวนี้**
 - ธีม: โทนมืด ดำ/น้ำเงิน/ม่วง ธีมเดียว (`color-scheme:dark`) · `--bg:#070814` `--panel:#0e1026` `--accent:#7aa2ff` `--accent-2:#a78bfa`
@@ -407,29 +429,37 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 ### หน้า address / โปรแกรม — แท็บ
 `tabs(groups)` + `tabState[location.hash]` จำแท็บที่เลือกต่อ URL
 
-| แท็บ | เนื้อหา |
+| แท็บ (`data-tab`) | เนื้อหา |
 |---|---|
-| เหรียญที่ถือ | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
-| ถูกเรียกใช้ / รับเข้า | `interactions` (รวมซ้อนชั้น มี badge "ซ้อนชั้น N") |
-| ส่งออก | `transactions` |
-| เรียกใช้โปรแกรม | ฟอร์ม interact — เลือกฟังก์ชัน, input JSON, value |
-| event | event ของโปรแกรม |
-| ข้อมูล | storage แยกตามจำนวนชั้นของ key: program info / storage / get storage (ดูด้านล่าง) |
-| โค้ด | source |
+| Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
+| Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
+| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") |
+| Outgoing (`out`) | `/address/:a/txs` |
+| Interact (`interact`) | (โปรแกรม) ฟอร์ม — เลือกฟังก์ชัน, input JSON, value |
+| Edit metadata (`meta`) | (กระเป๋า) ฟอร์มแก้ metadata อยู่แถบเดียวกับ Interact (เดิมเป็นปุ่มในแถว information) |
+| Events (`event`) | `/program/:a/events` |
+| Storage (`storage`) | แยกตามจำนวนชั้นของ key: Variables / Maps / Lookup (ดูด้านล่าง) |
+| Code (`code`) | source |
+
+กดแท็บที่เปิดอยู่แล้วไม่วาดใหม่ (ค่าที่พิมพ์ในฟอร์มไม่หาย)
+
+### หน้า tx — Program calls
+`traceView()` การ์ดละ call เยื้องตาม depth (`--d`): ✓/✗, `#ลำดับ · depth`, caller → program`.method()`, gas, value, origin (ถ้าต่างจาก caller),
+Input (JSON) และ Result (หรือ Error code + ข้อความ) · บรรทัดบนสรุปจำนวน call, depth สูงสุด, จำนวนที่ล้ม
 
 ### แถบ "ข้อมูล" ของโปรแกรม
 แยก key ตามจำนวนชั้น (`src/node/explorer-api.js` · เทสต์ `47-explorer-storage`)
 
 | แถบย่อย | key | แสดง | API |
 |---|---|---|---|
-| program info | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
-| storage | 2 ชั้น (`balances:<address>`) | dropdown key แรกอยู่ที่หัวคอลัมน์แรกของตาราง → list key ที่ 2 + ค่า ทีละ 50 | `/program/:a/map?name=&start=` (cursor) |
-| get storage | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · ฟอร์มแนวตั้ง: key 1 dropdown, key 2, 3… ช่องละบรรทัด · `+ key` / `− key` → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
+| Variables (`info`) | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
+| Maps (`storage`) | 2 ชั้น (`balances:<address>`) | dropdown key แรกอยู่ที่หัวคอลัมน์แรกของตาราง → list key ที่ 2 + ค่า ทีละ 25 พร้อมเลขหน้า | `/program/:a/entries?name=&page=` |
+| Lookup (`get`) | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · ฟอร์มแนวตั้ง: key 1 dropdown, key 2, 3… ช่องละบรรทัด · `+ key` / `− key` → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
 
 - `layout` ไล่ key ไม่เกิน 20,000 ตัว (`SCAN_LIMIT`) เกินแล้วตอบ `truncated: true` และหน้าเว็บบอกว่านับไม่ครบ
 - กลุ่มเดียวกันมีทั้ง 2 และ 3 ชั้นได้ (`mixed:a` กับ `mixed:a:b`) → ขึ้นทั้งใน storage และ get storage
 - `storageView` จำแถบ / key ที่เลือก / ผลที่อ่านไว้ ตราบที่ยังอยู่โปรแกรมเดิม · `readKeys()` เก็บค่าที่พิมพ์ก่อนวาดใหม่ (กด `+` แล้วค่าไม่หาย)
-- `/program/:a/groups` และ `/program/:a/storage` เดิมยังอยู่ (หน้าเว็บไม่ได้ใช้แล้ว)
+- `/program/:a/groups`, `/program/:a/storage`, `/program/:a/map` (cursor) และ `/blocks?before` เดิมยังอยู่ (หน้าเว็บไม่ได้ใช้แล้ว)
 
 ### การแสดงค่า
 - ค่าที่เป็น object/array ทุกที่ (input, ผลลัพธ์, event, ค่าใน storage) → `json(v)` กล่องดำ `pre.json` ลงสีแบบ JSON · `"123n"` แสดงเป็นตัวเลข
@@ -438,7 +468,8 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 - ยอดเหรียญ `units(raw, decimals)` · ค่าที่มาจาก storage ต้องผ่าน `attr()`/`esc()` เสมอ (key มาจากโปรแกรม)
 
 ### มาตรฐาน token (`src/standards/token.js` · เทสต์ `48-token-standard`)
-ฟังก์ชัน `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom` + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
+ฟังก์ชัน `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom`
+ฟังก์ชันเสริมใน `TOKEN_PROGRAM` (ไม่บังคับในมาตรฐาน): `multiTransfer({ transfers: [{ to, amount }] })` โอนหลายกระเป๋าใน tx เดียว (≈1,400 gas ต่อรายการ) · ข้อความ error เป็นภาษาอังกฤษ + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
 mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(code)` ตรวจจาก `return { … }` + `emit(` ในโค้ด
 `TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals) · input ตอน deploy: `{ name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }`
 เหรียญที่ถือ = ดัชนี `holding:` (บอกว่าโปรแกรมไหน) + `balanceOf` ตอนเปิดหน้า (ยอดจริง) → ยอด 0 ไม่แสดง
@@ -452,9 +483,9 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 | links | `url` + `contact` | ลิงก์ออกไปข้างนอก (`target=_blank rel=noopener noreferrer nofollow`) |
 
 - `safeHref()` ยอมเฉพาะ `https?://` · `mailto:` · `tel:` และอีเมลล้วน (→ `mailto:`) อย่างอื่นแสดงเป็นข้อความ ไม่ทำลิงก์ (กัน `javascript:`)
-- ปุ่ม "แก้ไข metadata" มีเฉพาะหน้ากระเป๋า: ฟอร์ม icon / namespace / คำอธิบาย / url / contact → `sendTx({ action: "metadata", input })`
+- แท็บ "Edit metadata" มีเฉพาะหน้ากระเป๋า (อยู่แถบเดียวกับ Interact): ฟอร์ม icon / namespace / คำอธิบาย / url / contact → `sendTx({ action: "metadata", input })`
   ส่งเฉพาะช่องที่เปลี่ยน · ช่องที่ล้างว่าง = `null` (ลบ) · wallet ต้องเป็น address ของหน้านั้น (VM ใช้ผู้เซ็นเป็น address เสมอ)
-- โปรแกรมไม่มีปุ่มแก้ไข (ผู้ใช้เลือกไว้ 9 ต.ค.: ตั้งได้เฉพาะของตัวเอง) → metadata ของโปรแกรมตั้งจากโค้ดด้วย `setMetadata`
+- โปรแกรมไม่มีแท็บแก้ไข (ผู้ใช้เลือกไว้ 9 ต.ค.: ตั้งได้เฉพาะของตัวเอง) → metadata ของโปรแกรมตั้งจากโค้ดด้วย `setMetadata`
   `TOKEN_PROGRAM` รับ `icon` / `url` / `contact` / `description` ใน input ตอน deploy (seed ใช้ไอคอน data:image)
 
 ### ไอคอน address
@@ -552,6 +583,26 @@ npm run simulate -- --blocks 200 --min 15 --max 25
 - เฟส 2 (`--blocks`, ค่าเริ่ม 100): deploy token / market / poll 10 ตัว (admin init ให้อัตโนมัติ) แล้วใช้งานจริง 15–25 tx/block: โอน, ตั้งชื่อ, แจกโทเคน, approve, ประกาศขาย, ซื้อ, ฝาก-ถอน, โหวต + tx ผิดพลาดตั้งใจเล็กน้อย (ต้องโดนปฏิเสธที่ `/sendtx`)
 - จบแล้วสรุป: ส่ง / เข้าคิว / ถูกปฏิเสธ (แยกสาเหตุ) / เข้าคิวแต่ไม่เข้า block / tx ต่อ block / ระยะห่าง block · รายงานเต็มที่ `simulate-report.json` · key ของกระเป๋าที่ `simulate-report-wallets.json`
 - ต้องเริ่มจาก chain ใหม่ (block 0) เพราะใช้เงินจาก genesis ~7.7 ล้าน และชื่อ namespace ซ้ำกับรอบก่อนไม่ได้ · ถ้า server ตั้ง `ADMINS` ต้องส่ง `--admin-key`
+
+### scenario 1000 กระเป๋า · 10 tx ต่อ block (`npm run scenario`)
+
+`scripts/scenario.js` + โปรแกรมใน `scripts/scenario-programs.js` (เทสต์ `50-scenario-programs`)
+
+```
+RATE_LIMIT=0 BLOCK_MS=3000 npm start          # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
+npm run scenario                               # terminal 2 · ค่าเริ่ม 60 block ของการใช้งาน
+npm run scenario -- --spawn --blocks 15        # หรือเปิด server เอง (MemoryDB)
+```
+
+- ทุก block หยิบงานที่ "พร้อม" (ของที่ต้องใช้เข้า block แล้ว) ให้ครบ `--per-block` (10) ใบ: งานตั้งต้นก่อน แล้วเติมด้วยงานของกระเป๋าที่ได้เหรียญแล้ว
+- โปรแกรม: token `TEST` (6 decimals, ไอคอน, namespace `scenario-test`) · `multisend` (แจก native) · `chain-a`…`chain-f` (step เรียกต่อกัน 6 ทอด, C / E แวะอ่าน balanceOf, D catch ความผิดพลาดของชั้นล่าง)
+  · `router-1`…`router-4` (forward: ดึง token ด้วย transferFrom แล้วส่ง token + native ต่อกัน 4 ทอด หักทอดละ 1%)
+- แจก: multiSend native 3,500 ให้ 1000 กระเป๋า (100 ต่อ tx) + 40,000 ให้ 50 กระเป๋า power · multiTransfer TEST 1,000 ให้ทุกกระเป๋า (power 50,000)
+  `--target` (ค่าเริ่ม 0xF10F…80Cf) ได้ native 500,000 + TEST 1,000,000 และได้เพิ่มระหว่างทางจาก router / การโอน
+- ใช้งาน: power 3 ใบต่อ block (chain 3–6 ทอด, 20% ของสาย 6 ทอดให้ F ล้มแต่ D catch ไว้ · router 4 ทอด · multiTransfer 10–30 คน) + กระเป๋าทั่วไป (โอน TEST / native, ตั้งชื่อ)
+  ประเมินค่าใช้จ่ายต่อกระเป๋า (`COST`, `budget`) ไม่ส่งงานที่จ่ายไม่ไหว · tx ที่ล้มทั้งใบไม่มีในชุดนี้เพราะ simulate ที่ `/sendtx` ปฏิเสธก่อนเข้า block
+- รันจริง 9 ต.ค. (BLOCK_MS 3000): 64 block × 10 tx ทุก block, 640/640 สำเร็จ, ผู้ถือ TEST 1,006 · รายงานที่ `scenario-report.json`
+- ⚠️ แท็บ Incoming ของกระเป๋านับเฉพาะ tx ที่ส่ง**ถึง**กระเป๋านั้นตรง ๆ — token ที่ได้จาก transfer / router และ native จาก transferNative ไม่อยู่ในรายการนี้ (ดูได้จากแท็บ Tokens / ยอด)
 
 ---
 
