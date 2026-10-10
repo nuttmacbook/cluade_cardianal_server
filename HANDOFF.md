@@ -433,7 +433,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 |---|---|
 | Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
 | Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
-| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีป้าย "call failed · caught" เพิ่ม · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
+| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีข้อความเตือนสีส้ม "⚠ caught" ต่อท้าย · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
 | Outgoing (`out`) | `/address/:a/txs` |
 | Interact (`interact`) | (โปรแกรม) ฟอร์ม — เลือกฟังก์ชัน, input JSON, value |
 | Edit metadata (`meta`) | (กระเป๋า) ฟอร์มแก้ metadata อยู่แถบเดียวกับ Interact (เดิมเป็นปุ่มในแถว information) |

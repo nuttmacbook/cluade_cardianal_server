@@ -6,7 +6,7 @@
   /* dark theme: black · blue · purple (same theme for light and dark OS mode) */
   color-scheme:dark;
   --bg:#070814;--panel:#0e1026;--line:#22264a;--text:#e8e9ff;--dim:#8e93c2;--soft:#161a3a;
-  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
   --grad:linear-gradient(135deg,#3b5bdb 0%,#7c3aed 100%);--radius:12px;
 }
 *{box-sizing:border-box}
@@ -188,6 +188,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .io .tag{max-width:100%;overflow-wrap:anywhere}
 .io{min-width:0}.io .lbl{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
 .bad{color:var(--bad)}
+.warn{color:var(--warn);font-size:12px;white-space:nowrap}
 .full{overflow-wrap:anywhere;word-break:break-all}
 .share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
 @media(max-width:720px){
@@ -1192,7 +1193,7 @@ async function address(value, draw = el) {
   const callState = (t) => {
     const tx = t.txStatus ?? t.status;
     const call = t.depth && t.status !== "success" && tx === "success"
-      ? ` <span class="tag bad" title="This call into the program failed, but a program above caught the error, so the transaction still succeeded">call failed · caught</span>` : "";
+      ? ` <span class="warn" title="This call into the program failed, but a program above caught the error, so the transaction still succeeded">⚠ caught</span>` : "";
     return state(tx) + call;
   };
   const inRows = incoming.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
