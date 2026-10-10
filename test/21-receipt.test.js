@@ -295,6 +295,22 @@ test("block.receipt: สรุปทุก tx พร้อมยอดรวม"
   assert.equal(native["alice:consumed"], receipt.fee);
 });
 
+test("block.receipt: nativeChanges ของแต่ละ tx มีค่าก่อน tx นั้น (ไล่ต่อกันใน block) → รู้ว่าเปลี่ยนไปเท่าไร", () => {
+  const vm = setup();
+  const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
+  block.transfer({ from: "alice", to: "carol", amount: 300, nonce: 0 });
+  block.transfer({ from: "alice", to: "carol", amount: 200, nonce: 1 });
+  const [first, second] = block.receipt({ number: 3 }).transactions;
+  const changes = (tx) => Object.fromEntries(tx.nativeChanges.map((c) => [`${c.address}:${c.field}`, [c.before, c.after]]));
+
+  assert.deepEqual(changes(first)["carol:received"], [0, 300]);
+  assert.deepEqual(changes(second)["carol:received"], [300, 500]);          // ต่อจาก tx ก่อนหน้าใน block เดียวกัน
+  assert.deepEqual(changes(second)["alice:sended"], [300, 500]);
+  const [before, after] = changes(second)["alice:consumed"];
+  assert.equal(after - before, second.fee);                                 // ค่าแก๊สของ tx นี้เท่านั้น
+  for (const tx of [first, second]) for (const c of tx.nativeChanges) assert.ok(c.after >= c.before, `${c.address}:${c.field}`);
+});
+
 test("block.receipt: ตรงกับ DB จริงหลัง commit", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });

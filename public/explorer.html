@@ -73,7 +73,7 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
 .form textarea{font-family:ui-monospace,Menlo,monospace;min-height:84px;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 /* interact input: fields guessed from the code, or raw JSON */
-.ix-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);margin-bottom:-4px}
+.ix-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);margin-bottom:-4px}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--bg)}
 .seg button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer}
 .seg button.on{background:var(--grad);color:#fff}
@@ -82,6 +82,22 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
 .ix-type{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:0 7px}
 .ix-fields textarea{min-height:64px}
 .ix-none{font-size:12.5px}
+.ixout{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:12px 14px;display:grid;gap:10px;min-height:46px;transition:opacity .15s}
+.ixout.busy>:not(.ix-status){opacity:.45}
+.ix-status{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12.5px}
+.ix-link{cursor:pointer;color:var(--accent-2);margin-left:auto}
+.ix-ret{display:grid;gap:6px;min-width:0}
+.ix-ret .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.ix-ret>.mono{font-size:15px;overflow-wrap:anywhere}
+.bal{display:grid;gap:2px;padding:10px 18px}
+.bal-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px}
+.bal-row:last-child{border-bottom:0}
+.bal .up{color:var(--ok)}
+.ret-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;max-width:760px}
+.ix-full summary{cursor:pointer;color:var(--dim);font-size:12.5px}
+.ix-full .json{margin-top:8px;max-height:320px}
+.spin{width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent-2);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .out{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -581,7 +597,7 @@ async function tx(hash, draw = el) {
       ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
       ["Block", blockNo(r.blockNumber)],
       ["Time", when(r.timestamp)],
-      ["Result", r.result === undefined ? '<span class="dim">—</span>' : anyValue(r.result)],
+      ["Return value", returnLine(r.result, r.trace?.length)],
     ]))
     + (r.input && Object.keys(r.input).length ? panel("Input", json(r.input), true) : "")
     + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace, r.from, names)) : "")
@@ -590,8 +606,27 @@ async function tx(hash, draw = el) {
          <td>${json(e.data)}</td></tr>`))) : "")
     + (r.stateChanges?.length ? panel(`State changes (${r.stateChanges.length})`, table(["Program", "Key", "New value"], r.stateChanges.map((s) =>
         `<tr><td>${addr(s.program)}</td><td>${keyChips(s.key)}</td><td>${s.after === undefined ? '<span class="dim">Deleted</span>' : anyValue(s.after)}</td></tr>`))) : "")
-    + (r.nativeChanges?.length ? panel(`Balance changes (${r.nativeChanges.length})`, table(["Address", "Field", "New value"], r.nativeChanges.map((n) =>
-        `<tr><td>${addr(n.address)}</td><td class="dim">${esc(n.field)}</td><td class="mono">${num(n.after)}</td></tr>`))) : ""));
+    + (r.nativeChanges?.length ? panel(`Balance changes (${r.nativeChanges.length})`, balanceLines(r.nativeChanges)) : ""));
+}
+
+/** the call's return value on one line (objects shortened · the full value is in Program calls #1) */
+function returnLine(value, calls) {
+  if (value === undefined || value === null) return '<span class="dim">—</span>';
+  if (!isObject(value)) return anyValue(value);
+  const text = JSON.stringify(value, (k, v) => (typeof v === "string" && /^-?\d+n$/.test(v) ? Number(v.slice(0, -1)) : v));
+  return `<span class="ret-line mono" title="${attr(text)}">${esc(text)}</span>${calls ? '<span class="dim">Full value in Program calls #1</span>' : ""}`;
+}
+
+/** native counters (received / sent / gas) as one short line each: address · field · +change (new total) */
+const NATIVE_LABEL = { received: "received", sended: "sent", consumed: "gas paid" };
+function balanceLines(changes) {
+  return `<div class="bal">${changes.map((n) => {
+    const delta = n.before === undefined ? null : Number(n.after ?? 0) - Number(n.before ?? 0);
+    const sign = n.field === "received" ? "+" : "−";   // received adds to the balance, sent / gas take from it
+    return `<div class="bal-row">${addr(n.address)}<span class="dim">${esc(NATIVE_LABEL[n.field] ?? n.field)}</span>
+      <span class="mono ${n.field === "received" ? "up" : "bad"}">${delta === null ? "" : `${sign}${num(delta)}`}</span>
+      <span class="dim mono" title="Running total of this counter">total ${num(n.after)}</span></div>`;
+  }).join("")}</div>`;
 }
 
 // ---------- wallet ----------
@@ -858,7 +893,7 @@ function interactPanel(program) {
       <button class="btn" onclick="runQuery('${program.address}')">Read (no gas)</button>
       <button class="btn solid" onclick="runWrite('${program.address}')">Send transaction</button>
     </div>
-    <div class="out" id="out">The result will appear here</div>
+    <div class="ixout" id="out" aria-live="polite"><div class="ix-status dim">The result will appear here</div></div>
   </div>`;
 }
 
@@ -918,7 +953,7 @@ function setMode(mode) {
           : typeof v === "boolean" || typeof v === "number" ? String(v) : JSON.stringify(v);
       }
     }
-  } catch (error) { return show(`Error: ${error.message}`); }
+  } catch (error) { return show(error.message); }
   ix.mode = mode;
   try { localStorage.setItem("ix-mode", mode); } catch {}
   drawIx();
@@ -932,25 +967,79 @@ const readForm = () => {
     value: Number(document.getElementById("val").value || 0),
   };
 };
-const show = (data) => { document.getElementById("out").innerHTML = typeof data === "string" ? esc(data) : jsonHtml(data); };
+// ---------- interact results: the return value up front, the full response folded underneath ----------
+//   the box is updated in place (old result stays dimmed while the next one loads) so the page never jumps or blinks
+let outSeq = 0;
+let fullOpen = false;   // keep "Full response" open / closed between runs
+const outBox = () => document.getElementById("out");
 
-async function runQuery(program) {
-  try {
-    const { functionName, input } = readForm();
-    show("Reading…");
-    show(await api("/query", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ programUuid: program, functionName, input }) }));
-  } catch (error) { show(`Error: ${error.message}`); }
+/** loading state: keep what is there, dim it, change only the status line */
+function busy(text, extra = "") {
+  const box = outBox();
+  if (!box) return;
+  box.classList.add("busy");
+  const status = box.querySelector(".ix-status");
+  status.className = "ix-status dim";
+  status.innerHTML = `<span class="spin"></span>${esc(text)}${extra}`;
 }
 
+/** final state: status line · return value (or error) · full response folded */
+function showResult({ ok, label, value, error, full, link = "" }) {
+  const box = outBox();
+  if (!box) return;
+  const shown = value === undefined || value === null
+    ? `<span class="dim mono">${value === null ? "null" : "nothing returned"}</span>` : anyValue(value);
+  box.classList.remove("busy");
+  box.innerHTML = `<div class="ix-status"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
+      <span class="dim">${label}</span>${link}</div>
+    <div class="ix-ret"><span class="lbl">${ok ? "Return value" : "Error"}</span>
+      ${ok ? shown : `<span class="bad">${esc(error ?? "Unknown error")}</span>`}</div>
+    ${full === undefined ? "" : `<details class="ix-full" ${fullOpen ? "open" : ""} ontoggle="fullOpen = this.open"><summary>Full response</summary>${json(full)}</details>`}`;
+  labelCells(box);
+  decorate(box);
+}
+const show = (message) => showResult({ ok: false, label: "", error: message });
+const errorText = (e) => (e == null ? undefined : typeof e === "string" ? e : [e.code, e.message].filter(Boolean).join(": "));
+const txLinkBtn = (hash) => ` <a class="ix-link" onclick="go('#tx/${hash}')">View transaction →</a>`;
+
+async function runQuery(program) {
+  const seq = ++outSeq;
+  try {
+    const { functionName, input } = readForm();
+    busy("Reading…");
+    const res = await api("/query", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ programUuid: program, functionName, input }) });
+    if (seq !== outSeq) return;
+    const ok = res.status === "success";
+    showResult({ ok, label: `Read · ${functionName}()${res.gasUsed !== undefined ? ` · gas ${num(res.gasUsed)}` : ""}`,
+      value: res.result, error: errorText(res.error) ?? res.message, full: res });
+  } catch (error) { if (seq === outSeq) show(error.message); }
+}
+
+/** send → wait for the block → show the call's return value (the user stays on this page) */
 async function runWrite(program) {
+  const seq = ++outSeq;
   try {
     const { functionName, input, value } = readForm();
-    show("Waiting for the wallet signature…");
-    const result = await sendTx({ action: "call", to: program, method: functionName, input, value });
-    show(result);
-    if (result.queued) setTimeout(() => go(`#tx/${result.hash}`), 2500);
-  } catch (error) { show(`Error: ${error.message}`); }
+    busy("Waiting for the wallet signature…");
+    const sent = await sendTx({ action: "call", to: program, method: functionName, input, value });
+    if (seq !== outSeq) return;
+    if (!sent.queued) return showResult({ ok: false, label: `Transaction · ${functionName}()`, error: errorText(sent.error) ?? "Not accepted", full: sent });
+    busy("Sent · waiting for the next block…", txLinkBtn(sent.hash));
+    const box = outBox();
+    for (let i = 0; i < 120; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (seq !== outSeq || !box.isConnected) return;   // another run started or the user left / redrew the page
+      const found = await api(`/tx/${sent.hash}`).catch(() => null);
+      if (!found?.blockNumber) continue;
+      const receipt = await api(`/tx/${sent.hash}/receipt`);
+      if (seq !== outSeq || !box.isConnected) return;
+      return showResult({ ok: receipt.status === "success",
+        label: `Transaction · ${functionName}() · block ${num(receipt.blockNumber)} · gas ${num(receipt.gasUsed)}`,
+        value: receipt.result, error: errorText(receipt.error), full: receipt, link: txLinkBtn(sent.hash) });
+    }
+    busy("Still waiting for a block — check the transaction page", txLinkBtn(sent.hash));
+  } catch (error) { if (seq === outSeq) show(error.message); }
 }
 
 // ---------- program storage, split by how many parts the key has ----------
@@ -1141,13 +1230,13 @@ async function address(value, draw = el) {
       body: table(["Hash", "Type", "Nonce", "Status", "Gas", "Age"], outRows) + pager(outgoing, "setPage('out',$)") },
   );
   if (program) {
+    groups.push({ id: "code", label: "Code", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
     groups.push({ id: "interact", label: "Interact", body: interactPanel(program) });
     groups.push({ id: "event", label: "Events", count: events.total,
       body: table(["Name", "Data", "Tx", "Block"], events.items.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${json(e.data)}</td>
          <td>${txLink(e.txHash)}</td><td>${blockNo(e.blockNumber)}</td></tr>`)) + pager(events, "setPage('events',$)") });
     groups.push({ id: "storage", label: "Storage", count: storageView.layout?.scanned, body: storagePanel() });
-    groups.push({ id: "code", label: "Code", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
   } else {
     // a wallet sets its own metadata (signed by that wallet) · a program's metadata comes from its code (setMetadata)
     groups.push({ id: "meta", label: "Edit metadata", body: metaPanel(data) });

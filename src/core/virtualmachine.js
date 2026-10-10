@@ -1144,9 +1144,10 @@ export class VirtualMachine {
    * แปลง request + ผลลัพธ์ เป็น receipt สำหรับ explorer
    * @param {object} request  request ที่ส่งเข้า deploy / init / reject / call / transfer
    * @param {object} result   ผลลัพธ์ที่ได้กลับมา
-   * @param {{ index?: number, action?: string }} [meta]  action = "call" | "deploy" | "init" | "reject" | "transfer"
+   * @param {{ index?: number, action?: string, nativeBefore?: Map }} [meta]  action = "call" | "deploy" | "init" | "reject" | "transfer"
+   *        nativeBefore = dbKey → ค่าก่อน tx นี้ (block.receipt ส่งมา) ทำให้ nativeChanges มี before ด้วย
    */
-  buildReceipt(request = {}, result = {}, { index = 0, action = guessAction(request), blockNumber = null } = {}) {
+  buildReceipt(request = {}, result = {}, { index = 0, action = guessAction(request), blockNumber = null, nativeBefore = null } = {}) {
     const changes = collapseWrites(result.writes ?? []);
     const pick = (kind) => changes.filter((change) => change.kind === kind);
     const isTransfer = action === "transfer";
@@ -1184,7 +1185,9 @@ export class VirtualMachine {
         status: call.status,
         error: call.error ?? null,
       })),
-      nativeChanges: pick(KEY.NATIVE).map(({ address, field, value }) => ({ address, field, after: value })),
+      nativeChanges: pick(KEY.NATIVE).map(({ address, field, value }) => (nativeBefore
+        ? { address, field, before: nativeBefore.get(nativeKey(address, field)) ?? 0, after: value }
+        : { address, field, after: value })),
       stateChanges: pick(KEY.STORAGE).map(({ address, key, value }) => ({ program: address, key, after: value })),
       programChanges: changes
         .filter((change) => [KEY.PENDING, KEY.CODE, KEY.CONTEXT, KEY.THIS].includes(change.kind))
@@ -2383,9 +2386,19 @@ export class Block {
 
   /** receipt ของทั้ง block สำหรับ explorer */
   receipt({ number = this.#number, feeRecipient = this.#feeRecipient } = {}) {
+    // ค่า native ก่อน tx แต่ละใบ (ไล่ตามลำดับใน block) → receipt บอกได้ว่าแต่ละช่องเปลี่ยนไปเท่าไร
+    const running = new Map();
     const transactions = this.#results.map((result, index) => {
       const { action, request } = this.#requests[index];
-      return this.#vm.buildReceipt(request, result, { index, action, blockNumber: number });
+      const nativeBefore = new Map();
+      for (const write of result.writes ?? []) {
+        if (nativeBefore.has(write.dbKey) || decodeDbKey(write.dbKey).kind !== KEY.NATIVE) continue;
+        nativeBefore.set(write.dbKey, running.has(write.dbKey) ? running.get(write.dbKey) : this.#beforeValue(write.dbKey));
+      }
+      for (const write of result.writes ?? []) {
+        if (nativeBefore.has(write.dbKey)) running.set(write.dbKey, write.type === WRITE.DEL ? undefined : write.value);
+      }
+      return this.#vm.buildReceipt(request, result, { index, action, blockNumber: number, nativeBefore });
     });
     const { hash, txRoot, stateRoot } = this.hashes();
 

@@ -216,11 +216,20 @@ test("อ่านค่าโปรแกรมจากฟอร์ม (ไม
   await page.click(".ix-head .seg button[data-mode=fields]");
   await page.selectOption("#fn", "balanceOf");
   await page.fill("#ix-who", ME);                                                   // ช่องกรอกที่เดาจาก params.input.who
+  await page.evaluate(() => { window.__swaps = 0; new MutationObserver((ms) => { for (const m of ms) if (m.target.id === "view") window.__swaps += 1; })
+    .observe(document.getElementById("view"), { childList: true }); });
   await page.click("text=Read (no gas)");
-  await page.waitForFunction(() => document.getElementById("out").textContent.includes('"status"'));
-  const out = JSON.parse(await page.locator("#out").innerText());                 // แสดงเป็น JSON (ตัวเลข bigint ไม่มี n)
-  assert.equal(out.status, "success");
-  assert.equal(typeof out.result, "number");
+  await page.waitForSelector("#out .ix-ret");
+  const { balance } = await get(`/address/${address}`).then(() => get(`/token/${address}/holders?limit=100`))
+    .then((h) => h.items.find((x) => x.address === ME.toLowerCase()) ?? { balance: "0n" });
+  assert.match(await page.locator("#out .ix-status").innerText(), /Success[\s\S]*Read · balanceOf\(\)/);
+  assert.equal(await page.locator("#out .ix-ret .mono").innerText(), BigInt(String(balance).replace(/n$/, "")).toLocaleString("en-US")); // ค่าที่ return จริง
+  assert.equal(await page.locator("#out details.ix-full").getAttribute("open"), null);   // ข้อมูลเต็มพับไว้
+  const full = JSON.parse(await page.locator("#out details.ix-full pre").textContent());
+  assert.equal(full.status, "success");
+  assert.equal(typeof full.result, "number");
+  assert.equal(await page.evaluate(() => window.__swaps), 0, "กด Read แล้วหน้าไม่ถูกวาดใหม่");
+  assert.equal(await page.locator("#fn").inputValue(), "balanceOf");
 });
 
 test("Interact: สร้างช่องกรอกจาก params.input ของฟังก์ชันที่เลือก · สลับ Fields ↔ JSON แล้วค่าไม่หาย", async () => {
@@ -243,7 +252,7 @@ test("Interact: สร้างช่องกรอกจาก params.input �
 
   await page.fill("#ix-amount", "1.5");
   await page.click("text=Read (no gas)");
-  assert.match(await page.locator("#out").innerText(), /amount must be a whole number/);
+  assert.match(await page.locator("#out .ix-ret").innerText(), /amount must be a whole number/);
 
   await page.selectOption("#fn", "multiTransfer");                                     // list ของ object: ตัวอย่างจาก item.to / item.amount
   assert.deepEqual(await fields(), ["transfers:list"]);
@@ -266,16 +275,19 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   await page.click(".ix-head .seg button[data-mode=json]");                         // แบบ JSON เดิมยังใช้ได้
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "7n" }));
   await page.click("text=Send transaction");
-  await page.waitForFunction(() => /"queued"/.test(document.getElementById("out").textContent));
-  const out = JSON.parse(await page.locator("#out").innerText());
-  assert.equal(out.queued, true, JSON.stringify(out));
-  assert.equal(out.sender, ME);
+  // อยู่หน้าเดิม: รอเข้า block แล้วโชวค่าที่ return (transfer คืน true) + ข้อมูลเต็มแบบพับ
+  await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
+  assert.match(await page.locator("#out .ix-status").innerText(), /Success[\s\S]*Transaction · transfer\(\) · block/);
+  assert.equal(await page.locator("#out .ix-ret .mono").innerText(), "true");
+  const receipt = JSON.parse(await page.locator("#out details.ix-full pre").textContent());
+  assert.equal(receipt.from, ME);
+  assert.equal(receipt.method, "transfer");
 
-  await page.waitForFunction((hash) => location.hash === `#tx/${hash}`, out.hash, { timeout: 10_000 });
-  for (let i = 0; i < 50 && !(await get(`/tx/${out.hash}`)).blockNumber; i += 1) await wait(200);
-  await page.reload();
+  await page.click("#out .ix-link");                                                 // ลิงก์ไปหน้า tx
+  await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
   await page.waitForFunction(() => document.getElementById("view").innerText.includes("Success"));
   assert.match(await view(), /transfer/);
+  assert.match(await page.locator("#view tr", { hasText: /^Return value/ }).innerText(), /true/);
 
   const after = (await get(`/program/${address}/storage?prefix=balances&limit=200`)).items;
   const bobAfter = after.find((s) => s.key[1] === BOB.toLowerCase()).value;
