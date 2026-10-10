@@ -443,6 +443,11 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 
 กดแท็บที่เปิดอยู่แล้วไม่วาดใหม่ (ค่าที่พิมพ์ในฟอร์มไม่หาย)
 
+### หน้า tx — Return value / Balance changes
+แถว "Return value" = ค่าที่โปรแกรม return เต็ม ๆ แสดงแบบเดียวกับผล Read ใน Interact (`returnValue()` ใช้ร่วมกัน) · tx ที่ล้มโชว "— (failed)"
+Balance changes = บรรทัดละช่อง: address · received / sent / gas paid · +/−จำนวนที่เปลี่ยน · total ใหม่
+จำนวนที่เปลี่ยนมาจาก `before` ใน `nativeChanges` ที่ `block.receipt()` ใส่ให้ (ค่าก่อน tx นั้น ไล่ต่อกันใน block · ไม่อยู่ใน block hash)
+
 ### หน้า tx — Program calls
 `traceView()` เป็นแผนผังย่อ: กล่องเล็กละ call ในกล่องมีแค่เลขลำดับ (กรอบแดง = call นั้นล้ม · tooltip = program.method())
 วางเป็นต้นไม้จากบนลงล่าง: ชั้นละ depth · call ที่ถูกเรียกอยู่ใต้ผู้เรียก พี่น้องเรียงซ้าย→ขวาตามลำดับที่เกิด · ใบไม้ละ 1 คอลัมน์ (`slot`) ผู้เรียกอยู่กึ่งกลางเหนือลูกคนแรกกับคนสุดท้าย
@@ -513,6 +518,11 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 - ตัวเลขที่กรอก `7` ส่งเป็น `"7n"` (VM ไม่รับ number ของ JS) · ช่องว่าง = ไม่ส่ง key นั้น · ค่าไม่ถูกชนิดขึ้น error พร้อมชื่อช่องตอนกด Read / Send
 - สลับ Fields → JSON เขียนค่าที่กรอกเป็น JSON (ค่าที่ไม่ถูกชนิดคัดลอกไปตามที่พิมพ์) · JSON → Fields เติมช่องกลับ key ที่ไม่มีช่องจะเก็บไว้แล้วส่งไปด้วย ("Also sent from the JSON")
 - state อยู่ใน `ix` (program, fn, mode, values, json, extra) เปลี่ยนฟังก์ชัน / ต่อ wallet แล้ววาดใหม่ค่าที่พิมพ์ไม่หาย
+
+**ผลของ Read / Send** (`#out` = `.ixout`): แก้ในกล่องเดิม ไม่วาดหน้าใหม่ ระหว่างรอผลเก่าจางลง (`busy()`) แล้ว `showResult()` แทนที่
+- บรรทัดสถานะ (✓/✗ · Read หรือ Transaction · ฟังก์ชัน · block · gas) → **Return value** (หรือ Error) → "Full response" พับไว้ (จำว่าเปิด/ปิด)
+- Send ไม่เด้งไปหน้า tx แล้ว: รอ `/tx/:hash` จนมี blockNumber (สูงสุด 120 วิ) แล้วอ่าน receipt โชวค่าที่ return + ลิงก์ "View transaction"
+- `outSeq` กันผลของรอบเก่าทับรอบใหม่ · ถ้ากล่องหายจากหน้า (เปลี่ยนหน้า / วาดใหม่) หยุดรอทันที
 
 ⚠️ `canonical()` ในหน้าเว็บ**ต้องตรงกับ `canonicalJson()` ใน VM เป๊ะ ๆ** (เรียง key, bigint → `"123n"`)
 และ `signingInput()` ต้องทำ hex ใน input เป็นตัวพิมพ์เล็กแบบเดียวกับ `normalizeTransaction()` ใน `signature.js`
