@@ -11,7 +11,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
 import { chromium } from "playwright";
-import { Wallet } from "ethers";
+import { Wallet, JsonRpcProvider, Contract } from "ethers";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";  // มียอดใน genesis.json
@@ -495,3 +495,34 @@ test("Calls ของโปรแกรม: call ซ้อนที่ล้ม�
   await settle();
   assert.match(await page.locator("#view tr", { hasText: /^Status/ }).textContent(), /Success/);
 });
+
+test("/evm: ethers JsonRpcProvider ต่อกับเชนได้ (chainId, block, ยอด, tx, receipt, ERC-20) · ส่ง tx ไม่ได้ · ลิงก์ explorer ของกระเป๋าพาไปหน้าเดิม", async () => {
+  const provider = new JsonRpcProvider(`${url}/evm`);
+  const genesis = await get("/genesis");
+  assert.equal((await provider.getNetwork()).chainId, BigInt(genesis.chainId));
+  const latest = await provider.getBlock("latest");
+  assert.ok(latest.number >= 1 && latest.timestamp < Date.now() / 1000 + 5);
+  const native = (await get(`/address/${ME}`)).native.balance;
+  assert.equal(await provider.getBalance(ME), BigInt(native) * 10n ** 18n);
+  const { address: token } = await get("/name/mytoken");
+  const erc20 = new Contract(token, ["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)"], provider);
+  assert.equal(await erc20.symbol(), "MTK");
+  assert.equal(await erc20.decimals(), 6n);
+  const { result } = await fetch(`${url}/query`, { method: "POST", body: JSON.stringify({ programUuid: token, functionName: "balanceOf", input: { who: ME } }) }).then((r) => r.json());
+  assert.equal(await erc20.balanceOf(ME), BigInt(String(result).replace(/n$/, "")));
+  const [hash] = (await get("/block/1")).txHashes;
+  const receipt = await provider.getTransactionReceipt(hash);
+  assert.equal(receipt.status, 1);
+  assert.equal(receipt.contractAddress.toLowerCase(), token);
+  assert.equal((await provider.getTransaction(hash)).from.toLowerCase(), ME);
+  await assert.rejects(provider.broadcastTransaction("0x02f86c"), /EIP-712|could not coalesce/);
+  const params = await get("/evm");
+  assert.equal(params.nativeCurrency.decimals, 18);
+  assert.equal(params.rpcUrls[0], `${url}/evm`);
+  await page.goto(`${url}/evm/explorer/tx/${hash}`);
+  await settle();
+  assert.equal(new URL(page.url()).hash, `#tx/${hash}`);
+  assert.match(await view(), /deploy/i);
+  provider.destroy();
+});
+
