@@ -188,6 +188,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .io .tag{max-width:100%;overflow-wrap:anywhere}
 .io{min-width:0}.io .lbl{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
 .bad{color:var(--bad)}
+.utc{display:block;font-size:11px;color:var(--dim);opacity:.85;font-variant-numeric:tabular-nums;white-space:nowrap}
 .full{overflow-wrap:anywhere;word-break:break-all}
 .share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
 @media(max-width:720px){
@@ -200,6 +201,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .kv td:first-child{width:118px;font-size:12px}
   .stat b{font-size:20px}
   table{font-size:13px}
+  .utc .sec{display:none}   /* narrow screens: UTC time to the minute */
 }
 /* phones: each table row becomes a card, every cell labelled from its column header (data-label) */
 @media(max-width:640px){
@@ -269,6 +271,11 @@ const num = (v) => (typeof v === "string" && /^-?\d+n$/.test(v) ? BigInt(v.slice
 const when = (t) => (t ? new Date(t).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "medium" }) : "—");
 const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000);
   return s < 60 ? `${s | 0} sec ago` : s < 3600 ? `${s / 60 | 0} min ago` : s < 86400 ? `${s / 3600 | 0} hr ago` : `${s / 86400 | 0} days ago`; };
+/** full date-time in UTC, small, under a relative age · seconds hidden on narrow screens (.sec) */
+const utc = (t) => { if (!t) return "";
+  const [date, time] = new Date(t).toISOString().split("T");
+  return `<small class="utc">${date} ${time.slice(0, 5)}<span class="sec">${time.slice(5, 8)}</span> UTC</small>`; };
+const age = (t) => (t ? `<span class="age">${ago(t)}${utc(t)}</span>` : "—");
 const plural = (n, word) => `${num(n)} ${word}${n === 1 ? "" : "s"}`;
 
 /** every address and hash is clickable and copyable */
@@ -443,7 +450,7 @@ async function home(draw = el) {
       <div class="stat"><b>${info.chainId}</b><span>Chain ID</span></div></div>`)
     + panel("Latest blocks", table(["Block", "Age", "Txs", "Result", "Gas", "Fee recipient"], blocks.items.map((b) => txRow(b, [
         blockNo(b.number),
-        `<span title="${when(b.timestamp)}">${ago(b.timestamp)}</span>`,
+        `<span title="${when(b.timestamp)}">${age(b.timestamp)}</span>`,
         num(b.txCount),
         b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : '<span class="dim">Empty</span>',
         gas(b.gasUsed), addr(b.feeRecipient),
@@ -459,7 +466,7 @@ async function block(number, draw = el) {
   if (!header?.number) return draw(panel("Block not found", `<div class="empty">${esc(data.error ?? "Block not found")}</div>`));
   const txs = slicePage(data.transactions ?? [], pageOf("txs"));
   draw(panel(`<span class="ico blk"></span>Block #${header.number}`, kv([
-      ["Time", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>`],
+      ["Time", `${when(header.timestamp)} <span class="dim">· ${ago(header.timestamp)}</span>${utc(header.timestamp)}`],
       ["Hash", full(header.hash)],
       ["Parent block", header.parentHash ? `<span class="mono full"><a onclick="go('#block/${header.number - 1}')">${esc(header.parentHash)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">First block</span>'],
       ["State root", full(header.stateRoot)],
@@ -1192,10 +1199,10 @@ async function address(value, draw = el) {
       t.depth ? ` <span class="tag" title="Called through another program">Nested · depth ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
     <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
     <td>${blockNo(t.blockNumber)}</td>
-    <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
+    <td class="dim" title="${when(t.timestamp)}">${age(t.timestamp)}</td></tr>`);
   const outRows = outgoing.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>
     <td>${t.nonce}</td><td>${state(t.status)}</td><td>${gas(t.gasUsed)}</td>
-    <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
+    <td class="dim" title="${when(t.timestamp)}">${age(t.timestamp)}</td></tr>`);
 
   // tokens held: found from Transfer events sent to this address · zero balances hidden
   const held = slicePage(tokens, pageOf("tokens"));
