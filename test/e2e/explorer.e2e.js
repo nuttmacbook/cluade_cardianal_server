@@ -460,6 +460,28 @@ test("trace การเรียกโปรแกรม: แผนผังต
   assert.deepEqual(pageErrors, []);
 });
 
+test("เวลา: ทุกจุดที่บอก ... ago มีวันเวลา UTC ตัวเล็ก · จอกว้างถึงวินาที จอแคบถึงนาที", async () => {
+  const { address } = await get("/name/mytoken");
+  const latest = await get("/block/latest");
+  const stamp = new Date(latest.timestamp).toISOString();
+  for (const hash of ["", `#address/${address}`, `#block/${latest.number}`]) {
+    await open(hash);
+    if (hash.startsWith("#address")) await tab("Calls");
+    const smalls = page.locator("#view .utc");
+    assert.ok(await smalls.count() > 0, `มี UTC ใน ${hash || "หน้าแรก"}`);
+    assert.match(await smalls.first().innerText(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/);
+  }
+  assert.equal(await page.locator("#view .utc").first().innerText(), `${stamp.slice(0, 10)} ${stamp.slice(11, 19)} UTC`);
+  const original = page.viewportSize();
+  await page.setViewportSize({ width: 375, height: 800 });
+  try {
+    await open(`#block/${latest.number}`);
+    assert.equal(await page.locator("#view .utc").first().innerText(), `${stamp.slice(0, 10)} ${stamp.slice(11, 16)} UTC`);
+  } finally {
+    await page.setViewportSize(original ?? { width: 1280, height: 720 });
+  }
+});
+
 test("Calls ของโปรแกรม: call ซ้อนที่ล้มแต่ชั้นบน catch ไว้ → Status = Success ตรงกับหน้า tx + ข้อความเตือนสีส้ม ⚠ caught", async () => {
   const { address: token } = await get("/name/mytoken");
   await open(`#address/${token}`);
