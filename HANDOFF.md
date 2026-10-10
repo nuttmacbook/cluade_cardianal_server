@@ -399,6 +399,23 @@ POST /query    { programUuid, functionName, input, context?, value? }
 `/sendtx` **คืน error ก่อนเข้าคิวเสมอ** ถ้า simulate ไม่ผ่าน (user จะไม่เสียเวลารอใบที่ล้มแน่ ๆ)
 `simulate` รันบน state ปัจจุบันของ DB ไม่นับผลของใบที่รออยู่ในคิว → เป็นการ "ประเมิน" ไม่ใช่รับประกัน
 
+### `/evm` — ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (`src/node/evm-rpc.js` · เทสต์ `50-evm-rpc` + e2e)
+**อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน** แค่อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem ต่อได้)
+```
+POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP)
+GET  /evm                      ค่าสำหรับ wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
+GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก์ "ดูใน explorer" ของกระเป๋า)
+```
+- รองรับ: `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
+  `eth_getBlockByNumber/ByHash` `eth_getTransactionByHash` `eth_getTransactionReceipt` `eth_call` (ERC-20 อ่านอย่างเดียว) `eth_estimateGas` ฯลฯ (`rpc.methods`)
+- native × 10^`EVM_DECIMALS` (ค่าเริ่มต้น 18 → 1 native = 1 เหรียญใน MetaMask) · gasPrice = 1 native ต่อ gas ก็ถูกคูณเหมือนกัน
+- timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`) · status `0x1/0x0` · `contractAddress` = programUuid ของ deploy
+- event `Transfer` ของ token มาตรฐาน → log ERC-20 (topic keccak("Transfer(address,address,uint256)")) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
+- tx `input` = JSON `{action, method, input}` เป็น hex (ไม่ใช่ ABI) · `eth_getCode` คืน `0xfe` ถ้าเป็นโปรแกรม (ไม่ใช่ bytecode จริง)
+- **ส่ง tx ไม่ได้**: `eth_sendRawTransaction` ตอบ error (เชนรับเฉพาะ EIP-712 ของตัวเอง) → ส่งผ่าน explorer เหมือนเดิม
+- ไม่รองรับ: `eth_getLogs`, `eth_feeHistory`, `eth_getStorageAt`, `debug_*`, `eth_subscribe`
+- chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
+
 ---
 
 ## 8. Explorer (`public/explorer.html`)

@@ -3,6 +3,9 @@
  *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
  *   TIMEOUT_MS=2000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms)
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
+ *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
+ *   EVM_DECIMALS=18   ยอด native ที่ /evm ส่งให้กระเป๋า EVM = ยอดจริง × 10^EVM_DECIMALS (MetaMask บังคับ 18)
+ *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -14,6 +17,7 @@ import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
+import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders } from "./src/node/explorer-api.js";
 
@@ -36,6 +40,9 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
 export const mempool = new Mempool(vm);
 // POST ทุกตัวอาจรันโปรแกรม → จำกัดต่อ IP (ส่วน /sendtx ยังมี rate limit ต่อ address ใน mempool อีกชั้น)
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
+// ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
+export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
+export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 18) });
 if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("genesis.json", "utf8")));
 
 let mining = false;
@@ -192,8 +199,45 @@ const send = (response, status, data) => {
   response.end(JSON.stringify(data, (key, value) => (typeof value === "bigint" ? `${value}n` : value)));
 };
 
+/**
+ * /evm — JSON-RPC แบบ EVM (POST) · ค่าสำหรับเพิ่มเชนใน MetaMask (GET /evm)
+ * /evm/explorer/{tx,address,token,block}/:id — ลิงก์ "ดูใน explorer" ของกระเป๋า → หน้า explorer เดิม
+ */
+async function handleEvm(request, response, url) {
+  const explorerLink = /^\/evm\/explorer\/(tx|address|token|block)\/([^/]+)$/.exec(url.pathname);
+  if (explorerLink) {
+    const [, kind, id] = explorerLink;
+    response.writeHead(302, { location: `/#${kind === "token" ? "address" : kind}/${encodeURIComponent(id)}` });
+    return response.end();
+  }
+  if (url.pathname !== "/evm") return send(response, 404, { error: "Endpoint not found" });
+  if (request.method === "OPTIONS") {   // dApp ในเบราว์เซอร์ส่ง content-type: application/json → ต้องตอบ preflight
+    response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type" });
+    return response.end();
+  }
+  if (request.method === "GET") {
+    const origin = `${request.headers["x-forwarded-proto"] ?? "http"}://${request.headers.host ?? "localhost"}`;
+    return send(response, 200, evmRpc.chainParams({ rpcUrl: `${origin}/evm`, explorerUrl: `${origin}/evm/explorer`,
+      name: process.env.EVM_NAME ?? "Cardianal", symbol: process.env.EVM_SYMBOL ?? "CARD" }));
+  }
+  if (request.method !== "POST") return send(response, 405, { error: "Use POST for JSON-RPC" });
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const ip = request.socket.remoteAddress ?? "unknown";
+  if (!evmLimiter.allow(ip)) {
+    response.setHeader("retry-after", String(evmLimiter.retryAfter(ip)));
+    return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
+  }
+  let body;
+  try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(response, 200, parseError()); }
+  try { return send(response, 200, evmRpc.handle(body)); }
+  catch (error) { console.error(error); return send(response, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: error.message } }); }
+}
+
 export const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
+  if (url.pathname === "/evm" || url.pathname.startsWith("/evm/")) return handleEvm(request, response, url);
   if (request.method === "OPTIONS") return send(response, 204, {});
   if (url.pathname === "/" || url.pathname === "/explorer") {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
