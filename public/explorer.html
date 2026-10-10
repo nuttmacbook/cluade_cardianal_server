@@ -93,7 +93,6 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
 .bal-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px}
 .bal-row:last-child{border-bottom:0}
 .bal .up{color:var(--ok)}
-.ret-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;max-width:760px}
 .ix-full summary{cursor:pointer;color:var(--dim);font-size:12.5px}
 .ix-full .json{margin-top:8px;max-height:320px}
 .spin{width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent-2);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
@@ -597,7 +596,7 @@ async function tx(hash, draw = el) {
       ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
       ["Block", blockNo(r.blockNumber)],
       ["Time", when(r.timestamp)],
-      ["Return value", returnLine(r.result, r.trace?.length)],
+      ["Return value", r.status === "success" ? returnValue(r.result) : '<span class="dim">— (failed)</span>'],
     ]))
     + (r.input && Object.keys(r.input).length ? panel("Input", json(r.input), true) : "")
     + (r.trace?.length ? panel(`Program calls (${r.trace.length})`, traceView(r.trace, r.from, names)) : "")
@@ -609,13 +608,9 @@ async function tx(hash, draw = el) {
     + (r.nativeChanges?.length ? panel(`Balance changes (${r.nativeChanges.length})`, balanceLines(r.nativeChanges)) : ""));
 }
 
-/** the call's return value on one line (objects shortened · the full value is in Program calls #1) */
-function returnLine(value, calls) {
-  if (value === undefined || value === null) return '<span class="dim">—</span>';
-  if (!isObject(value)) return anyValue(value);
-  const text = JSON.stringify(value, (k, v) => (typeof v === "string" && /^-?\d+n$/.test(v) ? Number(v.slice(0, -1)) : v));
-  return `<span class="ret-line mono" title="${attr(text)}">${esc(text)}</span>${calls ? '<span class="dim">Full value in Program calls #1</span>' : ""}`;
-}
+/** a program's return value, shown the same way everywhere (Interact result box and the tx page) */
+const returnValue = (value) => (value === undefined || value === null
+  ? `<span class="dim mono">${value === null ? "null" : "nothing returned"}</span>` : anyValue(value));
 
 /** native counters (received / sent / gas) as one short line each: address · field · +change (new total) */
 const NATIVE_LABEL = { received: "received", sended: "sent", consumed: "gas paid" };
@@ -987,8 +982,7 @@ function busy(text, extra = "") {
 function showResult({ ok, label, value, error, full, link = "" }) {
   const box = outBox();
   if (!box) return;
-  const shown = value === undefined || value === null
-    ? `<span class="dim mono">${value === null ? "null" : "nothing returned"}</span>` : anyValue(value);
+  const shown = returnValue(value);
   box.classList.remove("busy");
   box.innerHTML = `<div class="ix-status"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
       <span class="dim">${label}</span>${link}</div>

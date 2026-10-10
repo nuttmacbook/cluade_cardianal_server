@@ -444,7 +444,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 กดแท็บที่เปิดอยู่แล้วไม่วาดใหม่ (ค่าที่พิมพ์ในฟอร์มไม่หาย)
 
 ### หน้า tx — Return value / Balance changes
-แถว "Return value" = ค่าที่ call นี้ return บรรทัดเดียว (object ย่อเหลือ 2 บรรทัด ค่าเต็มอยู่ใน Program calls #1)
+แถว "Return value" = ค่าที่โปรแกรม return เต็ม ๆ แสดงแบบเดียวกับผล Read ใน Interact (`returnValue()` ใช้ร่วมกัน) · tx ที่ล้มโชว "— (failed)"
 Balance changes = บรรทัดละช่อง: address · received / sent / gas paid · +/−จำนวนที่เปลี่ยน · total ใหม่
 จำนวนที่เปลี่ยนมาจาก `before` ใน `nativeChanges` ที่ `block.receipt()` ใส่ให้ (ค่าก่อน tx นั้น ไล่ต่อกันใน block · ไม่อยู่ใน block hash)
 

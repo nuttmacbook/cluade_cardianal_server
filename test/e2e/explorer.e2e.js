@@ -433,6 +433,8 @@ test("trace การเรียกโปรแกรม: แผนผังต
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
   }
   await open(`#tx/${relay.hash}`);
+  // แถว Return value = ค่าที่โปรแกรม return เต็ม ๆ แบบเดียวกับผล Read
+  assert.equal((await page.locator("#view tr", { hasText: /^Return value/ }).locator("td").last().innerText()).trim(), "1,200,500,000");
   const nodes = page.locator("#view .flow .node[data-call]");
   assert.equal(await nodes.count(), 2);
   assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // กล่องผู้ส่ง tx
