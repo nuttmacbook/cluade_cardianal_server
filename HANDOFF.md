@@ -504,6 +504,16 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 `callableOf(code)` อ่านชื่อฟังก์ชันจาก `return { … }` ท้ายโค้ดด้วย regex
 `runQuery()` ไม่ต้องต่อ wallet · `runWrite()` ต้องเซ็น แล้วเด้งไปหน้า tx หลัง 2.5 วิ
 
+**Input ของ Interact มี 2 แบบ** (ปุ่ม Fields / JSON · จำแบบที่เลือกไว้ใน localStorage `ix-mode`)
+- Fields: `inferInputs(code, fn)` อ่านโค้ดของฟังก์ชันที่เลือก (`functionSource()` ตัด body ด้วยการนับวงเล็บ) หา `params.input.<ชื่อ>`
+  รวม alias (`const i = params.input`), destructuring (`const { to, amount } = params.input` / `({ input })`) และตามเข้า helper ในโปรแกรม 1 ชั้น (`move(from, to, amount)`)
+- เดาชนิดจากการใช้งาน (`guessShape`): list (for…of / .length / .map) → object (.ย่อย) → address (ชื่อ to/from/who/owner/token… หรือเป็นเป้าของ transferNative / runProgram)
+  → whole number (คำนวณ / เทียบกับ `1n`, ชื่อ amount…) → yes/no (`=== true`, `|| false`, หรือใช้แค่ใน if/!/?) → text
+- ช่อง list/object เป็น JSON มีตัวอย่างใน placeholder จาก `item.<key>` ใน for…of · ตัวเลขในช่องเหล่านี้แปลงเป็น `"Nn"` ให้ (`bigints()`)
+- ตัวเลขที่กรอก `7` ส่งเป็น `"7n"` (VM ไม่รับ number ของ JS) · ช่องว่าง = ไม่ส่ง key นั้น · ค่าไม่ถูกชนิดขึ้น error พร้อมชื่อช่องตอนกด Read / Send
+- สลับ Fields → JSON เขียนค่าที่กรอกเป็น JSON (ค่าที่ไม่ถูกชนิดคัดลอกไปตามที่พิมพ์) · JSON → Fields เติมช่องกลับ key ที่ไม่มีช่องจะเก็บไว้แล้วส่งไปด้วย ("Also sent from the JSON")
+- state อยู่ใน `ix` (program, fn, mode, values, json, extra) เปลี่ยนฟังก์ชัน / ต่อ wallet แล้ววาดใหม่ค่าที่พิมพ์ไม่หาย
+
 ⚠️ `canonical()` ในหน้าเว็บ**ต้องตรงกับ `canonicalJson()` ใน VM เป๊ะ ๆ** (เรียง key, bigint → `"123n"`)
 และ `signingInput()` ต้องทำ hex ใน input เป็นตัวพิมพ์เล็กแบบเดียวกับ `normalizeTransaction()` ใน `signature.js`
 ไม่ตรง = digest ไม่ตรง = ลายเซ็นใช้ไม่ได้ทุกใบ (`test/46-explorer-canonical.test.js` คุมอยู่)

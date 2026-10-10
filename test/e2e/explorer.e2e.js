@@ -213,13 +213,46 @@ test("อ่านค่าโปรแกรมจากฟอร์ม (ไม
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Interact");
+  await page.click(".ix-head .seg button[data-mode=fields]");
   await page.selectOption("#fn", "balanceOf");
-  await page.fill("#args", JSON.stringify({ who: ME }));
+  await page.fill("#ix-who", ME);                                                   // ช่องกรอกที่เดาจาก params.input.who
   await page.click("text=Read (no gas)");
   await page.waitForFunction(() => document.getElementById("out").textContent.includes('"status"'));
   const out = JSON.parse(await page.locator("#out").innerText());                 // แสดงเป็น JSON (ตัวเลข bigint ไม่มี n)
   assert.equal(out.status, "success");
   assert.equal(typeof out.result, "number");
+});
+
+test("Interact: สร้างช่องกรอกจาก params.input ของฟังก์ชันที่เลือก · สลับ Fields ↔ JSON แล้วค่าไม่หาย", async () => {
+  const { address } = await get("/name/mytoken");
+  await open(`#address/${address}`);
+  await tab("Interact");
+  await page.click(".ix-head .seg button[data-mode=fields]");
+  await page.selectOption("#fn", "transfer");
+  const fields = () => page.locator("#ix-input .ix-f").evaluateAll((els) => els.map((e) => `${e.dataset.name}:${e.dataset.type}`));
+  assert.deepEqual(await fields(), ["to:address", "amount:number"]);
+  await page.fill("#ix-to", BOB);
+  await page.fill("#ix-amount", "7");
+
+  await page.click(".ix-head .seg button[data-mode=json]");
+  assert.deepEqual(JSON.parse(await page.inputValue("#args")), { to: BOB, amount: "7n" });   // ตัวเลขกลายเป็น bigint "7n"
+  await page.fill("#args", JSON.stringify({ to: BOB, amount: "9n", memo: "hi" }));
+  await page.click(".ix-head .seg button[data-mode=fields]");
+  assert.equal(await page.inputValue("#ix-amount"), "9");
+  assert.match(await page.locator("#ix-input").innerText(), /Also sent from the JSON: memo/);
+
+  await page.fill("#ix-amount", "1.5");
+  await page.click("text=Read (no gas)");
+  assert.match(await page.locator("#out").innerText(), /amount must be a whole number/);
+
+  await page.selectOption("#fn", "multiTransfer");                                     // list ของ object: ตัวอย่างจาก item.to / item.amount
+  assert.deepEqual(await fields(), ["transfers:list"]);
+  assert.deepEqual(JSON.parse(await page.getAttribute("#ix-transfers", "placeholder")), [{ to: "0x…", amount: 1 }]);
+  await page.selectOption("#fn", "balanceOf");
+  assert.deepEqual(await fields(), ["who:address"]);
+  await page.selectOption("#fn", "totalSupply");
+  assert.match(await page.locator("#ix-input").innerText(), /reads nothing from params.input/);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้าเว็บผ่าน /sendtx และเข้า block (address ใน input เป็นตัวพิมพ์ผสม)", async () => {
@@ -230,6 +263,7 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   await open(`#address/${address}`);
   await tab("Interact");
   await page.selectOption("#fn", "transfer");
+  await page.click(".ix-head .seg button[data-mode=json]");                         // แบบ JSON เดิมยังใช้ได้
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "7n" }));
   await page.click("text=Send transaction");
   await page.waitForFunction(() => /"queued"/.test(document.getElementById("out").textContent));

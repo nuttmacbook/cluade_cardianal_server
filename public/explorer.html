@@ -72,6 +72,16 @@ pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14
   padding:9px 12px;border-radius:8px;font:inherit;font-size:13px;width:100%}
 .form textarea{font-family:ui-monospace,Menlo,monospace;min-height:84px;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+/* interact input: fields guessed from the code, or raw JSON */
+.ix-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);margin-bottom:-4px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--bg)}
+.seg button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--grad);color:#fff}
+.ix-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:10px 14px;align-items:start}
+.ix-name{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:var(--text)}
+.ix-type{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:0 7px}
+.ix-fields textarea{min-height:64px}
+.ix-none{font-size:12.5px}
 .out{background:#04050d;color:#d8dee9;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;
   font-size:12.5px;white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -167,7 +177,8 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
-  .brand{width:100%}
+  .brand{width:100%;white-space:normal}
+  .brand span{display:inline-block}   /* "block 123 · 0 pending" drops to its own line on very narrow screens */
   .bar input{flex:1 1 150px}
   main{padding:14px;gap:14px}
   td,th{padding:10px 12px}
@@ -652,13 +663,196 @@ const walletRow = (note) => `<div class="row">
     <span class="dim">${note}</span>
   </div>`;
 
+// ---------- interact: input as fields guessed from the function's code, or raw JSON ----------
+//   inferInputs() reads the chosen function's body for params.input.<name> (also aliases, destructuring and one hop
+//   into local helpers it passes the value to) and guesses each field's type from how it is used:
+//   list (for…of / .length / .map) · object (.sub) · address (name or transferNative / runProgram target) ·
+//   number (math or compare with 1n, name like amount) · yes/no (if (x), === true) · text (everything else)
+const ADDRESS_NAME = /^(to|from|who|owner|spender|account|recipient|receiver|target|token|program|wallet|user|address)$|address$|^(to|from)[A-Z_]/i;
+const NUMBER_NAME = /^(amount|value|count|price|qty|quantity|total|fee|id|index|depth|decimals|supply|limit|max|min|nonce|deadline|n|num)$|(amount|count|price|supply|fee|total)$/i;
+const BOOL_NAME = /^(is|has|can|should|allow|enable|use)[A-Z_]/;
+const LIST_USE = /^\s*\??\.(length|map|forEach|filter|reduce|some|every|find|slice|join|includes|indexOf|at)\b/;
+const NUM_OP = String.raw`(?:===|!==|==|!=|<=|>=|<|>|\+|-|\*|\/|%)`;
+
+/** body of a function in the program code: function name(p) { … } or const name = (p) => { … } → { param, body } */
+function functionSource(code, name) {
+  const head = new RegExp(String.raw`(?:function\s+${name}\s*\(([^)]*)\)|(?:const|let|var)\s+${name}\s*=\s*(?:function\s*)?\(([^)]*)\)\s*(?:=>)?)\s*\{`).exec(code);
+  if (!head) return null;
+  let depth = 0, quote = "";
+  for (let i = head.index + head[0].length - 1; i < code.length; i += 1) {
+    const c = code[i];
+    if (quote) { if (c === "\\") i += 1; else if (c === quote) quote = ""; continue; }
+    if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{") depth += 1;
+    else if (c === "}" && --depth === 0) return { params: (head[1] ?? head[2] ?? "").trim(), body: code.slice(head.index + head[0].length, i) };
+  }
+  return null;
+}
+
+/** every place `expr` (a regex source) is used in body → [{ before, after }] (skips object keys and .props of something else) */
+function usesOf(body, expr) {
+  const out = [];
+  for (const m of body.matchAll(new RegExp(expr, "g"))) {
+    const before = body.slice(Math.max(0, m.index - 48), m.index), after = body.slice(m.index + m[0].length, m.index + m[0].length + 48);
+    if (/\.\s*$/.test(before) || /^\s*:(?!:)/.test(after) && /[{,]\s*$/.test(before)) continue;
+    out.push({ before, after, match: m[0] });
+  }
+  return out;
+}
+
+/** type evidence from how a value is used: { list, object, address, number, boolean, text, subkeys, item } */
+function evidence(body, expr, code, seen = new Set()) {
+  const e = { subkeys: new Set(), item: null };
+  for (const { before, after } of usesOf(body, expr)) {
+    if (LIST_USE.test(after) || /\bof\s*$/.test(before) || /^\s*(\|\||\?\?)\s*\[/.test(after)) e.list = true;
+    else if (/^\s*\??\.\s*([A-Za-z_$][\w$]*)/.test(after)) { e.object = true; e.subkeys.add(/^\s*\??\.\s*([A-Za-z_$][\w$]*)/.exec(after)[1]); }
+    if (/(transferNative|runProgram|isAddress|getBalance|balanceOfNative)\s*\(\s*$/.test(before)) e.address = true;
+    if (new RegExp(String.raw`^\s*${NUM_OP}\s*-?\d+n\b`).test(after) || new RegExp(String.raw`-?\d+n\s*${NUM_OP}\s*$`).test(before)
+      || /^\s*(\|\||\?\?)\s*-?\d+n\b/.test(after) || /BigInt\(\s*$/.test(before) || /transferNative\s*\([^,()]+,\s*$/.test(before)) e.number = true;
+    if (/^\s*[!=]==?\s*(true|false)\b/.test(after) || /^\s*(\|\||\?\?)\s*(true|false)\b/.test(after)) e.boolean = true;
+    // truthiness only (if (x) / !x / x ? a : b) hints yes/no, unless the value is also used for something else
+    if (/(\bif\s*\(\s*!?|!|&&|\|\|)\s*$/.test(before) && /^\s*(\)|&&|\|\||\?(?![?.]))/.test(after) && !/^\s*(\|\||\?\?)/.test(after)
+      || /^\s*\?(?![?.])/.test(after)) e.cond = true;
+    else if (!/^\s*\??\./.test(after)) e.used = true;
+    if (/^\s*(\|\||\?\?)\s*["'`]/.test(after) || /^\s*[!=]==?\s*["'`]/.test(after)) e.text = true;
+    // list items: for (const item of <expr>) { … item.to … }
+    if (/\bof\s*$/.test(before)) {
+      const loop = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+of\s*$/.exec(before);
+      if (loop) e.item = guessShape(body, String.raw`\b${loop[1]}\b`, loop[1], code, seen);
+    }
+  }
+  // one hop into local helpers: move(params.context.sender, params.input.to, params.input.amount) → move(from, to, amount)
+  for (const call of body.matchAll(new RegExp(String.raw`\b([A-Za-z_$][\w$]*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)`, "g"))) {
+    const args = call[2].split(",").map((x) => x.trim());
+    const at = args.findIndex((x) => new RegExp(`^(?:${expr})$`).test(x));
+    if (at < 0 || seen.has(call[1])) continue;
+    const helper = functionSource(code, call[1]);
+    const param = helper?.params.split(",")[at]?.trim();
+    if (!param || !/^[A-Za-z_$][\w$]*$/.test(param)) continue;
+    const inner = evidence(helper.body, String.raw`\b${param}\b`, code, new Set([...seen, call[1]]));
+    for (const k of ["list", "object", "address", "number", "boolean", "text", "used"]) e[k] ||= inner[k];
+    inner.subkeys.forEach((k) => e.subkeys.add(k));
+    e.item ||= inner.item;
+  }
+  if (e.cond && !e.used) e.boolean = true;
+  return e;
+}
+
+/** a value's shape → { name, type, item?, keys? } · type: list | object | address | number | boolean | text */
+function guessShape(body, expr, name, code, seen = new Set()) {
+  const e = evidence(body, expr, code, seen);
+  const type = e.list ? "list" : e.object ? "object" : e.address || (!e.number && !e.boolean && ADDRESS_NAME.test(name)) ? "address"
+    : e.number || (!e.text && !e.boolean && NUMBER_NAME.test(name)) ? "number"
+    : e.boolean || (!e.text && BOOL_NAME.test(name)) ? "boolean" : "text";
+  const shape = { name, type };
+  if (type === "list") shape.item = e.item;
+  if (type === "object") shape.keys = [...e.subkeys].map((k) => guessShape(body, String.raw`${expr}\s*\??\.\s*${k}\b`, k, code, seen));
+  return shape;
+}
+
+/** fields a function reads from params.input, in the order they first appear */
+function inferInputs(rawCode, fn) {
+  const raw = String(rawCode ?? "");
+  let code;   // stored code is one line with JSON escapes (\n, \") → back to normal source
+  try { code = JSON.parse(`"${raw}"`); } catch { code = raw.replace(/\\n/g, "\n"); }
+  const src = functionSource(code, fn);
+  if (!src) return [];
+  const { params, body } = src;
+  const bases = [];          // expressions that mean params.input
+  const locals = [];         // [field, local name] from const { to, amount: amt } = params.input
+  if (/^[A-Za-z_$][\w$]*$/.test(params)) bases.push(String.raw`\b${params}\s*\??\.\s*input`);
+  const destructured = /^\{([^}]*)\}$/.exec(params);
+  if (destructured) {
+    const part = destructured[1].split(",").map((x) => x.trim()).find((x) => /^input\b/.test(x));
+    const local = part && (/^input\s*:\s*([A-Za-z_$][\w$]*)/.exec(part)?.[1] ?? "input");
+    if (local) bases.push(String.raw`\b${local}`);
+  }
+  if (!bases.length) return [];
+  for (let round = 0; round < 2; round += 1) {
+    for (const base of [...bases]) {
+      for (const m of body.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${base}\b(?!\s*\??\.)`, "g"))) {
+        const alias = String.raw`\b${m[1]}`;
+        if (!bases.includes(alias)) bases.push(alias);
+      }
+      for (const m of body.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*${base}\b(?!\s*\??\.)`, "g"))) {
+        for (const part of m[1].split(",").map((x) => x.trim()).filter(Boolean)) {
+          const [key, rest] = part.split(":").map((x) => x.trim());
+          const field = key.replace(/\s*=.*$/, ""), local = (rest ?? key).replace(/\s*=.*$/, "");
+          if (/^[A-Za-z_$][\w$]*$/.test(field) && /^[A-Za-z_$][\w$]*$/.test(local)) locals.push([field, local]);
+        }
+      }
+    }
+  }
+  const order = new Map();
+  for (const base of bases) {
+    for (const m of body.matchAll(new RegExp(String.raw`${base}\s*\??\.\s*([A-Za-z_$][\w$]*)`, "g"))) if (!order.has(m[1])) order.set(m[1], m.index);
+  }
+  for (const [field, local] of locals) if (!order.has(field)) order.set(field, body.search(new RegExp(String.raw`\b${local}\b`)));
+  return [...order.entries()].sort((x, y) => x[1] - y[1]).map(([field]) => {
+    const exprs = bases.map((base) => String.raw`${base}\s*\??\.\s*${field}\b`);
+    const local = locals.find(([f]) => f === field)?.[1];
+    if (local) exprs.push(String.raw`\b${local}\b`);
+    return guessShape(body, exprs.map((x) => `(?:${x})`).join("|"), field, code);
+  });
+}
+
+/** example JSON for list / object fields (shown as the placeholder) */
+function sampleOf(shape) {
+  if (!shape) return "";
+  if (shape.type === "list") return [shape.item ? sampleOf(shape.item) : "…"];
+  if (shape.type === "object") return Object.fromEntries((shape.keys ?? []).map((k) => [k.name, sampleOf(k)]));
+  return { address: "0x…", number: 1, boolean: true }[shape.type] ?? "…";
+}
+
+/** integers in typed JSON → "123n" (the VM takes whole numbers as bigint strings, never JS numbers) */
+const bigints = (v) => (typeof v === "number" && Number.isInteger(v) ? `${v}n`
+  : Array.isArray(v) ? v.map(bigints) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, bigints(x)])) : v);
+
+let ix = { program: null, code: "", fn: "", mode: "fields", values: {}, json: "{}", extra: {} };
+try { if (localStorage.getItem("ix-mode") === "json") ix.mode = "json"; } catch {}
+
+const TYPE_LABEL = { list: "list (JSON)", object: "object (JSON)", address: "address", number: "whole number", boolean: "yes / no", text: "text" };
+
+function ixFields() { return inferInputs(ix.code, ix.fn); }
+
+function ixInner() {
+  if (ix.mode === "json") {
+    const rows = Math.min(16, Math.max(4, ix.json.split("\n").length + 1));
+    return `<textarea id="args" spellcheck="false" aria-label="Input (JSON)" rows="${rows}">${esc(ix.json)}</textarea>`;
+  }
+  const fields = ixFields();
+  const extra = Object.keys(ix.extra);
+  const rows = fields.map((f) => {
+    const v = ix.values[f.name] ?? "";
+    const id = `ix-${f.name}`;
+    const control = f.type === "boolean"
+      ? `<select class="ix-f" id="${id}" data-name="${attr(f.name)}" data-type="boolean">${["", "true", "false"].map((o) => `<option value="${o}" ${o === v ? "selected" : ""}>${o === "" ? "— not set —" : o === "true" ? "Yes (true)" : "No (false)"}</option>`).join("")}</select>`
+      : f.type === "list" || f.type === "object"
+        ? `<textarea class="ix-f" id="${id}" data-name="${attr(f.name)}" data-type="${f.type}" spellcheck="false" rows="3" placeholder="${attr(JSON.stringify(sampleOf(f)))}">${esc(v)}</textarea>`
+        : `<input class="ix-f" id="${id}" data-name="${attr(f.name)}" data-type="${f.type}" value="${attr(v)}" autocomplete="off" spellcheck="false"
+            ${f.type === "number" ? 'inputmode="numeric" placeholder="0"' : f.type === "address" ? 'placeholder="0x…"' : ""}>`;
+    return `<label for="${id}"><span class="ix-name"><span class="mono">${esc(f.name)}</span><span class="ix-type">${TYPE_LABEL[f.type]}</span></span>${control}</label>`;
+  }).join("");
+  return `${rows ? `<div class="ix-fields">${rows}</div>`
+    : '<div class="dim ix-none">This function reads nothing from params.input. Switch to JSON to send a custom input.</div>'}
+    ${extra.length ? `<div class="dim ix-none">Also sent from the JSON: <span class="mono">${esc(extra.join(", "))}</span></div>` : ""}`;
+}
+
 function interactPanel(program) {
   const names = callableOf(program.code);
-  const options = names.map((n) => `<option>${esc(n)}</option>`).join("");
+  if (ix.program !== program.address) ix = { ...ix, program: program.address, fn: names[0] ?? "", values: {}, json: "{}", extra: {} };
+  if (!names.includes(ix.fn)) ix.fn = names[0] ?? "";
+  ix.code = program.code;
+  const options = names.map((n) => `<option ${n === ix.fn ? "selected" : ""}>${esc(n)}</option>`).join("");
   return `<div class="pad form">
     ${walletRow("Sending a transaction needs a wallet; reading does not")}
-    <label>Function<select id="fn">${options || "<option>No callable functions</option>"}</select></label>
-    <label>Input (JSON)<textarea id="args" spellcheck="false">{}</textarea></label>
+    <label>Function<select id="fn" onchange="pickFn(this.value)">${options || "<option>No callable functions</option>"}</select></label>
+    <div class="ix-head"><span>Input</span>
+      <span class="seg" role="group" aria-label="Input mode">
+        <button type="button" data-mode="fields" class="${ix.mode === "fields" ? "on" : ""}" onclick="setMode('fields')">Fields</button>
+        <button type="button" data-mode="json" class="${ix.mode === "json" ? "on" : ""}" onclick="setMode('json')">JSON</button>
+      </span></div>
+    <div id="ix-input" oninput="ixSave()" onchange="ixSave()">${ixInner()}</div>
     <label>Attached value<input id="val" value="0" inputmode="numeric"></label>
     <div class="row">
       <button class="btn" onclick="runQuery('${program.address}')">Read (no gas)</button>
@@ -668,11 +862,76 @@ function interactPanel(program) {
   </div>`;
 }
 
-const readForm = () => ({
-  functionName: document.getElementById("fn").value,
-  input: JSON.parse(document.getElementById("args").value || "{}"),
-  value: Number(document.getElementById("val").value || 0),
-});
+/** remember what is typed (switching function / mode or reconnecting the wallet keeps it) */
+function ixSave() {
+  const box = document.getElementById("ix-input");
+  if (!box) return;
+  if (ix.mode === "json") { ix.json = document.getElementById("args")?.value ?? ix.json; return; }
+  for (const f of box.querySelectorAll(".ix-f")) ix.values[f.dataset.name] = f.value;
+}
+
+function drawIx() {
+  const box = document.getElementById("ix-input");
+  if (box) box.innerHTML = ixInner();
+  for (const b of document.querySelectorAll(".ix-head .seg button")) b.classList.toggle("on", b.dataset.mode === ix.mode);
+}
+
+function pickFn(name) { ixSave(); ix.fn = name; drawIx(); }
+
+/** fields → input object · throws with the field name when a value does not fit its type
+ *  (loose = switching to JSON: a value that does not fit is copied as typed, so nothing is lost) */
+function fieldsInput(loose = false) {
+  const input = { ...ix.extra };
+  for (const f of ixFields()) {
+    const raw = String(ix.values[f.name] ?? "").trim();
+    if (raw === "") { delete input[f.name]; continue; }
+    if (f.type === "number") {
+      if (!/^-?\d+n?$/.test(raw)) { if (loose) { input[f.name] = raw; continue; } throw new Error(`${f.name} must be a whole number`); }
+      input[f.name] = `${raw.replace(/n$/, "")}n`;
+    } else if (f.type === "boolean") input[f.name] = raw === "true";
+    else if (f.type === "list" || f.type === "object") {
+      let v;
+      try { v = JSON.parse(raw); } catch {
+        if (loose) { input[f.name] = raw; continue; }
+        throw new Error(`${f.name} must be JSON, e.g. ${JSON.stringify(sampleOf(f))}`);
+      }
+      input[f.name] = bigints(v);
+    } else input[f.name] = raw;
+  }
+  return input;
+}
+
+function setMode(mode) {
+  if (mode === ix.mode) return;
+  ixSave();
+  try {
+    if (mode === "json") ix.json = JSON.stringify(fieldsInput(true), null, 2);
+    else {
+      const parsed = JSON.parse(ix.json.trim() || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Input must be a JSON object { … }");
+      const names = new Set(ixFields().map((f) => f.name));
+      ix.values = {};
+      ix.extra = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!names.has(k)) ix.extra[k] = v;
+        else ix.values[k] = typeof v === "string" ? (/^-?\d+n$/.test(v) ? v.slice(0, -1) : v)
+          : typeof v === "boolean" || typeof v === "number" ? String(v) : JSON.stringify(v);
+      }
+    }
+  } catch (error) { return show(`Error: ${error.message}`); }
+  ix.mode = mode;
+  try { localStorage.setItem("ix-mode", mode); } catch {}
+  drawIx();
+}
+
+const readForm = () => {
+  ixSave();
+  return {
+    functionName: document.getElementById("fn").value,
+    input: ix.mode === "json" ? JSON.parse(ix.json || "{}") : fieldsInput(),
+    value: Number(document.getElementById("val").value || 0),
+  };
+};
 const show = (data) => { document.getElementById("out").innerHTML = typeof data === "string" ? esc(data) : jsonHtml(data); };
 
 async function runQuery(program) {
