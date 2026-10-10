@@ -60,12 +60,17 @@ await confirm(await send({ action: "call", to: address, method: "multiTransfer",
 // โปรแกรมที่เรียกโปรแกรมอื่น (trace 2 ชั้น พร้อม input / result ของแต่ละชั้น)
 const RELAY = `function program() {
   function check(params) { return runProgram(params.input.token, "balanceOf", { who: params.input.who }) }
-  return { check }
+  function tryPay(params) {
+    try { return runProgram(params.input.token, "transfer", { to: params.input.to, amount: params.input.amount }) } catch (e) { return false }
+  }
+  return { check, tryPay }
 }`;
 const relayHash = await send({ action: "deploy", code: RELAY, input: {} });
 await confirm(relayHash);
 const relay = (await get(`/tx/${relayHash}/receipt`)).result?.programUuid;
 await confirm(await send({ action: "init", to: relay }));
+// เรียกซ้อนที่ล้ม (relay ไม่มีเหรียญ) แต่ relay catch ไว้ → tx สำเร็จ, call เข้า token ล้ม
+await confirm(await send({ action: "call", to: relay, method: "tryPay", input: { token: address, to: BOB, amount: "1n" } }));
 await confirm(await send({ action: "call", to: relay, method: "check", input: { token: address, who: BOB } }));
 
 console.log("\nยอดของ bob:", JSON.stringify((await post("/query", { programUuid: address, functionName: "balanceOf", input: { who: BOB } })).result));

@@ -6,7 +6,7 @@
   /* dark theme: black · blue · purple (same theme for light and dark OS mode) */
   color-scheme:dark;
   --bg:#070814;--panel:#0e1026;--line:#22264a;--text:#e8e9ff;--dim:#8e93c2;--soft:#161a3a;
-  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
   --grad:linear-gradient(135deg,#3b5bdb 0%,#7c3aed 100%);--radius:12px;
 }
 *{box-sizing:border-box}
@@ -189,6 +189,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .io{min-width:0}.io .lbl{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
 .bad{color:var(--bad)}
 .utc{display:block;font-size:11px;color:var(--dim);opacity:.85;font-variant-numeric:tabular-nums;white-space:nowrap}
+.warn{color:var(--warn);font-size:12px;white-space:nowrap}
 .full{overflow-wrap:anywhere;word-break:break-all}
 .share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
 @media(max-width:720px){
@@ -1195,9 +1196,16 @@ async function address(value, draw = el) {
     program ? loadLayout(program.address) : null,
   ]);
 
+  // Status = the whole tx (same as the tx page) · a nested call that failed inside a successful tx says so beside it
+  const callState = (t) => {
+    const tx = t.txStatus ?? t.status;
+    const call = t.depth && t.status !== "success" && tx === "success"
+      ? ` <span class="warn" title="This call into the program failed, but a program above caught the error, so the transaction still succeeded">⚠ caught</span>` : "";
+    return state(tx) + call;
+  };
   const inRows = incoming.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
       t.depth ? ` <span class="tag" title="Called through another program">Nested · depth ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
-    <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
+    <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${callState(t)}</td>
     <td>${blockNo(t.blockNumber)}</td>
     <td class="dim" title="${when(t.timestamp)}">${age(t.timestamp)}</td></tr>`);
   const outRows = outgoing.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>

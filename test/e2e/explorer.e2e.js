@@ -481,3 +481,17 @@ test("เวลา: ทุกจุดที่บอก ... ago มีวัน
     await page.setViewportSize(original ?? { width: 1280, height: 720 });
   }
 });
+
+test("Calls ของโปรแกรม: call ซ้อนที่ล้มแต่ชั้นบน catch ไว้ → Status = Success ตรงกับหน้า tx + ข้อความเตือนสีส้ม ⚠ caught", async () => {
+  const { address: token } = await get("/name/mytoken");
+  await open(`#address/${token}`);
+  await tab("Calls");
+  const row = page.locator("#view tr", { hasText: "⚠ caught" });
+  assert.equal(await row.count(), 1);
+  assert.equal(await row.locator(".warn").evaluate((n) => getComputedStyle(n).color), "rgb(251, 146, 60)");   // ส้ม ไม่ใช่แดง
+  assert.match(await row.textContent(), /Nested · depth 1[\s\S]*transfer[\s\S]*Success/);
+  await row.locator("a[title^='0x']").first().click();
+  await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
+  await settle();
+  assert.match(await page.locator("#view tr", { hasText: /^Status/ }).textContent(), /Success/);
+});

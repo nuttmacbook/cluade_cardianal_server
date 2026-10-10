@@ -95,3 +95,36 @@ test("pageBlocks / pageEvents / pageTransactionsTo / pageStorageMap: total แ�
   assert.equal(balances.items.length, 5);
   assert.ok(balances.items.every((item) => typeof item.key === "string" && item.value !== undefined));
 });
+
+test("listTransactionsTo: การเรียกซ้อนที่ล้มแต่ชั้นบน catch ไว้ → status ของชั้นนั้น = throw, txStatus = success", () => {
+  const HOP = `function program() {
+    function hop(params) {
+      const { path, failAt, catchAt } = params.input
+      const self = path[0]
+      if (failAt === self) throw new Error("fail at " + self)
+      if (path.length === 1) return [self]
+      const next = () => runProgram(path[1], "hop", { ...params.input, path: path.slice(1) })
+      if (catchAt !== self) return [self, ...next()]
+      try { return [self, ...next()] } catch (e) { return [self, "caught"] }
+    }
+    return { hop }
+  }`;
+  const { vm, block } = chain();
+  const id = (c) => `0x${c.repeat(40)}`;
+  const [d, e, f] = [id("d"), id("e"), id("f")];
+  block((b) => [d, e, f].flatMap((programUuid) => [
+    b.deploy({ programUuid, code: HOP, context: { sender: OWNER, origin: OWNER } }), b.init({ programUuid }),
+  ])).forEach((r) => assert.equal(r.status, "success", JSON.stringify(r.error)));
+
+  const caught = block((b) => b.call({ programUuid: d, functionName: "hop", input: { path: [d, e, f], failAt: f, catchAt: d }, context: { sender: OWNER, origin: OWNER } }));
+  assert.equal(caught.status, "success", JSON.stringify(caught.error));
+  const [toE] = vm.listTransactionsTo(e);
+  assert.deepEqual([toE.depth, toE.status, toE.txStatus], [1, "throw", "success"]);
+  const [toF] = vm.listTransactionsTo(f);
+  assert.deepEqual([toF.depth, toF.status, toF.txStatus], [2, "throw", "success"]);
+  assert.equal(vm.listTransactionsTo(d)[0].status, "success");   // ชั้นนอกสุด = สถานะของ tx
+
+  const failed = block((b) => b.call({ programUuid: d, functionName: "hop", input: { path: [d, e, f], failAt: f }, context: { sender: OWNER, origin: OWNER } }));
+  assert.equal(failed.status, "throw");
+  assert.deepEqual([vm.listTransactionsTo(e)[0].status, vm.listTransactionsTo(e)[0].txStatus], ["throw", "throw"]);
+});
