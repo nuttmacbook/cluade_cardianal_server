@@ -459,3 +459,16 @@ test("trace การเรียกโปรแกรม: แผนผังต
   assert.equal(await page.locator("#view .flow .node.on").getAttribute("data-call"), "1");
   assert.deepEqual(pageErrors, []);
 });
+
+test("Calls ของโปรแกรม: call ซ้อนที่ล้มแต่ชั้นบน catch ไว้ → Status = Success ตรงกับหน้า tx + ป้าย call failed · caught", async () => {
+  const { address: token } = await get("/name/mytoken");
+  await open(`#address/${token}`);
+  await tab("Calls");
+  const row = page.locator("#view tr", { hasText: "call failed · caught" });
+  assert.equal(await row.count(), 1);
+  assert.match(await row.textContent(), /Nested · depth 1[\s\S]*transfer[\s\S]*Success/);
+  await row.locator("a[title^='0x']").first().click();
+  await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
+  await settle();
+  assert.match(await page.locator("#view tr", { hasText: /^Status/ }).textContent(), /Success/);
+});

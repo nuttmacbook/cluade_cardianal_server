@@ -375,7 +375,7 @@ page เกินหน้าสุดท้าย → ได้หน้าส�
 |---|---|
 | `GET /blocks/page` | header ใหม่ไปเก่า (คำนวณจากเลข block ไม่ไล่ key) |
 | `GET /address/:a/txs` | tx ที่ address ส่ง · **เรียงด้วยเลข nonce** (key `txn` ไม่ได้เติม 0 ข้างหน้า เรียงตามตัวอักษรจะผิดตั้งแต่ nonce 10) |
-| `GET /address/:a/incoming` | tx ที่เข้ามาหา (ดัชนี `txto:` รวมการเรียกซ้อนชั้น) |
+| `GET /address/:a/incoming` | tx ที่เข้ามาหา (ดัชนี `txto:` รวมการเรียกซ้อนชั้น · แถวซ้อนชั้นมี `status` = ผลของ call ชั้นนั้น และ `txStatus` = ผลของทั้ง tx) |
 | `GET /program/:a/events?name` | event ใหม่ไปเก่า |
 | `GET /program/:a/entries?name` | key 2 ชั้นของกลุ่ม `name` (ข้าม key 3 ชั้น) |
 | `GET /token/:a/holders` | ผู้ถือจาก `balances:<address>` ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย · 404 ถ้าไม่ใช่ token |
@@ -433,7 +433,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 |---|---|
 | Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
 | Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
-| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") |
+| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีป้าย "call failed · caught" เพิ่ม · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
 | Outgoing (`out`) | `/address/:a/txs` |
 | Interact (`interact`) | (โปรแกรม) ฟอร์ม — เลือกฟังก์ชัน, input JSON, value |
 | Edit metadata (`meta`) | (กระเป๋า) ฟอร์มแก้ metadata อยู่แถบเดียวกับ Interact (เดิมเป็นปุ่มในแถว information) |

@@ -2326,7 +2326,8 @@ export class Block {
           type: WRITE.PUT,
           dbKey: txToKey(call.programUuid, this.#number, index, callIndex + 1),
           value: {
-            hash, action: "call", status: call.status,
+            // status = ผลของการเรียกชั้นนี้ · txStatus = ผลของทั้ง tx (ชั้นนี้ล้มได้ แต่ชั้นบนอาจ catch ไว้)
+            hash, action: "call", status: call.status, txStatus: result.status,
             from: normalizeAddress(call.sender ?? call.context?.sender) ?? null,
             method: call.functionName ?? null,
             depth: call.depth, via: normalizeAddress(request.programUuid) ?? null, value: 0,

@@ -1188,9 +1188,16 @@ async function address(value, draw = el) {
     program ? loadLayout(program.address) : null,
   ]);
 
+  // Status = the whole tx (same as the tx page) · a nested call that failed inside a successful tx says so beside it
+  const callState = (t) => {
+    const tx = t.txStatus ?? t.status;
+    const call = t.depth && t.status !== "success" && tx === "success"
+      ? ` <span class="tag bad" title="This call into the program failed, but a program above caught the error, so the transaction still succeeded">call failed · caught</span>` : "";
+    return state(tx) + call;
+  };
   const inRows = incoming.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${addr(t.from)}${
       t.depth ? ` <span class="tag" title="Called through another program">Nested · depth ${t.depth}</span>` : ""}</td><td>${actionTag(t.action)}</td>
-    <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${state(t.status)}</td>
+    <td class="mono">${t.method ? esc(t.method) : "—"}</td><td>${callState(t)}</td>
     <td>${blockNo(t.blockNumber)}</td>
     <td class="dim" title="${when(t.timestamp)}">${ago(t.timestamp)}</td></tr>`);
   const outRows = outgoing.items.map((t) => `<tr><td>${txLink(t.hash)}</td><td>${actionTag(t.action)}</td>
