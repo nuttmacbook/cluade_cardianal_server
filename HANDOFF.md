@@ -427,6 +427,8 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 - chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
+  · Blockscout 9.x ต้องเพิ่ม `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm ไม่อ่าน gzip) · ขั้นตอนเต็ม + เปิด-ปิด + แก้ปัญหา: `docs/blockscout.md`
+  · ตัวดักดูคำขอที่เข้า /evm: `node scripts/evm-proxy.mjs` (:3001 → :3000/evm)
 
 ---
 
