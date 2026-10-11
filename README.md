@@ -69,3 +69,5 @@ block.commit();
 ```
 
 ดูค่าตั้งต้นที่แนะนำทั้งหมดใน `CHECKPOINT.md` และวิธีเขียนโปรแกรมใน `program-sdk/README.md`
+
+ดูเชนผ่าน Blockscout (ต่อเข้า `/evm`): `docs/blockscout.md`
