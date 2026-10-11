@@ -18,6 +18,7 @@ import { Mempool } from "./src/node/mempool.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
+import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders } from "./src/node/explorer-api.js";
 
@@ -267,5 +268,8 @@ export const server = http.createServer(async (request, response) => {
     return send(response, 500, { error: error.message });
   }
 });
+
+// ws://host/evm: eth_subscribe newHeads / logs (นับ rate limit ร่วมกับ POST /evm)
+export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip) });
 
 if (process.argv[1]?.endsWith("server.js")) server.listen(PORT, () => console.log(`chain ทำงานที่ http://localhost:${PORT}`));

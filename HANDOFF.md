@@ -399,22 +399,34 @@ POST /query    { programUuid, functionName, input, context?, value? }
 `/sendtx` **คืน error ก่อนเข้าคิวเสมอ** ถ้า simulate ไม่ผ่าน (user จะไม่เสียเวลารอใบที่ล้มแน่ ๆ)
 `simulate` รันบน state ปัจจุบันของ DB ไม่นับผลของใบที่รออยู่ในคิว → เป็นการ "ประเมิน" ไม่ใช่รับประกัน
 
-### `/evm` — ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (`src/node/evm-rpc.js` · เทสต์ `50-evm-rpc` + e2e)
-**อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน** แค่อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem ต่อได้)
+### `/evm` — ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM / Blockscout (`src/node/evm-rpc.js` + `evm-ws.js` · เทสต์ `50-evm-rpc` `51-evm-ws` + e2e)
+**อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน** แค่อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem / Blockscout ต่อได้)
 ```
-POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP)
+POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP · 0 = ไม่จำกัด สำหรับ indexer)
+ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
 GET  /evm                      ค่าสำหรับ wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
 GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก์ "ดูใน explorer" ของกระเป๋า)
 ```
-- รองรับ: `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
-  `eth_getBlockByNumber/ByHash` `eth_getTransactionByHash` `eth_getTransactionReceipt` `eth_call` (ERC-20 อ่านอย่างเดียว) `eth_estimateGas` ฯลฯ (`rpc.methods`)
+- รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
+  `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
+  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 อ่านอย่างเดียว) `eth_estimateGas`
+  `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
+- **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
+  (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
+- ผล `vm.replayBlock` เก็บ cache 64 block (key = เลข + hash) → receipt ทุกใบ / `logIndex` (นับต่อเนื่องทั้ง block) / `cumulativeGasUsed` ได้จาก replay ครั้งเดียว
 - native × 10^`EVM_DECIMALS` (ค่าเริ่มต้น 18 → 1 native = 1 เหรียญใน MetaMask) · gasPrice = 1 native ต่อ gas ก็ถูกคูณเหมือนกัน
-- timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`) · status `0x1/0x0` · `contractAddress` = programUuid ของ deploy
+- timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, เวลา = เวลาของ block 1) · `gasLimit` = `vm.maxBlockGas` (ไม่ได้ตั้ง → 30M)
+- status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` คำนวณจริงจาก log (receipt + block)
 - event `Transfer` ของ token มาตรฐาน → log ERC-20 (topic keccak("Transfer(address,address,uint256)")) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
-- tx `input` = JSON `{action, method, input}` เป็น hex (ไม่ใช่ ABI) · `eth_getCode` คืน `0xfe` ถ้าเป็นโปรแกรม (ไม่ใช่ bytecode จริง)
+- tx `input` = JSON `{action, method, input}` เป็น hex (ไม่ใช่ ABI) · `eth_getCode` = ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (กระเป๋า → `0x`)
+- callTracer: root = tx (`CREATE` สำหรับ deploy), `calls[]` = trace ซ้อนตาม depth · native ที่โปรแกรมโอนด้วย `transferNative` (ไม่อยู่ใน trace)
+  หาได้จาก `nativeChanges` หลังตัด value ของทุกชั้นและค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) → เป็น `CALL` จากโปรแกรมนั้นไปผู้รับ · ค่าแก๊สไม่เป็น internal tx
+- txpool: จาก `mempool.list()` (ไม่มี to / value เพราะ mempool ไม่ได้เปิดให้อ่าน)
 - **ส่ง tx ไม่ได้**: `eth_sendRawTransaction` ตอบ error (เชนรับเฉพาะ EIP-712 ของตัวเอง) → ส่งผ่าน explorer เหมือนเดิม
-- ไม่รองรับ: `eth_getLogs`, `eth_feeHistory`, `eth_getStorageAt`, `debug_*`, `eth_subscribe`
+- ไม่รองรับ: `eth_feeHistory`, `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token มาตรฐาน
 - chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
+- Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
+  · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
 
 ---
 
