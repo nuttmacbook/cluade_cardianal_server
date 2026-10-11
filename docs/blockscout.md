@@ -58,6 +58,7 @@ NEXT_PUBLIC_NETWORK_CURRENCY_NAME=Cardianal
 NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=CARD
 NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # = EVM_DECIMALS (ค่าเริ่มต้น 18)
 NEXT_PUBLIC_NETWORK_RPC_URL=http://localhost:3000/evm   # ไม่มีในไฟล์ → เพิ่มเป็นบรรทัดใหม่ (ใช้กับปุ่ม Add to MetaMask · ไม่ใส่ก็ได้)
+NEXT_PUBLIC_IS_TESTNET=false                 # ไฟล์ตั้งไว้ true → หน้าเว็บขึ้นป้าย Testnet
 ```
 - บรรทัดอื่นปล่อยไว้ตามเดิม โดยเฉพาะ `NEXT_PUBLIC_STATS_API_HOST=http://localhost:8080` (service สถิติของ Blockscout เอง **ไม่ใช่** `/evm`)
 
@@ -132,5 +133,6 @@ docker-compose -f geth.yml restart proxy
 | log `429` | ลืม `EVM_RATE_LIMIT=0` ตอนรันเชน |
 | connection refused ไปที่ `host.docker.internal:3000` | เชนไม่ได้รัน หรือ firewall บล็อกพอร์ต 3000 จาก docker |
 | internal txns / receipts ไม่มา, ตัวดักขึ้น `[gzip]` | ขาด `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (ข้อ 3) |
+| หน้าเว็บขึ้นป้าย Testnet | `NEXT_PUBLIC_IS_TESTNET=false` (ข้อ 4) แล้ว `docker-compose -f geth.yml up -d --force-recreate frontend` + `restart proxy` |
 | พอร์ต 80 ชน | แก้ `published: 80` ใน `services/nginx.yml` |
 | log `deadlock_detected` ตอนสร้าง index | เป็นเรื่องภายในฐานข้อมูลของ Blockscout เอง ไม่กระทบการ index |
