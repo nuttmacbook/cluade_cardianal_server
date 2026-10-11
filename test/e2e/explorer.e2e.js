@@ -11,7 +11,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import net from "node:net";
 import { chromium } from "playwright";
-import { Wallet } from "ethers";
+import { Wallet, JsonRpcProvider, WebSocketProvider, Contract, id as topicOf } from "ethers";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";  // มียอดใน genesis.json
@@ -495,3 +495,70 @@ test("Calls ของโปรแกรม: call ซ้อนที่ล้ม�
   await settle();
   assert.match(await page.locator("#view tr", { hasText: /^Status/ }).textContent(), /Success/);
 });
+
+test("/evm: ethers JsonRpcProvider ต่อกับเชนได้ (chainId, block, ยอด, tx, receipt, ERC-20) · ส่ง tx ไม่ได้ · ลิงก์ explorer ของกระเป๋าพาไปหน้าเดิม", async () => {
+  const provider = new JsonRpcProvider(`${url}/evm`);
+  const genesis = await get("/genesis");
+  assert.equal((await provider.getNetwork()).chainId, BigInt(genesis.chainId));
+  const latest = await provider.getBlock("latest");
+  assert.ok(latest.number >= 1 && latest.timestamp < Date.now() / 1000 + 5);
+  const native = (await get(`/address/${ME}`)).native.balance;
+  assert.equal(await provider.getBalance(ME), BigInt(native) * 10n ** 18n);
+  const { address: token } = await get("/name/mytoken");
+  const erc20 = new Contract(token, ["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)"], provider);
+  assert.equal(await erc20.symbol(), "MTK");
+  assert.equal(await erc20.decimals(), 6n);
+  const { result } = await fetch(`${url}/query`, { method: "POST", body: JSON.stringify({ programUuid: token, functionName: "balanceOf", input: { who: ME } }) }).then((r) => r.json());
+  assert.equal(await erc20.balanceOf(ME), BigInt(String(result).replace(/n$/, "")));
+  const [hash] = (await get("/block/1")).txHashes;
+  const receipt = await provider.getTransactionReceipt(hash);
+  assert.equal(receipt.status, 1);
+  assert.equal(receipt.contractAddress.toLowerCase(), token);
+  assert.equal((await provider.getTransaction(hash)).from.toLowerCase(), ME);
+  await assert.rejects(provider.broadcastTransaction("0x02f86c"), /EIP-712|could not coalesce/);
+  const params = await get("/evm");
+  assert.equal(params.nativeCurrency.decimals, 18);
+  assert.equal(params.rpcUrls[0], `${url}/evm`);
+  await page.goto(`${url}/evm/explorer/tx/${hash}`);
+  await settle();
+  assert.equal(new URL(page.url()).hash, `#tx/${hash}`);
+  assert.match(await view(), /deploy/i);
+  provider.destroy();
+});
+
+test("/evm สำหรับ Blockscout: ยอดย้อนหลังตามเลข block · eth_getLogs · debug_traceTransaction (callTracer) · WebSocket", async () => {
+  const provider = new JsonRpcProvider(`${url}/evm`);
+  const latest = await provider.getBlockNumber();
+  const before = await provider.getBalance(ME, 0);
+  assert.ok(before > await provider.getBalance(ME, latest));   // genesis มียอดมากกว่าหลังจ่ายค่าแก๊ส
+  assert.equal(await provider.getBalance(BOB, 0), 0n);
+  const { address: token } = await get("/name/mytoken");
+  assert.equal(await provider.getCode(token, 0), "0x");
+  assert.match(Buffer.from((await provider.getCode(token)).slice(2), "hex").toString(), /function program\(\)/);
+
+  const logs = await provider.getLogs({ address: token, topics: [topicOf("Transfer(address,address,uint256)")], fromBlock: 0, toBlock: latest });
+  assert.ok(logs.length >= 2);
+  const indexes = logs.map((log) => `${log.blockNumber}:${log.index}`);
+  assert.equal(new Set(indexes).size, indexes.length);   // logIndex ไม่ซ้ำใน block
+  const receipts = await provider.send("eth_getBlockReceipts", [`0x${logs[0].blockNumber.toString(16)}`]);
+  assert.ok(receipts.some((r) => r.transactionHash === logs[0].transactionHash));
+
+  let relay;
+  for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
+    if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
+  }
+  const trace = await provider.send("debug_traceTransaction", [relay.hash, { tracer: "callTracer" }]);
+  assert.equal(trace.type, "CALL");
+  assert.equal(trace.calls.length, 1);
+  assert.equal(trace.calls[0].to, token);
+  assert.equal((await provider.send("debug_traceBlockByNumber", ["latest", { tracer: "callTracer" }])).length,
+    (await get(`/block/${latest}`)).txHashes.length);
+  assert.deepEqual(await provider.send("txpool_status", []), { pending: "0x0", queued: "0x0" });
+  provider.destroy();
+
+  const ws = new WebSocketProvider(`${url.replace("http", "ws")}/evm`);
+  assert.equal(await ws.getBlockNumber(), latest);
+  assert.match(await ws.send("eth_subscribe", ["newHeads"]), /^0x[0-9a-f]+$/);
+  await ws.destroy();
+});
+
