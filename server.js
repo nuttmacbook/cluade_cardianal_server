@@ -20,7 +20,8 @@ import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
-  pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders } from "./src/node/explorer-api.js";
+  pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
+  programCounts, pagePendingPrograms, pageApprovedPrograms } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -77,6 +78,10 @@ const ROUTES = {
   "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "No blocks yet" },
   "/pending": () => ({ size: mempool.size, transactions: mempool.list() }),
+  // โปรแกรม: จำนวนที่อนุมัติแล้ว / รออนุมัติ + รายการแบบแบ่งหน้า
+  "/programs": () => programCounts(vm),
+  "/programs/pending": (query) => pagePendingPrograms(vm, pageOf(query)),
+  "/programs/approved": (query) => pageApprovedPrograms(vm, pageOf(query)),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,

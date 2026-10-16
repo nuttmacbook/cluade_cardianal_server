@@ -203,3 +203,54 @@ export function pageHolders(vm, program, paging) {
     .sort((a, b) => { const d = bigOf(b.balance) - bigOf(a.balance); return d > 0n ? 1 : d < 0n ? -1 : a.address.localeCompare(b.address); });
   return slicePage(holders, paging, { truncated });
 }
+
+// ---------- โปรแกรม: อนุมัติแล้ว / รออนุมัติ ----------
+
+/**
+ * address ของโปรแกรมที่อนุมัติแล้ว (มี <address>:this หลัง init) · ไม่มีดัชนีรวม จึงไล่ทีละ address:
+ * อ่าน key แรกของ address แล้วกระโดดข้าม key ที่เหลือของ address นั้นทั้งหมด (";" อยู่ถัดจาก ":")
+ * → อ่าน 1 key ต่อ address ไม่ใช่ทุก key ของทุกกระเป๋า
+ */
+export function approvedProgramAddresses(vm) {
+  const programs = [];
+  let start = "0x";
+  for (;;) {
+    const [dbKey] = vm.listKeys("0x", { start, limit: 1 });
+    if (dbKey === undefined) break;
+    const [address] = dbKey.split(SEP);
+    if (vm.read(`${address}${SEP}this`) !== undefined) programs.push(address);
+    start = `${address};`;
+  }
+  return programs;
+}
+
+/** จำนวนโปรแกรม { approved, pending } */
+export function programCounts(vm) {
+  return { approved: approvedProgramAddresses(vm).length, pending: vm.listKeys(`pending${SEP}`).length };
+}
+
+const codeSize = (code) => Buffer.byteLength(String(code ?? ""), "utf8");
+
+/** โปรแกรมที่ deploy แล้วรอทีมงานอนุมัติ (init) หรือปฏิเสธ (reject) · เรียงตาม address */
+export function pagePendingPrograms(vm, paging) {
+  const prefix = `pending${SEP}`;
+  const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
+  const result = slicePage(keys.slice(0, PAGE_SCAN), paging, { truncated: keys.length > PAGE_SCAN });
+  return { ...result, items: result.items.map((dbKey) => {
+    const pending = vm.read(dbKey) ?? {};
+    return { address: dbKey.slice(prefix.length), deployer: pending.context?.sender ?? null, name: pending.metadata?.namespace ?? pending.initInput?.namespace ?? null,
+      value: pending.value ?? 0, codeSize: codeSize(pending.code), token: checkTokenStandard(pending.code ?? "").ok };
+  }) };
+}
+
+/** โปรแกรมที่อนุมัติแล้ว · ใหม่ไปเก่าตามเวลาที่อนุมัติ (createdAt) */
+export function pageApprovedPrograms(vm, paging) {
+  const programs = approvedProgramAddresses(vm).map((address) => ({ address, metadata: vm.getMetadata(address) }))
+    .sort((a, b) => (Number(b.metadata.createdAt) || 0) - (Number(a.metadata.createdAt) || 0) || a.address.localeCompare(b.address));
+  const result = slicePage(programs, paging);
+  return { ...result, items: result.items.map(({ address, metadata }) => {
+    const code = vm.read(`${address}${SEP}code`);
+    return { address, name: metadata.namespace ?? null, creator: metadata.creator ?? null, createdAt: metadata.createdAt ?? null,
+      codeSize: codeSize(code), token: checkTokenStandard(code ?? "").ok };
+  }) };
+}
