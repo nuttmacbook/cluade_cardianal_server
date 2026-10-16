@@ -365,6 +365,8 @@ vm[method](request);
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions }` |
+| `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
+| `GET /programs/pending` · `/programs/approved` | แบ่งหน้า `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token }], total, pages }` · หน้า explorer `#programs` (กดจากกล่องในหน้าแรก) |
 | `GET /sync?from` | `[{ header, body }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
 
 **แบบแบ่งหน้า** (explorer ใช้ทุกรายการยาว) · `?page=<เริ่ม 1>&limit=<≤100, ค่าเริ่ม 20>` → `{ items, total, page, pages, limit, truncated }`

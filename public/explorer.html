@@ -29,6 +29,7 @@ main{max-width:1120px;margin:0 auto;padding:24px;display:grid;gap:18px}
 .stat{background:var(--panel);padding:18px}
 .stat b{display:block;font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.2;overflow-wrap:anywhere}
 .stat span{color:var(--dim);font-size:12px}
+a.stat{color:inherit;text-decoration:none;cursor:pointer}a.stat:hover{background:var(--soft)}a.stat:hover span{color:var(--accent)}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th{text-align:left;padding:9px 18px;color:var(--dim);font-weight:500;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--line)}
 td{padding:11px 18px;border-bottom:1px solid var(--line)}
@@ -443,10 +444,13 @@ const paged = (path, id, limit = 20) => api(`${path}${path.includes("?") ? "&" :
 
 // ---------- home ----------
 async function home(draw = el) {
-  const [info, blocks, pending] = await Promise.all([api("/genesis"), paged("/blocks/page", "blocks", 15), api("/pending")]);
+  const [info, blocks, pending, programs] = await Promise.all([api("/genesis"), paged("/blocks/page", "blocks", 15), api("/pending"),
+    api("/programs").catch(() => ({ approved: 0, pending: 0 }))]);
   draw(panel("Overview", `<div class="stats">
       <div class="stat"><b>${num(info.latest ?? 0)}</b><span>Latest block</span></div>
       <div class="stat"><b>${num(pending.size)}</b><span>Pending txs</span></div>
+      <a class="stat" data-programs="approved" onclick="openPrograms('approved')"><b>${num(programs.approved)}</b><span>Approved programs</span></a>
+      <a class="stat" data-programs="pending" onclick="openPrograms('pending')"><b>${num(programs.pending)}</b><span>Awaiting approval</span></a>
       <div class="stat"><b>${num(info.burned)}</b><span>Burned coins</span></div>
       <div class="stat"><b>${info.chainId}</b><span>Chain ID</span></div></div>`)
     + panel("Latest blocks", table(["Block", "Age", "Txs", "Result", "Gas", "Fee recipient"], blocks.items.map((b) => txRow(b, [
@@ -458,6 +462,29 @@ async function home(draw = el) {
       ]))) + pager(blocks, "setPage('blocks',$)"))
     + (pending.size ? panel("Pending", table(["Hash", "Sender", "Type", "Nonce"], pending.transactions.slice(0, 50).map((t) =>
         txRow(t, [plain(t.hash), addr(t.sender), actionTag(t.action), t.nonce])))) : ""));
+}
+
+// ---------- programs: approved / awaiting approval ----------
+const openPrograms = (id) => { tabState["#programs"] = id; go("#programs"); };
+const kindTag = (token) => `<span class="tag">${token ? "Token" : "Program"}</span>`;
+const bytes = (n) => `${num(n ?? 0)} B`;
+async function programs(draw = el) {
+  const [counts, pending, approved] = await Promise.all([
+    api("/programs"), paged("/programs/pending", "pending"), paged("/programs/approved", "approved"),
+  ]);
+  const empty = (text) => `<div class="empty">${text}</div>`;
+  draw(tabs([
+    { id: "pending", label: "Awaiting approval", count: counts.pending, body: pending.total
+      ? table(["Program", "Name", "Type", "Deployer", "Value", "Code size"], pending.items.map((p) => txRow(p, [
+          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.deployer), num(p.value), bytes(p.codeSize),
+        ]))) + pager(pending, "setPage('pending',$)")
+      : empty("No programs are waiting for approval") },
+    { id: "approved", label: "Approved", count: counts.approved, body: approved.total
+      ? table(["Program", "Name", "Type", "Creator", "Approved", "Code size"], approved.items.map((p) => txRow(p, [
+          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.creator), age(p.createdAt), bytes(p.codeSize),
+        ]))) + pager(approved, "setPage('approved',$)")
+      : empty("No approved programs yet") },
+  ]));
 }
 
 // ---------- block ----------
@@ -1351,6 +1378,7 @@ async function render(soft) {
   if (kind === "block") await block(value, draw);
   else if (kind === "tx") await tx(value, draw);
   else if (kind === "address") await address(value, draw);
+  else if (kind === "programs") await programs(draw);
   else await home(draw);
   if (soft && seq === renderSeq) scrollTo(0, y);
 }

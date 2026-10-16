@@ -562,3 +562,34 @@ test("/evm สำหรับ Blockscout: ยอดย้อนหลังต�
   await ws.destroy();
 });
 
+
+test("โปรแกรม: หน้าแรกบอกจำนวนที่อนุมัติแล้ว / รออนุมัติ · กดแล้วเห็นรายการแต่ละแบบ", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const { nonce } = await get(`/nonce/${ME}`);
+  const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: 1, nonce,
+    action: "deploy", code: "function program() { function ping(params) { return 1; } return { ping }; }" };
+  const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+  assert.ok(sent.queued, JSON.stringify(sent));
+  for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`))?.blockNumber; i += 1) await wait(200);
+
+  const counts = await get("/programs");
+  assert.ok(counts.approved >= 2);   // mytoken + relay จาก seed
+  assert.equal(counts.pending, 1);
+
+  await open("");
+  assert.equal((await page.locator("[data-programs=approved] b").textContent()).trim(), String(counts.approved));
+  assert.equal((await page.locator("[data-programs=pending] b").textContent()).trim(), "1");
+
+  await page.click("[data-programs=pending]");
+  await settle();
+  assert.equal(await page.evaluate(() => location.hash), "#programs");
+  await page.waitForSelector("button.tab.on:has-text('Awaiting approval')");
+  assert.match(await view(), /Deployer/);
+  assert.equal(await page.locator("#view tbody tr").count(), 1);
+
+  await tab("Approved");
+  assert.match(await view(), /mytoken/);
+  assert.equal(await page.locator("#view tbody tr").count(), counts.approved);
+  assert.deepEqual(pageErrors, []);
+});
