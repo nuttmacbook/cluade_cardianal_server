@@ -6,12 +6,12 @@
 > blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
 > VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
 > มี server จริง (node:http) + explorer ไฟล์เดียว + ชุด SDK สำหรับคนเขียนโปรแกรม
-> **มีแก๊สนับขั้นแล้ว แต่ยังไม่มี sandbox จริง → ยังไม่ควรเปิดให้คนนอก deploy**
+> **มีแก๊สนับขั้น + sandbox จริงแล้ว (QuickJS ใน WebAssembly — หัวข้อ 4 "Sandbox")** · ก่อนเปิดให้คนนอก deploy ดูหัวข้อ 11
 
 | | |
 |---|---|
 | ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
-| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb` (+`ethers` เป็น dev) |
+| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
 | เทสต์ | `npm test` → 550 เคส ใช้เวลา ~20 วินาที |
@@ -45,6 +45,7 @@ env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIME
 
 ```
 src/core/virtualmachine.js   2,521 บรรทัด  ตรรกะทั้งหมดของ chain (ดูหัวข้อ 4)
+src/core/sandbox.js            935        sandbox ของโปรแกรม: QuickJS (WebAssembly) + snapshot ต่อ tx + ตัวแปลงค่าข้ามเขตแดน
 src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
@@ -67,7 +68,8 @@ index.js                         9        จุดเข้าเดียว�
 | ข้อความ error | `ERRORS` ในไฟล์เดียวกัน (ทุกข้อความรวมไว้ที่เดียว) |
 | รูปแบบ key ใน DB | กลุ่มฟังก์ชัน `*Key()` ประมาณบรรทัด 430–490 + `decodeDbKey()` |
 | โครงสร้างโปรแกรมที่ยอมรับ | `PROGRAM_WRAPPER_PATTERN` / `Compiler.parse` |
-| API ที่โปรแกรมเรียกได้ | `PROGRAM_API_NAMES` + `createProgramApi()` + `PROGRAM_API` ใน `autoreview.js` (**ต้องแก้ทั้ง 3 ที่**) |
+| API ที่โปรแกรมเรียกได้ | `PROGRAM_API_NAMES` + `createProgramApi()` + `API_OPS` ใน `sandbox.js` + `PROGRAM_API` ใน `autoreview.js` (**ต้องแก้ทั้ง 4 ที่**) |
+| หน่วยความจำ / stack / การแยกโปรแกรม | `src/core/sandbox.js` (หัวข้อ 4 "Sandbox") |
 | กฎการตรวจโค้ด | `ALLOWED_NODES` / `ALLOWED_MEMBERS` / `BANNED_*` ใน `autoreview.js` |
 | endpoint | `ROUTES` + `DYNAMIC` + `handlePost` ใน `server.js` |
 | หน้าเว็บ | `public/explorer.html` |
@@ -213,15 +215,61 @@ Math        random() ผูกกับ tx hash → รันซ้ำได้�
 3. `RETURN_EXPORT_PATTERN` จับ `return { … }` **ท้ายสุด** → รายชื่อ export แล้วตัดบรรทัดนั้นออกจาก body
 4. เก็บชื่อผู้สมัคร (`candidateNames`) จาก `function ชื่อ(` และ `const/let ชื่อ =` (ตัวหลังคือที่ทำให้ modifier ใช้ได้)
 
-แล้วรันด้วย
+แล้วฉีดตัวนับแก๊ส (`gasmeter.js`) และประกอบเป็น **ซอร์ส** (string) ของ factory
 ```js
-new Function("api", `"use strict";\nconst { readDB, writeDB, … } = api;\n${body}\n;return { … };`)
+(function (api) { "use strict"; const { readDB, writeDB, …, __gas, __call } = api; ${body} ;return { … }; })
 ```
-→ API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) แต่ **global ของ host realm ยังเอื้อมถึง** (ดูข้อจำกัดข้อ 1 ในหัวข้อ 11)
+→ API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) · ซอร์สนี้ถูกรันใน sandbox (QuickJS) ไม่ใช่ใน V8 ของ server
+syntax ถูกตรวจทั้งกับ V8 (ข้อความ error เดิม) และกับ QuickJS (`checkGuestSyntax` — ตัวที่รันจริง) ก่อนรับโค้ด
 
 `isTopLevelDeclaration()` ใช้ trick ที่ควรรู้ก่อนแก้: ต่อ `let <ชื่อ>;` เข้าท้ายโค้ดแล้วคอมไพล์
 ถ้า V8 ฟ้อง `'<ชื่อ>' has already been declared` = ชื่อนั้นถูกประกาศในระดับบนสุดจริง — ตรวจได้โดยไม่ต้องรันโค้ด
-ผลลัพธ์ compile ถูก cache ตาม string โค้ด (`#cache`)
+ผลลัพธ์ compile (ซอร์สที่ฉีดตัวนับแล้ว) ถูก cache ตาม string โค้ด (`#cache`)
+
+### Sandbox (`src/core/sandbox.js` · เทสต์ `58-sandbox`)
+
+โค้ดของโปรแกรมรันใน **QuickJS ที่คอมไพล์เป็น WebAssembly** (`quickjs-emscripten` 0.32.0 แบบ sync, QuickJS 2025-09-13)
+ไม่ใช่ใน V8 ของ server → โปรแกรมไม่มีทางเห็น `process` / `require` / global ของ Node / object ใด ๆ ของ host
+
+| | |
+|---|---|
+| ตอน import | โหลด wasm ครั้งเดียว (top-level await) · สร้าง runtime 1 ตัว + context สำรอง 8 ตัวที่โหลด prelude แล้ว · ถ่าย **snapshot** ของ memory ของ wasm (~1.8 MB) · self-check ว่าคืน snapshot ได้จริง (ไม่ผ่าน = import ล้ม) |
+| ต้น tx | คืน memory เป็น snapshot (~0.13 ms) → ทุก tx เริ่มจาก heap เดียวกันทุกไบต์ ไม่มีอะไรจาก tx ก่อนค้าง (global ที่แก้ / ขยะของ GC) |
+| 1 tx ชั้นนอกสุด | = runtime เดียว · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียก (`runProgram` / init ของ `cloneProgram` ซ้อนรันใน runtime เดียวกัน) |
+| 1 โปรแกรมใน tx | = 1 context (global แยกกัน) · factory ถูกเรียกใหม่ทุก call → ตัวแปรระดับบนสุดไม่ค้างข้าม call |
+| ค่าข้ามเขตแดน | เป็นข้อความ JSON เสมอ (BigInt / undefined / NaN / -0 / map(...) ติดป้ายด้วย key `"\u0000"`) → ได้สำเนาใหม่ทุกครั้ง · function / symbol / object ที่ไม่ใช่ข้อมูลส่งเป็น "ไม่ใช่ข้อมูล" แล้ว host ปฏิเสธเหมือนเดิม · error ของ host ที่โปรแกรมได้รับเป็น `Error` ของฝั่งโปรแกรม (มี `code`) ถ้า throw ต่อ host ได้ error ตัวเดิมคืน |
+| global | built-in มาตรฐานของ JS + `Date` / `Math` ของ block (Math.random ถาม host) · `eval` / `new Function` / constructor ของ async / generator function ถูกปิด (EvalError) เพราะโค้ดที่สร้างตอนรันไม่ผ่านตัวนับแก๊ส · `console.*` เรียกได้แต่ไม่พิมพ์ · ไม่มี `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
+| แก๊ส | `__gas(n)` / `__call` ทำงานในฝั่งโปรแกรม (ไม่ข้ามไป host ทุกครั้ง) · ยอดค้างส่งให้ host ทุกครั้งที่เรียก API · ยอดค้างเกินที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดิม **ตัวเลขแก๊สเท่าเดิมทุกหน่วย** |
+| แก๊สหมด / หมดเวลา / DB พัง / หน่วยความจำเกิน | host ตอบ "ตาย" → ทุก `__gas` / API หลังจากนั้น throw ซ้ำ (ทุก catch / finally ขึ้นต้นด้วย `__gas`) จึง catch ไม่ได้ · ลูปที่ไม่เรียกอะไรเลยถูกหยุดด้วย interrupt handler ของ QuickJS (catch ไม่ได้เช่นกัน) |
+| stack | `maxStackBytes` ค่าเริ่ม 256 KB (~1,400 ชั้นของการเรียกซ้อน — V8 เดิม ~10,000) · ล้น = `PROGRAM_ERROR (RangeError)` ที่ catch ได้ · ตั้งได้ 16–256 KB เท่านั้น (512 KB ทำให้ stack ของ Node ล้นจน wasm พัง) |
+| หน่วยความจำ | `memoryLimitBytes` ค่าเริ่ม 32 MB ต่อ tx (ตั้งได้ 1 MB–1 GB) · เกิน = **`OUT_OF_MEMORY`** (code ใหม่) |
+
+**หน่วยความจำ — ทำไมไม่ใช้ memory limit ของ QuickJS**: บน emscripten `malloc_usable_size` ใช้ไม่ได้ QuickJS จึงนับแค่ ~8 ไบต์ต่อก้อน (ลองแล้ว ตั้ง 32 MB แต่จองได้ 2 GB · quickjs-ng ก็เหมือนกัน)
+จึงคุมที่ WebAssembly memory แทน: instance สำหรับรันโปรแกรมมี `WebAssembly.Memory` ของตัวเองที่ `grow` ถูกห่อไว้
+ต้น tx (หลังคืน snapshot) จอง "ลูกโป่ง" ให้เหลือที่ว่างพอดี `memoryLimitBytes` + ที่สำรองของ host 2 MB แล้วล็อกไม่ให้ memory โต
+→ malloc ล้มที่จุดเดียวกันทุกเครื่องเสมอ (heap ต้น tx เหมือนกันทุกไบต์ และไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · มีการแตะล็อกเมื่อไร = OUT_OF_MEMORY
+OUT_OF_MEMORY ทำตัวเหมือน OUT_OF_GAS: ทั้ง tx ล้ม catch / finally ไม่ได้ ไม่มี writes ของโปรแกรม **เข้า block (`accepted: true`) กิน nonce และเสียค่าแก๊สเท่าที่ใช้ไป**
+⚠️ ทุก node ในเครือข่ายต้องตั้ง `MEMORY_LIMIT_MB` / `STACK_LIMIT_KB` เท่ากัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
+
+**snapshot — ข้อสมมติที่ต้องรู้ก่อนขยับเวอร์ชัน quickjs-emscripten**: memory ของ wasm = [ข้อมูล static ~90 KB | stack ของ C 5 MB | heap ของ dlmalloc]
+snapshot เก็บ 1 MB ล่าง (static) + heap ถึงก้อนว่างก้อนสุดท้าย (`top` ของ dlmalloc ซึ่งหาตำแหน่งจากการทดลองตอน import)
+self-check ตอน import ตรวจให้ ถ้าโครงสร้างเปลี่ยนจนคืนสถานะไม่ครบ server จะไม่ start (ไม่รันต่อแบบผิด ๆ) · หา `top` ไม่เจอ = เก็บ memory ทั้งก้อน (ถูกแต่ช้า)
+ห้าม `dispose` runtime ทั้งที่ยังมี handle ค้าง (QuickJS abort ทั้ง wasm) — runtime อยู่ตลอดอายุ process และ `Sandbox.dispose()` คืน handle / context ที่สร้างใน tx ทุกตัว
+
+**ต่างจาก V8 เดิมที่โปรแกรมอาจเห็นได้** (ผลของ API / แก๊ส / error code เท่าเดิมหมด — เทียบด้วยชุด probe แล้ว):
+`Date()` / `toString()` ของ Date ไม่ต่อท้าย "(Coordinated Universal Time)" · `toLocaleString` / `localeCompare` ไม่ใช้ ICU · ไม่มี `Intl`
+ข้อความ error จาก engine ต่างกัน (`cannot read property 'x' of null`) แต่ชื่อเหมือนกัน (error ที่ไม่ใช่ `Error` ธรรมดาถูกเปลี่ยนเป็นชื่ออยู่แล้ว)
+stack ล้นเป็น `InternalError` ในฝั่งโปรแกรม (ข้ามเขตแดนแล้วเป็น RangeError เหมือนเดิม) · Promise ไม่มีวันถูก resolve (ไม่มี job queue — async ใช้ไม่ได้อยู่แล้ว)
+`debug.at` บอกบรรทัด / คอลัมน์ตาม stack ของ QuickJS
+
+ตัวแปร server: `MEMORY_LIMIT_MB=32` `STACK_LIMIT_KB=256` (`TIMEOUT_MS` ยังเป็นด่านสุดท้ายของเวลา) · option `wallClock: true` ใส่ `performance.now()` จริงให้โปรแกรม — ใช้ในเทสต์เท่านั้น
+
+**บันทึกแผน / ทางที่ยังเปิดอยู่**
+- ความเร็ว: token transfer ~1.4 ms/tx (V8 เดิม ~0.6) ส่วนใหญ่คือคอมไพล์ factory ของโปรแกรมใหม่ทุก tx (~0.4 ms) + ตัวแปลภาษาของ QuickJS · งานคำนวณล้วนช้ากว่า V8 ~4–5 เท่า (~50 M gas/s) · วัดซ้ำด้วย `node scripts/bench-vm.js`
+- ทางเร่งที่คิดไว้แต่ยังไม่ทำ: เก็บ context ที่คอมไพล์โปรแกรมยอดนิยมไว้แล้วใน snapshot — **ต้องระวัง** snapshot จะต่างกันตามประวัติของแต่ละ node → heap ต้น tx ไม่เหมือนกัน → จุดที่หน่วยความจำเกินอาจต่างกัน ต้องทำให้ชุดโปรแกรมใน snapshot เป็นส่วนหนึ่งของ state ของ chain ก่อน
+- bytecode ของ QuickJS ข้าม runtime / snapshot ไม่ได้ใน quickjs-emscripten (ไม่มี API อ่าน / เขียน bytecode) จึง cache เป็นซอร์สที่ฉีดตัวนับแล้วแทน
+- ถ้าจะใช้ memory limit ของ QuickJS เองในอนาคต ต้องเป็น build ที่มี `malloc_usable_size`
+- พบระหว่างทำ (ยังไม่แก้ เป็นของเดิม): `gasmeter.js` แปลง `(255).toString(36)` เป็นโค้ดที่ syntax ผิด → deploy ไม่ผ่าน (ตัวเลขในวงเล็บตามด้วยเมธอด)
 
 ### วงจรชีวิตของ tx หนึ่งใบ
 
@@ -317,7 +365,8 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 
 ### พฤติกรรมที่ล็อกไว้แล้ว (เทสต์คุมอยู่ — อย่าทำให้พัง)
 
 - ไม่มีอะไรลง DB จนกว่าจะ `commit()`
-- timeout / DB พัง / แก๊สหมด → ทั้ง tx ล้ม โปรแกรม `catch` ไม่ได้
+- timeout / DB พัง / แก๊สหมด / หน่วยความจำเกิน → ทั้ง tx ล้ม โปรแกรม `catch` ไม่ได้
+- **หน่วยความจำเกิน (`OUT_OF_MEMORY`) → เข้า block กิน nonce เสียค่าแก๊สเท่าที่ใช้** (เหมือนแก๊สหมด)
 - `runProgram` ปลายทางล้มแล้วผู้เรียก catch → writes + event ของกิ่งนั้นถูกย้อน
 - **nonce ผิด / เกินโควตา / timeout → ไม่เข้า block ไม่กิน nonce ไม่เสียแก๊ส** (`accepted: false`)
 - **โปรแกรม throw / เงินไม่พอ → เข้า block กิน nonce เสียแก๊ส** (`status: "throw"`, `accepted: true`)
@@ -678,8 +727,8 @@ code: function program() { function evil(p) { return process.env } return { evil
 ```
 
 **ข้อจำกัดที่ต้องเข้าใจ**: autoreview กันโค้ด *ที่เขียนตรง ๆ* ว่าอันตราย แต่ไม่ใช่ sandbox
-ถ้ามีช่องที่หลุด (`ALLOWED_NODES` เพิ่มชนิดใหม่โดยไม่คิด, ช่องของ V8 เอง) โปรแกรมยังเข้าถึง global ของ Node ได้
-และกัน `while(true)` ที่ไม่แตะ DB ไม่ได้ — มีแค่ `timeoutMs` คุมอยู่
+ตอนนี้โปรแกรมรันใน sandbox (QuickJS) แล้ว ถึงหลุดการตรวจไปก็เอื้อมไม่ถึง Node · `while(true)` จบด้วยแก๊สหมด (ด่านสุดท้ายคือ interrupt ของ QuickJS ตาม `timeoutMs`)
+autoreview จึงเป็นชั้นที่สอง (กันโค้ดที่ไม่ deterministic / อ่านยาก) ไม่ใช่ขอบเขตความปลอดภัยชั้นเดียวอีกต่อไป
 
 ---
 
@@ -703,6 +752,7 @@ code: function program() { function evil(p) { return process.env } return { evil
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
+| `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
@@ -752,13 +802,12 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 ## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
 
 ### บล็อกการเปิดให้คนนอก deploy
-1. **ไม่มี sandbox จริง** — โปรแกรมรันด้วย `new Function` ใน process เดียวกับ server
-   `node:vm` ถูกใช้แค่จับเวลา ไม่ได้ใช้แยก context จริง
-   autoreview ช่วยกรองได้มาก แต่เป็นชั้นเดียวและไม่ใช่ขอบเขตการรันจริง
-   ทางเลือกที่คุยไว้: QuickJS (wasm, แยกจริง + นับขั้นได้), worker thread (แยกครึ่ง), เข้ม autoreview ต่อ (ถูกสุด อ่อนสุด)
+1. ~~ไม่มี sandbox จริง~~ เสร็จแล้ว: โปรแกรมรันใน QuickJS (WebAssembly) — `src/core/sandbox.js` (หัวข้อ 4 "Sandbox")
+   แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
+   ที่เหลือ: ความเร็ว (token transfer ~1.4 ms/tx เทียบ ~0.6 เดิม) และ fuzz / review ความปลอดภัยของตัวแปลงค่าข้ามเขตแดน
 2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node, เมธอดในตัวคิดตามขนาดข้อมูล)
    `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 3M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
-3. ค่ากลางในหน่วยความจำยังไม่จำกัด — `maxValueSize` กันเฉพาะตอนเขียน / return / emit
+3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
 
 ### บล็อกการมี node ที่สอง
 4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) · ข้อ 2 เสร็จแล้ว ผลแก๊สไม่ขึ้นกับความเร็วเครื่อง
