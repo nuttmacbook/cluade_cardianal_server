@@ -626,7 +626,20 @@ function pickCall(i) {
 
 async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
-  if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  if (r.error && !r.hash) {
+    // not in a block: it may still wait in the mempool, or have been replaced (same nonce, higher gas price)
+    const queued = await api(`/tx/${hash}`).catch(() => null);
+    if (queued?.status === "replaced") return draw(panel("Transaction", kv([
+      ["Status", `<span class="tag bad">Replaced</span> <span class="dim">by a transaction with the same nonce and a higher gas price</span>`],
+      ["Tx hash", full(hash)],
+      ["Replaced by", txLink(queued.replacedBy, queued.replacedBy)],
+    ])));
+    if (queued?.status === "pending") return draw(panel("Transaction", kv([
+      ["Status", state("pending") + ' <span class="dim">waiting for the next block</span>'],
+      ["Tx hash", full(hash)],
+    ])));
+    return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  }
   // namespace of every address in the diagram (box labels read better as names)
   const names = {};
   const inTrace = [...new Set((r.trace ?? []).flatMap((c) => [c.program, c.from]).concat(r.from ?? []).map((a) => String(a).toLowerCase()))].slice(0, 30);
@@ -1073,6 +1086,10 @@ async function runWrite(program) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       if (seq !== outSeq || !box.isConnected) return;   // another run started or the user left / redrew the page
       const found = await api(`/tx/${sent.hash}`).catch(() => null);
+      if (found?.status === "replaced") {
+        return showResult({ ok: false, label: `Transaction · ${functionName}()`, error: "Replaced by another transaction with the same nonce",
+          full: found, link: txLinkBtn(found.replacedBy) });
+      }
       if (!found?.blockNumber) continue;
       const receipt = await api(`/tx/${sent.hash}/receipt`);
       if (seq !== outSeq || !box.isConnected) return;

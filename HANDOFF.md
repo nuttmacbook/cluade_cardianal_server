@@ -48,7 +48,7 @@ src/core/virtualmachine.js   2,521 บรรทัด  ตรรกะทั้�
 src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
-src/node/mempool.js            140        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice
+src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice, แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
@@ -192,6 +192,17 @@ POST /sendtx
 ```
 
 `take()` เรียง tx ด้วย `sortPendingTransactions` (gasPrice มาก่อน) แล้วเช็ค `block.checkTransaction()` ทีละใบ
+
+**แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
+- nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
+- nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ gasPrice ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น)
+  ไม่ถึง → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · ไม่ระบุ gasPrice = `vm.gas.price`
+- ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 1 wei ให้ตัวเอง** (เชนไม่รับโอน 0: `amount ต้องเป็นจำนวนเต็มบวก`)
+- ไม่กิน `maxPerSender` / `maxSize` เพิ่ม แต่นับ rate limit ต่อ address · ต้องผ่าน simulate ก่อน — ไม่ผ่าน → ใบเดิมยังอยู่
+- ใบเดิมออกจากคิวแต่ยังอยู่ใน "เคยเห็น" (ส่งใบเดิมกลับมาไม่ได้) · `mempool.replacedBy(hash)` จำไว้ `ttlMs`
+  → `GET /tx/:hash` ตอบ `{ status: "replaced", hash, replacedBy }` · explorer แสดง "Replaced by …"
+- ใบแทนที่ใช้ nonce เดิม → `take()` ยังหยิบของแต่ละ address ตามลำดับ nonce · `/nonce/:address` ไม่ขยับ
+- `/evm`: txpool เห็นแค่ใบใหม่ · `eth_getTransactionByHash` ของใบเดิมตอบ `null` (แบบ geth)
 
 ### เมธอดที่น่าจะต้องใช้
 
@@ -356,7 +367,7 @@ vm[method](request);
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
-| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` |
+| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (ใช้ hash เท่านั้น ไม่รับ digest) |
 | `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
 | `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน) |
@@ -694,6 +705,8 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
 10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
+11. สถานะ `replaced` อยู่ในหน่วยความจำของ mempool (จำแค่ `ttlMs` 5 นาที, restart แล้วหาย) และค้นด้วย VM hash เท่านั้น ไม่รับ digest
+    พ้นเวลาแล้ว `GET /tx/:hash` ของใบที่ถูกแทนที่กลับเป็น 404
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
 **ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
