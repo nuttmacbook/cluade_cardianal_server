@@ -99,6 +99,8 @@ export function createFakeApi({
 
     /** เรียกโปรแกรมอื่นไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */
     runProgram: () => { throw new Error("โหมดทดสอบเร็วเรียกโปรแกรมอื่นไม่ได้ ใช้ createChain() แทน"); },
+    /** สร้างโปรแกรมใหม่ไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */
+    cloneProgram: () => { throw new Error("โหมดทดสอบเร็วสร้างโปรแกรมใหม่ไม่ได้ ใช้ createChain() แทน"); },
 
     // ---------- ตรวจผลในเทสต์ ----------
     store, native, meta, events, transfers,
