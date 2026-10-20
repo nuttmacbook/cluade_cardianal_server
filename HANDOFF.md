@@ -121,7 +121,7 @@ function program() {
 - `params` ที่ทุกฟังก์ชันได้รับ: `{ input, context: { sender, origin }, value, block: { timestamp } }`
   (เลข block ไม่ได้อยู่ใน `params` — เรียก `BlockNumber()` แทน)
 
-### อัปเกรดโปรแกรม (upgrade) — เทสต์ `54-upgrade`
+### อัปเกรดโปรแกรม (upgrade) — เทสต์ `56-upgrade`
 
 **ไม่มี upgrader = แก้ไม่ได้ตลอดไป** · โปรแกรมทุกตัวที่มีอยู่เดิมไม่มี upgrader จึงแก้ไม่ได้
 - **ตั้ง upgrader ตอน deploy เท่านั้น**: `vm.deploy({ …, upgrader: "0x…" })` / tx ที่เซ็น `{ action: "deploy", …, upgrader: "0x…" }`
@@ -148,7 +148,7 @@ function program() {
 - อ่านย้อนหลัง: `vm.listCodeVersions(addr)` · `vm.getCodeVersion(addr, n)` · `vm.codeAt(blockNumber, addr)` (= `stateAt` ของ `<id>:code`)
   `replayBlock` ของ block ก่อนอัปเกรดใช้โค้ด ณ ตอนนั้นเสมอ (อ่าน `<id>:code` ผ่าน history)
 
-### cloneProgram — โรงงานสร้างโปรแกรม (แบบ CREATE2) — เทสต์ `55-clone`
+### cloneProgram — โรงงานสร้างโปรแกรม (แบบ CREATE2) — เทสต์ `57-clone`
 
 ```js
 const address = cloneProgram(template, initInput, { salt, value })   // ในโปรแกรม (factory)
@@ -689,8 +689,8 @@ code: function program() { function evil(p) { return process.env } return { evil
 | `40-bigint` | โหมด BigInt ทั้งระบบ |
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
-| `54-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
-| `55-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
+| `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
+| `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
