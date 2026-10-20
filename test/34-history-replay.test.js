@@ -49,7 +49,7 @@ test("history: เก็บค่าก่อนเปลี่ยนของ�
   assert.ok(undo.includes(BALANCE));
   assert.ok(undo.includes("alice:nonce"));
   assert.equal(undo.some((key) => key.startsWith("block:")), false); // ข้อมูลของ chain เองไม่ต้องเก็บ
-  assert.deepEqual(vm.db.readKeys([`history:${BALANCE}:000000000003`])[0], { existed: true, before: 990 });
+  assert.deepEqual(vm.db.readKeys([`history:${BALANCE}:000000000003`])[0], { existed: true, before: "990n" });
   assert.deepEqual(vm.db.readKeys(["history:alice:nonce:000000000001"])[0], { existed: false }); // เพิ่งสร้างใน block 1
 });
 
@@ -65,8 +65,8 @@ test("history: ปิด recordHistory → ไม่มี key เหล่า�
 
 test("stateAt: ค่าของ key ย้อนหลังทุก block", () => {
   const vm = buildChain();
-  assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => vm.stateAt(n, BALANCE)), [undefined, 1000, 990, 980, 970, 960]);
-  assert.equal(vm.db.readKeys([BALANCE])[0], 960);
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => vm.stateAt(n, BALANCE)), [undefined, "1000n", "990n", "980n", "970n", "960n"]);
+  assert.equal(vm.db.readKeys([BALANCE])[0], "960n");
 });
 
 test("stateAt: key ที่เพิ่งสร้าง / ถูกลบ / ไม่เคยถูกแตะ", () => {
@@ -117,10 +117,10 @@ test("stateAt: ต้นทุนคงที่ — อ่าน DB จำน�
 test("snapshotAt: ดูข้อมูลของโปรแกรม ณ block เก่า", () => {
   const vm = buildChain();
   assert.deepEqual(vm.snapshotAt(2, "token:storage:"), {
-    "token:storage:balances:alice": 990,
-    "token:storage:balances:bob": 10,
+    "token:storage:balances:alice": "990n",
+    "token:storage:balances:bob": "10n",
     "token:storage:owner": "alice",
-    "token:storage:totalSupply": 1000,
+    "token:storage:totalSupply": "1000n",
   });
   assert.deepEqual(vm.snapshotAt(0, "token:storage:"), {});
 });
@@ -138,11 +138,11 @@ test("replayBlock: ได้ receipt เต็มของ block เก่า �
   assert.equal(receipt.hash, vm.getBlock(2).hash);
   assert.equal(receipt.txCount, 1);
   assert.deepEqual(receipt.transactions[0].stateChanges, [
-    { program: "token", key: ["balances", "alice"], after: 990 },
-    { program: "token", key: ["balances", "bob"], after: 10 },
+    { program: "token", key: ["balances", "alice"], after: "990n" },
+    { program: "token", key: ["balances", "bob"], after: "10n" },
   ]);
   assert.deepEqual(receipt.transactions[0].trace[0].method, "transfer");
-  assert.deepEqual(receipt.transactions[0].result, { from: "alice", to: "bob", amount: 10 });
+  assert.deepEqual(receipt.transactions[0].result, { from: "alice", to: "bob", amount: "10n" });
   assert.deepEqual(vm.db.snapshot(), before);
 });
 
@@ -188,7 +188,7 @@ test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้�
   assert.equal(result.stateRoot, stateRoot);
 
   assert.equal(vm.latestBlockNumber(), 2);
-  assert.equal(vm.db.readKeys([BALANCE])[0], 990);
+  assert.equal(vm.db.readKeys([BALANCE])[0], "990n");
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], 2);
   assert.equal(vm.getBlock(3), null);
   assert.equal(vm.getBlockBody(3), null);
@@ -219,7 +219,7 @@ test("rebuildFrom: ย้อนแล้วเดินหน้าต่อไ�
   assert.equal(vm.latestBlockNumber(), 3);
   assert.equal(vm.getBlock(3).parentHash, vm.getBlock(2).hash);
   assert.equal(vm.getBlock(3).parentStateRoot, vm.getBlock(2).stateRoot);
-  assert.equal(vm.db.readKeys(["token:storage:balances:carol"])[0], 5);
+  assert.equal(vm.db.readKeys(["token:storage:balances:carol"])[0], "5n");
 });
 
 test("rebuildFrom: ย้อนไป 0 = ล้างผลของทุก block แต่ข้อมูลนอกเชนยังอยู่", () => {

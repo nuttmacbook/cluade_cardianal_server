@@ -68,13 +68,13 @@ test("timeout: งานที่ใช้เวลาไม่เกินก�
   activate("faulty", FAULTY);
   activate("other", FAULTY);
   const res = ok(callAs("a", "faulty", "busyThenCall", { ms: Math.floor(TEST_TIMEOUT_MS * 0.2), target: "other" }));
-  assert.equal(res.result, Math.floor(TEST_TIMEOUT_MS * 0.2));
+  assert.equal(res.result, `${Math.floor(TEST_TIMEOUT_MS * 0.2)}n`);
 });
 
 test("timeout: request ถัดไปได้เวลาใหม่ และ VM ใช้งานต่อได้", () => {
   activate("faulty", FAULTY);
   fails(callAs("a", "faulty", "spin"), "TIMEOUT");
-  assert.equal(ok(callAs("a", "faulty", "returnNumber")).result, 1.5);
+  assert.equal(ok(callAs("a", "faulty", "returnBigInt")).result, "10n");
   ok(callAs("a", "faulty", "busy", { ms: Math.floor(TEST_TIMEOUT_MS * 0.5) }));
   ok(callAs("a", "faulty", "busy", { ms: Math.floor(TEST_TIMEOUT_MS * 0.5) }));
 });

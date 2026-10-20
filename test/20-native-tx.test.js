@@ -110,7 +110,7 @@ test("deploy พร้อม value: เงินย้ายไปที่โ�
   const initialized = vm.init({ programUuid: "funded" });
   assert.equal(initialized.result.value, "400n");
   vm.commit(initialized.writes);
-  assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], 400);
+  assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], "400n");
   assert.equal(native(vm, "funded"), 400); // เงินยังอยู่ที่โปรแกรม
 });
 
@@ -138,7 +138,7 @@ test("deploy: ไม่แนบ value → params.value = 0 และ refund = 0
   const vm = setup({}, { alice: 1000 });
   vm.commit(vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice") }).writes);
   vm.commit(vm.init({ programUuid: "funded" }).writes);
-  assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], 0);
+  assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], "0n");
 });
 
 test("deploy พร้อม value: โปรแกรมใช้เงินก้อนนั้นต่อได้หลัง init", () => {
@@ -148,7 +148,7 @@ test("deploy พร้อม value: โปรแกรมใช้เงิน�
   block.init({ programUuid: "funded" });
   const paid = block.call({ programUuid: "funded", functionName: "payBack", input: { amount: 150 }, context: user("alice") });
 
-  assert.equal(paid.result, 150);
+  assert.equal(paid.result, "150n");
   block.commit();
   assert.equal(native(vm, "funded"), 250);
   assert.equal(native(vm, "alice"), 750);

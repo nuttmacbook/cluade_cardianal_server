@@ -33,7 +33,7 @@ test("address: ไม่ส่ง programUuid → VM คำนวณจาก de
   assert.match(address, /^0x[0-9a-f]{40}$/);
   assert.equal(address, vm.programAddressFor("alice", 0));
   save(vm, vm.init({ programUuid: address }));
-  assert.equal(vm.call({ programUuid: address, functionName: "get", context: user("bob"), nonce: 0 }).result, 1);
+  assert.equal(vm.call({ programUuid: address, functionName: "get", context: user("bob"), nonce: 0 }).result, "1n");
 });
 
 test("address: nonce ต่างกัน / deployer ต่างกัน / chainId ต่างกัน → address ต่างกัน", () => {
@@ -109,12 +109,12 @@ test("random: โปรแกรมที่เรียกซ้อนใช้
 test("random: Math อย่างอื่นยังใช้ได้ปกติ", () => {
   const vm = diceVm();
   const res = vm.call({ programUuid: "dice", functionName: "mathStillWorks", context: user("alice") }, { timestamp: T });
-  assert.deepEqual(res.result, [2, 5, true, "number"]);
+  assert.deepEqual(res.result, ["2n", "5n", true, "number"]);
 });
 
 test("random: กระจายตัวพอใช้ (100 ค่า ไม่ซ้ำและกระจายทั้งช่วง)", () => {
   const vm = diceVm();
-  const values = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 100 }, context: user("alice") }, { timestamp: T }).result;
+  const values = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 100 }, context: user("alice") }, { timestamp: T }).result.map(Number);   // ทศนิยมส่งออกเป็น string
   assert.equal(new Set(values).size, 100);
   assert.ok(values.some((value) => value < 0.2) && values.some((value) => value > 0.8));
   const average = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -185,10 +185,10 @@ test("explorer: listTransactionsOf — ไล่ tx ของ address", () => {
 test("explorer: listProgramStorage — ดู storage ทั้งหมดของโปรแกรม", () => {
   const vm = chainVm();
   assert.deepEqual(vm.listProgramStorage("token"), [
-    { key: ["balances", "alice"], value: 994 },
-    { key: ["balances", "bob"], value: 6 },
+    { key: ["balances", "alice"], value: "994n" },
+    { key: ["balances", "bob"], value: "6n" },
     { key: ["owner"], value: "alice" },
-    { key: ["totalSupply"], value: 1000 },
+    { key: ["totalSupply"], value: "1000n" },
   ]);
 });
 

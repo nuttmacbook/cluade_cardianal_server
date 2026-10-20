@@ -10,22 +10,24 @@ beforeEach(() => {
 });
 
 const T = Date.UTC(2024, 5, 1, 12, 0, 0); // 2024-06-01T12:00:00.000Z
+/** ค่าตัวเลขที่ออกจากโปรแกรมเป็น "123n" */
+const n = (value) => `${value}n`;
 const now = (programUuid = "clock") => ({ programUuid, functionName: "now", context: user("a") });
 
 test("เวลาในโปรแกรม: Date.now / new Date / Date() / params.block.timestamp เท่ากับเวลาที่กำหนด", () => {
   const res = ok(vm.call(now(), { timestamp: T }));
   assert.equal(res.timestamp, T);
   assert.deepEqual(res.result, {
-    block: T,
-    dateNow: T,
-    newDate: T,
+    block: n(T),
+    dateNow: n(T),
+    newDate: n(T),
     iso: "2024-06-01T12:00:00.000Z",
     asString: new Date(T).toString(),
     isDate: true,
-    epoch: 0,
-    fromString: Date.UTC(2020, 0, 1),
-    utc: Date.UTC(2020, 0, 1),
-    parse: Date.UTC(2020, 0, 1),
+    epoch: "0n",
+    fromString: n(Date.UTC(2020, 0, 1)),
+    utc: n(Date.UTC(2020, 0, 1)),
+    parse: n(Date.UTC(2020, 0, 1)),
   });
 });
 
@@ -34,8 +36,8 @@ test("block: ทุก tx เห็นเวลาเดียวกันเป
   const first = block.call(now());
   await new Promise((resolve) => setTimeout(resolve, 20));
   const second = block.call(now());
-  assert.equal(first.result.dateNow, T);
-  assert.equal(second.result.dateNow, T);
+  assert.equal(first.result.dateNow, n(T));
+  assert.equal(second.result.dateNow, n(T));
   assert.equal(block.timestamp, T);
   assert.equal(block.summary().timestamp, T);
   assert.ok(block.results().every((r) => r.timestamp === T));
@@ -48,7 +50,7 @@ test("block: ไม่ส่ง timestamp → ใช้ Date.now() ครั้�
   await new Promise((resolve) => setTimeout(resolve, 20));
   const res = block.call(now());
   assert.ok(block.timestamp >= before && block.timestamp <= after);
-  assert.equal(res.result.dateNow, block.timestamp);
+  assert.equal(res.result.dateNow, n(block.timestamp));
 });
 
 test("call เดี่ยว: ไม่ส่ง timestamp → ใช้เวลาตอนเรียก call", () => {
@@ -56,12 +58,12 @@ test("call เดี่ยว: ไม่ส่ง timestamp → ใช้เว�
   const res = ok(vm.call(now()));
   const after = Date.now();
   assert.ok(res.timestamp >= before && res.timestamp <= after);
-  assert.equal(res.result.dateNow, res.timestamp);
+  assert.equal(res.result.dateNow, n(res.timestamp));
 });
 
 test("โปรแกรมที่เรียกต่อกัน (runProgram) เห็นเวลาเดียวกัน", () => {
   const res = ok(vm.call({ programUuid: "clock", functionName: "nowNested", input: { target: "clock2" }, context: user("a") }, { timestamp: T }));
-  assert.deepEqual(res.result, [T, T]);
+  assert.deepEqual(res.result, [n(T), n(T)]);
 });
 
 test("init: initialization เห็นเวลาของ block", () => {
@@ -69,8 +71,8 @@ test("init: initialization เห็นเวลาของ block", () => {
   block.deploy({ programUuid: "clock3", code: CLOCK, context: user("a") });
   block.init({ programUuid: "clock3" });
   block.commit();
-  assert.equal(stored("clock3", "createdAt"), T);
-  assert.equal(stored("clock3", "createdAtBlock"), T);
+  assert.equal(stored("clock3", "createdAt"), n(T));
+  assert.equal(stored("clock3", "createdAtBlock"), n(T));
 });
 
 test("writes เหมือนเดิมทุกครั้งเมื่อใช้ timestamp เดียวกัน และต่างกันเมื่อ timestamp ต่างกัน", () => {

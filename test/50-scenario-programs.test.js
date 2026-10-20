@@ -16,7 +16,7 @@ const CHAIN = ["a", "b", "c", "d", "e", "f"].map((label, i) => ({ label, address
 const ROUTERS = [0, 1, 2, 3].map((i) => `0x00000000000000000000000000000000000000e${i}`);
 
 function chain() {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true, chargeGas: true });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, chargeGas: true });
   vm.applyGenesis({ balances: { [OWNER]: 10_000_000, [USER]: 1_000_000 } });
   let number = 0;
   const as = (who) => ({ sender: who, origin: who });

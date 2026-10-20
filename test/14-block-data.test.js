@@ -75,20 +75,20 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
       {
         status: "success",
         timestamp: T,
-        result: { from: "alice", to: "bob", amount: 30 },
+        result: { from: "alice", to: "bob", amount: "30n" },
         calls: [record("success")],
-        loadValues: [{ dbKey: bal("alice"), loadValue: 100 }, { dbKey: bal("bob"), loadValue: undefined }],
-        afterValues: [{ dbKey: bal("alice"), afterValue: 70, changed: true }, { dbKey: bal("bob"), afterValue: 30, changed: true }],
-        writes: [{ type: "put", dbKey: bal("alice"), value: 70 }, { type: "put", dbKey: bal("bob"), value: 30 }],
+        loadValues: [{ dbKey: bal("alice"), loadValue: "100n" }, { dbKey: bal("bob"), loadValue: undefined }],
+        afterValues: [{ dbKey: bal("alice"), afterValue: "70n", changed: true }, { dbKey: bal("bob"), afterValue: "30n", changed: true }],
+        writes: [{ type: "put", dbKey: bal("alice"), value: "70n" }, { type: "put", dbKey: bal("bob"), value: "30n" }],
       },
       {
         status: "success",
         timestamp: T,
-        result: { from: "alice", to: "jane", amount: 50 },
+        result: { from: "alice", to: "jane", amount: "50n" },
         calls: [record("success")],
-        loadValues: [{ dbKey: bal("alice"), loadValue: 70 }, { dbKey: bal("jane"), loadValue: undefined }],
-        afterValues: [{ dbKey: bal("alice"), afterValue: 20, changed: true }, { dbKey: bal("jane"), afterValue: 50, changed: true }],
-        writes: [{ type: "put", dbKey: bal("alice"), value: 20 }, { type: "put", dbKey: bal("jane"), value: 50 }],
+        loadValues: [{ dbKey: bal("alice"), loadValue: "70n" }, { dbKey: bal("jane"), loadValue: undefined }],
+        afterValues: [{ dbKey: bal("alice"), afterValue: "20n", changed: true }, { dbKey: bal("jane"), afterValue: "50n", changed: true }],
+        writes: [{ type: "put", dbKey: bal("alice"), value: "20n" }, { type: "put", dbKey: bal("jane"), value: "50n" }],
       },
       {
         status: "throw",
@@ -99,19 +99,19 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
       },
     ],
     loadValues: [
-      { dbKey: bal("alice"), loadValue: 100 },
+      { dbKey: bal("alice"), loadValue: "100n" },
       { dbKey: bal("bob"), loadValue: undefined },
       { dbKey: bal("jane"), loadValue: undefined },
     ],
     afterValues: [
-      { dbKey: bal("alice"), afterValue: 20, changed: true },
-      { dbKey: bal("bob"), afterValue: 30, changed: true },
-      { dbKey: bal("jane"), afterValue: 50, changed: true },
+      { dbKey: bal("alice"), afterValue: "20n", changed: true },
+      { dbKey: bal("bob"), afterValue: "30n", changed: true },
+      { dbKey: bal("jane"), afterValue: "50n", changed: true },
     ],
     writes: [
-      { type: "put", dbKey: bal("alice"), value: 20 },
-      { type: "put", dbKey: bal("bob"), value: 30 },
-      { type: "put", dbKey: bal("jane"), value: 50 },
+      { type: "put", dbKey: bal("alice"), value: "20n" },
+      { type: "put", dbKey: bal("bob"), value: "30n" },
+      { type: "put", dbKey: bal("jane"), value: "50n" },
     ],
   });
 });
@@ -195,15 +195,15 @@ test("invariant: ข้ามโปรแกรม (approve → shop.buy ผ่�
   assert.deepEqual(summary.results.map((r) => r.status), ["success", "success", "success", "throw", "success"]);
   // เรียงตามลำดับที่ key ถูกแตะครั้งแรก (shop อ่าน token / shopId / price ก่อนเรียก token)
   assert.deepEqual(summary.afterValues.map((v) => [v.dbKey, v.afterValue]), [
-    ["token:storage:allowance:alice:shop", 10],
+    ["token:storage:allowance:alice:shop", "10n"],
     ["shop:storage:token", "token"],
     ["shop:storage:shopId", "shop"],
-    ["shop:storage:price", 30],
-    ["token:storage:balances:alice", 40],
-    ["token:storage:balances:shop", 60],
-    ["shop:storage:items:alice", 2],
-    ["shop:storage:sales", 2],
-    ["shop:storage:attempts:alice", 1],
+    ["shop:storage:price", "30n"],
+    ["token:storage:balances:alice", "40n"],
+    ["token:storage:balances:shop", "60n"],
+    ["shop:storage:items:alice", "2n"],
+    ["shop:storage:sales", "2n"],
+    ["shop:storage:attempts:alice", "1n"],
     ["shop:storage:failed:alice", "allowance ไม่พอ"],
   ]);
   assertBlockInvariants(vm, block);
@@ -231,7 +231,7 @@ test("invariant: deploy + init + call ใน block เดียว — key ร�
 
   const summary = block.summary();
   assert.deepEqual(summary.loadValues, [{ dbKey: "counter:storage:count", loadValue: undefined }]);
-  assert.deepEqual(summary.afterValues, [{ dbKey: "counter:storage:count", afterValue: 7, changed: true }]);
+  assert.deepEqual(summary.afterValues, [{ dbKey: "counter:storage:count", afterValue: "7n", changed: true }]);
   assert.deepEqual(summary.writes.map((w) => `${w.type} ${w.dbKey}`), [
     "del pending:counter",
     "put counter:storage:count",
@@ -255,8 +255,8 @@ test("invariant: ลบแล้วสร้างใหม่ / สร้าง
   const next = vm.createBlock({ timestamp: T });
   next.call({ programUuid: "counter", functionName: "reset", context: user("a") });   // ลบ
   next.call({ programUuid: "counter", functionName: "add", input: { amount: 5 }, context: user("a") }); // สร้างใหม่เป็น 5 = ค่าเดิม
-  assert.deepEqual(next.afterValues(), [{ dbKey: "counter:storage:count", afterValue: 5, changed: false }]);
-  assert.deepEqual(next.writes(), [{ type: "put", dbKey: "counter:storage:count", value: 5 }]);
+  assert.deepEqual(next.afterValues(), [{ dbKey: "counter:storage:count", afterValue: "5n", changed: false }]);
+  assert.deepEqual(next.writes(), [{ type: "put", dbKey: "counter:storage:count", value: "5n" }]);
   assertBlockInvariants(vm, next);
 
   const last = vm.createBlock({ timestamp: T });
@@ -333,8 +333,8 @@ for (const seed of [1, 2, 3, 42, 2024]) {
     // ยอดรวมของ token คงที่เสมอ
     const total = Object.entries(blockVm.db.snapshot())
       .filter(([key]) => key.startsWith("token:storage:balances:"))
-      .reduce((sum, [, value]) => sum + value, 0);
-    assert.equal(total, 1000);
+      .reduce((sum, [, value]) => sum + BigInt(value.slice(0, -1)), 0n);   // เก็บเป็น "123n"
+    assert.equal(total, 1000n);
 
     // มีทั้ง tx ที่สำเร็จและล้ม
     const statuses = new Set(block.results().map((r) => r.status));
@@ -362,9 +362,9 @@ test("ข้อมูลที่คืนออกมาเป็น copy — �
   summary.afterValues[0].afterValue = -1;
   summary.writes[0].value = -1;
   summary.results.length = 0;
-  assert.equal(block.loadValues()[0].loadValue, 100);
-  assert.equal(block.afterValues()[0].afterValue, 90);
-  assert.equal(block.writes()[0].value, 90);
+  assert.equal(block.loadValues()[0].loadValue, "100n");
+  assert.equal(block.afterValues()[0].afterValue, "90n");
+  assert.equal(block.writes()[0].value, "90n");
   assert.equal(block.results().length, 1);
 });
 
@@ -377,9 +377,9 @@ test("แก้ผลของ tx (ทั้งที่ได้จาก call 
   block.results()[0].writes[0].value = 222;
   block.results()[0].loadValues.length = 0;
 
-  assert.equal(block.writes()[0].value, 90);
+  assert.equal(block.writes()[0].value, "90n");
   assert.equal(block.results()[0].status, "success");
-  assert.equal(block.results()[0].writes[0].value, 90);
+  assert.equal(block.results()[0].writes[0].value, "90n");
   assert.equal(block.results()[0].loadValues.length, 2);
 });
 
@@ -397,7 +397,7 @@ test("summary แปลงเป็น JSON ได้ (loadValue undefined จ�
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 10));
   const json = JSON.parse(JSON.stringify(block.summary()));
-  assert.deepEqual(json.loadValues, [{ dbKey: bal("alice"), loadValue: 100 }, { dbKey: bal("bob") }]);
+  assert.deepEqual(json.loadValues, [{ dbKey: bal("alice"), loadValue: "100n" }, { dbKey: bal("bob") }]);
 });
 
 test("block ใหญ่ 500 tx: ข้อมูลถูกต้องและใช้เวลาไม่นาน", () => {
@@ -410,8 +410,8 @@ test("block ใหญ่ 500 tx: ข้อมูลถูกต้องแล�
   assert.equal(block.results().length, 500);
   assert.ok(block.results().every((r) => r.status === "success"));
   assert.equal(block.writes().length, 51); // alice + user0..49
-  assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("alice")), { dbKey: bal("alice"), afterValue: 0, changed: true });
-  assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("user7")), { dbKey: bal("user7"), afterValue: 10, changed: true });
+  assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("alice")), { dbKey: bal("alice"), afterValue: "0n", changed: true });
+  assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("user7")), { dbKey: bal("user7"), afterValue: "10n", changed: true });
   assert.ok(elapsed < 2000, `ใช้เวลา ${elapsed}ms`);
   assertBlockInvariants(vm, block);
 });

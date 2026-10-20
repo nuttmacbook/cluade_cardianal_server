@@ -85,9 +85,9 @@ test("flow จริง: deploy → init → หลาย call ต่อเน�
   const { log, db } = JSON.parse(finals[0]);
   assert.deepEqual(log, ["success", "success", "success", "success", "success", "success", "success", "success", "throw", "success", "success"]);
   const data = Object.fromEntries(db);
-  assert.equal(data["token:storage:balances:alice"], 20);
-  assert.equal(data["token:storage:balances:shop"], 100);
-  assert.equal(data["shop:storage:sales"], 2);
+  assert.equal(data["token:storage:balances:alice"], "20n");
+  assert.equal(data["token:storage:balances:shop"], "100n");
+  assert.equal(data["shop:storage:sales"], "2n");
   assert.equal(data["shop:storage:failed:alice"], "allowance ไม่พอ");
   assert.equal(data["pending:counter"], undefined);
 });

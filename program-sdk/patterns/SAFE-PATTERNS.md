@@ -8,10 +8,10 @@
 
 ```js
 function withdraw(params) {
-  const balance = readDB(map("balances", params.context.sender)) || 0;
-  if (balance <= 0) throw new Error("ไม่มีเงิน");
+  const balance = readDB(map("balances", params.context.sender)) || 0n;
+  if (balance <= 0n) throw new Error("ไม่มีเงิน");
   runProgram(params.context.sender, "receive", {}, { value: balance });   // ← ถูกเรียกกลับตรงนี้
-  writeDB(map("balances", params.context.sender), 0);                     // ← สายเกินไป
+  writeDB(map("balances", params.context.sender), 0n);                    // ← สายเกินไป
 }
 ```
 
@@ -22,9 +22,9 @@ function withdraw(params) {
 ```js
 function withdraw(params) {
   const who = params.context.sender;
-  const balance = readDB(map("balances", who)) || 0;   // checks
-  if (balance <= 0) throw new Error("ไม่มีเงิน");
-  writeDB(map("balances", who), 0);                    // effects — อัปเดตก่อนเสมอ
+  const balance = readDB(map("balances", who)) || 0n;  // checks
+  if (balance <= 0n) throw new Error("ไม่มีเงิน");
+  writeDB(map("balances", who), 0n);                   // effects — อัปเดตก่อนเสมอ
   transferNative(who, balance);                        // interactions — ทำท้ายสุด
 }
 ```
@@ -99,7 +99,7 @@ transferNative(params.input.to, amount);
 
 ```js
 const amount = params.input.amount;
-if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("amount ไม่ถูกต้อง");
+if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount ไม่ถูกต้อง");   // ตัวเลขใน input เป็น BigInt เสมอ
 ```
 
 `input` มาจากผู้ใช้โดยตรง VM ตรวจแค่ว่าเป็น JSON เท่านั้น

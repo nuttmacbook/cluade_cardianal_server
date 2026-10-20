@@ -40,17 +40,17 @@ test("value: แนบเงินไปกับ call → โอนจาก se
   const res = vm.call({ programUuid: "wallet", functionName: "deposit", context: user("alice"), value: 250 });
 
   assert.equal(res.status, "success");
-  assert.equal(res.result, 250);
+  assert.equal(res.result, "250n");
   assert.deepEqual(nativeWrites(res), { "alice:sended": 250, "wallet:received": 250 });
   vm.commit(res.writes);
   assert.equal(native(vm, "wallet"), 250);
-  assert.equal(vm.db.readKeys(["wallet:storage:deposits:alice"])[0], 250);
+  assert.equal(vm.db.readKeys(["wallet:storage:deposits:alice"])[0], "250n");
 });
 
 test("value: ไม่แนบ → params.value = 0 และไม่มี writes ของ native", () => {
   const vm = setup({}, { alice: 1000 });
   const res = vm.call({ programUuid: "wallet", functionName: "seenValue", context: user("alice") });
-  assert.equal(res.result, 0);
+  assert.equal(res.result, "0n");
   assert.deepEqual(nativeWrites(res), {});
 });
 
@@ -86,12 +86,12 @@ test("runProgram: แนบเงินต่อไปยังโปรแก�
   const res = vm.call({ programUuid: "wallet", functionName: "forward", input: { target: "wallet2", value: 60 }, context: user("alice"), value: 100 });
 
   assert.equal(res.status, "success");
-  assert.equal(res.result, 60);
+  assert.equal(res.result, "60n");
   assert.deepEqual(nativeWrites(res), { "alice:sended": 100, "wallet:received": 100, "wallet:sended": 60, "wallet2:received": 60 });
   // ผู้รับเงินชั้นในเห็น origin เป็น alice แต่เงินมาจากกระเป๋าของ wallet
   assert.deepEqual(res.calls.map((c) => `${c.programUuid}.${c.functionName}:${c.sender}`), ["wallet.forward:alice", "wallet2.deposit:wallet"]);
   vm.commit(res.writes);
-  assert.equal(vm.db.readKeys(["wallet2:storage:deposits:alice"])[0], 60);
+  assert.equal(vm.db.readKeys(["wallet2:storage:deposits:alice"])[0], "60n");
 });
 
 test("runProgram: ส่งต่อทั้งก้อนที่รับมา", () => {

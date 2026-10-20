@@ -30,7 +30,7 @@ test("DB: deploy → init → block → commit แล้วอ่านกลั
   const header = block.header();
   block.commit();
 
-  assert.equal(db.readKeys(["token:storage:balances:bob"])[0], 30);
+  assert.equal(db.readKeys(["token:storage:balances:bob"])[0], "30n");
   assert.deepEqual(db.readKeys(["token:context"])[0], user("alice"));
   assert.equal(vm.latestBlockNumber(), 1);
   assert.deepEqual(vm.getBlock(1), header);
@@ -60,14 +60,14 @@ test("DB: del ลบข้อมูลจริง และ snapshot / tree ใ
   db.writeKeys([{ type: "del", dbKey: "tmp:x" }]);
   assert.equal(db.has("tmp:x"), false);
 
-  assert.deepEqual(db.tree("token:").token.storage["balances:bob"], 30);
+  assert.deepEqual(db.tree("token:").token.storage["balances:bob"], "30n");
   assert.ok(db.dump({ prefix: "token:storage:" }).includes("balances:alice"));
   assert.ok(db.size > 5);
 });
 
 test("DB: ข้อมูลยังอยู่หลังเปิดใหม่ (เขียนลงดิสก์จริง)", () => {
   const reopened = new DB(path.join(dir, "data"));
-  assert.equal(reopened.readKeys(["token:storage:balances:bob"])[0], 30);
+  assert.equal(reopened.readKeys(["token:storage:balances:bob"])[0], "30n");
   assert.equal(reopened.readKeys(["latestblock"])[0], 1);
   reopened.close();
 });

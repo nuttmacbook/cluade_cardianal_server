@@ -120,16 +120,17 @@ function program() {
 - `params` ที่ทุกฟังก์ชันได้รับ: `{ input, context: { sender, origin }, value, block: { timestamp } }`
   (เลข block ไม่ได้อยู่ใน `params` — เรียก `BlockNumber()` แทน)
 
-### params / ค่าที่ส่งกลับ — โหมด BigInt
+### params / ค่าที่ส่งกลับ — ตัวเลขเป็น BigInt
 
-เมื่อเปิด `bigintValues: true` (ซึ่ง `server.js` เปิดอยู่) **ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น**
+**ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น** — VM ทำงานแบบนี้เสมอ (ตัวเลือก `bigintValues` / โหมด number ถูกตัดออกแล้ว)
 
 - `10` → error `numberNotAllowed` · ต้องเขียน `10n`
 - เก็บลง DB เป็น string `"123n"` แปลงกลับเป็น BigInt อัตโนมัติตอนอ่าน
 - ค่าที่ออกไปทาง JSON ของ API ก็เป็น `"123n"` → **ฝั่ง client ห้ามใช้ `Number()`** ใช้ `BigInt(v.slice(0,-1))`
 - ยอด native เป็น BigInt หน่วย wei (18 ทศนิยม, 1 เหรียญ = 10^18) เก็บใน DB / receipt / tx record เป็น `"123n"`
   `value` / `gasPrice` ที่ส่งเข้ามารับได้ทั้ง number, BigInt, `"123"` และ `"123n"` · ราคาแก๊สเริ่มต้น 1 gwei (`GAS_PRICE`)
-- ค่าของระบบที่เหลือ (gasUsed, nonce, เลข block, timestamp) ยังเป็น `number` ปกติ
+- ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
+  (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
 ### API ในโปรแกรม (18 ตัว)
 
@@ -621,7 +622,7 @@ code: function program() { function evil(p) { return process.env } return { evil
 | `31-chain-safety` | parentHash, block ซ้ำ, timestamp ถอยหลัง, tx ซ้ำ |
 | `33-limits-admin` | โควตา tx ต่อ block / ต่อ user, สิทธิ์ init/reject |
 | `38-reentrancy` | reentrancy + pattern ปลอดภัย |
-| `40-bigint` | โหมด BigInt ทั้งระบบ |
+| `40-bigint` | ตัวเลขเป็น BigInt ทั้งระบบ (ไม่มีโหมด number) |
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
 

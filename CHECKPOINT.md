@@ -34,8 +34,7 @@ program-sdk/ test/           ชุดเขียนโปรแกรมสำ
 const vm = new VirtualMachine(new DB("./data", { mapSize: 100 * 1024 ** 3 }), {
   chainId: 1,
   requireNonce: true, chargeGas: true, deriveProgramAddress: true, forceOriginFromSender: true,
-  recordTransactions: true, recordBlocks: true, recordHistory: true,
-  bigintValues: true,
+  recordTransactions: true, recordBlocks: true, recordHistory: true,   // ตัวเลขในโปรแกรมเป็น BigInt เสมอ (ไม่มีตัวเลือกแล้ว)
   gas: { call: 100, read: 100, write: 500, byte: 1, event: 200, hash: 100, recover: 3000, code: 10, price: 1 },
   feeRecipient: MINER, burnPercent: 50,
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000,
@@ -113,7 +112,7 @@ tx:<txhash> | sigtx:<digest> | history:<dbKey>:<n>
 
 **งานครึ่งวันก่อนรันจริง**
 - ~~ต่อ `mempool.js` เข้ากับ API จริง~~ ทำแล้วใน `server.js`
-- ~~เปิด `recordHistory` + `bigintValues`~~ เปิดแล้วใน `server.js` (ล้าง DB เริ่มใหม่ถ้ามีข้อมูลเก่า)
+- ~~เปิด `recordHistory` + `bigintValues`~~ เปิดแล้วใน `server.js` (ล้าง DB เริ่มใหม่ถ้ามีข้อมูลเก่า) · ภายหลังตัดโหมด number ออก VM ใช้ BigInt เสมอ
 - ทดสอบลายเซ็นกับ MetaMask จริง
 
 **เมื่อถึงเวลา**

@@ -41,7 +41,7 @@ test("class: หลาย instance คนละ endpoint ใช้ DB และ 
   const b = createVm({ timeoutMs: 50 });
 
   a.activate("counter", COUNTER, { start: 1 });
-  assert.equal(a.vm.call({ programUuid: "counter", functionName: "get", context: user("x") }).result, 1);
+  assert.equal(a.vm.call({ programUuid: "counter", functionName: "get", context: user("x") }).result, "1n");
   assert.equal(b.vm.call({ programUuid: "counter", functionName: "get", context: user("x") }).error.code, "NOT_FOUND");
 
   a.activate("faulty", FAULTY);
@@ -65,11 +65,11 @@ test("class: Block ใช้ DB ของ VM ที่สร้างมัน",
 
   const block = vm.createBlock();
   block.call({ programUuid: "counter", functionName: "add", input: { amount: 1 }, context: user("x") });
-  assert.equal(block.call({ programUuid: "counter", functionName: "add", input: { amount: 1 }, context: user("x") }).result, 12);
-  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], 10);
+  assert.equal(block.call({ programUuid: "counter", functionName: "add", input: { amount: 1 }, context: user("x") }).result, "12n");
+  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], "10n");
 
   block.commit();
-  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], 12);
+  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], "12n");
 });
 
 test("class: สถานะภายใน Block เข้าถึงจากข้างนอกไม่ได้", () => {

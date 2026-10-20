@@ -15,6 +15,7 @@ const vm = new VirtualMachine(new MemoryDB(), {
 });
 
 const alice = { sender: "alice", origin: "alice" };
+/** ตัวเลขในโปรแกรมเป็น BigInt เสมอ (0n) — เก็บใน DB เป็น "123n" */
 const TOKEN = `
 function program() {
   function initialization(params) {
@@ -23,10 +24,10 @@ function program() {
   }
   function transfer(params) {
     const from = params.context.sender
-    const balance = readDB(map("balances", from)) || 0
+    const balance = readDB(map("balances", from)) || 0n
     if (balance < params.input.amount) throw new Error("ยอดไม่พอ")
     writeDB(map("balances", from), balance - params.input.amount)
-    writeDB(map("balances", params.input.to), (readDB(map("balances", params.input.to)) || 0) + params.input.amount)
+    writeDB(map("balances", params.input.to), (readDB(map("balances", params.input.to)) || 0n) + params.input.amount)
     return true
   }
   return { transfer }

@@ -111,7 +111,7 @@ test("flow: tx ที่เซ็นถูกต้องทำงานได�
 
   assert.equal(res.status, "success");
   assert.equal(res.calls[0].sender, alice);
-  assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], 30);
+  assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], "30n");
 });
 
 test("flow: ปลอม from ไม่ได้ — bob เซ็นแต่อ้างว่าเป็น alice", () => {
@@ -196,7 +196,7 @@ test("flow: หลาย tx ใน block เดียว ทุกใบต้�
   block.commit();
 
   assert.deepEqual(block.results().map((r) => r.status), ["success", "success"]);
-  assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], 40);
+  assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], "40n");
   assert.deepEqual(vm.listTransactionsOf(alice).map((r) => r.nonce), [1, 0]);
 });
 

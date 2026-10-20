@@ -14,6 +14,11 @@ const ALICE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b7
 const alice = sign.addressOf(ALICE_KEY);
 const bob = "0xfabb0ac9d68b0b445fb7357272ff202c5651694a";
 
+// native 18 ทศนิยม (wei) แบบ ETH · ยอดใน tx ส่งเป็น string เพราะเกิน 2^53 ได้
+const GWEI = 10n ** 9n;
+const gwei = (amount) => `${BigInt(amount) * GWEI}`;
+
+/** ตัวเลขในโปรแกรมเป็น BigInt เสมอ (0n, 10n) — input ที่เป็นตัวเลขถูกแปลงเป็น BigInt ให้อัตโนมัติ */
 const TOKEN_CODE = `
 function program() {
   function initialization(params) {
@@ -22,10 +27,10 @@ function program() {
   }
   function transfer(params) {
     const from = params.context.sender
-    const balance = readDB(map("balances", from)) || 0
+    const balance = readDB(map("balances", from)) || 0n
     if (balance < params.input.amount) throw new Error("ยอดไม่พอ")
     writeDB(map("balances", from), balance - params.input.amount)
-    writeDB(map("balances", params.input.to), (readDB(map("balances", params.input.to)) || 0) + params.input.amount)
+    writeDB(map("balances", params.input.to), (readDB(map("balances", params.input.to)) || 0n) + params.input.amount)
     return true
   }
   return { transfer }
@@ -35,7 +40,7 @@ function program() {
 /** ฝั่ง client: ประกอบ tx แล้วเซ็น */
 const makeRequest = (tx, key = ALICE_KEY) => ({ tx, signature: sign.signTransaction(tx, key) });
 
-const base = { chainId: CHAIN_ID, from: alice, to: "", method: "", input: {}, value: 0, gasLimit: 200_000, gasPrice: 1 };
+const base = { chainId: CHAIN_ID, from: alice, to: "", method: "", input: {}, value: 0, gasLimit: 200_000, gasPrice: gwei(1) };   // 1 gwei
 
 // ============================================================================
 //  ฝั่ง server
@@ -49,11 +54,12 @@ const vm = new VirtualMachine(new MemoryDB(), {
   recordBlocks: true,
   deriveProgramAddress: true,
   burnPercent: 50,
+  gas: { price: gwei(1) },        // ราคาแก๊สขั้นต่ำ 1 gwei (เหมือน server.js)
   maxTransactions: 500,           // เพดานต่อ block
   maxTransactionsPerSender: 16,   // เพดานต่อ address ใน 1 block
   maxBlockGas: 3_000_000,
 });
-vm.db.load({ [`${alice}:native:received`]: 1_000_000 }); // genesis
+vm.db.load({ [`${alice}:native:received`]: `${1_000n * 10n ** 18n}n` }); // genesis: 1,000 เหรียญ (18 ทศนิยม)
 
 /** รับ { tx, signature } → ตรวจลายเซ็น → ใส่เข้า block */
 function submit(block, request) {
@@ -77,11 +83,11 @@ block.commit();
 // --- block 2: call / transfer / metadata + กรณีผิดพลาด ---
 const requests = [
   makeRequest({ ...base, action: "call", to: tokenAddress, method: "transfer", input: { to: bob, amount: 300 }, nonce: 1 }),
-  makeRequest({ ...base, action: "transfer", to: bob, value: 5_000, nonce: 2 }),
+  makeRequest({ ...base, action: "transfer", to: bob, value: gwei(5_000), nonce: 2 }),
   makeRequest({ ...base, action: "metadata", input: { namespace: "alice", icon: "👩" }, nonce: 3 }),
   makeRequest({ ...base, action: "call", to: tokenAddress, method: "transfer", input: { to: bob, amount: 999_999 }, nonce: 4 }), // ยอดไม่พอ
   makeRequest({ ...base, action: "call", to: tokenAddress, method: "transfer", input: { to: bob, amount: 1 }, nonce: 1 }),       // nonce ซ้ำ
-  makeRequest({ ...base, action: "call", to: tokenAddress, method: "transfer", input: { to: bob, amount: 1 }, nonce: 5, gasPrice: 20 }), // จ่ายแพงกว่า
+  makeRequest({ ...base, action: "call", to: tokenAddress, method: "transfer", input: { to: bob, amount: 1 }, nonce: 5, gasPrice: gwei(20) }), // จ่ายแพงกว่า
 ];
 
 block = vm.createBlock({ timestamp: Date.now() + 1, feeRecipient: MINER });

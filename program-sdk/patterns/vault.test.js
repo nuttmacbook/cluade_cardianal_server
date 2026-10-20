@@ -11,9 +11,9 @@ const setup = () => {
 
 test("deposit / withdraw ปกติ", () => {
   const { chain, vault } = setup();
-  assert.equal(vault.callRaw("deposit", {}, { as: "alice", value: 300 }).result, 300);
-  assert.equal(vault.call("withdraw", { amount: 100 }, { as: "alice" }), 200);
-  assert.equal(chain.balanceOf("alice").balance, 800);
+  assert.equal(vault.callRaw("deposit", {}, { as: "alice", value: 300 }).result, "300n");   // ค่าที่ return เป็น "123n"
+  assert.equal(vault.call("withdraw", { amount: 100 }, { as: "alice" }), "200n");
+  assert.equal(chain.balanceOf("alice").balance, 800n);
 });
 
 test("modifier onlyOwner: คนอื่นสั่งหยุดไม่ได้", () => {
@@ -26,9 +26,11 @@ test("modifier onlyOwner: คนอื่นสั่งหยุดไม่ไ
 test("ตรวจค่าที่รับมา", () => {
   const { vault } = setup();
   vault.callRaw("deposit", {}, { as: "alice", value: 100 });
-  for (const amount of [0, -5, 1.5, "10"]) {
+  for (const amount of [0, -5, "10"]) {
     assert.throws(() => vault.call("withdraw", { amount }, { as: "alice" }), /amount ไม่ถูกต้อง/);
   }
+  // ทศนิยมแปลงเป็น BigInt ไม่ได้ → VM ปฏิเสธก่อนถึงโปรแกรม
+  assert.throws(() => vault.call("withdraw", { amount: 1.5 }, { as: "alice" }), /ต้องเป็น BigInt/);
   assert.throws(() => vault.call("withdraw", { amount: 999 }, { as: "alice" }), /ยอดไม่พอ/);
 });
 
@@ -36,5 +38,5 @@ test("event ถูกบันทึก", () => {
   const { vault } = setup();
   const res = vault.callRaw("deposit", {}, { as: "alice", value: 50 });
   assert.deepEqual(res.events.map((event) => event.name), ["Deposited"]);
-  assert.deepEqual(res.events[0].data, { who: "alice", amount: 50 });
+  assert.deepEqual(res.events[0].data, { who: "alice", amount: "50n" });
 });

@@ -13,7 +13,7 @@ const OWNER = "0x00000000000000000000000000000000000000a1";
 const wallet = (i) => `0x${String(i + 1).padStart(40, "0")}`;
 
 function chain() {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   let number = 0;
   const block = (fn) => {
     number += 1;

@@ -11,12 +11,12 @@ export default function program() {
   function initialization(params) {
     writeDB("greeting", params.input.greeting ?? "สวัสดี");
     writeDB("owner", params.context.sender);
-    writeDB("count", 0);
+    writeDB("count", 0n);   // ตัวเลขในโปรแกรมเป็น BigInt เสมอ
   }
 
   // ไม่อยู่ใน return = ใช้ภายในโปรแกรมเท่านั้น
   function bump() {
-    const next = (readDB("count") ?? 0) + 1;
+    const next = (readDB("count") ?? 0n) + 1n;
     writeDB("count", next);
     return next;
   }
@@ -34,13 +34,13 @@ export default function program() {
     return readDB("greeting");
   }
 
-  function info() {
+  function info(params) {
     return {
       greeting: readDB("greeting"),
       owner: readDB("owner"),
-      count: readDB("count") ?? 0,
+      count: readDB("count") ?? 0n,
       address: ThisAddress(),
-      time: Date.now(),
+      time: params.block.timestamp,   // BigInt (Date.now() ในโปรแกรมเป็น number → ต้องห่อ BigInt() ก่อนเก็บ / return)
     };
   }
 

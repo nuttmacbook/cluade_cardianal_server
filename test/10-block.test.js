@@ -21,13 +21,13 @@ test("block: tx2 เห็นผลของ tx1 โดยยังไม่ล�
 
   assert.equal(tx1.status, "success");
   assert.equal(tx2.status, "success");
-  assert.deepEqual(tx2.loadValues[0], { dbKey: "token:storage:balances:alice", loadValue: 70 }); // ค่าหลัง tx1
-  assert.equal(stored("token", "balances", "alice"), 100); // DB ยังไม่เปลี่ยน
+  assert.deepEqual(tx2.loadValues[0], { dbKey: "token:storage:balances:alice", loadValue: "70n" }); // ค่าหลัง tx1
+  assert.equal(stored("token", "balances", "alice"), "100n"); // DB ยังไม่เปลี่ยน
 
   commit(block);
-  assert.equal(stored("token", "balances", "alice"), 20);
-  assert.equal(stored("token", "balances", "bob"), 30);
-  assert.equal(stored("token", "balances", "jane"), 50);
+  assert.equal(stored("token", "balances", "alice"), "20n");
+  assert.equal(stored("token", "balances", "bob"), "30n");
+  assert.equal(stored("token", "balances", "jane"), "50n");
 });
 
 test("block: writes รวมเหลือ 1 รายการต่อ key (ค่าสุดท้าย) ตามลำดับที่ key ถูกเขียนครั้งแรก", () => {
@@ -37,9 +37,9 @@ test("block: writes รวมเหลือ 1 รายการต่อ key (
   block.call(transfer("bob", "alice", 10));
 
   assert.deepEqual(block.writes(), [
-    { type: "put", dbKey: "token:storage:balances:alice", value: 30 },
-    { type: "put", dbKey: "token:storage:balances:bob", value: 20 },
-    { type: "put", dbKey: "token:storage:balances:jane", value: 50 },
+    { type: "put", dbKey: "token:storage:balances:alice", value: "30n" },
+    { type: "put", dbKey: "token:storage:balances:bob", value: "20n" },
+    { type: "put", dbKey: "token:storage:balances:jane", value: "50n" },
   ]);
 });
 
@@ -55,8 +55,8 @@ test("block: tx ที่ throw ไม่มีผลกับ block และ t
   assert.deepEqual(block.results().map((r) => r.status), ["success", "throw", "success"]);
 
   commit(block);
-  assert.equal(stored("token", "balances", "alice"), 0);
-  assert.equal(stored("token", "balances", "jane"), 40);
+  assert.equal(stored("token", "balances", "alice"), "0n");
+  assert.equal(stored("token", "balances", "jane"), "40n");
 });
 
 test("block: ไม่มี tx ที่ success → writes ว่าง", () => {
@@ -70,7 +70,7 @@ test("block: deploy → init → call ใน block เดียว", () => {
   assert.equal(block.deploy({ programUuid: "counter", code: COUNTER, context: user("a"), initInput: { start: 5 } }).status, "success");
   assert.equal(block.init({ programUuid: "counter" }).status, "success");
   const res = block.call({ programUuid: "counter", functionName: "add", input: { amount: 1 }, context: user("a") });
-  assert.equal(res.result, 6);
+  assert.equal(res.result, "6n");
   assert.equal(mockData.has("counter:code"), false);
 
   const writes = block.writes();
@@ -86,7 +86,7 @@ test("block: deploy → init → call ใน block เดียว", () => {
   ]);
   commit(block);
   assert.equal(mockData.has("pending:counter"), false);
-  assert.equal(stored("counter", "count"), 6);
+  assert.equal(stored("counter", "count"), "6n");
 });
 
 test("block: deploy id ซ้ำใน block เดียวกันไม่ได้ / reject แล้ว init ไม่ได้", () => {
@@ -103,11 +103,11 @@ test("block: delete ใน tx หนึ่ง แล้ว tx ถัดไปอ
   const block = vm.createBlock();
   block.call({ programUuid: "counter", functionName: "reset", context: user("a") });
   const get = block.call({ programUuid: "counter", functionName: "get", context: user("a") });
-  assert.equal(get.result, 0);
+  assert.equal(get.result, "0n");
   assert.deepEqual(block.writes(), [{ type: "del", dbKey: "counter:storage:count" }]);
 
   block.call({ programUuid: "counter", functionName: "add", input: { amount: 2 }, context: user("a") });
-  assert.deepEqual(block.writes(), [{ type: "put", dbKey: "counter:storage:count", value: 2 }]);
+  assert.deepEqual(block.writes(), [{ type: "put", dbKey: "counter:storage:count", value: "2n" }]);
 });
 
 test("block: ข้ามโปรแกรมหลาย tx (approve แล้วซื้อ)", () => {
@@ -120,9 +120,9 @@ test("block: ข้ามโปรแกรมหลาย tx (approve แล้
   assert.deepEqual(trace(buys[3]), ["0:shop.buy:throw:PROGRAM_ERROR", "1:token.transferFrom:throw:PROGRAM_ERROR"]);
 
   commit(block);
-  assert.equal(stored("token", "balances", "alice"), 10);
-  assert.equal(stored("token", "balances", "shop"), 90);
-  assert.equal(stored("shop", "sales"), 3);
+  assert.equal(stored("token", "balances", "alice"), "10n");
+  assert.equal(stored("token", "balances", "shop"), "90n");
+  assert.equal(stored("shop", "sales"), "3n");
 });
 
 test("block: timeout ของ tx หนึ่งไม่กระทบ tx อื่น (แต่ละ tx มีเวลาของตัวเอง)", () => {
@@ -132,7 +132,7 @@ test("block: timeout ของ tx หนึ่งไม่กระทบ tx อ
   const spin = block.call({ programUuid: "faulty", functionName: "spin", context: user("a") });
   block.call(transfer("alice", "bob", 10));
   assert.equal(spin.error.code, "TIMEOUT");
-  assert.deepEqual(block.writes().find((w) => w.dbKey === "token:storage:balances:bob"), { type: "put", dbKey: "token:storage:balances:bob", value: 20 });
+  assert.deepEqual(block.writes().find((w) => w.dbKey === "token:storage:balances:bob"), { type: "put", dbKey: "token:storage:balances:bob", value: "20n" });
 });
 
 test("block: ค่าที่ได้จาก writes() / results() เป็น copy — แก้แล้วไม่กระทบ block", () => {
@@ -140,7 +140,7 @@ test("block: ค่าที่ได้จาก writes() / results() เป็
   block.call(transfer("alice", "bob", 10));
   block.writes()[0].value = 999;
   block.results().pop();
-  assert.equal(block.writes()[0].value, 90);
+  assert.equal(block.writes()[0].value, "90n");
   assert.equal(block.results().length, 1);
 });
 
@@ -182,7 +182,7 @@ test("block.commit: บันทึกทีเดียวแล้วปิด
   assert.equal(block.committed, false);
   assert.equal(block.commit(), 2);
   assert.equal(block.committed, true);
-  assert.equal(stored("token", "balances", "bob"), 10);
+  assert.equal(stored("token", "balances", "bob"), "10n");
 
   assert.throws(() => block.commit(), { code: "INVALID_REQUEST", message: "block นี้ commit ไปแล้ว" });
   assert.throws(() => block.call(transfer("alice", "bob", 1)), { code: "INVALID_REQUEST" });
@@ -200,7 +200,7 @@ test("block.commit: writeKeys ล้ม → block ยังไม่ถูกป
   }
   assert.equal(block.committed, false);
   block.commit();
-  assert.equal(stored("token", "balances", "bob"), 10);
+  assert.equal(stored("token", "balances", "bob"), "10n");
 });
 
 // ---------------------------------------------------------------------------
@@ -213,14 +213,14 @@ test("block: loadValues / afterValues ของทั้ง block (ค่าก�
   block.call(transfer("alice", "jane", 50));
 
   assert.deepEqual(block.loadValues(), [
-    { dbKey: "token:storage:balances:alice", loadValue: 100 },
+    { dbKey: "token:storage:balances:alice", loadValue: "100n" },
     { dbKey: "token:storage:balances:bob", loadValue: undefined },
     { dbKey: "token:storage:balances:jane", loadValue: undefined },
   ]);
   assert.deepEqual(block.afterValues(), [
-    { dbKey: "token:storage:balances:alice", afterValue: 20, changed: true },
-    { dbKey: "token:storage:balances:bob", afterValue: 30, changed: true },
-    { dbKey: "token:storage:balances:jane", afterValue: 50, changed: true },
+    { dbKey: "token:storage:balances:alice", afterValue: "20n", changed: true },
+    { dbKey: "token:storage:balances:bob", afterValue: "30n", changed: true },
+    { dbKey: "token:storage:balances:jane", afterValue: "50n", changed: true },
   ]);
 });
 
@@ -230,8 +230,8 @@ test("block: ค่าที่เปลี่ยนไปแล้วเปล�
   block.call(transfer("bob", "alice", 30));
 
   assert.deepEqual(block.afterValues(), [
-    { dbKey: "token:storage:balances:alice", afterValue: 100, changed: false },
-    { dbKey: "token:storage:balances:bob", afterValue: 0, changed: true }, // เดิมไม่มี key → 0
+    { dbKey: "token:storage:balances:alice", afterValue: "100n", changed: false },
+    { dbKey: "token:storage:balances:bob", afterValue: "0n", changed: true }, // เดิมไม่มี key → 0
   ]);
   assert.equal(block.writes().length, 2);
 });
@@ -242,9 +242,9 @@ test("block: key ที่ถูกอ่านหลัง tx ก่อนห�
   block.call({ programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("x") });
 
   const results = block.results();
-  assert.equal(results[1].result, 70);
-  assert.deepEqual(results[1].loadValues, [{ dbKey: "token:storage:balances:alice", loadValue: 70 }]); // ระดับ call: ก่อน call นี้
-  assert.deepEqual(block.loadValues()[0], { dbKey: "token:storage:balances:alice", loadValue: 100 });  // ระดับ block: ก่อน block
+  assert.equal(results[1].result, "70n");
+  assert.deepEqual(results[1].loadValues, [{ dbKey: "token:storage:balances:alice", loadValue: "70n" }]); // ระดับ call: ก่อน call นี้
+  assert.deepEqual(block.loadValues()[0], { dbKey: "token:storage:balances:alice", loadValue: "100n" });  // ระดับ block: ก่อน block
 });
 
 test("block: tx ที่ throw ไม่ถูกนับใน loadValues / afterValues ของ block", () => {
@@ -260,7 +260,7 @@ test("block: tx ที่ throw ไม่ถูกนับใน loadValues / a
 test("block: อ่านอย่างเดียว → changed false และไม่มี writes", () => {
   const block = vm.createBlock();
   block.call({ programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("x") });
-  assert.deepEqual(block.afterValues(), [{ dbKey: "token:storage:balances:alice", afterValue: 100, changed: false }]);
+  assert.deepEqual(block.afterValues(), [{ dbKey: "token:storage:balances:alice", afterValue: "100n", changed: false }]);
   assert.deepEqual(block.writes(), []);
 });
 
@@ -270,7 +270,7 @@ test("block: key ที่ถูกลบในทั้ง block → afterValue
   block.call({ programUuid: "counter", functionName: "add", input: { amount: 1 }, context: user("a") });
   block.call({ programUuid: "counter", functionName: "reset", context: user("a") });
   assert.deepEqual(block.afterValues(), [{ dbKey: "counter:storage:count", afterValue: undefined, changed: true }]);
-  assert.deepEqual(block.loadValues(), [{ dbKey: "counter:storage:count", loadValue: 3 }]);
+  assert.deepEqual(block.loadValues(), [{ dbKey: "counter:storage:count", loadValue: "3n" }]);
 });
 
 test("block: summary() รวม results / loadValues / afterValues / writes", () => {

@@ -12,7 +12,7 @@ const PLAIN = "function program() { function ping(params) { return 1; } return {
 const as = (who) => ({ sender: who, origin: who });
 
 function chain() {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   let number = 0;
   const block = (fn) => {
     number += 1;

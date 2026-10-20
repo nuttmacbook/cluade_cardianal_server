@@ -27,11 +27,11 @@ export default function program() {
   }
 
   function balanceOf(account) {
-    return readDB(map("balances", account)) || 0;
+    return readDB(map("balances", account)) || 0n;
   }
 
   function requireAmount(amount) {
-    if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("amount ไม่ถูกต้อง");
+    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount ไม่ถูกต้อง");   // ตัวเลขเป็น BigInt เสมอ
     return amount;
   }
 

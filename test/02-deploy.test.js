@@ -81,10 +81,10 @@ test("deploy: ชื่อฟังก์ชันที่อยู่ใน st
 });
 
 test("deploy: ฟังก์ชันระดับบนสุดที่ย่อหน้า / async / ชื่อซ้ำกับฟังก์ชันด้านใน ยัง export ได้", () => {
-  const code = "function program() {\n      function indented() { return 1 }\n  async function later() {}\n  function wrapper() {\n    function indented() { return 2 }\n    return indented()\n  }\n  return { indented, later, wrapper }\n}";
+  const code = "function program() {\n      function indented() { return 1n }\n  async function later() {}\n  function wrapper() {\n    function indented() { return 2n }\n    return indented()\n  }\n  return { indented, later, wrapper }\n}";
   activate("p", code);
-  assert.equal(ok(vm.call({ programUuid: "p", functionName: "indented", context: user("a") })).result, 1);
-  assert.equal(ok(vm.call({ programUuid: "p", functionName: "wrapper", context: user("a") })).result, 2);
+  assert.equal(ok(vm.call({ programUuid: "p", functionName: "indented", context: user("a") })).result, "1n");
+  assert.equal(ok(vm.call({ programUuid: "p", functionName: "wrapper", context: user("a") })).result, "2n");
 });
 
 test("deploy: initialization ที่ซ้อนอยู่ด้านในไม่นับเป็น initialization ของโปรแกรม", () => {
@@ -108,11 +108,11 @@ test("deploy: programUuid ซ้ำกับ pending หรือโปรแก
 test("deploy: โค้ดเดียวกันใช้กับหลาย programUuid ได้ (storage แยกกัน)", () => {
   activate("c1", COUNTER, { initInput: { start: 1 } });
   activate("c2", COUNTER, { initInput: { start: 2 } });
-  assert.equal(ok(vm.call({ programUuid: "c1", functionName: "get", context: user("a") })).result, 1);
-  assert.equal(ok(vm.call({ programUuid: "c2", functionName: "get", context: user("a") })).result, 2);
+  assert.equal(ok(vm.call({ programUuid: "c1", functionName: "get", context: user("a") })).result, "1n");
+  assert.equal(ok(vm.call({ programUuid: "c2", functionName: "get", context: user("a") })).result, "2n");
 });
 
 test("deploy: โค้ด CRLF ทำงานเหมือน LF", () => {
   activate("crlf", COUNTER.replace(/\n/g, "\r\n"), { initInput: { start: 7 } });
-  assert.equal(ok(vm.call({ programUuid: "crlf", functionName: "get", context: user("a") })).result, 7);
+  assert.equal(ok(vm.call({ programUuid: "crlf", functionName: "get", context: user("a") })).result, "7n");
 });

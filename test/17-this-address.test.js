@@ -30,9 +30,9 @@ test("โปรแกรมรับเงินเข้ากระเป๋�
   const res = ok(vm.call({ programUuid: "vault", functionName: "collect", input: { amount: 120 }, context: user("alice") }));
   assert.equal(res.result, "vault");
   assert.deepEqual(trace(res), ["0:vault.collect:success", "1:token.transferFrom:success"]);
-  assert.equal(stored("token", "balances", "vault"), 120);
-  assert.equal(stored("token", "balances", "alice"), 880);
-  assert.equal(stored("vault", "collected"), 120);
+  assert.equal(stored("token", "balances", "vault"), "120n");
+  assert.equal(stored("token", "balances", "alice"), "880n");
+  assert.equal(stored("vault", "collected"), "120n");
 });
 
 test("ThisAddress เป็นตัวพิมพ์เล็กเสมอ (ตรงกับ key ที่ VM ใช้)", () => {
@@ -57,5 +57,5 @@ test("<address>:this มีเฉพาะของโปรแกรม — wal
     assert.equal(mockData.has(`bob${suffix}`), false);
   }
   // wallet มีตัวตนผ่านข้อมูลของโปรแกรมอื่นเท่านั้น
-  assert.equal(stored("token", "balances", "bob"), 1);
+  assert.equal(stored("token", "balances", "bob"), "1n");
 });
