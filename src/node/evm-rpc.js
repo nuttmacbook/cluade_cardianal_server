@@ -357,6 +357,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     for (const entry of trace) {
       if (entry.depth === 0) continue;
       const frame = frameOf({
+        type: entry.type === "create" ? "CREATE" : "CALL",   // cloneProgram = สร้างโปรแกรมใหม่ระหว่างทาง
         from: entry.from, to: entry.program, value: quantity(native(entry.value ?? 0)),
         gas: quantity(entry.gasUsed ?? 0), gasUsed: quantity(entry.gasUsed ?? 0),
         input: hexOfJson({ method: entry.method ?? null, input: entry.input ?? null }),

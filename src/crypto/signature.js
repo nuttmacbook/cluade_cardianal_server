@@ -31,7 +31,8 @@ export const TRANSACTION_TYPE = [
   { name: "gasPrice", type: "uint256" },
 ];
 
-const ACTIONS = new Set(["call", "deploy", "transfer", "metadata", "init", "reject"]);
+const ACTIONS = new Set(["call", "deploy", "transfer", "metadata", "init", "reject",
+  "upgrade", "setUpgrader", "initUpgrade", "rejectUpgrade"]);
 const HASH_LENGTH = 32;
 const SIGNATURE_LENGTH = 65;
 
@@ -84,6 +85,8 @@ export function normalizeTransaction(tx = {}) {
     method: tx.method ?? "",
     input: normalizeHexDeep(tx.input ?? {}),
     code: tx.code ?? null,
+    // deploy: ผู้มีสิทธิ์อัปเกรด (ไม่ส่ง = โปรแกรมแก้ไม่ได้) — ไม่ส่งแล้วข้อมูลที่เซ็นเหมือนเดิมทุกไบต์
+    ...(tx.upgrader === undefined || tx.upgrader === null || tx.upgrader === "" ? {} : { upgrader: normalizeAddress(tx.upgrader) }),
     value: tx.value ?? 0,
     nonce: tx.nonce ?? 0,
     gasLimit: tx.gasLimit ?? 0,
@@ -111,7 +114,7 @@ export function buildTypedData(rawTx) {
       to: tx.to,
       method: tx.method,
       // input + code ถูกรวมเป็น string เดียวแบบ canonical เพื่อให้เซ็นได้ทุกชนิดข้อมูล
-      input: canonicalJson({ input: tx.input, code: tx.code }),
+      input: canonicalJson({ input: tx.input, code: tx.code, upgrader: tx.upgrader }),   // upgrader ไม่มี = ถูกตัดออก
       value: tx.value,
       nonce: tx.nonce,
       gasLimit: tx.gasLimit,
@@ -197,12 +200,18 @@ export function toVmRequest(tx, sender, signature, digest) {
   if (tx.action === "transfer") return { from: sender, to: tx.to, amount: tx.value, ...common, context: undefined };
   if (tx.action === "metadata") return { metadata: tx.input, ...common };
   if (tx.action === "init" || tx.action === "reject") return { programUuid: tx.to, ...common };
-  if (tx.action === "deploy") return { programUuid: tx.to || undefined, code: tx.code, initInput: tx.input, value: tx.value, ...common };
+  if (tx.action === "deploy") return { programUuid: tx.to || undefined, code: tx.code, initInput: tx.input, value: tx.value, ...(tx.upgrader ? { upgrader: tx.upgrader } : {}), ...common };
+  // อัปเกรด: to = โปรแกรม · code = โค้ดใหม่ · input = migrateInput
+  if (tx.action === "upgrade") return { programUuid: tx.to, code: tx.code, migrateInput: tx.input, ...common };
+  // โอนสิทธิ์อัปเกรด: input = { upgrader: "0x…" } หรือ { upgrader: null } = สละสิทธิ์
+  if (tx.action === "setUpgrader") return { programUuid: tx.to, upgrader: tx.input?.upgrader ?? null, ...common };
+  if (tx.action === "initUpgrade" || tx.action === "rejectUpgrade") return { programUuid: tx.to, ...common };
   return { programUuid: tx.to, functionName: tx.method, input: tx.input, value: tx.value, ...common };
 }
 
 /** ชื่อเมธอดของ VM ที่ใช้กับแต่ละ action */
-export const VM_METHOD = { call: "call", deploy: "deploy", transfer: "transfer", metadata: "setMetadata", init: "init", reject: "reject" };
+export const VM_METHOD = { call: "call", deploy: "deploy", transfer: "transfer", metadata: "setMetadata", init: "init", reject: "reject",
+  upgrade: "upgrade", setUpgrader: "setUpgrader", initUpgrade: "initUpgrade", rejectUpgrade: "rejectUpgrade" };
 
 /**
  * ตรวจลายเซ็นแล้วคืน request ที่พร้อมส่งเข้า VM

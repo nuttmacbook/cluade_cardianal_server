@@ -16,10 +16,12 @@ const MINER = "0x1111111111111111111111111111111111111111";
  * @param {{ method: string, request: object }} item ผลจาก verifyTransaction
  */
 export function simulate(vm, item, { feeRecipient = MINER, timestamp = Date.now() } = {}) {
+  // อนุมัติการอัปเกรดแบบมี timelock ต้องรู้เลข block (นัดเปิดใช้ที่ block + N) → จำลองเป็น block ถัดไป
+  const needsNumber = item.method === "initUpgrade" && vm.upgradeDelayBlocks > 0;
   const preview = vm.createBlock({
     timestamp,
     feeRecipient,
-    number: null,          // ไม่จองเลข block
+    number: needsNumber ? (vm.latestBlockNumber() ?? 0) + 1 : null,   // ปกติไม่จองเลข block
     checkChain: false,     // ไม่ตรวจสายของ block
     recordBlocks: false,
     recordHistory: false,
