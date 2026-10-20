@@ -105,8 +105,14 @@ const DYNAMIC = [
     try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber }; }
     catch (error) { return { status: 409, body: { error: error.message, tx: found } }; }
   }],
-  [/^\/tx\/([^/]+)$/, (m) => vm.getTransaction(m[1])
-    ?? (mempool.has(m[1]) ? { status: "pending", hash: m[1] } : { status: 404, body: { error: "Transaction not found" } })],
+  [/^\/tx\/([^/]+)$/, (m) => {
+    const found = vm.getTransaction(m[1]);
+    if (found) return found;
+    if (mempool.has(m[1])) return { status: "pending", hash: m[1] };
+    const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (จำไว้ ttlMs)
+    if (replacedBy) return { status: "replaced", hash: m[1], replacedBy };
+    return { status: 404, body: { error: "Transaction not found" } };
+  }],
   [/^\/address\/([^/]+)$/, (m, query) => ({
     address: lower(m[1]), native: vm.nativeBalanceOf(m[1]),
     nonce: vm.checkTransaction({ from: m[1], nonce: -1 }).expectedNonce,

@@ -86,7 +86,7 @@ chain เปิดโหมด BigInt ตัวเลขทุกตัวที
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:number` | header ของ block นั้น |
 | `GET /block/:number?full=1` | **receipt เต็ม** — tx ทุกใบพร้อม input, result, trace, stateChanges, events |
-| `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) |
+| `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) · ยังรอในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` |
 | `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
 | `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
 | `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage |
