@@ -9,7 +9,7 @@ let endpointCounter = 0;
 
 /** VM ที่มี DB ของตัวเอง (endpoint ไม่ซ้ำ) */
 function createVm(options) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), options);
+  const vm = new VM.VirtualMachine(new MemoryDB(), { maxTxGas: Infinity, ...options });   // เทสต์ timeout ด้วยลูปรอเวลา
   const save = (res) => {
     if (res.status === "success") vm.commit(res.writes);
     return res;

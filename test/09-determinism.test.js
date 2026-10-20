@@ -7,6 +7,15 @@ beforeEach(resetVM);
 
 const REPEAT = 5;
 
+/**
+ * TIMEOUT หยุดตามเวลาจริง → แก๊สที่นับขั้นได้ก่อนหยุดต่างกันตามความเร็วเครื่อง
+ * (tx ที่ TIMEOUT ไม่เข้า block จึงไม่กระทบเชน) ตัดเฉพาะตัวเลขแก๊สออกก่อนเทียบ
+ */
+function withoutTimeoutGas(result) {
+  if (result?.error?.code !== "TIMEOUT") return result;
+  return JSON.parse(JSON.stringify(result, (key, value) => (key === "gasUsed" ? undefined : value)));
+}
+
 /** รันซ้ำบน DB สถานะเดิม แล้วเทียบผลลัพธ์ทั้งก้อน */
 function assertDeterministic(name, run) {
   const snapshot = new Map([...mockData].map(([k, v]) => [k, structuredClone(v)]));
@@ -14,7 +23,7 @@ function assertDeterministic(name, run) {
   for (let i = 0; i < REPEAT; i++) {
     mockData.clear();
     for (const [k, v] of snapshot) mockData.set(k, structuredClone(v));
-    results.push(JSON.stringify(run()));
+    results.push(JSON.stringify(withoutTimeoutGas(run())));
   }
   assert.equal(new Set(results).size, 1, `${name}: ผลลัพธ์ไม่เหมือนกันทุกครั้ง`);
 }

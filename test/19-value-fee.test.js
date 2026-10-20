@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { WALLET, TREASURY, TOKEN } from "./programs.js";
 
 /*
@@ -13,7 +13,7 @@ const user = (name) => ({ sender: name, origin: name });
 let endpointCounter = 0;
 
 function setup(options = {}, balances = {}) {
-  const { vm: base } = { vm: new VM.VirtualMachine(new MemoryDB(), options) };
+  const { vm: base } = { vm: new VM.VirtualMachine(new MemoryDB(), { ...options, gas: { ...API_GAS_ONLY, ...options.gas } }) };
   const plain = new VM.VirtualMachine(base.db);
   const save = (res) => {
     assert.equal(res.status, "success", JSON.stringify(res.error));

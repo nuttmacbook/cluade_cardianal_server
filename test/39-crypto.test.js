@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 
@@ -33,7 +33,7 @@ function program() {
 `;
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, ...options, gas: { ...API_GAS_ONLY, ...options.gas } });
   vm.commit(vm.deploy({ programUuid: "crypto", code: CRYPTO, context: user("owner"), initInput: { admin: signer } }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "crypto" }, { timestamp: T }).writes);
   return vm;

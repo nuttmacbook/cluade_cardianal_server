@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { EVENTFUL, PROBE } from "./programs.js";
 
 /* emit ของโปรแกรม และเพดานความยาว key ของ storage */
@@ -9,7 +9,7 @@ const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options, gas: { ...API_GAS_ONLY, ...options.gas } });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "token", code: EVENTFUL, context: user("alice"), initInput: { supply: 1000 } });
   block.init({ programUuid: "token" });

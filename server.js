@@ -1,7 +1,7 @@
 /**
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
- *   TIMEOUT_MS=2000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms)
+  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms)
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
  *   EVM_DECIMALS=18   ยอด native ที่ /evm ส่งให้กระเป๋า EVM = ยอดจริง × 10^EVM_DECIMALS (MetaMask บังคับ 18)
@@ -27,8 +27,8 @@ const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
 const BLOCK_MS = Number(process.env.BLOCK_MS ?? 3000);
 // โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
-// (ยังไม่มีแก๊สแบบนับขั้น ลูปที่ไม่แตะ DB จึงถูกหยุดได้ด้วยเวลานี้อย่างเดียว)
-const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 2000);
+// (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
+const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
@@ -36,7 +36,7 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true, bigintValues: true,
   feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
-  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000,
+  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
 });
 export const mempool = new Mempool(vm);

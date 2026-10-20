@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { TOKEN } from "./programs.js";
 
 /* gasPrice ที่ผู้ส่งกำหนดเอง: จ่ายแพงกว่าเพื่อให้ถูกเลือกเข้า block ก่อน */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { call: 100, read: 0, write: 0, byte: 0, price: 2 }; // ราคาขั้นต่ำ 2
+const GAS = { ...API_GAS_ONLY, call: 100, read: 0, write: 0, byte: 0, price: 2 }; // ราคาขั้นต่ำ 2
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), {

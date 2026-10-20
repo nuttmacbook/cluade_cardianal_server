@@ -6,7 +6,7 @@
 > blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
 > VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
 > มี server จริง (node:http) + explorer ไฟล์เดียว + ชุด SDK สำหรับคนเขียนโปรแกรม
-> เทสต์ 550 เคสผ่านหมด **แต่ยังไม่มี sandbox จริงและยังไม่มี gas แบบนับขั้น → ยังไม่ควรเปิดให้คนนอก deploy**
+> **มีแก๊สนับขั้นแล้ว แต่ยังไม่มี sandbox จริง → ยังไม่ควรเปิดให้คนนอก deploy**
 
 | | |
 |---|---|
@@ -242,8 +242,11 @@ block.commit()                            // เขียนทีเดีย�
 ### ค่าแก๊ส
 
 ```
-call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · price 1
+call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
 ```
+**แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
+(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · เมธอดในตัว (join, split, slice, JSON.stringify …) และ `obj[x](…)` ถูกเปลี่ยนเป็น `__call` คิด `builtin` ต่อตัวอักษร / สมาชิกที่เข้า-ออก
+โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` ส่งมาเองได้
 เผาทิ้ง `burnPercent` (server ใช้ 50) → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient`
 

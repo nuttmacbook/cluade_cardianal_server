@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { TOKEN, TREASURY, COUNTER } from "./programs.js";
 
 /*
@@ -15,7 +15,7 @@ const user = (name) => ({ sender: name, origin: name });
 let endpointCounter = 0;
 
 function setup({ requireNonce = true, chargeGas = true, gas, balances = {} } = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce, chargeGas, gas });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce, chargeGas, gas: { ...API_GAS_ONLY, ...gas } });
   const plain = new VM.VirtualMachine(vm.db); // VM ที่ไม่เก็บค่าแก๊ส ใช้เตรียมข้อมูล
   const save = (res) => {
     assert.equal(res.status, "success", JSON.stringify(res.error));

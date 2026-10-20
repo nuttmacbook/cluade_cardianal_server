@@ -2,6 +2,7 @@ import nodeVm from "node:vm";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
+import { instrument, GAS_FN, CALL_FN } from "./gasmeter.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
 /*
@@ -69,6 +70,8 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *                          ข้อมูล block และดัชนีค้น tx จาก hash — เปิดด้วย recordBlocks + ส่ง number ตอน createBlock
  *
  *  ค่าแก๊ส (เมื่อ chargeGas): call 100 + write 500 + read 100 + 1 ต่อ byte ที่อ่าน/เขียน
+ *    + 1 ต่อ node ของโค้ดที่รันผ่าน และเมธอดในตัวตามขนาดข้อมูล (ฉีดตัวนับตอนคอมไพล์ ดู gasmeter.js)
+ *    เพดานต่อ tx = maxTxGas ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS
  *    ผู้จ่ายคือ sender ของ tx ชั้นนอกสุดเสมอ, หักจาก <sender>:nativebalance
  *    user ส่ง gasLimit มาเองได้ (เพดานสูงสุดคือยอด native ที่เหลือหลังหัก value)
  *    แก๊สไม่พอ → OUT_OF_GAS (โปรแกรม catch ไม่ได้), tx ที่ล้มก็ยังกิน nonce และค่าแก๊ส
@@ -101,6 +104,7 @@ export const DEFAULT_OPTIONS = {
   maxTransactions: null,          // จำนวน tx สูงสุดต่อ block (null = ไม่จำกัด)
   maxTransactionsPerSender: null, // จำนวน tx สูงสุดต่อ address ใน 1 block
   maxBlockGas: null,              // แก๊สรวมสูงสุดต่อ block
+  maxTxGas: 10_000_000,           // แก๊สสูงสุดต่อ tx / query (ลูปไม่รู้จบหยุดที่นี่ด้วย OUT_OF_GAS แม้ไม่ได้หักค่าแก๊ส)
   admins: null,                   // address ที่เรียก init / reject ได้ (null = ใครก็ได้)
   maxCodeSize: 64 * 1024,         // ขนาดโค้ดสูงสุดต่อโปรแกรม
   maxKeySize: 1000,               // ความยาวสูงสุดของ key storage (เหลือที่ให้ history: ซ้อนทับ)
@@ -130,6 +134,8 @@ export const DEFAULT_GAS = {
   hash: 100,   // ต่อการเรียก keccak256 (บวกค่า byte ของข้อมูล)
   recover: 3000, // ต่อการเรียก ecrecover (คำนวณหนัก)
   code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
+  node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
+  builtin: 1,  // ต่อหน่วยข้อมูล (ตัวอักษร / สมาชิก) ที่เมธอดในตัวอย่าง join, split, JSON.stringify รับเข้าและส่งออก
   price: 1,    // native ต่อ 1 gas
 };
 
@@ -323,6 +329,22 @@ export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddr
 export const toInputValue = (value, label) => normalizeHexDeep(toJsonValue(value, label));
 
 /** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส */
+/** ขนาดคร่าว ๆ ของค่า (ไม่ลงลึก): string = ความยาว, array = จำนวนสมาชิก, object = จำนวน key */
+function sizeOf(value) {
+  if (typeof value === "string" || Array.isArray(value)) return value.length;
+  if (value !== null && typeof value === "object") return Object.keys(value).length;
+  return 1;
+}
+
+/** ขนาดผลที่รู้ได้ก่อนเรียก (กันการสร้างข้อมูลใหญ่ด้วยคำสั่งเดียวก่อนถูกคิดแก๊ส) */
+function expectedSize(target, method, args) {
+  const count = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0);
+  if (method === "repeat" && typeof target === "string") return target.length * count(args[0]);
+  if ((method === "padStart" || method === "padEnd") && typeof target === "string") return count(args[0]);
+  if (method === "from" && args[0] && typeof args[0] === "object") return count(args[0].length);
+  return 0;
+}
+
 export const valueSize = (value) => (value === undefined ? 0 : Buffer.byteLength(JSON.stringify(encodeBigints(value)) ?? "", "utf8"));
 
 /** ตัวเลขถูกเก็บเป็น string ลงท้ายด้วย n เช่น "1000n" เพราะ JSON ไม่มี BigInt */
@@ -647,7 +669,7 @@ export class Compiler {
       this.#cache.set(oneLineCode, {
         exports: callable,
         hasInit: functionNames.includes(INIT_FUNCTION),
-        create: Compiler.buildFactory(body, functionNames),
+        create: Compiler.buildFactory(Compiler.meter(body), functionNames),
       });
     }
     return this.#cache.get(oneLineCode);
@@ -673,7 +695,16 @@ export class Compiler {
   }
 
   static source(body, tail = "") {
-    return `"use strict";\nconst { ${PROGRAM_API_NAMES.join(", ")} } = api;\n${body}\n;${tail}`;
+    return `"use strict";\nconst { ${[...PROGRAM_API_NAMES, GAS_FN, CALL_FN].join(", ")} } = api;\n${body}\n;${tail}`;
+  }
+
+  /** ฉีดตัวนับแก๊สเข้าโค้ด (ดู gasmeter.js) */
+  static meter(body) {
+    try {
+      return instrument(body);
+    } catch (err) {
+      fail(ERRORS.syntaxError, err.message);
+    }
   }
 
   /** คอมไพล์เพื่อตรวจ syntax (ไม่รันโค้ด) */
@@ -720,7 +751,7 @@ export class Transaction {
   #read;
   #readCache = new Map(); // dbKey → ค่าที่อ่านจาก DB แล้ว (อ่านแต่ละ key จาก DB ครั้งเดียวต่อ request)
 
-  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null }) {
+  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity }) {
     checkTimestamp(timestamp);
     this.#read = read;
     this.blockNumber = blockNumber;           // เลข block ที่ tx นี้อยู่ (null = รันนอก block)
@@ -730,7 +761,8 @@ export class Transaction {
     this.gasPrice = gas.price;                // ราคาต่อ 1 gas ของ tx นี้ (ผู้ส่งเสนอสูงกว่าได้)
     this.chargeGas = chargeGas;
     this.gasUsed = 0;
-    this.gasLimit = Infinity;                 // ตั้งตามยอด native ของผู้จ่ายเมื่อรู้ตัวผู้จ่าย
+    this.maxTxGas = maxTxGas;                 // เพดานแก๊สต่อ tx ไม่ว่าผู้จ่ายจะมีเงินเท่าไร
+    this.gasLimit = maxTxGas;                 // ตั้งตามยอด native ของผู้จ่ายเมื่อรู้ตัวผู้จ่าย
     this.payer = null;                        // { address, nonce } ของ tx ชั้นนอกสุด
     this.transaction = null;                  // ข้อมูลของ tx สำหรับเขียน <addr>:txn:<nonce>:<hash>
     this.feeCharged = 0;                      // ค่าแก๊สที่เก็บจริง (native)
@@ -885,6 +917,7 @@ export class VirtualMachine {
     maxTransactions = DEFAULT_OPTIONS.maxTransactions,
     maxTransactionsPerSender = DEFAULT_OPTIONS.maxTransactionsPerSender,
     maxBlockGas = DEFAULT_OPTIONS.maxBlockGas,
+    maxTxGas = DEFAULT_OPTIONS.maxTxGas,
     admins = DEFAULT_OPTIONS.admins,
     maxCodeSize = DEFAULT_OPTIONS.maxCodeSize,
     maxKeySize = DEFAULT_OPTIONS.maxKeySize,
@@ -911,6 +944,7 @@ export class VirtualMachine {
     this.maxTransactions = maxTransactions;
     this.maxTransactionsPerSender = maxTransactionsPerSender;
     this.maxBlockGas = maxBlockGas;
+    this.maxTxGas = maxTxGas;
     this.admins = admins === null ? null : admins.map(normalizeAddress);
     this.maxCodeSize = maxCodeSize;
     this.maxKeySize = maxKeySize;
@@ -1587,6 +1621,7 @@ export class VirtualMachine {
       blockNumber,
       timeoutMs: this.timeoutMs,
       maxCallDepth: this.maxCallDepth,
+      maxTxGas: this.maxTxGas,
       gas: this.gas,
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
@@ -1663,7 +1698,7 @@ export class VirtualMachine {
 
   /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
   preparePayer(tx, address, { nonce, gasLimit, gasPrice, value = 0 } = {}) {
-    const requestedLimit = checkGasLimit(gasLimit);
+    const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
     tx.gasPrice = checkGasPrice(gasPrice, this.gas.price); // จ่ายแพงกว่าได้ เพื่อให้ถูกเลือกก่อน
     if (!this.requireNonce && !this.chargeGas && !this.recordTransactions) {
       tx.gasLimit = requestedLimit;
@@ -1826,6 +1861,8 @@ export class VirtualMachine {
       return fn(...args);
     };
     return {
+      [GAS_FN]: (nodes) => tx.useGas(nodes * tx.gas.node),
+      [CALL_FN]: (target, method, args) => this.programCallBuiltin(tx, target, method, args),
       map,
       Date: tx.Date,
       Math: tx.Math,
@@ -1947,6 +1984,19 @@ export class VirtualMachine {
   }
 
   /** keccak256 ของ string หรือข้อมูล JSON (object ถูกแปลงแบบ canonical ก่อน) */
+  /**
+   * obj.method(...args) ที่ถูกเปลี่ยนเป็น __call ตอนคอมไพล์: คิดแก๊สตามขนาดข้อมูล
+   * คิดก่อนเรียก (ขนาดข้อมูลเข้า + ขนาดผลที่คาดได้ล่วงหน้า เช่น repeat) แล้วคิดขนาดผลจริงหลังเรียก
+   */
+  programCallBuiltin(tx, target, method, args) {
+    const fn = target[method];   // target เป็น null / undefined → TypeError แบบเดียวกับการเรียกปกติ
+    if (typeof fn !== "function") return fn.apply(target, args);   // ให้ error เหมือนเดิม (not a function)
+    tx.useGas(tx.gas.builtin * (sizeOf(target) + args.reduce((sum, arg) => sum + sizeOf(arg), 0) + expectedSize(target, method, args)));
+    const result = Reflect.apply(fn, target, args);
+    tx.useGas(tx.gas.builtin * sizeOf(result));
+    return result;
+  }
+
   programKeccak(tx, value) {
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ keccak256"));
     tx.useGas(tx.gas.hash + tx.gas.byte * Buffer.byteLength(text, "utf8"));

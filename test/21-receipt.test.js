@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { TOKEN, WALLET, SHOP, COUNTER, FAULTY } from "./programs.js";
 
 /* receipt ของแต่ละ tx (vm.buildReceipt) และของทั้ง block (block.receipt) */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { call: 100, read: 10, write: 50, byte: 0, price: 1 };
+const GAS = { ...API_GAS_ONLY, call: 100, read: 10, write: 50, byte: 0, price: 1 };
 let endpointCounter = 0;
 
 function setup(options = {}, balances = { alice: 100_000 }) {
