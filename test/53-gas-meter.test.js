@@ -103,7 +103,7 @@ test("ลูปไม่รู้จบใน block: หมดแก๊สตา
 
 test("เมธอดในตัวคิดแก๊สตามขนาดข้อมูล · repeat ขนาดใหญ่ถูกหยุดก่อนสร้างข้อมูล", () => {
   const code = `function program() {
-    function joinN(params) { const list = []; list.length = params.input.n; return list.fill("x").join("").length }
+    function joinN(params) { const list = []; list.length = Number(params.input.n); return BigInt(list.fill("x").join("").length) }
     function huge() { return "x".repeat(1e9).length }
     return { joinN, huge }
   }`;

@@ -32,7 +32,7 @@ test("emit: event อยู่ในผลลัพธ์ของ tx", () => {
 
   assert.equal(res.status, "success");
   assert.deepEqual(res.events, [
-    { index: 0, depth: 0, program: "token", name: "Transfer", data: { from: "alice", to: "bob", amount: 30 } },
+    { index: 0, depth: 0, program: "token", name: "Transfer", data: { from: "alice", to: "bob", amount: "30n" } },
   ]);
 });
 
@@ -40,7 +40,7 @@ test("emit: initialization ก็ emit ได้ และเห็นตอน 
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   vm.commit(vm.deploy({ programUuid: "token", code: EVENTFUL, context: user("alice"), initInput: { supply: 10 } }, { timestamp: T }).writes);
   const res = vm.init({ programUuid: "token" }, { timestamp: T });
-  assert.deepEqual(res.events, [{ index: 0, depth: 0, program: "token", name: "Created", data: { owner: "alice", supply: 10 } }]);
+  assert.deepEqual(res.events, [{ index: 0, depth: 0, program: "token", name: "Created", data: { owner: "alice", supply: "10n" } }]);
 });
 
 test("emit: เรียกซ้อน → เห็น event ของทุกชั้นพร้อม depth และชื่อโปรแกรม", () => {
@@ -53,7 +53,7 @@ test("emit: เรียกซ้อน → เห็น event ของทุ�
     "1 token.Transfer",
     "0 relayer.RelayDone",
   ]);
-  assert.deepEqual(res.events[1].data, { from: "relayer", to: "carol", amount: 10 });
+  assert.deepEqual(res.events[1].data, { from: "relayer", to: "carol", amount: "10n" });
 });
 
 test("emit: กิ่งที่ถูกย้อน → event ของกิ่งนั้นหายไปด้วย", () => {
@@ -106,7 +106,7 @@ test("emit: ย้อนดู event ของ block เก่าได้ด้
   }
 
   const receipt = vm.replayBlock(2);
-  assert.deepEqual(receipt.events.map((event) => event.data), [{ from: "alice", to: "bob", amount: 10 }]);
+  assert.deepEqual(receipt.events.map((event) => event.data), [{ from: "alice", to: "bob", amount: "10n" }]);
 });
 
 test("emit: คิดค่าแก๊สตามจำนวน event และขนาดข้อมูล", () => {

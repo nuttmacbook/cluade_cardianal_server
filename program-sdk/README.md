@@ -69,7 +69,7 @@ Math.random()                // สุ่มแบบ deterministic (รัน�
 
 ## ตัวเลขเป็น BigInt
 
-เมื่อ chain เปิดโหมด `bigintValues` ตัวเลขทุกตัวในโปรแกรมต้องเป็น BigInt
+ตัวเลขทุกตัวในโปรแกรมต้องเป็น BigInt เสมอ (ไม่มีโหมด number)
 
 ```js
 const balance = readDB(map("balances", who)) || 0n;   // ✅ 0n ไม่ใช่ 0
@@ -81,6 +81,8 @@ if (balance < params.input.amount) throw new Error("ยอดไม่พอ");
 - `params.value`, `params.block.timestamp`, `ThisBalance()`, `BalanceOf()`, `BlockNumber()` เป็น BigInt ทั้งหมด
 - ค่าที่ return ออกไปและ event จะกลายเป็น string ลงท้าย `n` เช่น `"970n"` เพราะ JSON ไม่มี BigInt
 - ใช้ `number` ที่ไหนก็ตามจะถูกปฏิเสธพร้อมข้อความบอกจุดที่ผิด
+- `Date.now()` / `Math.*` ในโปรแกรมยังคืน number ตามปกติ ห่อด้วย `BigInt(...)` ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งออกเป็น string)
+- ยอด native เป็นหน่วยย่อย 18 ทศนิยม (wei) — 1 เหรียญ = `10n ** 18n`
 
 ## modifier
 
@@ -109,10 +111,10 @@ import program from "./hello.program.js";
 
 const hello = createChain().deploy(program, { as: "owner", initInput: { greeting: "สวัสดี" } });
 
-hello.call("greet", { name: "โลก" });              // → "สวัสดี โลก (ครั้งที่ 1)"
+hello.call("greet", { name: "โลก" });              // → "สวัสดี โลก (ครั้งที่ 1)" (ตัวเลขที่ return ออกมาเป็น "123n")
 hello.call("greet", {}, { as: "alice" });          // เรียกในนามคนอื่น
 hello.callRaw("greet", { name: "โลก" });           // ดู gasUsed / writes / trace
-hello.state();                                      // ข้อมูลทั้งหมดที่โปรแกรมเก็บไว้
+hello.state();                                      // ข้อมูลทั้งหมดที่โปรแกรมเก็บไว้ เช่น { count: "2n" }
 hello.address;                                      // address ของโปรแกรม
 ```
 
@@ -120,11 +122,11 @@ hello.address;                                      // address ของโป�
 
 ```js
 import { createFakeApi } from "../lib/program-globals.js";
-const api = createFakeApi({ self: "0xhello", balances: { "0xhello": 500 }, programs: ["0xtoken"] });
+const api = createFakeApi({ self: "0xhello", balances: { "0xhello": 500n }, programs: ["0xtoken"] });
 Object.assign(globalThis, api);
 const { greet } = program();
 
-greet(api.params({ name: "โลก" }, { sender: "0xalice", value: 0 }));
+greet(api.params({ name: "โลก" }, { sender: "0xalice", value: 0n }));   // ตัวเลขใน input ส่งเป็น BigInt เอง (โหมดนี้ไม่แปลงให้)
 api.store / api.native / api.events / api.transfers   // ตรวจผลได้ตรง ๆ
 ```
 
@@ -135,9 +137,9 @@ api.store / api.native / api.events / api.transfers   // ตรวจผลไ�
 ตัวเลือกเพิ่มเติม
 
 ```js
-createChain({ chargeGas: true, balances: { alice: 1_000_000 } });   // ทดสอบเรื่องค่าแก๊ส
+createChain({ chargeGas: true, balances: { alice: 10n ** 18n } });   // ทดสอบเรื่องค่าแก๊ส (ยอด native เป็น wei)
 chain.transfer("alice", "bob", 100);
-chain.balanceOf("alice");    // { received, sended, consumed, balance }
+chain.balanceOf("alice");    // { received, sended, consumed, balance } เป็น BigInt
 chain.setTime(Date.parse("2025-01-01"));
 ```
 

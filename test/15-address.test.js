@@ -25,7 +25,7 @@ test("programUuid: deploy / init / call ด้วยตัวพิมพ์ต�
   assert.equal(mockData.has(`${token}:code`), true);
 
   const res = ok(vm.call({ programUuid: TOKEN_ADDR, functionName: "balanceOf", input: { account: ALICE }, context: ctx(bob) }));
-  assert.equal(res.result, 100);
+  assert.equal(res.result, "100n");
   assert.equal(res.calls[0].programUuid, token);
 });
 
@@ -58,8 +58,8 @@ test("token: ยอดเงินของ address เดียวกันไ�
   ok(vm.call({ programUuid: token, functionName: "transfer", input: { to: BOB, amount: 30 }, context: ctx(alice) }));
   ok(vm.call({ programUuid: token, functionName: "transfer", input: { to: bob, amount: 20 }, context: ctx(ALICE) }));
 
-  assert.equal(stored(token, "balances", alice), 50);
-  assert.equal(stored(token, "balances", bob), 50);
+  assert.equal(stored(token, "balances", alice), "50n");
+  assert.equal(stored(token, "balances", bob), "50n");
   assert.deepEqual([...mockData.keys()].filter((key) => key.includes(":balances:")).sort(), [
     `${token}:storage:balances:${alice}`,
     `${token}:storage:balances:${bob}`,
@@ -85,7 +85,7 @@ test("input: string 0x… hex ทุกชั้น (รวมชื่อ key �
     list: [alice, "Hello World", "0xNotHex", "0x1234"], // "0X1234" ก็นับเป็น hex
     nested: { [alice]: { owner: bob, name: "Alice" } },
     hash: "0xabcdef0123",
-    number: 10,
+    number: "10n",
   });
 });
 
@@ -105,7 +105,7 @@ test("runProgram: target และ input ที่โปรแกรมส่ง
 test("storage key: address ในโค้ดโปรแกรม (map) เป็นตัวพิมพ์เล็กเสมอ", () => {
   activate(BOOK_ADDR, ADDRESS_BOOK, { initInput: { admin: alice } });
   const res = ok(vm.call({ programUuid: book, functionName: "saveLiteral", context: ctx(alice) }));
-  assert.equal(res.result, 1);
+  assert.equal(res.result, "1n");
   assert.deepEqual(res.writes.map((w) => w.dbKey), [`${book}:storage:balances:0xabcdef`]);
 
   ok(vm.call({ programUuid: book, functionName: "save", input: { address: ALICE, note: "x" }, context: ctx(alice) }));
@@ -124,14 +124,14 @@ test("block: address ตัวพิมพ์ต่างกันใน tx ต�
   block.call({ programUuid: TOKEN_ADDR, functionName: "transfer", input: { to: BOB, amount: 10 }, context: ctx(ALICE) });
   block.call({ programUuid: token, functionName: "transfer", input: { to: ALICE, amount: 5 }, context: ctx(bob) });
   assert.deepEqual(block.afterValues(), [
-    { dbKey: `${token}:storage:balances:${alice}`, afterValue: 95, changed: true },
-    { dbKey: `${token}:storage:balances:${bob}`, afterValue: 5, changed: true },
+    { dbKey: `${token}:storage:balances:${alice}`, afterValue: "95n", changed: true },
+    { dbKey: `${token}:storage:balances:${bob}`, afterValue: "5n", changed: true },
   ]);
 });
 
 test("ชื่อธรรมดา (ไม่ใช่ 0x…) ของ programUuid / sender ก็เป็นตัวพิมพ์เล็ก", () => {
   activate("Token", TOKEN, { context: ctx("Owner"), initInput: { supply: 10 } });
   assert.equal(mockData.has("token:code"), true);
-  assert.equal(stored("token", "balances", "owner"), 10);
-  assert.equal(ok(vm.call({ programUuid: "TOKEN", functionName: "balanceOf", input: { account: "owner" }, context: ctx("OWNER") })).result, 10);
+  assert.equal(stored("token", "balances", "owner"), "10n");
+  assert.equal(ok(vm.call({ programUuid: "TOKEN", functionName: "balanceOf", input: { account: "owner" }, context: ctx("OWNER") })).result, "10n");
 });

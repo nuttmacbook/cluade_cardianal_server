@@ -80,9 +80,9 @@ test("receipt: call ธรรมดา (อ่าน อย่างเดีย
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("alice"), nonce: 0 });
 
   assert.equal(receipt.status, "success");
-  assert.equal(receipt.result, 1000);
+  assert.equal(receipt.result, "1000n");
   assert.deepEqual(receipt.stateChanges, []);
-  assert.deepEqual(receipt.trace, [{ depth: 0, program: "token", method: "balanceOf", from: "alice", origin: "alice", input: { account: "alice" }, value: "0n", result: 1000, gasUsed: GAS.call + GAS.read, status: "success", error: null }]);
+  assert.deepEqual(receipt.trace, [{ depth: 0, program: "token", method: "balanceOf", from: "alice", origin: "alice", input: { account: "alice" }, value: "0n", result: "1000n", gasUsed: GAS.call + GAS.read, status: "success", error: null }]);
   assert.equal(receipt.gasUsed, GAS.call + GAS.read);
   assert.deepEqual(receipt.nativeChanges, [
     { address: "alice", field: "consumed", after: receipt.fee },
@@ -94,10 +94,10 @@ test("receipt: call ที่เปลี่ยนข้อมูล", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 30 }, context: user("alice"), nonce: 0 });
 
-  assert.deepEqual(receipt.result, { from: "alice", to: "bob", amount: 30 });
+  assert.deepEqual(receipt.result, { from: "alice", to: "bob", amount: "30n" });
   assert.deepEqual(receipt.stateChanges, [
-    { program: "token", key: ["balances", "alice"], after: 970 },
-    { program: "token", key: ["balances", "bob"], after: 30 },
+    { program: "token", key: ["balances", "alice"], after: "970n" },
+    { program: "token", key: ["balances", "bob"], after: "30n" },
   ]);
   assert.equal(receipt.nonce, 1);
 });
@@ -146,7 +146,7 @@ test("receipt: deploy / init / reject", () => {
   assert.equal(initialized.method, "init");
   assert.equal(initialized.from, null);                  // init มาจากทีมงาน ไม่ใช่ user
   assert.equal(initialized.nonce, null);
-  assert.deepEqual(initialized.stateChanges, [{ program: "counter2", key: ["count"], after: 3 }]);
+  assert.deepEqual(initialized.stateChanges, [{ program: "counter2", key: ["count"], after: "3n" }]);
   assert.deepEqual(initialized.programChanges, [
     { kind: "code", address: "counter2", removed: false },
     { kind: "context", address: "counter2", removed: false },
@@ -172,15 +172,15 @@ test("receipt: เรียกข้ามโปรแกรม (shop → token)
 
   assert.equal(receipt.index, 3);
   assert.deepEqual(receipt.trace, [
-    { depth: 0, program: "shop", method: "buy", from: "alice", origin: "alice", input: {}, value: "0n", result: 1, gasUsed: 550, status: "success", error: null },
-    { depth: 1, program: "token", method: "transferFrom", from: "shop", origin: "alice", input: { from: "alice", to: "shop", amount: 100 }, value: "0n", result: { from: "alice", to: "shop", amount: 100 }, gasUsed: 290, status: "success", error: null },
+    { depth: 0, program: "shop", method: "buy", from: "alice", origin: "alice", input: {}, value: "0n", result: "1n", gasUsed: 550, status: "success", error: null },
+    { depth: 1, program: "token", method: "transferFrom", from: "shop", origin: "alice", input: { from: "alice", to: "shop", amount: "100n" }, value: "0n", result: { from: "alice", to: "shop", amount: "100n" }, gasUsed: 290, status: "success", error: null },
   ]);
   assert.deepEqual(receipt.stateChanges.map((c) => `${c.program}/${c.key.join("/")} = ${c.after}`), [
-    "token/allowance/alice/shop = 400",
-    "token/balances/alice = 900",
-    "token/balances/shop = 100",
-    "shop/items/alice = 1",
-    "shop/sales = 1",
+    "token/allowance/alice/shop = 400n",
+    "token/balances/alice = 900n",
+    "token/balances/shop = 100n",
+    "shop/items/alice = 1n",
+    "shop/sales = 1n",
   ]);
 });
 

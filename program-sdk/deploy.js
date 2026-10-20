@@ -31,7 +31,7 @@ async function api(endpoint, body) {
 }
 
 /** ทุกฟิลด์ต้องมีครบ เพราะลายเซ็นผูกกับทุกฟิลด์ */
-const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 200_000, gasPrice = 1 }) =>
+const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 200_000, gasPrice = "1000000000" }) =>   // gasPrice 1 gwei (native 18 ทศนิยม)
   ({ chainId: CHAIN_ID, action, from: me, to, method, input, ...(code === undefined ? {} : { code }), value, nonce, gasLimit, gasPrice });
 
 const send = (tx) => api("/sendtx", { tx, signature: signTransaction(tx, PRIVATE_KEY) });

@@ -29,7 +29,7 @@ function program() {
     runProgram(readDB("tokenIn"), "transferFrom", { from: trader, to: readDB("self"), amount: amountIn })
     runProgram(readDB("tokenOut"), "transfer", { to: trader, amount: amountOut })
 
-    writeDB("volumeIn", (readDB("volumeIn") || 0) + amountIn)
+    writeDB("volumeIn", (readDB("volumeIn") || 0n) + amountIn)
     return amountOut
   }
   return { swap }
@@ -64,17 +64,17 @@ function program() {
   }
 
   function pay(params) {
-    let total = 0
+    let total = 0n
     for (const item of params.input.items) {
       runProgram(readDB("token"), "transferFrom", { from: params.context.origin, to: item.to, amount: item.amount })
       total = total + item.amount
     }
-    writeDB("paid", (readDB("paid") || 0) + total)
+    writeDB("paid", (readDB("paid") || 0n) + total)
     return total
   }
 
   function paySafe(params) {
-    let paid = 0
+    let paid = 0n
     const failed = []
     for (const item of params.input.items) {
       try {
@@ -84,7 +84,7 @@ function program() {
         failed.push(item.to)
       }
     }
-    writeDB("paid", (readDB("paid") || 0) + paid)
+    writeDB("paid", (readDB("paid") || 0n) + paid)
     if (failed.length > 0) writeDB("lastFailed", failed)
     return { paid, failed }
   }
@@ -138,7 +138,7 @@ const trace = (result) => result.calls.map((c) => `${c.depth} ${c.programUuid}.$
 function balanceDeltas(summary, token) {
   return summary.afterValues
     .filter((v) => v.dbKey.startsWith(`${token}:storage:balances:`))
-    .map((v) => ({ account: v.dbKey.split(":").pop(), after: v.afterValue ?? 0 }));
+    .map((v) => ({ account: v.dbKey.split(":").pop(), after: v.afterValue ?? "0n" }));   // ค่าใน DB เป็น "123n"
 }
 
 // ---------------------------------------------------------------------------
@@ -150,19 +150,19 @@ test("swap: tx เดียวเรียก tokenA.transferFrom และ toke
   const res = vm.call(swapTx("swapab", 100), { timestamp: T });
 
   assert.equal(res.status, "success");
-  assert.equal(res.result, 200);
+  assert.equal(res.result, "200n");
   assert.deepEqual(trace(res), [
     "0 swapab.swap (alice→alice) success",
     "1 tokena.transferFrom (swapab→alice) success",
     "1 tokenb.transfer (swapab→alice) success",
   ]);
   assert.deepEqual(res.writes.map((w) => `${w.dbKey} = ${w.value}`), [
-    "tokena:storage:allowance:alice:swapab = 99900",
-    "tokena:storage:balances:alice = 900",
-    "tokena:storage:balances:swapab = 100",
-    "tokenb:storage:balances:swapab = 800",
-    "tokenb:storage:balances:alice = 200",
-    "swapab:storage:volumeIn = 100",
+    "tokena:storage:allowance:alice:swapab = 99900n",
+    "tokena:storage:balances:alice = 900n",
+    "tokena:storage:balances:swapab = 100n",
+    "tokenb:storage:balances:swapab = 800n",
+    "tokenb:storage:balances:alice = 200n",
+    "swapab:storage:volumeIn = 100n",
   ]);
 });
 
@@ -174,7 +174,7 @@ test("router: 2 ทอด (A→B→C) สลับ router / swap / token คร�
   const vm = setup();
   const res = vm.call(routeTx(["swapab", "swapbc"], 50), { timestamp: T });
 
-  assert.equal(res.result, 300); // 50 × 2 × 3
+  assert.equal(res.result, "300n"); // 50 × 2 × 3
   assert.deepEqual(trace(res), [
     "0 router.route (alice→alice) success",
     "1 swapab.swap (router→alice) success",
@@ -186,11 +186,11 @@ test("router: 2 ทอด (A→B→C) สลับ router / swap / token คร�
   ]);
 
   // ยอดสุทธิของแต่ละ token หลัง tx
-  assert.deepEqual(balanceDeltas(res, "tokena"), [{ account: "alice", after: 950 }, { account: "swapab", after: 50 }]);
-  assert.deepEqual(balanceDeltas(res, "tokenb"), [{ account: "swapab", after: 900 }, { account: "alice", after: 0 }, { account: "swapbc", after: 100 }]);
-  assert.deepEqual(balanceDeltas(res, "tokenc"), [{ account: "swapbc", after: 700 }, { account: "alice", after: 300 }]);
+  assert.deepEqual(balanceDeltas(res, "tokena"), [{ account: "alice", after: "950n" }, { account: "swapab", after: "50n" }]);
+  assert.deepEqual(balanceDeltas(res, "tokenb"), [{ account: "swapab", after: "900n" }, { account: "alice", after: "0n" }, { account: "swapbc", after: "100n" }]);
+  assert.deepEqual(balanceDeltas(res, "tokenc"), [{ account: "swapbc", after: "700n" }, { account: "alice", after: "300n" }]);
   // alice ได้ tokenB มา 100 แล้วจ่ายออกทั้งหมดใน tx เดียวกัน → เหลือ 0 (เดิมไม่มี key จึงนับว่า changed)
-  assert.deepEqual(res.afterValues.find((v) => v.dbKey === bal("tokenb", "alice")), { dbKey: bal("tokenb", "alice"), afterValue: 0, changed: true });
+  assert.deepEqual(res.afterValues.find((v) => v.dbKey === bal("tokenb", "alice")), { dbKey: bal("tokenb", "alice"), afterValue: "0n", changed: true });
 });
 
 test("router: ทอดที่สองล้ม ไม่มีใคร catch → ทั้ง tx ล้ม ไม่มีอะไรเปลี่ยน", () => {
@@ -248,7 +248,7 @@ test("payroll: โอนให้หลายคนใน tx เดียว (�
   const items = [{ to: "bob", amount: 10 }, { to: "carol", amount: 20 }, { to: "dave", amount: 30 }];
   const res = vm.call(payTx(items), { timestamp: T });
 
-  assert.equal(res.result, 60);
+  assert.equal(res.result, "60n");
   assert.deepEqual(trace(res), [
     "0 payroll.pay (alice→alice) success",
     "1 tokena.transferFrom (payroll→alice) success",
@@ -256,10 +256,10 @@ test("payroll: โอนให้หลายคนใน tx เดียว (�
     "1 tokena.transferFrom (payroll→alice) success",
   ]);
   assert.deepEqual(balanceDeltas(res, "tokena"), [
-    { account: "alice", after: 940 },
-    { account: "bob", after: 10 },
-    { account: "carol", after: 20 },
-    { account: "dave", after: 30 },
+    { account: "alice", after: "940n" },
+    { account: "bob", after: "10n" },
+    { account: "carol", after: "20n" },
+    { account: "dave", after: "30n" },
   ]);
 });
 
@@ -268,7 +268,7 @@ test("payroll: บางรายการล้มแต่ catch ไว้ →
   const items = [{ to: "bob", amount: 10 }, { to: "carol", amount: 99999 }, { to: "dave", amount: 30 }];
   const res = vm.call(payTx(items, "paySafe"), { timestamp: T });
 
-  assert.deepEqual(res.result, { paid: 40, failed: ["carol"] });
+  assert.deepEqual(res.result, { paid: "40n", failed: ["carol"] });
   assert.deepEqual(trace(res), [
     "0 payroll.paySafe (alice→alice) success",
     "1 tokena.transferFrom (payroll→alice) success",
@@ -278,9 +278,9 @@ test("payroll: บางรายการล้มแต่ catch ไว้ →
   // carol ไม่ถูกแตะเลย เพราะ token ตรวจยอดไม่พอก่อนเขียน → ไม่มีใน afterValues
   assert.equal(res.afterValues.some((v) => v.dbKey === bal("tokena", "carol")), false);
   assert.deepEqual(balanceDeltas(res, "tokena"), [
-    { account: "alice", after: 960 },
-    { account: "bob", after: 10 },
-    { account: "dave", after: 30 },
+    { account: "alice", after: "960n" },
+    { account: "bob", after: "10n" },
+    { account: "dave", after: "30n" },
   ]);
   assert.deepEqual(res.writes.at(-1), { type: "put", dbKey: "payroll:storage:lastFailed", value: ["carol"] });
 });
@@ -322,23 +322,23 @@ test("block: หลาย tx ผสมกัน — ข้อมูลของ 
     .filter((v) => v.dbKey.includes(":balances:"))
     .map((v) => [v.dbKey.replace(":storage:balances", ""), v.afterValue]));
   assert.deepEqual(net, {
-    "tokena:alice": 820,
-    "tokena:swapab": 150,
-    "tokena:bob": 10,
-    "tokena:carol": 20,
-    "tokenb:swapab": 700,
-    "tokenb:alice": 50,
-    "tokenb:swapbc": 250,
-    "tokenc:swapbc": 250,
-    "tokenc:alice": 750,
+    "tokena:alice": "820n",
+    "tokena:swapab": "150n",
+    "tokena:bob": "10n",
+    "tokena:carol": "20n",
+    "tokenb:swapab": "700n",
+    "tokenb:alice": "50n",
+    "tokenb:swapbc": "250n",
+    "tokenc:swapbc": "250n",
+    "tokenc:alice": "750n",
   });
 
   // ยอดรวมของแต่ละ token ต้องคงที่ 1000 เสมอ
   for (const token of ["tokena", "tokenb", "tokenc"]) {
     const total = summary.afterValues
       .filter((v) => v.dbKey.startsWith(`${token}:storage:balances:`))
-      .reduce((sum, v) => sum + v.afterValue, 0);
-    assert.equal(total, 1000, token);
+      .reduce((sum, v) => sum + BigInt(v.afterValue.slice(0, -1)), 0n);
+    assert.equal(total, 1000n, token);
   }
 
   block.commit();
@@ -401,5 +401,5 @@ test("calls มี input / value / result / gasUsed ของการเรี�
   // gas ของชั้นนอกรวมของชั้นในไว้แล้ว
   assert.ok(res.calls[0].gasUsed >= res.calls[1].gasUsed + res.calls[2].gasUsed);
   assert.ok(res.calls[0].gasUsed <= res.gasUsed);
-  assert.equal(res.result, 300);
+  assert.equal(res.result, "300n");
 });

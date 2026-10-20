@@ -153,7 +153,7 @@ test("runProgram error ก่อนเริ่มรัน (NOT_FOUND / FORBIDD
 test("recursion: เรียกตัวเองซ้อนแบบมีจุดจบ → success", () => {
   activateProbes("r");
   const res = ok(callAs("u", "r", "recurse", { self: "r", left: 5 }));
-  assert.equal(res.result, 5);
+  assert.equal(res.result, "5n");
   assert.equal(res.calls.length, 6);
 });
 

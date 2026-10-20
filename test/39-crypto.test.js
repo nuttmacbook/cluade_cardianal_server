@@ -42,9 +42,12 @@ function setup(options = {}) {
 const call = (vm, functionName, input, sender = "alice") =>
   vm.call({ programUuid: "crypto", functionName, input, context: user(sender) }, { timestamp: T + 1000 });
 
+/** ข้อความในรูปที่โปรแกรมเห็น: ตัวเลขใน input กลายเป็น BigInt ("123n" ตอน hash) */
+const asProgramSees = (message) => VM.canonicalJson(VM.decodeBigints(message));
+
 /** เซ็นข้อความแบบเดียวกับที่โปรแกรมจะ hash (canonical JSON → keccak256) */
 const signMessage = (message, key = KEY) => {
-  const digest = VM.keccak256Hex(VM.canonicalJson(message));
+  const digest = VM.keccak256Hex(asProgramSees(message));
   const bytes = Buffer.from(digest.slice(2), "hex");
   return signRaw(bytes, key);
 };
@@ -65,7 +68,7 @@ test("keccak256: string และ object", () => {
   const first = call(vm, "hash", { value: { a: 1, b: 2 } }).result;
   const second = call(vm, "hash", { value: { b: 2, a: 1 } }).result;
   assert.equal(first, second);
-  assert.equal(first, VM.keccak256Hex(VM.canonicalJson({ a: 1, b: 2 })));
+  assert.equal(first, VM.keccak256Hex(VM.canonicalJson({ a: 1n, b: 2n })));   // ตัวเลขเป็น BigInt → "1n"
 });
 
 test("keccak256: ค่าต่างกัน → hash ต่างกัน", () => {
@@ -97,8 +100,8 @@ test("flow: คูปองที่ admin เซ็นไว้ล่วงห�
   const signature = signMessage(message);
 
   const first = call(vm, "claim", { message, signature });
-  assert.equal(first.result, 50);
-  assert.deepEqual(first.events[0].data, { by: "alice", amount: 50 });
+  assert.equal(first.result, "50n");
+  assert.deepEqual(first.events[0].data, { by: "alice", amount: "50n" });
   vm.commit(first.writes);
 
   assert.equal(call(vm, "claim", { message, signature }).error.message, "ใช้ไปแล้ว");
@@ -116,7 +119,7 @@ test("ค่าแก๊ส: keccak256 และ ecrecover คิดตามท
 
   const message = { a: 1 };
   const recovered = call(vm, "recover", { message, signature: signMessage(message) });
-  assert.equal(recovered.gasUsed, gas.recover + Buffer.byteLength(VM.canonicalJson(message)));
+  assert.equal(recovered.gasUsed, gas.recover + Buffer.byteLength(asProgramSees(message)));
 });
 
 test("ค่าเริ่มต้นของค่าแก๊ส", () => {

@@ -13,7 +13,7 @@ const BOB = "0x00000000000000000000000000000000000000B2";   // ตัวพิ�
 const CAROL = "0x00000000000000000000000000000000000000c3";
 
 function chain() {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   let number = 0;
   const block = (fn) => {
     number += 1;
@@ -53,7 +53,7 @@ test("token 6 decimals: name / ticker / decimals / totalSupply อ่านไ�
 });
 
 test("token: icon / url / contact / description ที่ส่งมาตอน deploy กลายเป็น metadata ของโปรแกรม", () => {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true });
+  const vm = new VM.VirtualMachine(new MemoryDB());
   const context = { sender: OWNER, origin: OWNER };
   for (const res of [
     vm.deploy({ programUuid: T, code: TOKEN_PROGRAM, context, initInput: { name: "A", ticker: "A", decimals: "6n", supply: "1n",
@@ -99,7 +99,7 @@ test("เหรียญที่ถือ: มาจาก event Transfer ท�
 });
 
 test("โปรแกรมที่ emit Transfer แต่ไม่ใช่ token ตามมาตรฐาน → ไม่แสดงในเหรียญที่ถือ", () => {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   const fake = `function program() {
   function poke(params) { emit("Transfer", { from: params.context.sender, to: params.input.to, amount: 1n }) }
   return { poke }

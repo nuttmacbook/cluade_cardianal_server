@@ -8,23 +8,23 @@ beforeEach(resetVM);
 test("storage: read-your-writes ภายใน request เดียว", () => {
   activate("counter", COUNTER, { initInput: { start: 1 } });
   const res = ok(callAs("a", "counter", "addTwice", { amount: 10 }));
-  assert.equal(res.result, 21);
+  assert.equal(res.result, "21n");
   assert.deepEqual(dbKeys(res), ["put counter:storage:count", "put counter:storage:count"]);
-  assert.deepEqual(res.writes.map((w) => w.value), [11, 21]);
-  assert.equal(stored("counter", "count"), 21);
+  assert.deepEqual(res.writes.map((w) => w.value), ["11n", "21n"]);
+  assert.equal(stored("counter", "count"), "21n");
 });
 
 test("storage: loadValues เก็บค่าก่อนรัน (อ่านครั้งแรก), afterValues เก็บค่าสุดท้าย", () => {
   activate("counter", COUNTER, { initInput: { start: 1 } });
   const res = ok(callAs("a", "counter", "addTwice", { amount: 10 }));
-  assert.deepEqual(res.loadValues, [{ dbKey: "counter:storage:count", loadValue: 1 }]);
-  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: 21, changed: true }]);
+  assert.deepEqual(res.loadValues, [{ dbKey: "counter:storage:count", loadValue: "1n" }]);
+  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: "21n", changed: true }]);
 });
 
 test("storage: อ่านอย่างเดียว → changed false, ไม่มี writes", () => {
   activate("counter", COUNTER, { initInput: { start: 3 } });
   const res = ok(callAs("a", "counter", "get"));
-  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: 3, changed: false }]);
+  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: "3n", changed: false }]);
   assert.deepEqual(res.writes, []);
 });
 
@@ -41,7 +41,7 @@ test("storage: เขียนอย่างเดียว (ไม่อ่า
   ok(callAs("a", "probe", "writeOnly", { key: "k", value: 1 }));
   const res = ok(callAs("a", "probe", "writeOnly", { key: "k", value: 2 }));
   assert.deepEqual(res.loadValues, []);
-  assert.deepEqual(res.afterValues, [{ dbKey: "probe:storage:k", afterValue: 2, changed: true }]);
+  assert.deepEqual(res.afterValues, [{ dbKey: "probe:storage:k", afterValue: "2n", changed: true }]);
 });
 
 test("storage: เขียน null ได้ และอ่านกลับเป็น null", () => {
@@ -74,9 +74,11 @@ test("storage: writeDB ค่าที่ไม่ใช่ JSON / undefined", (
   activate("faulty", FAULTY);
   fails(callAs("a", "faulty", "writeUndefined"), "INVALID_REQUEST", "writeDB ห้ามใช้ undefined (ใช้ deleteDB)");
   fails(callAs("a", "faulty", "writeFunction"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  fails(callAs("a", "faulty", "writeBigInt"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  fails(callAs("a", "faulty", "writeCircular"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  assert.equal(ok(callAs("a", "faulty", "writeDate")).result, "1970-01-01T00:00:00.000Z");
+  fails(callAs("a", "faulty", "writeCircular"), "PROGRAM_ERROR", /RangeError/);
+  fails(callAs("a", "faulty", "writeDate"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
+  // BigInt เขียนได้ เก็บใน DB เป็น "10n"
+  const big = ok(callAs("a", "faulty", "writeBigInt"));
+  assert.deepEqual(big.writes.map((w) => w.value), ["10n"]);
 });
 
 test("key: string ที่มี ':' ถูก encode — ไม่ชนกับ map() และเขียนข้าม namespace ไม่ได้", () => {

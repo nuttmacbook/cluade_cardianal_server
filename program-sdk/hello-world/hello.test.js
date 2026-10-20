@@ -11,7 +11,7 @@ test("greet: ทักทายพร้อมนับจำนวนครั�
   const hello = setup();
   assert.equal(hello.call("greet", { name: "โลก" }), "สวัสดี โลก (ครั้งที่ 1)");
   assert.equal(hello.call("greet", {}, { as: "alice" }), "สวัสดี alice (ครั้งที่ 2)");
-  assert.deepEqual(hello.state(), { greeting: "สวัสดี", owner: "owner", count: 2, "visits/alice": 2 });
+  assert.deepEqual(hello.state(), { greeting: "สวัสดี", owner: "owner", count: "2n", "visits/alice": "2n" });   // ตัวเลขเก็บเป็น "123n"
 });
 
 test("setGreeting: เจ้าของเปลี่ยนคำทักทายได้", () => {
@@ -37,7 +37,7 @@ test("info: ThisAddress และเวลาของ block", () => {
   const info = hello.call("info");
   assert.equal(info.address, hello.address);
   assert.equal(info.owner, "owner");
-  assert.equal(typeof info.time, "number");
+  assert.match(info.time, /^\d+n$/);   // BigInt ออกมาเป็น "123n"
 });
 
 test("ดูค่าแก๊สที่จะใช้จริง", () => {

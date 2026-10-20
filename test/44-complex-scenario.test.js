@@ -135,7 +135,7 @@ function program() {
 
 function setup() {
   const vm = new VM.VirtualMachine(new MemoryDB(), {
-    bigintValues: true, requireNonce: false, chargeGas: true, recordBlocks: true, recordHistory: true,
+    requireNonce: false, chargeGas: true, recordBlocks: true, recordHistory: true,
     recordTransactions: true, feeRecipient: "miner", burnPercent: 50,
   });
   vm.db.load(Object.fromEntries(PEOPLE.map((p) => [`${p}:native:received`, 10_000_000])));

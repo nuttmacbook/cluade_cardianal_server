@@ -56,7 +56,7 @@ const BAD_MIGRATE = `function program() {
 }`;
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: 5000, bigintValues: true, recordBlocks: true, recordHistory: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: 5000, recordBlocks: true, recordHistory: true, ...options });
   let time = T;
   /** สร้าง block ถัดไป → รัน fn(block) → commit · คืนผลของ fn */
   const block = (fn = () => []) => {

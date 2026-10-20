@@ -71,7 +71,7 @@ test("VM: อ่านผ่าน db.readKeys และ commit ผ่าน db.
 
   reads.length = 0;
   const res = vm.call({ programUuid: "c", functionName: "add", input: { amount: 3 }, context: user("a") });
-  assert.equal(res.result, 5);
+  assert.equal(res.result, "5n");
   assert.deepEqual(reads, [["c:code"], ["c:storage:count"]]);
   assert.equal(commits.length, 2);
 });
@@ -191,7 +191,7 @@ test("MemoryDB: ใช้ดูสถานะหลังรัน VM ได้
   vm.commit(vm.init({ programUuid: "counter" }).writes);
   vm.commit(vm.call({ programUuid: "counter", functionName: "add", input: { amount: 2 }, context: user("alice") }).writes);
 
-  assert.deepEqual(vm.db.tree().counter.storage, { count: 7 });
+  assert.deepEqual(vm.db.tree().counter.storage, { count: "7n" });
   assert.deepEqual(vm.db.listKeys("counter:"), [
     "counter:code", "counter:context",
     "counter:metadata:createdAt", "counter:metadata:creator", "counter:metadata:type",

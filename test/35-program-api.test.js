@@ -28,12 +28,12 @@ const call = (vm, functionName, input = {}, options = {}) =>
 
 test("ThisBalance: ยอดของโปรแกรมเอง และเปลี่ยนตามการรับเงิน", () => {
   const vm = setup({ balances: { alice: 1000 } });
-  assert.equal(call(vm, "me").result.balance, 0);
+  assert.equal(call(vm, "me").result.balance, "0n");
 
   const res = call(vm, "me", {}, { value: 250 });   // แนบเงินมากับ call
-  assert.equal(res.result.balance, 250);
+  assert.equal(res.result.balance, "250n");
   vm.commit(res.writes);
-  assert.equal(call(vm, "me").result.balance, 250);
+  assert.equal(call(vm, "me").result.balance, "250n");
 });
 
 test("ThisBalance: เห็นยอดล่าสุดหลังโอนออกในการเรียกเดียวกัน", () => {
@@ -41,15 +41,15 @@ test("ThisBalance: เห็นยอดล่าสุดหลังโอน�
   vm.commit(vm.transfer({ from: "alice", to: "inspector", amount: 500 }, { timestamp: T + 500 }).writes);
 
   const res = call(vm, "sendAll", { to: "bob" });
-  assert.equal(res.result, 0);                       // โอนออกหมดแล้ว ยอดเป็น 0 ทันที
+  assert.equal(res.result, "0n");                       // โอนออกหมดแล้ว ยอดเป็น 0 ทันที
   assert.equal(res.writes.find((w) => w.dbKey === "bob:native:received").value, "500n");
 });
 
 test("BalanceOf: ดูยอดของ address อื่นได้", () => {
   const vm = setup({ balances: { alice: 1000, bob: 42 } });
-  assert.equal(call(vm, "look", { address: "bob" }).result.balance, 42);
-  assert.equal(call(vm, "look", { address: "ไม่มีใคร" }).result.balance, 0);
-  assert.equal(call(vm, "look", { address: "0xALICE" }).result.balance, 0); // คนละ address กับ alice
+  assert.equal(call(vm, "look", { address: "bob" }).result.balance, "42n");
+  assert.equal(call(vm, "look", { address: "ไม่มีใคร" }).result.balance, "0n");
+  assert.equal(call(vm, "look", { address: "0xALICE" }).result.balance, "0n"); // คนละ address กับ alice
 });
 
 test("IsProgram: แยก wallet กับโปรแกรมได้", () => {
@@ -63,7 +63,7 @@ test("IsProgram: ใช้กันการโอนเข้าโปรแก
   const vm = setup({ balances: { alice: 1000 } });
   vm.commit(vm.transfer({ from: "alice", to: "inspector", amount: 300 }, { timestamp: T + 500 }).writes);
 
-  assert.equal(call(vm, "payIfWallet", { to: "bob", amount: 100 }).result, 200);
+  assert.equal(call(vm, "payIfWallet", { to: "bob", amount: 100 }).result, "200n");
   const blocked = call(vm, "payIfWallet", { to: "token", amount: 100 });
   assert.equal(blocked.error.message, "ปลายทางเป็นโปรแกรม");
 });
@@ -83,7 +83,7 @@ test("BlockNumber: เลข block ที่ tx อยู่ (null เมื่�
 
   const block = vm.createBlock({ timestamp: T + 2000, feeRecipient: "miner" });
   const res = block.call({ programUuid: "inspector", functionName: "me", context: user("alice") });
-  assert.equal(res.result.block, 2);
+  assert.equal(res.result.block, "2n");
   assert.equal(block.number, 2);
 });
 
@@ -110,6 +110,6 @@ test("API ใหม่ใช้ได้ทั้งในโปรแกรม�
 
   // token.transfer เรียกจาก inspector → inspector ยังเห็นยอดของตัวเองถูกต้อง
   const res = call(vm, "me");
-  assert.equal(res.result.balance, 100);
+  assert.equal(res.result.balance, "100n");
   assert.equal(res.result.address, "inspector");
 });

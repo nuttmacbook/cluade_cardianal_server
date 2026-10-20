@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 
 /*
- * โหมด bigintValues: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น
+ * ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (VM ทำงานแบบนี้เสมอ ไม่มีโหมด number แล้ว)
  *   - เก็บใน DB เป็น string ลงท้าย n ("1000n")
  *   - แปลงเป็น BigInt อัตโนมัติเมื่อส่งเข้าโปรแกรม แปลงกลับเป็น string เมื่อออกจากโปรแกรม
  */
@@ -48,7 +48,7 @@ function program() {
 `;
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, ...options });
   vm.db.load({ "alice:native:received": "1000000n" });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } });
@@ -131,18 +131,23 @@ test("เทียบค่าและคำนวณข้ามฟังก�
   assert.match(call(vm, "transfer", { to: "bob", amount: 99_999 }).error.message, /ยอดไม่พอ/);
 });
 
-test("ปิดโหมด bigint → ใช้ number ได้เหมือนเดิม", () => {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
+test("ไม่มีโหมด number แล้ว: ส่ง bigintValues: false มาก็ยังเป็น BigInt", () => {
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, bigintValues: false });
+  assert.equal("bigintValues" in VM.DEFAULT_OPTIONS, false);
   const code = `function program() {
-  function initialization() { writeDB("count", 0) }
+  function initialization() { writeDB("count", 0n) }
   function add(params) { writeDB("count", readDB("count") + params.input.amount); return readDB("count") }
-  return { add }
+  function addNumber() { writeDB("count", 1) }
+  return { add, addNumber }
 }`;
   vm.commit(vm.deploy({ programUuid: "counter", code, context: user("alice") }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "counter" }, { timestamp: T }).writes);
   const res = vm.call({ programUuid: "counter", functionName: "add", input: { amount: 5 }, context: user("alice") }, { timestamp: T });
-  assert.equal(res.result, 5);
-  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], 0);
+  assert.equal(res.result, "5n");
+  assert.equal(vm.db.readKeys(["counter:storage:count"])[0], "0n");
+  const number = vm.call({ programUuid: "counter", functionName: "addNumber", context: user("alice") }, { timestamp: T });
+  assert.equal(number.error.code, "INVALID_REQUEST");
+  assert.match(number.error.message, /ต้องเป็น BigInt/);
 });
 
 test("helper แปลงค่าไปกลับ", () => {

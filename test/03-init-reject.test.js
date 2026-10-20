@@ -22,14 +22,14 @@ test("init: รัน initialization ด้วย context / initInput ตอน 
 "put counter:metadata:createdAt",
     "del pending:counter",
   ]);
-  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: 10, changed: true }]);
+  assert.deepEqual(res.afterValues, [{ dbKey: "counter:storage:count", afterValue: "10n", changed: true }]);
   assert.deepEqual(res.loadValues, []);
 
   assert.equal(mockData.has("pending:counter"), false);
   assert.equal(mockData.get("counter:code"), VM.toOneLine(COUNTER));
   assert.deepEqual(mockData.get("counter:context"), user("alice"));
   assert.equal(mockData.get("counter:this"), "counter");
-  assert.equal(stored("counter", "count"), 10);
+  assert.equal(stored("counter", "count"), "10n");
 });
 
 test("init: โปรแกรมไม่มี initialization → ไม่มี calls แต่บันทึกโปรแกรม", () => {
@@ -53,7 +53,7 @@ test("init: initialization throw → ไม่มี writes, pending ยัง�
 
   mockData.get("pending:p").initInput = { ok: true }; // สมมติว่าแก้ข้อมูล pending ใน DB
   ok(vm.init({ programUuid: "p" }));
-  assert.equal(stored("p", "partial"), 1);
+  assert.equal(stored("p", "partial"), "1n");
 });
 
 test("init: initialization วนไม่รู้จบ → TIMEOUT", () => {

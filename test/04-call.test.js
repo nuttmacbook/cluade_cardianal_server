@@ -8,8 +8,8 @@ beforeEach(resetVM);
 test("call: เรียกฟังก์ชันที่ export ได้ และคืน result / calls", () => {
   activate("counter", COUNTER, { initInput: { start: 1 } });
   const res = ok(callAs("alice", "counter", "add", { amount: 4 }));
-  assert.equal(res.result, 5);
-  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", input: { amount: 4 }, value: "0n", gasStart: 0, result: 5, gasUsed: 744, status: "success" }]);   // 702 จาก API + 42 จาก node ที่รันผ่าน
+  assert.equal(res.result, "5n");
+  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", input: { amount: 4 }, value: "0n", gasStart: 0, result: "5n", gasUsed: 750, status: "success" }]);   // 708 จาก API + 42 จาก node ที่รันผ่าน
 });
 
 test("call: ฟังก์ชัน internal เรียกจากในโปรแกรมได้ แต่เรียกจากข้างนอกไม่ได้ และไม่ถูกบันทึกใน calls", () => {
@@ -66,22 +66,24 @@ test("call: input ที่ไม่ใช่ JSON → INVALID_REQUEST", () => {
   fails(callAs("a", "probe", "echo", { big: 1n }), "INVALID_REQUEST", "input ต้องเป็นข้อมูล JSON");
 });
 
-test("call: ค่าที่ return ถูกแปลงแบบ JSON", () => {
+test("call: ค่าที่ return ถูกแปลงแบบ JSON (BigInt → \"123n\")", () => {
   activate("faulty", FAULTY);
   const result = (fn) => ok(callAs("a", "faulty", fn)).result;
 
   assert.equal(result("returnUndefined"), undefined);
   assert.equal(result("returnNull"), null);
-  assert.equal(result("returnNumber"), 1.5);
+  assert.equal(result("returnBigInt"), "10n");
   assert.equal(result("returnString"), "สวัสดี 🎉");
-  assert.deepEqual(result("returnNested"), { a: [1, { b: true }], c: null });
-  assert.equal(result("returnDate"), "1970-01-01T00:00:00.000Z");
-  assert.equal(result("returnNaN"), null);
-  assert.deepEqual(result("returnWithUndefinedField"), { a: 1 });
+  assert.deepEqual(result("returnNested"), { a: ["1n", { b: true }], c: null });
+  assert.deepEqual(result("returnWithUndefinedField"), { a: "1n" });
 
+  // number (รวมทศนิยม / NaN) ต้องเป็น BigInt
+  fails(callAs("a", "faulty", "returnNumber"), "INVALID_REQUEST", "ค่าที่ return: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
+  fails(callAs("a", "faulty", "returnNaN"), "INVALID_REQUEST", "ค่าที่ return: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
+  // object ที่ไม่ใช่ข้อมูลธรรมดา (Date / function) ไม่ใช่ JSON
+  fails(callAs("a", "faulty", "returnDate"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
   fails(callAs("a", "faulty", "returnFunction"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
-  fails(callAs("a", "faulty", "returnBigInt"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
-  fails(callAs("a", "faulty", "returnCircular"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
+  fails(callAs("a", "faulty", "returnCircular"), "PROGRAM_ERROR", /RangeError/);
 });
 
 test("call: ไม่รองรับ async / thenable", () => {
@@ -92,9 +94,9 @@ test("call: ไม่รองรับ async / thenable", () => {
 
 test("call: ตัวแปรระดับบนสุดของโปรแกรมไม่ค้างข้าม call", () => {
   activate("stateful", STATEFUL);
-  assert.equal(ok(callAs("a", "stateful", "hit")).result, 1);
-  assert.equal(ok(callAs("a", "stateful", "hit")).result, 1);
-  assert.equal(ok(callAs("a", "stateful", "hitTwice")).result, 2);
+  assert.equal(ok(callAs("a", "stateful", "hit")).result, "1n");
+  assert.equal(ok(callAs("a", "stateful", "hit")).result, "1n");
+  assert.equal(ok(callAs("a", "stateful", "hitTwice")).result, "2n");
 });
 
 test("call: strict mode — ประกาศตัวแปร global โดยไม่ตั้งใจ → error", () => {
@@ -106,6 +108,6 @@ test("call: strict mode — ประกาศตัวแปร global โด�
 test("call: แต่ละ request เป็นอิสระกัน (writes ที่ไม่ได้ save ไม่มีผลกับ call ถัดไป)", () => {
   activate("counter", COUNTER, { initInput: { start: 0 } });
   vm.call({ programUuid: "counter", functionName: "add", input: { amount: 5 }, context: user("a") }); // ไม่ save
-  assert.equal(ok(callAs("a", "counter", "get")).result, 0);
+  assert.equal(ok(callAs("a", "counter", "get")).result, "0n");
 });
 

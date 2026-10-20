@@ -85,7 +85,7 @@ export class DB extends BaseDB {
     super();
     this.basekey = crypto.createHash("sha256").update(`primarydbkey|${dbPath}`).digest("hex");
     this.queue = [];
-    this.server = open({ path: path.resolve(`./${dbPath}`), compression, mapSize });
+    this.server = open({ path: path.resolve(dbPath), compression, mapSize });   // path เต็ม (/var/data) ใช้ตามนั้น · path สั้นนับจากโฟลเดอร์ที่รัน
   }
 
   // ---------- ที่ VM ใช้ ----------

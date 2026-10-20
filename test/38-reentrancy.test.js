@@ -41,7 +41,7 @@ test("⚠️ withdrawUnsafe: ถอนซ้ำได้ ดูดเงิน�
   vm.commit(res.writes);
   assert.equal(vm.nativeBalanceOf("attacker").balance, 300n);   // ฝาก 100 แต่ถอนออกมา 300
   assert.equal(vm.nativeBalanceOf("vault").balance, 300n);      // เงินของเหยื่อหายไป 200
-  assert.equal(vm.db.readKeys(["vault:storage:balances:attacker"])[0], 0);
+  assert.equal(vm.db.readKeys(["vault:storage:balances:attacker"])[0], "0n");
 });
 
 test("withdrawSafe: อัปเดตยอดก่อนเรียกออก (checks-effects-interactions) → ถอนซ้ำได้ 0", () => {
@@ -105,5 +105,5 @@ test("ตัวล็อกไม่ค้างไปยัง tx ถัดไ�
   assert.equal(vm.db.readKeys(["vault:storage:locked"])[0], undefined);
 
   const normal = vm.call({ programUuid: "vault", functionName: "balanceOf", input: { who: "victim" }, context: user("bob") }, { timestamp: T + 2000 });
-  assert.equal(normal.result, 500);
+  assert.equal(normal.result, "500n");
 });

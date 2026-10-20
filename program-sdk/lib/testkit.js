@@ -9,11 +9,12 @@ let counter = 0;
 
 /**
  * สร้าง chain จำลองไว้ทดสอบ
- * @param {{ chargeGas?: boolean, timestamp?: number, balances?: Record<string, number> }} [options]
+ * ตัวเลขในโปรแกรมเป็น BigInt เสมอ: ค่าที่ call() คืนมาเป็น "123n" และ state() ก็เก็บแบบเดียวกัน
+ * @param {{ chargeGas?: boolean, timestamp?: number, balances?: Record<string, bigint | number> }} [options]  ยอด native (wei)
  */
 export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01-01T00:00:00Z"), balances = {} } = {}) {
   const vm = new VirtualMachine(new MemoryDB(), { chargeGas, recordBlocks: true, recordHistory: true });
-  vm.db.load(Object.fromEntries(Object.entries(balances).map(([address, value]) => [`${address}:native:received`, value])));
+  vm.db.load(Object.fromEntries(Object.entries(balances).map(([address, value]) => [`${address}:native:received`, `${BigInt(value)}n`])));
 
   let now = timestamp;
   const context = (sender) => ({ sender, origin: sender });
@@ -52,7 +53,7 @@ export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01
         callRaw(functionName, input = {}, { as: sender = "alice", value: sent = 0 } = {}) {
           return run("call", { programUuid, functionName, input, context: context(sender), value: sent });
         },
-        /** ข้อมูลที่โปรแกรมเก็บไว้ทั้งหมด: { "balances/alice": 70 } */
+        /** ข้อมูลที่โปรแกรมเก็บไว้ทั้งหมด: { "balances/alice": "70n" } */
         state() {
           return Object.fromEntries(vm.listProgramStorage(programUuid).map(({ key, value }) => [key.join("/"), value]));
         },
@@ -64,7 +65,7 @@ export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01
       return run("transfer", { from, to, amount });
     },
 
-    /** ยอด native: { received, sended, consumed, balance } */
+    /** ยอด native (BigInt): { received, sended, consumed, balance } */
     balanceOf(address) {
       return vm.nativeBalanceOf(address);
     },

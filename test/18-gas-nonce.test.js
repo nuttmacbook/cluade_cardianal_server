@@ -209,7 +209,7 @@ test("transferNative: โอนจากกระเป๋าของโปร�
   assert.deepEqual(res.writes, [
     { type: "put", dbKey: "treasury:native:sended", value: "30n" },
     { type: "put", dbKey: "0xfabb0ac9:native:received", value: "30n" },   // address ถูก normalize
-    { type: "put", dbKey: "treasury:storage:paid:0xfabb0ac9", value: 30 },
+    { type: "put", dbKey: "treasury:storage:paid:0xfabb0ac9", value: "30n" },
   ]);
   vm.commit(res.writes);
   assert.equal(balanceOf(vm, "0xfabb0ac9"), 30);
@@ -220,7 +220,7 @@ test("transferNative: โอนหลายครั้งใน tx เดีย
   const items = [{ to: "bob", amount: 30 }, { to: "carol", amount: 50 }, { to: "bob", amount: 10 }];
   const res = vm.call({ programUuid: "treasury", functionName: "payoutMany", input: { items }, context: user("alice") });
 
-  assert.equal(res.result, 3);
+  assert.equal(res.result, "3n");
   vm.commit(res.writes);
   assert.equal(balanceOf(vm, "treasury"), 10);
   assert.equal(balanceOf(vm, "bob"), 40);

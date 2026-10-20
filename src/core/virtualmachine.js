@@ -60,8 +60,9 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *
  *  API ในโปรแกรม: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
  *                 keccak256 / ecrecover / ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
- *  bigintValues: true → ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
- *                 ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber / Date / Math
+ *  ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น เช่น 10n (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
+ *    ยอด native (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() เป็น BigInt
+ *    Date.now() / Math ยังคืน number → ห่อ BigInt() ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งเป็น string)
  *
  *  key ใน DB: pending:<id> | <id>:code | <id>:context | <id>:this | <id>:storage:<a>:<b>...
  *    <id>:this          address ของโปรแกรมเอง (โปรแกรมอ่านได้ด้วย ThisAddress())
@@ -118,7 +119,6 @@ export const DEFAULT_OPTIONS = {
   maxCodeSize: 64 * 1024,         // ขนาดโค้ดสูงสุดต่อโปรแกรม
   maxKeySize: 1000,               // ความยาวสูงสุดของ key storage (เหลือที่ให้ history: ซ้อนทับ)
   autoReview: false,              // true = ตรวจโค้ดด้วยบัญชีขาวตอน deploy (แทนการรีวิวด้วยคน)
-  bigintValues: false,            // true = ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เก็บใน DB เป็น "123n")
   maxValueSize: 64 * 1024,        // ขนาดสูงสุดของค่าที่เขียน / return / emit ต่อรายการ
   recordHistory: false,           // เก็บ history:<key>:<block> + blockundo:<block> (ต้องเปิดถ้าจะย้อนดู / กู้ระบบ)
   upgradeDelayBlocks: 0,          // timelock ของการอัปเกรด: 0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ, N = ใช้ตอน block (ที่อนุมัติ + N)
@@ -395,8 +395,7 @@ export function decodeBigints(value, label = "ค่า") {
   return value;
 }
 
-/** ค่าที่โปรแกรมส่งออกมา: ห้ามเป็น number (ต้องใช้ BigInt) และต้องเป็นข้อมูลธรรมดา */
-/** BigInt ที่โปรแกรมส่งมา → number สำหรับใช้ภายใน VM (ต้องไม่เกินช่วงที่ปลอดภัย) */
+/** จำนวนเงินที่โปรแกรมส่งมาต้องเป็น BigInt (number → numberNotAllowed) */
 export function fromProgramAmount(amount, label = "amount") {
   if (typeof amount === "number") fail(ERRORS.numberNotAllowed, label);
   if (typeof amount !== "bigint") fail(ERRORS.invalidAmount);
@@ -410,10 +409,9 @@ export function fromProgramOptions(options) {
   return value === undefined ? {} : { value: fromProgramAmount(value, "value") };
 }
 
-/** โหมดปกติใช้ JSON ธรรมดา โหมด BigInt แปลงค่าไปกลับให้อัตโนมัติ */
-export const toProgram = (value, label, bigint) => (bigint ? decodeBigints(value, label) : value);
-export const fromProgram = (value, label, bigint) =>
-  (bigint ? encodeBigints(toProgramValue(value, label)) : toJsonValue(value, label));
+/** ค่าเข้า / ออกจากโปรแกรม: "123n" ↔ BigInt แปลงไปกลับให้อัตโนมัติ */
+export const toProgram = (value, label) => decodeBigints(value, label);
+export const fromProgram = (value, label) => encodeBigints(toProgramValue(value, label));
 
 export function toProgramValue(value, label) {
   if (value === undefined) return undefined;
@@ -992,7 +990,6 @@ export class VirtualMachine {
     maxCodeSize = DEFAULT_OPTIONS.maxCodeSize,
     maxKeySize = DEFAULT_OPTIONS.maxKeySize,
     autoReview = DEFAULT_OPTIONS.autoReview,
-    bigintValues = DEFAULT_OPTIONS.bigintValues,
     maxValueSize = DEFAULT_OPTIONS.maxValueSize,
     recordHistory = DEFAULT_OPTIONS.recordHistory,
     upgradeDelayBlocks = DEFAULT_OPTIONS.upgradeDelayBlocks,
@@ -1020,7 +1017,6 @@ export class VirtualMachine {
     this.maxCodeSize = maxCodeSize;
     this.maxKeySize = maxKeySize;
     this.autoReview = autoReview;
-    this.bigintValues = bigintValues;
     this.maxValueSize = maxValueSize;
     this.recordHistory = recordHistory;
     if (!Number.isSafeInteger(upgradeDelayBlocks) || upgradeDelayBlocks < 0) fail(ERRORS.invalidUpgradeDelay);
@@ -2078,10 +2074,10 @@ export class VirtualMachine {
     try {
       const api = this.createProgramApi(tx, { programUuid, context, depth });
       const params = {
-        input: toProgram(toInputValue(input, "input") ?? {}, "input", this.bigintValues),
+        input: toProgram(toInputValue(input, "input") ?? {}, "input"),
         context: pickContext(context),
-        value: this.toAmount(readNative(value)),   // native ที่แนบมากับการเรียกนี้
-        block: { timestamp: this.bigintValues ? BigInt(tx.timestamp) : tx.timestamp },
+        value: readNative(value),   // native ที่แนบมากับการเรียกนี้
+        block: { timestamp: BigInt(tx.timestamp) },
       };
       const result = this.invokeProgram(tx, program, api, functionName, params, depth);
       tx.assertAlive(); // DB พังแต่โปรแกรม catch ไว้ → ยัง throw
@@ -2103,7 +2099,7 @@ export class VirtualMachine {
     const result = depth === 0 ? runWithTimeout(invoke, tx.remainingTime()) : invoke();
     if (typeof result?.then === "function") fail(ERRORS.asyncNotSupported);
     // ค่าที่ออกจากโปรแกรม: BigInt ถูกแปลงเป็น "123n" เพื่อให้ส่งเป็น JSON ได้
-    return this.checkValueSize(fromProgram(result, "ค่าที่ return", this.bigintValues), "ค่าที่ return");
+    return this.checkValueSize(fromProgram(result, "ค่าที่ return"), "ค่าที่ return");
   }
 
   // ---------- API ที่โปรแกรมเรียกใช้ ----------
@@ -2122,26 +2118,25 @@ export class VirtualMachine {
       Date: tx.Date,
       Math: tx.Math,
       ThisAddress: () => programUuid,
-      ThisBalance: guard(() => this.toAmount(this.programNativeBalance(tx, programUuid))),
-      BalanceOf: guard((address) => this.toAmount(this.programNativeBalance(tx, address))),
+      ThisBalance: guard(() => this.programNativeBalance(tx, programUuid)),
+      BalanceOf: guard((address) => this.programNativeBalance(tx, address)),
       IsProgram: guard((address) => this.programIsProgram(tx, address)),
-      MetadataOf: guard((address, field) => toProgram(this.programMetadataOf(tx, address, field) ?? null, "metadata", this.bigintValues)),
-      BlockNumber: () => (tx.blockNumber === null ? null : this.toAmount(BigInt(tx.blockNumber))),
+      MetadataOf: guard((address, field) => toProgram(this.programMetadataOf(tx, address, field) ?? null, "metadata")),
+      BlockNumber: () => (tx.blockNumber === null ? null : BigInt(tx.blockNumber)),
       readDB: guard((key) => this.programReadDB(tx, programUuid, key)),
       writeDB: guard((key, value) => this.programWriteDB(tx, programUuid, key, value)),
       deleteDB: guard((key) => this.programDeleteDB(tx, programUuid, key)),
-      transferNative: guard((to, amount) => this.programTransferNative(tx, programUuid, to, this.fromAmount(amount))),
-      setMetadata: guard((field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata", this.bigintValues))),
-      emit: guard((name, data) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event", this.bigintValues))),
-      keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ keccak256", this.bigintValues))),
-      ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ ecrecover", this.bigintValues), signature)),
+      transferNative: guard((to, amount) => this.programTransferNative(tx, programUuid, to, fromProgramAmount(amount))),
+      setMetadata: guard((field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata"))),
+      emit: guard((name, data) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"))),
+      keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ keccak256"))),
+      ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ ecrecover"), signature)),
       runProgram: guard((target, functionName, input, options) => toProgram(
         this.programRunProgram(tx, caller, target, functionName,
-          this.bigintValues ? fromProgram(input ?? {}, "input", true) : input,
-          this.bigintValues ? fromProgramOptions(options) : options) ?? null,
-        "ผลลัพธ์", this.bigintValues)),
+          fromProgram(input ?? {}, "input"), fromProgramOptions(options)) ?? null,
+        "ผลลัพธ์")),
       cloneProgram: guard((template, initInput, options) => this.programCloneProgram(tx, caller, template,
-        this.bigintValues ? fromProgram(initInput ?? {}, "initInput", true) : initInput ?? {}, options)),
+        fromProgram(initInput ?? {}, "initInput"), options)),
     };
   }
 
@@ -2157,12 +2152,12 @@ export class VirtualMachine {
     tx.loaded.add(dbKey);
     const value = tx.current(dbKey);
     tx.useGas(tx.gas.read + tx.gas.byte * valueSize(value));
-    return value === undefined ? undefined : toProgram(value, "ค่าที่อ่านจาก DB", this.bigintValues);
+    return value === undefined ? undefined : toProgram(value, "ค่าที่อ่านจาก DB");
   }
 
   programWriteDB(tx, programUuid, key, value) {
     if (value === undefined) fail(ERRORS.writeUndefined);
-    const stored = this.checkValueSize(fromProgram(value, "ค่าที่ writeDB", this.bigintValues), "writeDB");
+    const stored = this.checkValueSize(fromProgram(value, "ค่าที่ writeDB"), "writeDB");
     tx.useGas(tx.gas.write + tx.gas.byte * valueSize(stored));
     tx.put(this.checkKeySize(tx.touch(programUuid, key)), stored);
   }
@@ -2205,20 +2200,6 @@ export class VirtualMachine {
     const size = valueSize(value);
     if (size > this.maxValueSize) fail(ERRORS.valueTooLarge, this.maxValueSize, size);
     return value;
-  }
-
-  /** BigInt → ค่าที่โปรแกรมเห็น (โหมด number: ต้องไม่เกินช่วงที่ number แทนได้แม่นยำ) */
-  toAmount(value) {
-    if (this.bigintValues) return value;
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) fail(ERRORS.invalidAmount);
-    return Number(value);
-  }
-
-  /** ค่าที่โปรแกรมส่งมา → BigInt สำหรับใช้ภายใน */
-  fromAmount(value, label = "amount") {
-    if (this.bigintValues) return fromProgramAmount(value, label);
-    if (!Number.isSafeInteger(value)) fail(ERRORS.invalidAmount);
-    return BigInt(value);
   }
 
   /** ยอด native คงเหลือของ address (อ่าน 3 ช่อง) */
@@ -2310,7 +2291,6 @@ export class VirtualMachine {
 
   /** sender = โปรแกรมที่เรียก, origin = คงเดิม; ปลายทาง error → ย้อนการเขียนของปลายทางแล้ว throw ให้ผู้เรียกจัดการ */
   programRunProgram(tx, caller, programUuid, functionName, input, { value = 0n } = {}) {
-    if (typeof value === "number") value = this.fromAmount(value, "value");   // โหมด number
     value = checkValue(value);
     const savepoint = tx.savepoint();
     try {
@@ -2341,7 +2321,7 @@ export class VirtualMachine {
     if (!isNonEmptyString(template)) fail(ERRORS.invalidAddress);
     const saltText = typeof salt === "bigint" ? `${salt}` : salt;
     if (!isNonEmptyString(saltText)) fail(ERRORS.invalidSalt);
-    const amount = value === undefined || value === null ? 0n : checkValue(this.fromAmount(value, "value"));
+    const amount = value === undefined || value === null ? 0n : checkValue(fromProgramAmount(value, "value"));
     const depth = caller.depth + 1;
     if (depth > tx.maxCallDepth) fail(ERRORS.callDepthExceeded, tx.maxCallDepth);
 

@@ -70,7 +70,7 @@ const OUTER_CODE = `function program() {
 }`;
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: 5000, bigintValues: true, recordBlocks: true, recordHistory: true, recordTransactions: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: 5000, recordBlocks: true, recordHistory: true, recordTransactions: true, ...options });
   vm.db.load({ [VM.nativeKey("alice", "received")]: "1000n" });
   let time = T;
   const block = (fn) => {

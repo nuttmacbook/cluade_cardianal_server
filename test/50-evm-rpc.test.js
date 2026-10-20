@@ -13,7 +13,7 @@ const MINER = "0x1111111111111111111111111111111111111111";
 const START = Date.parse("2026-01-01T00:00:00Z");
 
 function chain() {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, bigintValues: true, recordBlocks: true, recordTransactions: true, recordHistory: true,
+  const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, recordBlocks: true, recordTransactions: true, recordHistory: true,
     requireNonce: true, chargeGas: true });
   vm.applyGenesis({ chainId: 7777, balances: { [OWNER]: 1_000_000 } });
   let number = 0;
@@ -170,7 +170,7 @@ const RELAY = `function program() {
   return { pay, boom }
 }`;
 function nested({ maxBlockGas = null } = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, bigintValues: true, recordBlocks: true, recordTransactions: true, recordHistory: true,
+  const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, recordBlocks: true, recordTransactions: true, recordHistory: true,
     requireNonce: true, chargeGas: true, maxBlockGas, burnPercent: 50, feeRecipient: MINER });
   vm.applyGenesis({ chainId: 7777, balances: { [OWNER]: 1_000_000 } });
   const as = { sender: OWNER, origin: OWNER };

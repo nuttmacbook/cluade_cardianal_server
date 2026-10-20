@@ -37,7 +37,7 @@ const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต�
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
   chainId: Number(process.env.CHAIN_ID ?? 1),
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
-  recordTransactions: true, recordBlocks: true, recordHistory: true, bigintValues: true,
+  recordTransactions: true, recordBlocks: true, recordHistory: true,
   feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
