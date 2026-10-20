@@ -2,6 +2,8 @@
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
+ *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
+ *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
  *   GAS_PRICE=1000000000   ราคาแก๊สขั้นต่ำ (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei)
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
@@ -32,6 +34,9 @@ const BLOCK_MS = Number(process.env.BLOCK_MS ?? 3000);
 // (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
+// sandbox ของโปรแกรม (ดู src/core/sandbox.js): ทุกเครื่องในเครือข่ายต้องตั้งค่าเดียวกัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
+const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB ?? 32);
+const STACK_LIMIT_KB = Number(process.env.STACK_LIMIT_KB ?? 256);
 const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต่อแก๊ส (1 gwei)
 
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
@@ -39,6 +44,7 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true,
   feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
+  memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,

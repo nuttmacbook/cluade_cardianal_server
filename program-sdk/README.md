@@ -67,6 +67,9 @@ Math.random()                // สุ่มแบบ deterministic (รัน�
 
 **ห้ามใช้** `process`, `fetch`, `globalThis`, `performance`, `async`/`await`, `setTimeout` และการ import ทุกชนิด โค้ดที่ใช้สิ่งเหล่านี้จะไม่ผ่านการรีวิว
 
+โปรแกรมรันใน sandbox (QuickJS) แยกจาก server: ไม่มี `eval` / `new Function` / `Intl` · `console.log` เรียกได้แต่ไม่พิมพ์
+หน่วยความจำรวมทั้ง tx ไม่เกิน 32 MB (เกิน = `OUT_OF_MEMORY` ทั้ง tx ล้มและเสียค่าแก๊ส) · เรียกฟังก์ชันซ้อนได้ราว 1,400 ชั้น (เกิน = RangeError)
+
 ## ตัวเลขเป็น BigInt
 
 ตัวเลขทุกตัวในโปรแกรมต้องเป็น BigInt เสมอ (ไม่มีโหมด number)

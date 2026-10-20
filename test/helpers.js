@@ -4,6 +4,9 @@ import { MemoryDB } from "../src/storage/db.js";
 
 export { MemoryDB };
 
+// โปรแกรมทดสอบ timeout (FAULTY.busy) ต้องเผาเวลาจริงด้วย performance.now() — sandbox ไม่มีนาฬิกาจริงเว้นแต่เปิด wallClock
+VM.DEFAULT_OPTIONS.wallClock = true;
+
 /** VM ตัวเดียวที่ทุกเทสต์ใช้ */
 export const vm = new VM.VirtualMachine(new MemoryDB());
 

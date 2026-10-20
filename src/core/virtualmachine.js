@@ -1,8 +1,8 @@
-import nodeVm from "node:vm";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
 import { instrument, GAS_FN, CALL_FN } from "./gasmeter.js";
+import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
 /*
@@ -36,7 +36,12 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *      หรือ { status: "throw", error: { code, message }, calls }
  *  เมื่อ success → vm.commit(res.writes) บันทึกลง DB ผ่าน db.writeKeys (หรือบันทึกเอง)
  *  runProgram error → ผู้เรียก catch ได้ (การเขียนของปลายทางถูกย้อน) ถ้าไม่ catch → throw ต่อขึ้นไปจนทั้ง request ล้ม
- *  timeout / อ่าน DB ไม่สำเร็จ → ทั้ง request ล้มเสมอ (catch ไม่ได้)
+ *  timeout / แก๊สหมด / หน่วยความจำเกิน / อ่าน DB ไม่สำเร็จ → ทั้ง request ล้มเสมอ (catch ไม่ได้)
+ *
+ *  sandbox: โค้ดของโปรแกรมรันใน QuickJS (WebAssembly) ไม่ใช่ใน process ของ server — ดู sandbox.js
+ *    1 tx = 1 runtime (หน่วยความจำ memoryLimitBytes / stack maxStackBytes นับรวมทั้งสายการเรียก)
+ *    1 โปรแกรม = 1 context (global แยกกัน) · ค่าข้ามเขตแดนเป็นสำเนาเสมอ โปรแกรมแตะ object ของ host ไม่ได้
+ *    global ของโปรแกรม: built-in มาตรฐานของ JS + Date / Math ของ block · ไม่มี eval / new Function / process / require
  *
  *  เวลา: ทุก call ใน block เห็นเวลาเดียวกัน (แบบ block.timestamp ของ EVM)
  *    vm.createBlock({ timestamp })  /  vm.call(request, { timestamp })   ไม่ส่ง → Date.now() ครั้งเดียว
@@ -122,6 +127,9 @@ export const DEFAULT_OPTIONS = {
   maxValueSize: 64 * 1024,        // ขนาดสูงสุดของค่าที่เขียน / return / emit ต่อรายการ
   recordHistory: false,           // เก็บ history:<key>:<block> + blockundo:<block> (ต้องเปิดถ้าจะย้อนดู / กู้ระบบ)
   upgradeDelayBlocks: 0,          // timelock ของการอัปเกรด: 0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ, N = ใช้ตอน block (ที่อนุมัติ + N)
+  memoryLimitBytes: SANDBOX_DEFAULTS.memoryLimitBytes, // หน่วยความจำของ sandbox ต่อ tx (รวมทุกโปรแกรมในสายการเรียก) เกิน → OUT_OF_MEMORY
+  maxStackBytes: SANDBOX_DEFAULTS.maxStackBytes,       // stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน → RangeError ที่ catch ได้)
+  wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
 };
 
 /** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
@@ -156,11 +164,12 @@ export const ERROR_CODE = {
   LIMIT_EXCEEDED: "LIMIT_EXCEEDED",
   TIMEOUT: "TIMEOUT",
   OUT_OF_GAS: "OUT_OF_GAS",
+  OUT_OF_MEMORY: "OUT_OF_MEMORY",
   PROGRAM_ERROR: "PROGRAM_ERROR",
   INTERNAL: "INTERNAL",
 };
 
-const { INVALID_REQUEST, NOT_FOUND, FORBIDDEN, LIMIT_EXCEEDED, TIMEOUT, OUT_OF_GAS, PROGRAM_ERROR, INTERNAL } = ERROR_CODE;
+const { INVALID_REQUEST, NOT_FOUND, FORBIDDEN, LIMIT_EXCEEDED, TIMEOUT, OUT_OF_GAS, OUT_OF_MEMORY, PROGRAM_ERROR, INTERNAL } = ERROR_CODE;
 
 /** error ทั้งหมด: code + message (message เป็นฟังก์ชันได้) */
 export const ERRORS = {
@@ -208,6 +217,7 @@ export const ERRORS = {
   listNotSupported: [INTERNAL, "DB ตัวนี้ไม่มี listKeys(prefix) จึงไล่ดูข้อมูลไม่ได้"],
   nativeInsufficient: [PROGRAM_ERROR, (address) => `ยอด native ของ '${address}' ไม่พอ`],
   outOfGas: [OUT_OF_GAS, (used, limit) => `แก๊สไม่พอ: ใช้ ${used} แต่จ่ายได้ ${limit}`],
+  outOfMemory: [OUT_OF_MEMORY, (limit) => `โปรแกรมใช้หน่วยความจำเกินกำหนด (${limit} ไบต์ต่อ tx)`],
   blockCommitted: [INVALID_REQUEST, "block นี้ commit ไปแล้ว"],
   blockExists: [INVALID_REQUEST, (number) => `block ${number} ถูกบันทึกไปแล้ว`],
   blockFull: [LIMIT_EXCEEDED, (max) => `block เต็มแล้ว (สูงสุด ${max} tx)`],
@@ -226,6 +236,7 @@ export const ERRORS = {
   upgradeNotFound: [NOT_FOUND, "ไม่พบการอัปเกรดที่รอรีวิว"],
   upgradeNeedsBlock: [INVALID_REQUEST, "upgradeDelayBlocks > 0: ต้องอนุมัติการอัปเกรดใน block ที่มีเลข block"],
   invalidUpgradeDelay: [INVALID_REQUEST, "upgradeDelayBlocks ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
+  invalidSandboxLimit: [INVALID_REQUEST, (name, [min, max]) => `${name} ต้องเป็นจำนวนเต็มระหว่าง ${min} ถึง ${max}`],
   templateNotActive: [NOT_FOUND, (id) => `โปรแกรมต้นแบบ '${id}' ไม่มีอยู่หรือยังไม่ได้รับอนุมัติ`],
   invalidSalt: [INVALID_REQUEST, "salt ต้องเป็น string ที่ไม่ว่าง หรือ BigInt"],
 };
@@ -269,12 +280,8 @@ const WRITE = { PUT: "put", DEL: "del" };
 
 const HEX_PATTERN = /^0x[0-9a-f]+$/i;
 const METADATA_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
-const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";
+const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";   // โปรแกรม throw { code: ค่านี้ } = TIMEOUT (แบบเดิมของ node:vm)
 const MAP_PARTS = Symbol("map parts");
-
-// node:vm ใช้แค่จับเวลา
-const timerContext = nodeVm.createContext({ task: null });
-const timerScript = new nodeVm.Script("task()");
 
 // ============================================================================
 //  Error
@@ -305,6 +312,19 @@ export class VMError extends Error {
     }
     return new VMError(PROGRAM_ERROR, String(err));
   }
+
+  /** error ที่โปรแกรม throw ใน sandbox (ได้มาเป็นชื่อ + ข้อความ) — กติกาเดียวกับ fromProgram */
+  static fromGuest({ name, message, stack }) {
+    const error = new VMError(PROGRAM_ERROR, name === "Error" ? message : `โปรแกรมทำงานผิดพลาด (${name})`);
+    error.detail = { name, message, at: locateInGuest(stack) };
+    return error;
+  }
+}
+
+/** ตำแหน่งจาก stack ของ QuickJS: "at f (program:12:5)" */
+function locateInGuest(stack) {
+  const match = /\(program:(\d+):(\d+)\)/.exec(stack ?? "");
+  return match ? `line ${match[1]}, col ${match[2]}` : null;
 }
 
 /** ตำแหน่งคร่าว ๆ ในโค้ดที่คอมไพล์แล้ว (โค้ดถูกเก็บเป็นบรรทัดเดียว ตัวเลขจึงเป็นแค่ตัวช่วย) */
@@ -349,23 +369,7 @@ export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddr
 /** input ของโปรแกรม: copy แบบ JSON แล้ว normalize address */
 export const toInputValue = (value, label) => normalizeHexDeep(toJsonValue(value, label));
 
-/** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส */
-/** ขนาดคร่าว ๆ ของค่า (ไม่ลงลึก): string = ความยาว, array = จำนวนสมาชิก, object = จำนวน key */
-function sizeOf(value) {
-  if (typeof value === "string" || Array.isArray(value)) return value.length;
-  if (value !== null && typeof value === "object") return Object.keys(value).length;
-  return 1;
-}
-
-/** ขนาดผลที่รู้ได้ก่อนเรียก (กันการสร้างข้อมูลใหญ่ด้วยคำสั่งเดียวก่อนถูกคิดแก๊ส) */
-function expectedSize(target, method, args) {
-  const count = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0);
-  if (method === "repeat" && typeof target === "string") return target.length * count(args[0]);
-  if ((method === "padStart" || method === "padEnd") && typeof target === "string") return count(args[0]);
-  if (method === "from" && args[0] && typeof args[0] === "object") return count(args[0].length);
-  return 0;
-}
-
+/** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส (แก๊สของเมธอดในตัว __call คิดใน sandbox ดู sandbox.js) */
 export const valueSize = (value) => (value === undefined ? 0 : Buffer.byteLength(JSON.stringify(encodeBigints(value)) ?? "", "utf8"));
 
 /** ตัวเลขถูกเก็บเป็น string ลงท้ายด้วย n เช่น "1000n" เพราะ JSON ไม่มี BigInt */
@@ -666,18 +670,6 @@ export function checkUpgrader(upgrader) {
   return normalizeAddress(upgrader);
 }
 
-// ---------- timeout ----------
-
-/** รัน fn และหยุดทันทีเมื่อเกินเวลา (ใช้ที่ชั้นนอกสุด โปรแกรมซ้อนอยู่ใต้เวลาเดียวกัน) */
-export function runWithTimeout(fn, timeoutMs) {
-  timerContext.task = fn;
-  try {
-    return timerScript.runInContext(timerContext, { timeout: Math.max(1, Math.floor(timeoutMs)) });
-  } finally {
-    timerContext.task = null;
-  }
-}
-
 // ---------- เวลา ----------
 
 const RealDate = Date;
@@ -714,24 +706,27 @@ export function createBlockDate(timestamp) {
 }
 
 // ============================================================================
-//  Compiler: แปลงโค้ดเป็นฟังก์ชัน (มี cache)
+//  Compiler: ตรวจโค้ด + ฉีดตัวนับแก๊ส → ซอร์สที่พร้อมรันใน sandbox (มี cache ตามเนื้อโค้ด)
 // ============================================================================
 
 export class Compiler {
   #cache = new Map(); // oneLineCode → program
 
-  /** โค้ดบรรทัดเดียว → { exports, hasInit, create(api) } */
+  /** โค้ดบรรทัดเดียว → { exports, hasInit, hasMigrate, source } (source = ฟังก์ชัน factory(api) ที่ฉีดตัวนับแก๊สแล้ว) */
   compile(oneLineCode) {
     if (!this.#cache.has(oneLineCode)) {
       const { body, exports, candidateNames } = Compiler.parse(fromOneLine(oneLineCode));
       Compiler.checkSyntax(body);
       const functionNames = candidateNames.filter((name) => Compiler.isTopLevelDeclaration(body, name));
       const callable = Compiler.validateExports(exports, functionNames);
+      const source = Compiler.buildFactory(Compiler.meter(body), functionNames);
+      const guestError = checkGuestSyntax(source);   // QuickJS รับ syntax ไม่ตรงกับ V8 ทุกข้อ → ตรวจกับตัวที่ใช้รันจริงด้วย
+      if (guestError) fail(ERRORS.syntaxError, guestError);
       this.#cache.set(oneLineCode, {
         exports: callable,
         hasInit: functionNames.includes(INIT_FUNCTION),
         hasMigrate: functionNames.includes(MIGRATE_FUNCTION),
-        create: Compiler.buildFactory(Compiler.meter(body), functionNames),
+        source,
       });
     }
     return this.#cache.get(oneLineCode);
@@ -774,7 +769,7 @@ export class Compiler {
     }
   }
 
-  /** คอมไพล์เพื่อตรวจ syntax (ไม่รันโค้ด) */
+  /** คอมไพล์เพื่อตรวจ syntax ด้วย V8 (ไม่รันโค้ด — แค่สร้างฟังก์ชันโดยไม่เรียก ข้อความ error คงเดิม) */
   static checkSyntax(body) {
     try {
       new Function("api", Compiler.source(body));
@@ -803,10 +798,10 @@ export class Compiler {
     return exports.filter((name) => name !== INIT_FUNCTION && name !== MIGRATE_FUNCTION);
   }
 
-  /** factory(api) → { ชื่อฟังก์ชัน: function } */
+  /** ซอร์สของ factory(api) → { ชื่อฟังก์ชัน: function } (รันใน sandbox ทุก call จึงไม่มีตัวแปรค้างข้าม call) */
   static buildFactory(body, functionNames) {
     const returns = functionNames.map((name) => `${name}: typeof ${name} === "function" ? ${name} : undefined`);
-    return new Function("api", Compiler.source(body, `return { ${returns.join(", ")} };`));
+    return `(function (api) {\n${Compiler.source(body, `return { ${returns.join(", ")} };`)}\n})`;
   }
 }
 
@@ -818,9 +813,14 @@ export class Transaction {
   #read;
   #readCache = new Map(); // dbKey → ค่าที่อ่านจาก DB แล้ว (อ่านแต่ละ key จาก DB ครั้งเดียวต่อ request)
 
-  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity }) {
+  #sandbox = null;
+  #sandboxOptions;
+
+  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity,
+    memoryLimitBytes = DEFAULT_OPTIONS.memoryLimitBytes, maxStackBytes = DEFAULT_OPTIONS.maxStackBytes, wallClock = false }) {
     checkTimestamp(timestamp);
     this.#read = read;
+    this.#sandboxOptions = { memoryLimitBytes, maxStackBytes, wallClock };
     this.blockNumber = blockNumber;           // เลข block ที่ tx นี้อยู่ (null = รันนอก block)
     this.seed = null;                         // seed ของตัวสุ่ม (ตั้งจาก hash ของ tx)
     this.Math = Math;                         // แทนด้วยตัวสุ่มที่ผูกกับ tx เมื่อรู้ seed
@@ -839,7 +839,7 @@ export class Transaction {
     this.Date = createBlockDate(timestamp);
     this.maxCallDepth = maxCallDepth;
     this.deadline = Date.now() + timeoutMs;
-    this.fatal = null;       // error ที่ทั้ง request ต้องล้ม (DB พัง / แก๊สหมด) — โปรแกรม catch ไม่ได้
+    this.fatal = null;       // error ที่ทั้ง request ต้องล้ม (DB พัง / แก๊สหมด / หมดเวลา / หน่วยความจำเกิน) — โปรแกรม catch ไม่ได้
     this.writes = [];        // [{ type: "put", dbKey, value } | { type: "del", dbKey }]
     this.calls = [];         // log การเรียกโปรแกรม
     this.events = [];        // event ที่โปรแกรม emit (ถูกย้อนพร้อม writes)
@@ -881,6 +881,33 @@ export class Transaction {
       this.fatal = VMError.from(ERRORS.outOfGas, this.gasUsed, this.gasLimit);
       throw this.fatal;
     }
+  }
+
+  /** sandbox ตั้งให้ทั้ง request ล้ม: "timeout" | "memory" (error แรกชนะ) */
+  abort(kind) {
+    this.fatal ??= kind === "timeout"
+      ? VMError.from(ERRORS.timeout)
+      : VMError.from(ERRORS.outOfMemory, this.#sandboxOptions.memoryLimitBytes);
+    return this.fatal;
+  }
+
+  // ---------- sandbox ----------
+
+  /** runtime ของ QuickJS ของ tx นี้ (สร้างตอนรันโปรแกรมครั้งแรก — tx ที่ไม่รันโปรแกรมไม่ต้องจ่าย) */
+  sandbox() {
+    this.#sandbox ??= new Sandbox(this, {
+      ...this.#sandboxOptions,
+      nodeGas: this.gas.node,
+      builtinGas: this.gas.builtin,
+      timestamp: this.timestamp,
+      map,
+    });
+    return this.#sandbox;
+  }
+
+  /** คืน runtime / context ทั้งหมด (runAction เรียกเสมอ) */
+  dispose() {
+    this.#sandbox?.dispose();
   }
 
   /** ค่าแก๊สที่ต้องจ่ายเป็น native */
@@ -993,6 +1020,9 @@ export class VirtualMachine {
     maxValueSize = DEFAULT_OPTIONS.maxValueSize,
     recordHistory = DEFAULT_OPTIONS.recordHistory,
     upgradeDelayBlocks = DEFAULT_OPTIONS.upgradeDelayBlocks,
+    memoryLimitBytes = DEFAULT_OPTIONS.memoryLimitBytes,
+    maxStackBytes = DEFAULT_OPTIONS.maxStackBytes,
+    wallClock = DEFAULT_OPTIONS.wallClock,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -1021,6 +1051,13 @@ export class VirtualMachine {
     this.recordHistory = recordHistory;
     if (!Number.isSafeInteger(upgradeDelayBlocks) || upgradeDelayBlocks < 0) fail(ERRORS.invalidUpgradeDelay);
     this.upgradeDelayBlocks = upgradeDelayBlocks;
+    for (const [name, value] of Object.entries({ memoryLimitBytes, maxStackBytes })) {
+      const [min, max] = SANDBOX_LIMITS[name];
+      if (!Number.isSafeInteger(value) || value < min || value > max) fail(ERRORS.invalidSandboxLimit, name, SANDBOX_LIMITS[name]);
+    }
+    this.memoryLimitBytes = memoryLimitBytes;
+    this.maxStackBytes = maxStackBytes;
+    this.wallClock = wallClock;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     this.compiler = new Compiler();
@@ -1876,12 +1913,23 @@ export class VirtualMachine {
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
       burnPercent: checkBurnPercent(burnPercent),
+      memoryLimitBytes: this.memoryLimitBytes,
+      maxStackBytes: this.maxStackBytes,
+      wallClock: this.wallClock,
     });
   }
 
-  /** รัน action(tx) แล้วแปลงเป็น response */
+  /** รัน action(tx) แล้วแปลงเป็น response (คืน sandbox ของ tx ทุกกรณี) */
   runAction(action, options) {
     const tx = this.createTransaction(options);
+    try {
+      return this.#runAction(tx, action);
+    } finally {
+      tx.dispose();
+    }
+  }
+
+  #runAction(tx, action) {
     try {
       const result = action(tx);
       const charge = this.chargeOnSuccess(tx); // โปรแกรมโอน native ออกจนจ่ายค่าแก๊สไม่ไหว → OUT_OF_GAS
@@ -2079,7 +2127,7 @@ export class VirtualMachine {
         value: readNative(value),   // native ที่แนบมากับการเรียกนี้
         block: { timestamp: BigInt(tx.timestamp) },
       };
-      const result = this.invokeProgram(tx, program, api, functionName, params, depth);
+      const result = this.invokeProgram(tx, program, api, functionName, params, depth, programUuid);
       tx.assertAlive(); // DB พังแต่โปรแกรม catch ไว้ → ยัง throw
       record.result = result;
       Transaction.finishCall(record, undefined, tx.gasUsed);
@@ -2093,18 +2141,29 @@ export class VirtualMachine {
     }
   }
 
-  /** ชั้นนอกสุดจับเวลา, ชั้นในรันตรงภายใต้เวลาเดียวกัน */
-  invokeProgram(tx, program, api, functionName, params, depth) {
-    const invoke = () => program.create(api)[functionName](params);
-    const result = depth === 0 ? runWithTimeout(invoke, tx.remainingTime()) : invoke();
-    if (typeof result?.then === "function") fail(ERRORS.asyncNotSupported);
+  /** รันใน sandbox ของ tx (เวลา / หน่วยความจำ / stack นับรวมทั้งสายการเรียก) */
+  invokeProgram(tx, program, api, functionName, params, depth, programUuid) {
+    if (depth === 0) tx.remainingTime();   // หมดเวลาไปก่อนเริ่มแล้ว → TIMEOUT
+    const outcome = tx.sandbox().invoke({ programUuid, source: program.source, functionName, params, api, blockNumber: tx.blockNumber });
+    if (outcome.kind === "fatal") throw tx.fatal;
+    if (outcome.kind === "async") fail(ERRORS.asyncNotSupported);
+    if (outcome.kind === "throw") {
+      if (outcome.hostError !== undefined) throw outcome.hostError;   // error ของ host ตัวเดิมที่โปรแกรมไม่ได้ catch
+      if (outcome.fakeTimeout) fail(ERRORS.timeout);
+      if (outcome.guestError) throw VMError.fromGuest(outcome.guestError);
+      throw new VMError(PROGRAM_ERROR, outcome.text);
+    }
     // ค่าที่ออกจากโปรแกรม: BigInt ถูกแปลงเป็น "123n" เพื่อให้ส่งเป็น JSON ได้
-    return this.checkValueSize(fromProgram(result, "ค่าที่ return"), "ค่าที่ return");
+    return this.checkValueSize(fromProgram(outcome.value, "ค่าที่ return"), "ค่าที่ return");
   }
 
   // ---------- API ที่โปรแกรมเรียกใช้ ----------
 
-  /** ทุกฟังก์ชันหยุดทันทีถ้า DB พังไปแล้วใน request นี้ */
+  /**
+   * API ฝั่ง host ที่โปรแกรมเรียกผ่าน sandbox (ค่าที่ได้รับเป็นสำเนาจากโปรแกรมเสมอ)
+   * __gas / __call / map / Date / Math / ThisAddress / BlockNumber อยู่ใน sandbox เอง (ดู sandbox.js)
+   * ทุกฟังก์ชันหยุดทันทีถ้า DB พังไปแล้วใน request นี้
+   */
   createProgramApi(tx, caller) {
     const { programUuid } = caller;
     const guard = (fn) => (...args) => {
@@ -2112,17 +2171,10 @@ export class VirtualMachine {
       return fn(...args);
     };
     return {
-      [GAS_FN]: (nodes) => tx.useGas(nodes * tx.gas.node),
-      [CALL_FN]: (target, method, args) => this.programCallBuiltin(tx, target, method, args),
-      map,
-      Date: tx.Date,
-      Math: tx.Math,
-      ThisAddress: () => programUuid,
       ThisBalance: guard(() => this.programNativeBalance(tx, programUuid)),
       BalanceOf: guard((address) => this.programNativeBalance(tx, address)),
       IsProgram: guard((address) => this.programIsProgram(tx, address)),
       MetadataOf: guard((address, field) => toProgram(this.programMetadataOf(tx, address, field) ?? null, "metadata")),
-      BlockNumber: () => (tx.blockNumber === null ? null : BigInt(tx.blockNumber)),
       readDB: guard((key) => this.programReadDB(tx, programUuid, key)),
       writeDB: guard((key, value) => this.programWriteDB(tx, programUuid, key, value)),
       deleteDB: guard((key) => this.programDeleteDB(tx, programUuid, key)),
@@ -2226,19 +2278,6 @@ export class VirtualMachine {
   }
 
   /** keccak256 ของ string หรือข้อมูล JSON (object ถูกแปลงแบบ canonical ก่อน) */
-  /**
-   * obj.method(...args) ที่ถูกเปลี่ยนเป็น __call ตอนคอมไพล์: คิดแก๊สตามขนาดข้อมูล
-   * คิดก่อนเรียก (ขนาดข้อมูลเข้า + ขนาดผลที่คาดได้ล่วงหน้า เช่น repeat) แล้วคิดขนาดผลจริงหลังเรียก
-   */
-  programCallBuiltin(tx, target, method, args) {
-    const fn = target[method];   // target เป็น null / undefined → TypeError แบบเดียวกับการเรียกปกติ
-    if (typeof fn !== "function") return fn.apply(target, args);   // ให้ error เหมือนเดิม (not a function)
-    tx.useGas(tx.gas.builtin * (sizeOf(target) + args.reduce((sum, arg) => sum + sizeOf(arg), 0) + expectedSize(target, method, args)));
-    const result = Reflect.apply(fn, target, args);
-    tx.useGas(tx.gas.builtin * sizeOf(result));
-    return result;
-  }
-
   programKeccak(tx, value) {
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ keccak256"));
     tx.useGas(tx.gas.hash + tx.gas.byte * Buffer.byteLength(text, "utf8"));
