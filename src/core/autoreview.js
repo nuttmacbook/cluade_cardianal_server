@@ -16,6 +16,7 @@ import { parse } from "acorn";
 export const PROGRAM_API = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
   "keccak256", "ecrecover", "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber",
+  "cloneProgram",   // สร้างโปรแกรมใหม่จากโปรแกรมต้นแบบที่อนุมัติแล้ว (แบบ CREATE2)
   "params",
 ];
 

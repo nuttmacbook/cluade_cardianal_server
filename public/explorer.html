@@ -406,7 +406,9 @@ async function decorate(root = document) {
 }
 
 const txRow = (t, columns) => `<tr>${columns.map((c) => `<td>${c}</td>`).join("")}</tr>`;
-const actionTag = (a) => `<span class="tag">${esc(a)}</span>`;
+// readable labels for program upgrade / clone actions (other actions show their raw name)
+const ACTION_LABELS = { upgrade: "Upgrade", setUpgrader: "Set upgrader", initUpgrade: "Approve upgrade", rejectUpgrade: "Reject upgrade", create: "Create" };
+const actionTag = (a) => `<span class="tag">${esc(ACTION_LABELS[a] ?? a)}</span>`;
 
 // ---------- pagination ----------
 //   every long list is fetched one page at a time: { items, total, page, pages, limit }
@@ -603,7 +605,7 @@ function callDetail(i) {
   const name = (a) => (traceNames[String(a).toLowerCase()] ? ` <span class="dim">(${esc(traceNames[String(a).toLowerCase()])})</span>` : "");
   return `<div class="call ${ok ? "" : "fail"}">
     <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
-      <b>Call #${i + 1}</b><span class="dim">depth ${c.depth}</span></div>
+      <b>${c.type === "create" ? "Create" : "Call"} #${i + 1}</b>${c.type === "create" ? ' <span class="tag">CREATE</span>' : ""}<span class="dim">depth ${c.depth}</span></div>
     <div class="call-path">${addr(c.from)}${name(c.from)} <span class="dim">→</span> ${addr(c.program)}${name(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
     <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${coin(c.value ?? 0)}</span></span>
       ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
@@ -626,7 +628,20 @@ function pickCall(i) {
 
 async function tx(hash, draw = el) {
   const r = await api(`/tx/${hash}/receipt`);
-  if (r.error && !r.hash) return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  if (r.error && !r.hash) {
+    // not in a block: it may still wait in the mempool, or have been replaced (same nonce, higher gas price)
+    const queued = await api(`/tx/${hash}`).catch(() => null);
+    if (queued?.status === "replaced") return draw(panel("Transaction", kv([
+      ["Status", `<span class="tag bad">Replaced</span> <span class="dim">by a transaction with the same nonce and a higher gas price</span>`],
+      ["Tx hash", full(hash)],
+      ["Replaced by", txLink(queued.replacedBy, queued.replacedBy)],
+    ])));
+    if (queued?.status === "pending") return draw(panel("Transaction", kv([
+      ["Status", state("pending") + ' <span class="dim">waiting for the next block</span>'],
+      ["Tx hash", full(hash)],
+    ])));
+    return draw(panel("Transaction not found", `<div class="empty">${esc(r.error)}</div>`));
+  }
   // namespace of every address in the diagram (box labels read better as names)
   const names = {};
   const inTrace = [...new Set((r.trace ?? []).flatMap((c) => [c.program, c.from]).concat(r.from ?? []).map((a) => String(a).toLowerCase()))].slice(0, 30);
@@ -1073,6 +1088,10 @@ async function runWrite(program) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       if (seq !== outSeq || !box.isConnected) return;   // another run started or the user left / redrew the page
       const found = await api(`/tx/${sent.hash}`).catch(() => null);
+      if (found?.status === "replaced") {
+        return showResult({ ok: false, label: `Transaction · ${functionName}()`, error: "Replaced by another transaction with the same nonce",
+          full: found, link: txLinkBtn(found.replacedBy) });
+      }
       if (!found?.blockNumber) continue;
       const receipt = await api(`/tx/${sent.hash}/receipt`);
       if (seq !== outSeq || !box.isConnected) return;
@@ -1304,6 +1323,11 @@ async function address(value, draw = el) {
         <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],
       program && ["Creator", addr(data.metadata.creator)],
       program && ["Created", when(data.metadata.createdAt)],
+      // upgrade / clone: version (no metadata = 1), who may upgrade (none = immutable), template it was cloned from
+      program && ["Version", `${esc(meta.version ?? 1)}${program.pendingUpgrade ? ' <span class="tag">Upgrade pending review</span>' : ""}${
+        program.scheduledUpgrade ? ` <span class="tag">Upgrade active from block ${esc(program.scheduledUpgrade.activateAt)}</span>` : ""}`],
+      program && ["Upgrader", meta.upgrader ? addr(meta.upgrader) : '<span class="dim">None (immutable)</span>'],
+      program && meta.template && ["Template", addr(meta.template)],
     ])) + tabs(groups));
 }
 

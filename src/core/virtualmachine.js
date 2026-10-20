@@ -23,6 +23,15 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *  vm.call({ programUuid, functionName, input, context }) user เรียกฟังก์ชันที่ export
  *  vm.transfer({ from, to, amount })                      โอน native ระหว่าง address (ไม่เรียกโปรแกรม)
  *
+ *  อัปเกรดโปรแกรม (เฉพาะโปรแกรมที่มี upgrader — ไม่มี = แก้ไม่ได้ตลอดไป):
+ *    vm.deploy({ ..., upgrader })                            ตั้ง upgrader ตั้งแต่ deploy → เขียนเป็น metadata.upgrader ตอน init
+ *    vm.setUpgrader({ programUuid, upgrader, context })      upgrader คนปัจจุบันโอนสิทธิ์ (null = สละสิทธิ์ → แก้ไม่ได้อีก)
+ *    vm.upgrade({ programUuid, code, migrateInput, context }) upgrader ส่งโค้ดใหม่ → pending-upgrade:<id> รอรีวิว
+ *    vm.initUpgrade({ programUuid }) / vm.rejectUpgrade(...) ทีมงานอนุมัติ / ปฏิเสธ (กติกาเดียวกับ init / reject)
+ *       อนุมัติ → เปลี่ยน <id>:code, รัน migrate(params) ครั้งเดียว, metadata.version + 1, เก็บ <id>:codeversion:<n>
+ *       upgradeDelayBlocks = N > 0 → โค้ดใหม่เริ่มใช้ตอนสร้าง block (ที่อนุมัติ + N) ดู Block.#activateUpgrades
+ *  โคลนโปรแกรม (ในโปรแกรม): cloneProgram(template, initInput, { salt, value }) → address ใหม่ (แบบ CREATE2)
+ *
  *  คืนค่า { status: "success", result, calls, loadValues, afterValues, writes }
  *      หรือ { status: "throw", error: { code, message }, calls }
  *  เมื่อ success → vm.commit(res.writes) บันทึกลง DB ผ่าน db.writeKeys (หรือบันทึกเอง)
@@ -112,6 +121,7 @@ export const DEFAULT_OPTIONS = {
   autoReview: false,              // true = ตรวจโค้ดด้วยบัญชีขาวตอน deploy (แทนการรีวิวด้วยคน)
   maxValueSize: 64 * 1024,        // ขนาดสูงสุดของค่าที่เขียน / return / emit ต่อรายการ
   recordHistory: false,           // เก็บ history:<key>:<block> + blockundo:<block> (ต้องเปิดถ้าจะย้อนดู / กู้ระบบ)
+  upgradeDelayBlocks: 0,          // timelock ของการอัปเกรด: 0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ, N = ใช้ตอน block (ที่อนุมัติ + N)
 };
 
 /** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
@@ -209,6 +219,15 @@ export const ERRORS = {
   blockMissing: [NOT_FOUND, (number) => `ไม่พบ block ${number}`],
   replayMismatch: [INTERNAL, (number) => `รัน block ${number} ใหม่แล้วได้ hash ไม่ตรงกับที่บันทึกไว้`],
   blockTimestampOrder: [INVALID_REQUEST, (timestamp, previous) => `timestamp ของ block ต้องมากกว่า block ก่อนหน้า (${timestamp} <= ${previous})`],
+  immutableProgram: [FORBIDDEN, (id) => `โปรแกรม '${id}' อัปเกรดไม่ได้ (ไม่มี upgrader)`],
+  notUpgrader: [FORBIDDEN, (address) => `'${address}' ไม่ใช่ upgrader ของโปรแกรมนี้`],
+  invalidUpgrader: [INVALID_REQUEST, "upgrader ต้องเป็น address (string ที่ไม่ว่าง) หรือ null"],
+  upgradePending: [INVALID_REQUEST, (id) => `โปรแกรม '${id}' มีการอัปเกรดที่รออยู่แล้ว`],
+  upgradeNotFound: [NOT_FOUND, "ไม่พบการอัปเกรดที่รอรีวิว"],
+  upgradeNeedsBlock: [INVALID_REQUEST, "upgradeDelayBlocks > 0: ต้องอนุมัติการอัปเกรดใน block ที่มีเลข block"],
+  invalidUpgradeDelay: [INVALID_REQUEST, "upgradeDelayBlocks ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
+  templateNotActive: [NOT_FOUND, (id) => `โปรแกรมต้นแบบ '${id}' ไม่มีอยู่หรือยังไม่ได้รับอนุมัติ`],
+  invalidSalt: [INVALID_REQUEST, "salt ต้องเป็น string ที่ไม่ว่าง หรือ BigInt"],
 };
 
 // ============================================================================
@@ -216,13 +235,15 @@ export const ERRORS = {
 // ============================================================================
 
 const INIT_FUNCTION = "initialization";
+const MIGRATE_FUNCTION = "migrate";   // รันครั้งเดียวตอนอัปเกรด — เหมือน initialization คือเรียกจากภายนอกไม่ได้
 const KEY = { SEPARATOR: ":", PENDING: "pending", CODE: "code", CONTEXT: "context", STORAGE: "storage", THIS: "this", NONCE: "nonce", NATIVE: "native", TXN: "txn",
   METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", TX_TO: "txto",
   BLOCK: "block", BLOCK_BODY: "blockbody", BLOCK_HASH: "blockhash", LATEST_BLOCK: "latestblock", TX: "tx", GENESIS: "genesis",
-  HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding" };
+  HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding",
+  PENDING_UPGRADE: "pending-upgrade", SCHEDULED_UPGRADE: "scheduled-upgrade", UPGRADE_AT: "upgradeat", CODE_VERSION: "codeversion" };
 const PROGRAM_API_NAMES = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
-  "keccak256", "ecrecover",
+  "keccak256", "ecrecover", "cloneProgram",
   "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber", "Date", "Math",
 ];
 
@@ -243,7 +264,7 @@ const FUNCTION_PATTERN = /^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm
 const BINDING_PATTERN = /^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=/gm;
 
 const STATUS = { SUCCESS: "success", THROW: "throw", RUNNING: "running" };
-const STATE = { PENDING: "pending_review", ACTIVE: "active", REJECTED: "rejected" };
+const STATE = { PENDING: "pending_review", ACTIVE: "active", REJECTED: "rejected", SCHEDULED: "scheduled" };
 const WRITE = { PUT: "put", DEL: "del" };
 
 const HEX_PATTERN = /^0x[0-9a-f]+$/i;
@@ -436,6 +457,11 @@ export const NATIVE_FIELD = { RECEIVED: "received", SENDED: "sended", CONSUMED: 
 export const nativeKey = (address, field) => joinKey(address, KEY.NATIVE, field);
 export const metadataKey = (address, field) => joinKey(address, KEY.METADATA, field);
 export const namespaceKey = (name) => joinKey(KEY.NAMESPACE, name);
+/** การอัปเกรดที่รอรีวิว / อนุมัติแล้วแต่รอ timelock / ดัชนี "block ไหนต้องเปิดใช้โค้ดของใคร" / โค้ดทุกเวอร์ชัน */
+export const pendingUpgradeKey = (programUuid) => joinKey(KEY.PENDING_UPGRADE, programUuid);
+export const scheduledUpgradeKey = (programUuid) => joinKey(KEY.SCHEDULED_UPGRADE, programUuid);
+export const upgradeAtKey = (number) => joinKey(KEY.UPGRADE_AT, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
+export const codeVersionKey = (programUuid, version) => joinKey(programUuid, KEY.CODE_VERSION, String(version));
 
 /** address ปลายทางของเงินที่ถูกเผา (ตรวจยอดที่เผาไปทั้งหมดได้) */
 export const BURN_ADDRESS = `0x${"0".repeat(40)}`;
@@ -450,8 +476,12 @@ export const METADATA_FIELD = {
   URL: "url",
   ICON: "icon",
   TAGS: "tags",
+  UPGRADER: "upgrader",     // ผู้มีสิทธิ์ส่งโค้ดใหม่ (ไม่มี = โปรแกรมแก้ไม่ได้ตลอดไป)
+  VERSION: "version",       // เวอร์ชันของโค้ด (ไม่มี = 1) — เพิ่มทีละ 1 ทุกครั้งที่อัปเกรด
+  TEMPLATE: "template",     // โปรแกรมต้นแบบ (เฉพาะโปรแกรมที่สร้างด้วย cloneProgram)
 };
-export const RESERVED_METADATA = [METADATA_FIELD.TYPE, METADATA_FIELD.CREATOR, METADATA_FIELD.CREATED_AT];
+export const RESERVED_METADATA = [METADATA_FIELD.TYPE, METADATA_FIELD.CREATOR, METADATA_FIELD.CREATED_AT,
+  METADATA_FIELD.UPGRADER, METADATA_FIELD.VERSION, METADATA_FIELD.TEMPLATE];
 export const txnKey = (address, nonce, hash) => joinKey(address, KEY.TXN, String(nonce), hash);
 export const blockKey = (number) => joinKey(KEY.BLOCK, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 export const blockBodyKey = (number) => joinKey(KEY.BLOCK_BODY, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
@@ -538,6 +568,8 @@ export function collapseWrites(writes) {
 export function decodeDbKey(dbKey) {
   const [head, ...rest] = dbKey.split(KEY.SEPARATOR);
   if (head === KEY.PENDING) return { kind: KEY.PENDING, address: rest.join(KEY.SEPARATOR) };
+  if (head === KEY.PENDING_UPGRADE || head === KEY.SCHEDULED_UPGRADE) return { kind: head, address: rest.join(KEY.SEPARATOR) };
+  if (head === KEY.UPGRADE_AT) return { kind: KEY.UPGRADE_AT, number: Number(rest[0]) };
   if (head === KEY.BLOCK) return { kind: KEY.BLOCK, number: Number(rest[0]) };
   if (head === KEY.BLOCK_BODY) return { kind: KEY.BLOCK_BODY, number: Number(rest[0]) };
   if (head === KEY.BLOCK_HASH) return { kind: KEY.BLOCK_HASH, hash: rest[0] };
@@ -562,6 +594,7 @@ export function decodeDbKey(dbKey) {
   if (kind === KEY.TXN) return { kind, address: head, nonce: Number(parts[0]), hash: parts[1] };
   if (kind === KEY.NATIVE) return { kind, address: head, field: parts[0] };
   if (kind === KEY.METADATA) return { kind, address: head, field: parts[0] };
+  if (kind === KEY.CODE_VERSION) return { kind, address: head, version: Number(parts[0]) };
   return { kind, address: head };
 }
 
@@ -624,6 +657,13 @@ export function checkBurnPercent(percent) {
 
 export function checkCode(code) {
   if (typeof code !== "string") fail(ERRORS.invalidCode);
+}
+
+/** upgrader: address (string ที่ไม่ว่าง ไม่มี ':') · null / undefined = ไม่มี → คืน address ตัวพิมพ์เล็ก หรือ null */
+export function checkUpgrader(upgrader) {
+  if (upgrader === undefined || upgrader === null) return null;
+  if (!isNonEmptyString(upgrader) || upgrader.includes(":")) fail(ERRORS.invalidUpgrader);
+  return normalizeAddress(upgrader);
 }
 
 // ---------- timeout ----------
@@ -690,10 +730,16 @@ export class Compiler {
       this.#cache.set(oneLineCode, {
         exports: callable,
         hasInit: functionNames.includes(INIT_FUNCTION),
+        hasMigrate: functionNames.includes(MIGRATE_FUNCTION),
         create: Compiler.buildFactory(Compiler.meter(body), functionNames),
       });
     }
     return this.#cache.get(oneLineCode);
+  }
+
+  /** ลืมโค้ดที่คอมไพล์ไว้ (เรียกตอนโค้ดของโปรแกรมถูกแทนที่ด้วยการอัปเกรด — ใช้อีกเมื่อไรก็คอมไพล์ใหม่ได้) */
+  forget(oneLineCode) {
+    this.#cache.delete(oneLineCode);
   }
 
   /** แยกโค้ดเป็น body ภายใน scope, รายชื่อที่ return, ชื่อที่ "อาจ" เป็นฟังก์ชัน */
@@ -750,11 +796,11 @@ export class Compiler {
     }
   }
 
-  /** initialization ถูกตัดออกจากรายการ export เสมอ (VM เรียกเองตอน init เท่านั้น) */
+  /** initialization / migrate ถูกตัดออกจากรายการ export เสมอ (VM เรียกเองตอน init / อัปเกรดเท่านั้น) */
   static validateExports(exports, functionNames) {
     const missing = exports.find((name) => !functionNames.includes(name));
     if (missing) fail(ERRORS.exportMissing, missing);
-    return exports.filter((name) => name !== INIT_FUNCTION);
+    return exports.filter((name) => name !== INIT_FUNCTION && name !== MIGRATE_FUNCTION);
   }
 
   /** factory(api) → { ชื่อฟังก์ชัน: function } */
@@ -882,8 +928,9 @@ export class Transaction {
 
   // ---------- log การเรียก ----------
 
-  startCall({ depth, programUuid, functionName, context, input, value = 0, gasStart = this.gasUsed }) {
+  startCall({ depth, programUuid, functionName, context, input, value = 0, gasStart = this.gasUsed, type }) {
     const record = { depth, programUuid, functionName, ...pickContext(context), input, value: encodeNative(readNative(value)), gasStart, status: STATUS.RUNNING };
+    if (type) record.type = type;   // "create" = โปรแกรมถูกสร้างด้วย cloneProgram (ไม่มี = call ปกติ)
     this.calls.push(record);
     return record;
   }
@@ -945,6 +992,7 @@ export class VirtualMachine {
     autoReview = DEFAULT_OPTIONS.autoReview,
     maxValueSize = DEFAULT_OPTIONS.maxValueSize,
     recordHistory = DEFAULT_OPTIONS.recordHistory,
+    upgradeDelayBlocks = DEFAULT_OPTIONS.upgradeDelayBlocks,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -971,6 +1019,8 @@ export class VirtualMachine {
     this.autoReview = autoReview;
     this.maxValueSize = maxValueSize;
     this.recordHistory = recordHistory;
+    if (!Number.isSafeInteger(upgradeDelayBlocks) || upgradeDelayBlocks < 0) fail(ERRORS.invalidUpgradeDelay);
+    this.upgradeDelayBlocks = upgradeDelayBlocks;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     this.compiler = new Compiler();
@@ -989,13 +1039,14 @@ export class VirtualMachine {
   // ---------- API ของ server ----------
 
   /** user ส่งโค้ด → ตรวจ syntax → pending รอรีวิว */
-  deploy({ programUuid: rawProgramUuid, code, context: rawContext, initInput = {}, metadata = {}, nonce, gasLimit, gasPrice, value = 0 } = {}, options) {
+  deploy({ programUuid: rawProgramUuid, code, context: rawContext, initInput = {}, metadata = {}, upgrader, nonce, gasLimit, gasPrice, value = 0 } = {}, options) {
     return this.runAction((tx) => {
       const derive = this.deriveProgramAddress || rawProgramUuid === undefined;
       if (!derive) checkProgramUuid(rawProgramUuid);
       checkContext(rawContext);
       checkCode(code);
       const amount = checkValue(value);
+      const upgraderAddress = checkUpgrader(upgrader);
       const context = this.userContext(rawContext);
       this.preparePayer(tx, context.sender, { nonce, gasLimit, gasPrice, value: amount });
 
@@ -1030,8 +1081,10 @@ export class VirtualMachine {
         initInput: toInputValue(initInput, "initInput"),
         metadata,
         value: encodeNative(amount),
+        // ไม่ระบุ = ไม่มี field นี้เลย (pending ของโปรแกรมที่แก้ไม่ได้หน้าตาเหมือนเดิมทุกไบต์)
+        ...(upgraderAddress ? { upgrader: upgraderAddress } : {}),
       });
-      return { programUuid, code: oneLineCode, state: STATE.PENDING, value: encodeNative(amount) };
+      return { programUuid, code: oneLineCode, state: STATE.PENDING, value: encodeNative(amount), ...(upgraderAddress ? { upgrader: upgraderAddress } : {}) };
     }, options);
   }
 
@@ -1061,6 +1114,7 @@ export class VirtualMachine {
         [METADATA_FIELD.TYPE]: "program",
         [METADATA_FIELD.CREATOR]: deployer.sender,
         [METADATA_FIELD.CREATED_AT]: tx.timestamp,
+        ...(pending.upgrader ? { [METADATA_FIELD.UPGRADER]: pending.upgrader } : {}),
       }, { allowReserved: true });
       tx.delete(pendingKey(programUuid));
       return { programUuid, state: STATE.ACTIVE, initResult, value: encodeNative(value) };
@@ -1083,6 +1137,172 @@ export class VirtualMachine {
       tx.delete(pendingKey(programUuid));
       return { programUuid, state: STATE.REJECTED, refund: encodeNative(refund) };
     }, options);
+  }
+
+  // ---------- อัปเกรดโปรแกรม ----------
+
+  /** โปรแกรมต้องมีอยู่ มี upgrader และ sender ต้องเป็น upgrader คนปัจจุบัน */
+  requireUpgrader(tx, programUuid, sender) {
+    if (typeof tx.current(codeKey(programUuid)) !== "string") fail(ERRORS.programNotFound, programUuid);
+    const upgrader = tx.current(metadataKey(programUuid, METADATA_FIELD.UPGRADER));
+    if (upgrader === undefined || upgrader === null) fail(ERRORS.immutableProgram, programUuid);
+    if (upgrader !== sender) fail(ERRORS.notUpgrader, sender);
+    return upgrader;
+  }
+
+  /** upgrader ส่งโค้ดใหม่ → ตรวจแบบเดียวกับ deploy → pending-upgrade:<id> รอทีมงานอนุมัติ */
+  upgrade({ programUuid: rawProgramUuid, code, migrateInput = {}, context, nonce, gasLimit, gasPrice } = {}, options) {
+    return this.runAction((tx) => {
+      checkProgramUuid(rawProgramUuid);
+      checkContext(context);
+      checkCode(code);
+      const programUuid = normalizeAddress(rawProgramUuid);
+      const userContext = this.userContext(context);
+      this.preparePayer(tx, userContext.sender, { nonce, gasLimit, gasPrice });
+      this.rememberTransaction(tx, arguments[0], "upgrade");
+      this.seedRandom(tx, arguments[0], "upgrade");
+
+      const oneLineCode = toOneLine(code);
+      const codeSize = Buffer.byteLength(oneLineCode, "utf8");
+      if (codeSize > this.maxCodeSize) fail(ERRORS.codeTooLong, this.maxCodeSize, codeSize);
+      if (this.autoReview) {
+        const result = review(code, { apiNames: [...PROGRAM_API_NAMES, "params"] });
+        if (!result.ok) fail(ERRORS.reviewFailed, reviewMessage(result));
+      }
+      tx.useGas(tx.gas.call + tx.gas.code * codeSize);   // คิดแบบเดียวกับ deploy
+      this.compiler.compile(oneLineCode);
+
+      this.requireUpgrader(tx, programUuid, userContext.sender);
+      if (tx.current(pendingUpgradeKey(programUuid)) || tx.current(scheduledUpgradeKey(programUuid))) fail(ERRORS.upgradePending, programUuid);
+
+      tx.put(pendingUpgradeKey(programUuid), { code: oneLineCode, context: userContext, migrateInput: toInputValue(migrateInput, "migrateInput") ?? {} });
+      return { programUuid, code: oneLineCode, state: STATE.PENDING, version: this.programVersion(tx, programUuid) + 1 };
+    }, options);
+  }
+
+  /** upgrader คนปัจจุบันโอนสิทธิ์ให้คนอื่น หรือสละสิทธิ์ (upgrader: null → โปรแกรมแก้ไม่ได้อีกตลอดไป) */
+  setUpgrader({ programUuid: rawProgramUuid, upgrader, context, nonce, gasLimit, gasPrice } = {}, options) {
+    return this.runAction((tx) => {
+      checkProgramUuid(rawProgramUuid);
+      checkContext(context);
+      const programUuid = normalizeAddress(rawProgramUuid);
+      const next = checkUpgrader(upgrader);
+      const userContext = this.userContext(context);
+      this.preparePayer(tx, userContext.sender, { nonce, gasLimit, gasPrice });
+      this.rememberTransaction(tx, arguments[0], "setUpgrader");
+      this.seedRandom(tx, arguments[0], "setUpgrader");
+      tx.useGas(tx.gas.call + tx.gas.write);
+
+      this.requireUpgrader(tx, programUuid, userContext.sender);
+      this.writeMetadata(tx, programUuid, { [METADATA_FIELD.UPGRADER]: next }, { allowReserved: true });
+      return { programUuid, upgrader: next };
+    }, options);
+  }
+
+  /**
+   * ทีมงานอนุมัติการอัปเกรด (กติกาของผู้อนุมัติเหมือน init ทุกอย่าง)
+   *   upgradeDelayBlocks = 0 → เปลี่ยนโค้ด + รัน migrate ทันที (migrate ล้ม = อนุมัติไม่สำเร็จ ไม่มีอะไรเปลี่ยน)
+   *   upgradeDelayBlocks = N → นัดเปิดใช้ที่ block (เลข block นี้ + N) โค้ดเดิมยังทำงานจนถึงตอนนั้น
+   */
+  initUpgrade({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
+    return this.runAction((tx) => {
+      checkProgramUuid(rawProgramUuid);
+      const programUuid = normalizeAddress(rawProgramUuid);
+      this.prepareAdminAction(tx, arguments[0], "initUpgrade", { context, nonce, gasLimit, gasPrice });
+
+      const pending = tx.current(pendingUpgradeKey(programUuid));
+      if (!pending) fail(ERRORS.upgradeNotFound);
+      if (context === undefined) this.seedRandom(tx, arguments[0], "initUpgrade");
+      // upgrader ต้องยังเป็นคนเดิม (โอน / สละสิทธิ์ไปแล้ว → โค้ดที่ส่งค้างไว้ใช้ไม่ได้ ทีมงาน rejectUpgrade ทิ้งได้)
+      this.requireUpgrader(tx, programUuid, pending.context.sender);
+      tx.delete(pendingUpgradeKey(programUuid));
+
+      if (this.upgradeDelayBlocks > 0) {
+        if (tx.blockNumber === null) fail(ERRORS.upgradeNeedsBlock);
+        const activateAt = tx.blockNumber + this.upgradeDelayBlocks;
+        tx.useGas(2 * tx.gas.write);
+        tx.put(scheduledUpgradeKey(programUuid), { ...pending, approvedAt: tx.blockNumber, activateAt });
+        tx.put(upgradeAtKey(activateAt), [...(tx.current(upgradeAtKey(activateAt)) ?? []), programUuid]);
+        return { programUuid, state: STATE.SCHEDULED, version: this.programVersion(tx, programUuid) + 1, activateAt };
+      }
+      return { programUuid, state: STATE.ACTIVE, ...this.applyUpgrade(tx, programUuid, pending) };
+    }, options);
+  }
+
+  /** ทีมงานปฏิเสธการอัปเกรด → ลบ pending-upgrade (โค้ดเดิมทำงานต่อ) */
+  rejectUpgrade({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
+    return this.runAction((tx) => {
+      checkProgramUuid(rawProgramUuid);
+      const programUuid = normalizeAddress(rawProgramUuid);
+      this.prepareAdminAction(tx, arguments[0], "rejectUpgrade", { context, nonce, gasLimit, gasPrice });
+      if (!tx.current(pendingUpgradeKey(programUuid))) fail(ERRORS.upgradeNotFound);
+      if (context === undefined) this.seedRandom(tx, arguments[0], "rejectUpgrade");
+      tx.delete(pendingUpgradeKey(programUuid));
+      return { programUuid, state: STATE.REJECTED };
+    }, options);
+  }
+
+  /**
+   * เปิดใช้โค้ดที่ครบ timelock — Block เรียกเองตอนสร้าง block ที่ตรงกับ activateAt
+   * (ไม่ใช่ tx ของใคร: ไม่มีผู้จ่ายแก๊ส ไม่มี hash ไม่อยู่ใน body · replay สร้าง block เดิมก็ได้ผลเดิม)
+   * migrate ล้ม → ผลถูกทิ้ง (Block ลบนัดหมายทิ้งเอง) โค้ดเดิมทำงานต่อ
+   */
+  activateUpgrade({ programUuid, blockNumber }, options) {
+    return this.runAction((tx) => {
+      this.seedRandom(tx, { programUuid, blockNumber }, "activateUpgrade");
+      const scheduled = tx.current(scheduledUpgradeKey(programUuid));
+      if (!scheduled) fail(ERRORS.upgradeNotFound);
+      tx.delete(scheduledUpgradeKey(programUuid));
+      return { programUuid, state: STATE.ACTIVE, ...this.applyUpgrade(tx, programUuid, scheduled) };
+    }, options);
+  }
+
+  /** เวอร์ชันปัจจุบันของโค้ด (ไม่มี metadata.version = 1) */
+  programVersion(tx, programUuid) {
+    return Number(tx.current(metadataKey(programUuid, METADATA_FIELD.VERSION)) ?? 1);
+  }
+
+  /** เปลี่ยนโค้ด → เก็บเวอร์ชัน → รัน migrate ครั้งเดียว (throw = ทั้ง tx ล้ม ไม่มีอะไรเปลี่ยน) */
+  applyUpgrade(tx, programUuid, { code, migrateInput = {}, context }) {
+    const oldCode = tx.current(codeKey(programUuid));
+    if (typeof oldCode !== "string") fail(ERRORS.programNotFound, programUuid);
+    const version = this.programVersion(tx, programUuid);
+    const next = version + 1;
+    tx.useGas(3 * tx.gas.write);
+
+    // เวอร์ชันแรกไม่ถูกเก็บแยกตอน init → เก็บตอนถูกแทนที่ครั้งแรก (blockNumber ไม่รู้ = null)
+    if (tx.current(codeVersionKey(programUuid, version)) === undefined) {
+      tx.put(codeVersionKey(programUuid, version), { version, code: oldCode, blockNumber: null,
+        timestamp: tx.current(metadataKey(programUuid, METADATA_FIELD.CREATED_AT)) ?? null });
+    }
+    tx.put(codeKey(programUuid), code);
+    tx.put(codeVersionKey(programUuid, next), { version: next, code, blockNumber: tx.blockNumber, timestamp: tx.timestamp });
+    this.writeMetadata(tx, programUuid, { [METADATA_FIELD.VERSION]: next }, { allowReserved: true });
+
+    // migrate เห็นโค้ดใหม่แล้ว (runProgram กลับเข้าตัวเองก็ได้โค้ดใหม่) · context = upgrader ที่ส่งโค้ดมา
+    const program = this.compiler.compile(code);
+    const migrateResult = program.hasMigrate
+      ? this.runFunction(tx, { programUuid, functionName: MIGRATE_FUNCTION, input: migrateInput, context, value: 0n, code, isInit: true })
+      : undefined;
+    // cache คอมไพล์ผูกกับเนื้อโค้ด จึงไม่มีทางได้โค้ดเก่าจาก address นี้อีก · ลืมของเก่าทิ้ง (replay block เก่าก็คอมไพล์ใหม่ได้)
+    if (oldCode !== code) this.compiler.forget(oldCode);
+    return { version: next, migrateResult };
+  }
+
+  /** โค้ดทุกเวอร์ชันที่ถูกเก็บ (มีเฉพาะโปรแกรมที่เคยอัปเกรด) เก่าไปใหม่ — ต้องมี db.listKeys */
+  listCodeVersions(programUuid) {
+    const prefix = joinKey(normalizeAddress(programUuid), KEY.CODE_VERSION, "");
+    return this.listEntries(prefix).map(({ value }) => value).sort((a, b) => a.version - b.version);
+  }
+
+  /** โค้ดเวอร์ชัน n (ไม่มี → null) */
+  getCodeVersion(programUuid, version) {
+    return this.read(codeVersionKey(normalizeAddress(programUuid), version)) ?? null;
+  }
+
+  /** โค้ดที่โปรแกรมใช้ ณ ตอนที่ block <number> ปิด (ต้องเปิด recordHistory) */
+  codeAt(number, programUuid) {
+    return this.stateAt(number, codeKey(normalizeAddress(programUuid))) ?? null;
   }
 
   /** user เรียกฟังก์ชันที่ export */
@@ -1138,10 +1358,18 @@ export class VirtualMachine {
       return { ...base, from: normalizeAddress(request.context?.sender) ?? null, metadata: normalizeHexDeep(request.metadata ?? {}), ...fee };
     }
     if (action === "deploy") {
-      return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, code: toOneLine(typeof request.code === "string" ? request.code : ""), initInput: normalizeHexDeep(request.initInput ?? {}), value: request.value ?? 0, ...fee };
+      return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, code: toOneLine(typeof request.code === "string" ? request.code : ""), initInput: normalizeHexDeep(request.initInput ?? {}), value: request.value ?? 0,
+        ...(request.upgrader === undefined ? {} : { upgrader: normalizeAddress(request.upgrader) }),   // ไม่ส่ง = ไม่อยู่ใน hash (hash ของ tx เดิมไม่เปลี่ยน)
+        ...fee };
     }
     if (action === "call") {
       return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, method: request.functionName ?? null, input: normalizeHexDeep(request.input ?? {}), value: request.value ?? 0, ...fee };
+    }
+    if (action === "upgrade") {
+      return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, code: toOneLine(typeof request.code === "string" ? request.code : ""), input: normalizeHexDeep(request.migrateInput ?? {}), ...fee };
+    }
+    if (action === "setUpgrader") {
+      return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, upgrader: normalizeAddress(request.upgrader) ?? null, ...fee };
     }
     const signer = normalizeAddress(request.context?.sender) ?? null;
     if (signer) return { ...base, from: signer, to: normalizeAddress(request.programUuid) ?? null, ...fee };
@@ -1218,7 +1446,7 @@ export class VirtualMachine {
       from: normalizeAddress(isTransfer ? request.from : request.context?.sender) ?? null,
       to: normalizeAddress(isTransfer ? request.to : request.programUuid) ?? null,
       method: isTransfer ? "transfer" : request.functionName ?? action,
-      input: request.input ?? null,
+      input: request.input ?? request.migrateInput ?? null,
       value: encodeNative(readNative(isTransfer ? request.amount : request.value)),
       result: result.result ?? null,
       error: result.error ?? null,
@@ -1228,6 +1456,7 @@ export class VirtualMachine {
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
       trace: (result.calls ?? []).map((call) => ({
+        ...(call.type ? { type: call.type } : {}),   // "create" = โปรแกรมถูกสร้างด้วย cloneProgram
         depth: call.depth,
         program: call.programUuid,
         method: call.functionName,
@@ -1245,7 +1474,7 @@ export class VirtualMachine {
         : { address, field, after: value })),
       stateChanges: pick(KEY.STORAGE).map(({ address, key, value }) => ({ program: address, key, after: value })),
       programChanges: changes
-        .filter((change) => [KEY.PENDING, KEY.CODE, KEY.CONTEXT, KEY.THIS].includes(change.kind))
+        .filter((change) => [KEY.PENDING, KEY.CODE, KEY.CONTEXT, KEY.THIS, KEY.PENDING_UPGRADE, KEY.SCHEDULED_UPGRADE].includes(change.kind))
         .map(({ kind, address, value }) => ({ kind, address, removed: value === undefined })),
     };
   }
@@ -1830,7 +2059,7 @@ export class VirtualMachine {
    *   code   โค้ดบรรทัดเดียว (ใช้ตอน init เพราะยังไม่อยู่ใน DB)
    *   isInit อนุญาตให้เรียก initialization
    */
-  runFunction(tx, { programUuid: rawProgramUuid, functionName, input = {}, context: rawContext, value = 0, depth = 0, code, isInit = false }) {
+  runFunction(tx, { programUuid: rawProgramUuid, functionName, input = {}, context: rawContext, value = 0, depth = 0, code, isInit = false, callType }) {
     const programUuid = normalizeAddress(rawProgramUuid);
     const context = normalizeContext(rawContext);
     if (depth > tx.maxCallDepth) fail(ERRORS.callDepthExceeded, tx.maxCallDepth);
@@ -1840,7 +2069,7 @@ export class VirtualMachine {
 
     const gasStart = tx.gasUsed;
     tx.useGas(tx.gas.call);
-    const record = tx.startCall({ depth, programUuid, functionName, context, input, value, gasStart });
+    const record = tx.startCall({ depth, programUuid, functionName, context, input, value, gasStart, type: callType });
 
     try {
       const api = this.createProgramApi(tx, { programUuid, context, depth });
@@ -1906,6 +2135,8 @@ export class VirtualMachine {
         this.programRunProgram(tx, caller, target, functionName,
           fromProgram(input ?? {}, "input"), fromProgramOptions(options)) ?? null,
         "ผลลัพธ์")),
+      cloneProgram: guard((template, initInput, options) => this.programCloneProgram(tx, caller, template,
+        fromProgram(initInput ?? {}, "initInput"), options)),
     };
   }
 
@@ -2072,6 +2303,69 @@ export class VirtualMachine {
       throw err;
     }
   }
+
+  /** address ของโปรแกรมที่ cloneProgram สร้าง (แบบ CREATE2: factory + salt + hash ของโค้ด) → รู้ได้ก่อนสร้างจริง */
+  cloneAddressFor(factory, salt, oneLineCode) {
+    return addressFromHash(this.hashData({ chainId: this.chainId, factory: normalizeAddress(factory), salt: String(salt), codeHash: keccak256Hex(oneLineCode) }));
+  }
+
+  /**
+   * cloneProgram(template, initInput, { salt, value }) → address ใหม่
+   *   copy โค้ดของ template (ต้องอนุมัติแล้ว) ไปไว้ที่ address ใหม่ แล้วรัน initialization ทันทีใน tx เดียวกัน
+   *   context.sender ของ initialization = โปรแกรมที่เรียก (factory) · value โอนจาก factory ไปโปรแกรมใหม่
+   *   โปรแกรมใหม่ได้รับอนุมัติทันที (ไม่มี upgrader = แก้ไม่ได้) · ล้มตรงไหน → ย้อนทั้งหมด
+   *   trace: บันทึกเป็น call ชนิด "create" (explorer / callTracer แสดงเป็น CREATE)
+   */
+  programCloneProgram(tx, caller, template, initInput, options) {
+    const { salt, value } = options ?? {};
+    if (!isNonEmptyString(template)) fail(ERRORS.invalidAddress);
+    const saltText = typeof salt === "bigint" ? `${salt}` : salt;
+    if (!isNonEmptyString(saltText)) fail(ERRORS.invalidSalt);
+    const amount = value === undefined || value === null ? 0n : checkValue(fromProgramAmount(value, "value"));
+    const depth = caller.depth + 1;
+    if (depth > tx.maxCallDepth) fail(ERRORS.callDepthExceeded, tx.maxCallDepth);
+
+    const factory = caller.programUuid;
+    const source = normalizeAddress(template);
+    tx.useGas(tx.gas.read);
+    const code = tx.current(codeKey(source));   // มีเฉพาะโปรแกรมที่ init แล้ว (pending / rejected / ไม่มี → ไม่มี code)
+    if (typeof code !== "string") fail(ERRORS.templateNotActive, source);
+
+    const address = this.cloneAddressFor(factory, saltText, code);
+    if (tx.current(codeKey(address)) !== undefined || tx.current(pendingKey(address)) !== undefined
+      || tx.current(thisKey(address)) !== undefined) fail(ERRORS.programUuidUsed, address);
+
+    // ค่าแก๊ส: call (นับใน runFunction) + ตามขนาดโค้ด (เหมือน deploy) + write ของ code / context / this / metadata 4 ช่อง
+    const codeSize = Buffer.byteLength(code, "utf8");
+    tx.useGas(tx.gas.code * codeSize + 7 * tx.gas.write);
+
+    const savepoint = tx.savepoint();
+    try {
+      if (amount > 0n) this.moveNative(tx, factory, address, amount);
+      const context = { sender: factory, origin: caller.context.origin };
+      if (this.compiler.compile(code).hasInit) {
+        this.runFunction(tx, { programUuid: address, functionName: INIT_FUNCTION, input: initInput, context, value: amount, depth, code, isInit: true, callType: "create" });
+      } else {
+        // ไม่มี initialization ก็ยังต้องมีรายการ create ใน trace
+        const record = tx.startCall({ depth, programUuid: address, functionName: "create", context, input: toInputValue(initInput, "initInput") ?? {}, value: amount, type: "create" });
+        tx.useGas(tx.gas.call);
+        Transaction.finishCall(record, undefined, tx.gasUsed);
+      }
+      tx.put(codeKey(address), code);
+      tx.put(contextKey(address), context);
+      tx.put(thisKey(address), address);
+      this.writeMetadata(tx, address, {
+        [METADATA_FIELD.TYPE]: "program",
+        [METADATA_FIELD.CREATOR]: factory,
+        [METADATA_FIELD.CREATED_AT]: tx.timestamp,
+        [METADATA_FIELD.TEMPLATE]: source,
+      }, { allowReserved: true });
+      return address;
+    } catch (err) {
+      tx.rollbackTo(savepoint);
+      throw err;
+    }
+  }
 }
 
 /**
@@ -2140,6 +2434,7 @@ export class Block {
   #parentHash;
   #parentStateRoot;
   #recordBlocks;
+  #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -2180,6 +2475,39 @@ export class Block {
     }
     this.#feeRecipient = feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient);
     this.#burnPercent = checkBurnPercent(burnPercent);
+    if (this.#number !== null) this.#activateUpgrades();
+  }
+
+  /**
+   * timelock ของการอัปเกรด: ก่อน tx ใบแรกของ block N เปิดใช้โค้ดทุกตัวที่นัดไว้ที่ N (upgradeat:<N>)
+   * ทำตอนสร้าง block จึงขึ้นกับเลข block อย่างเดียว — replay / rebuild สร้าง block เดิมก็ได้ผลเดิมทุกครั้ง
+   * writes เข้า state ของ block (อยู่ใน stateRoot / history) แต่ไม่ใช่ tx: ไม่มี hash ไม่อยู่ใน body
+   */
+  #activateUpgrades() {
+    const dueKey = upgradeAtKey(this.#number);
+    const due = this.read(dueKey);
+    if (!Array.isArray(due) || due.length === 0) return;
+    for (const programUuid of due) {
+      const result = this.#vm.activateUpgrade({ programUuid, blockNumber: this.#number }, {
+        read: (dbKey) => this.read(dbKey),
+        timestamp: this.#timestamp,
+        blockNumber: this.#number,
+        feeRecipient: this.#feeRecipient,
+        burnPercent: this.#burnPercent,
+      });
+      if (result.status === STATUS.SUCCESS) {
+        for (const write of result.writes ?? []) this.#state.set(write.dbKey, copyValue(write));
+      }
+      // ล้ม (migrate throw) → ทิ้งนัดหมาย โค้ดเดิมทำงานต่อ
+      this.#state.set(scheduledUpgradeKey(programUuid), { type: WRITE.DEL, dbKey: scheduledUpgradeKey(programUuid) });
+      this.#upgrades.push({ program: programUuid, status: result.status, version: result.result?.version ?? null, error: result.error ?? null });
+    }
+    this.#state.set(dueKey, { type: WRITE.DEL, dbKey: dueKey });
+  }
+
+  /** โปรแกรมที่ถูกเปิดใช้โค้ดใหม่ตอนเริ่ม block นี้ (timelock ครบ) */
+  upgrades() {
+    return this.#upgrades.map(copyValue);
   }
 
   /** ผู้ปิด block ที่ได้ส่วนแบ่งค่าแก๊ส */
@@ -2227,6 +2555,22 @@ export class Block {
 
   setMetadata(request) {
     return this.#execute("setMetadata", request, "metadata");
+  }
+
+  upgrade(request) {
+    return this.#execute("upgrade", request);
+  }
+
+  setUpgrader(request) {
+    return this.#execute("setUpgrader", request);
+  }
+
+  initUpgrade(request) {
+    return this.#execute("initUpgrade", request);
+  }
+
+  rejectUpgrade(request) {
+    return this.#execute("rejectUpgrade", request);
   }
 
   /** ผลของทุก tx ที่เข้า block (copy) */
@@ -2390,7 +2734,7 @@ export class Block {
           dbKey: txToKey(call.programUuid, this.#number, index, callIndex + 1),
           value: {
             // status = ผลของการเรียกชั้นนี้ · txStatus = ผลของทั้ง tx (ชั้นนี้ล้มได้ แต่ชั้นบนอาจ catch ไว้)
-            hash, action: "call", status: call.status, txStatus: result.status,
+            hash, action: call.type === "create" ? "create" : "call", status: call.status, txStatus: result.status,
             from: normalizeAddress(call.sender ?? call.context?.sender) ?? null,
             method: call.functionName ?? null,
             depth: call.depth, via: normalizeAddress(request.programUuid) ?? null, value: 0,
@@ -2445,6 +2789,7 @@ export class Block {
       txRoot,
       stateRoot,
       txHashes,
+      ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
     };
   }
 

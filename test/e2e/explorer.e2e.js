@@ -111,6 +111,9 @@ test("ค้นหาด้วยชื่อ → หน้าโปรแกร
   await page.waitForFunction(() => location.hash.startsWith("#address/"));
   await settle();
   assert.match(await view(), /mytoken/);
+  // อัปเกรด: เวอร์ชัน (ไม่เคยอัปเกรด = 1) และ upgrader (ไม่มี = แก้ไม่ได้)
+  assert.match(await view(), /Version\s*1/);
+  assert.match(await view(), /Upgrader\s*None \(immutable\)/);
 
   await tab("Events");
   assert.match(await view(), /Transfer/);

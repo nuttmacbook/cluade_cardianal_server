@@ -49,6 +49,7 @@ writeDB(key, value)          // เขียน (ค่าต้องเป็�
 deleteDB(key)
 map("balances", address)     // ประกอบ key หลายส่วน → "balances:0x…"
 runProgram(address, "method", input, { value })   // เรียกโปรแกรมอื่น
+cloneProgram(template, initInput, { salt, value })   // สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address ใหม่ (แบบ CREATE2)
 transferNative(to, amount)   // โอนเงินจากกระเป๋าของโปรแกรมเอง
 setMetadata(field, value)    // ตั้ง namespace / description ของโปรแกรม
 emit("Transfer", { from, to, amount })   // บันทึก event ให้ explorer (ถูกย้อนถ้ากิ่งนั้นล้ม)
@@ -129,7 +130,7 @@ greet(api.params({ name: "โลก" }, { sender: "0xalice", value: 0n }));   //
 api.store / api.native / api.events / api.transfers   // ตรวจผลได้ตรง ๆ
 ```
 
-รองรับ API ครบทุกตัวยกเว้น `runProgram` ซึ่งต้องใช้ `createChain()`
+รองรับ API ครบทุกตัวยกเว้น `runProgram` และ `cloneProgram` ซึ่งต้องใช้ `createChain()`
 
 `createChain()` รันบน VM ตัวจริง พฤติกรรมจึงเหมือนบน chain ทุกอย่าง ทั้งการย้อนข้อมูลเมื่อ throw, ค่าแก๊ส และเวลาของ block
 

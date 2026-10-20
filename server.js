@@ -7,6 +7,7 @@
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
  *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
+ *   UPGRADE_DELAY_BLOCKS=0   timelock ของการอัปเกรดโปรแกรม: โค้ดใหม่เริ่มใช้ที่ block (ที่อนุมัติ + N) · 0 = ทันที
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -41,6 +42,7 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
+  upgradeDelayBlocks: Number(process.env.UPGRADE_DELAY_BLOCKS ?? 0),   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
 });
 export const mempool = new Mempool(vm);
 // POST ทุกตัวอาจรันโปรแกรม → จำกัดต่อ IP (ส่วน /sendtx ยังมี rate limit ต่อ address ใน mempool อีกชั้น)
@@ -105,8 +107,14 @@ const DYNAMIC = [
     try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber }; }
     catch (error) { return { status: 409, body: { error: error.message, tx: found } }; }
   }],
-  [/^\/tx\/([^/]+)$/, (m) => vm.getTransaction(m[1])
-    ?? (mempool.has(m[1]) ? { status: "pending", hash: m[1] } : { status: 404, body: { error: "Transaction not found" } })],
+  [/^\/tx\/([^/]+)$/, (m) => {
+    const found = vm.getTransaction(m[1]);
+    if (found) return found;
+    if (mempool.has(m[1])) return { status: "pending", hash: m[1] };
+    const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (จำไว้ ttlMs)
+    if (replacedBy) return { status: "replaced", hash: m[1], replacedBy };
+    return { status: 404, body: { error: "Transaction not found" } };
+  }],
   [/^\/address\/([^/]+)$/, (m, query) => ({
     address: lower(m[1]), native: vm.nativeBalanceOf(m[1]),
     nonce: vm.checkTransaction({ from: m[1], nonce: -1 }).expectedNonce,
@@ -118,6 +126,8 @@ const DYNAMIC = [
     const code = vm.read(`${lower(m[1])}:code`);
     if (!code) return { status: 404, body: { error: "Program not found (it may not be initialized yet)" } };
     return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: vm.getMetadata(m[1]),
+      // อัปเกรด: รอรีวิว / อนุมัติแล้วรอ timelock (ไม่มี = null)
+      pendingUpgrade: vm.read(`pending-upgrade:${lower(m[1])}`) ?? null, scheduledUpgrade: vm.read(`scheduled-upgrade:${lower(m[1])}`) ?? null,
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),
       interactions: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
       events: vm.listEvents({ program: m[1], limit: limitOf(query) }), token: tokenInfo(vm, m[1]) };
@@ -139,6 +149,8 @@ const DYNAMIC = [
       .map(({ dbKey, value }) => ({ key: dbKey.slice(base.length).split(":"), value }))];
     return { items, next: hasMore ? rows[limit - head.length].dbKey : null, prefix: group };
   }],
+  // โค้ดทุกเวอร์ชันของโปรแกรมที่เคยอัปเกรด [{ version, code, blockNumber, timestamp }]
+  [/^\/program\/([^/]+)\/versions$/, (m) => vm.listCodeVersions(m[1])],
   [/^\/program\/([^/]+)\/groups$/, (m, query) => {
     const address = lower(m[1]);
     const counts = new Map();
@@ -185,7 +197,7 @@ function handlePost(url, body) {
 
     // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
     const check = (item) => {
-      if (tx.action === "deploy") {
+      if (tx.action === "deploy" || tx.action === "upgrade") {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
         const reviewed = reviewProgram(tx.code);
         if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
       }

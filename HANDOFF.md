@@ -48,7 +48,7 @@ src/core/virtualmachine.js   2,521 บรรทัด  ตรรกะทั้�
 src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
-src/node/mempool.js            140        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice
+src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice, แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
@@ -117,8 +117,52 @@ function program() {
 - ชื่อฟังก์ชันครอบเป็นอะไรก็ได้ · `const program = () => { … }` ก็ได้ · **ห้าม `import` / `export`**
 - `return { … }` ต้องเป็น**บรรทัดสุดท้าย**ของฟังก์ชันครอบ (regex จับท้ายไฟล์)
 - ห้าม export `initialization`
+- `migrate(params)` (ถ้ามี) รันครั้งเดียวตอนอนุมัติการอัปเกรดเท่านั้น — อยู่ใน `return { … }` ก็ถูกตัดออก **เรียกจากภายนอกไม่ได้** เหมือน `initialization`
 - `params` ที่ทุกฟังก์ชันได้รับ: `{ input, context: { sender, origin }, value, block: { timestamp } }`
   (เลข block ไม่ได้อยู่ใน `params` — เรียก `BlockNumber()` แทน)
+
+### อัปเกรดโปรแกรม (upgrade) — เทสต์ `56-upgrade`
+
+**ไม่มี upgrader = แก้ไม่ได้ตลอดไป** · โปรแกรมทุกตัวที่มีอยู่เดิมไม่มี upgrader จึงแก้ไม่ได้
+- **ตั้ง upgrader ตอน deploy เท่านั้น**: `vm.deploy({ …, upgrader: "0x…" })` / tx ที่เซ็น `{ action: "deploy", …, upgrader: "0x…" }`
+  → เก็บใน `pending:<id>` (field `upgrader` มีเฉพาะเมื่อส่งมา) → ตอน `init` เขียนเป็น `metadata.upgrader`
+  (`upgrader` / `version` / `template` เป็นฟิลด์ของระบบ — ผู้ใช้ส่งผ่าน metadata / โปรแกรม `setMetadata` เองไม่ได้)
+- **โอนสิทธิ์ / สละสิทธิ์**: `vm.setUpgrader({ programUuid, upgrader, context })` — ต้องเป็น upgrader คนปัจจุบัน · `upgrader: null` = สละ → แก้ไม่ได้อีก
+  tx ที่เซ็น: `{ action: "setUpgrader", to: <program>, input: { upgrader: "0x…" | null } }`
+- **ส่งโค้ดใหม่**: `vm.upgrade({ programUuid, code, migrateInput, context })` จาก upgrader · ตรวจแบบ deploy ทุกอย่าง (ขนาด / syntax / autoreview / แก๊ส `call + code × byte`)
+  → `pending-upgrade:<id>` `{ code, context, migrateInput }` (ทีละ 1 รายการต่อโปรแกรม) · tx ที่เซ็น: `{ action: "upgrade", to, code, input: migrateInput }`
+- **ทีมงานอนุมัติ / ปฏิเสธ**: `vm.initUpgrade({ programUuid, context })` / `vm.rejectUpgrade(…)` — **กติกาผู้อนุมัติเหมือน init / reject ทุกอย่าง** (`admins`, ไม่มี context = เรียกภายใน)
+  tx ที่เซ็น: `action: "initUpgrade"` / `"rejectUpgrade"` · upgrader ต้องยังเป็นคนที่ส่งโค้ดมา (โอน / สละไปแล้ว → อนุมัติไม่ได้ ให้ reject ทิ้ง)
+- **ตอนอนุมัติ** (`applyUpgrade`): แทน `<id>:code` → เก็บ `<id>:codeversion:<n>` `{ version, code, blockNumber, timestamp }`
+  (เวอร์ชัน 1 ถูกเก็บตอนถูกแทนที่ครั้งแรก `blockNumber: null`) → `metadata.version` + 1 (ไม่มี = 1)
+  → รัน `migrate(params)` ครั้งเดียว (`input = migrateInput`, `sender = upgrader`, เห็นโค้ดใหม่แล้ว) · **migrate throw = อนุมัติล้ม ไม่มีอะไรเปลี่ยน** (pending ยังอยู่)
+  storage เดิมอยู่ครบ · cache คอมไพล์ผูกกับเนื้อโค้ด (โค้ดใหม่ = คอมไพล์ใหม่) และลืมโค้ดเก่าด้วย `compiler.forget()`
+- **timelock** — option `upgradeDelayBlocks` (server: env `UPGRADE_DELAY_BLOCKS`, ค่าเริ่ม 0)
+  - `0` → ใช้โค้ดใหม่ทันทีใน tx ที่อนุมัติ (tx ถัดไปใน block เดียวกันเห็นโค้ดใหม่)
+  - `N > 0` → อนุมัติที่ block B: ลบ pending เขียน `scheduled-upgrade:<id>` `{ …, approvedAt: B, activateAt: B + N }` + ดัชนี `upgradeat:<B+N>` `[id…]`
+    คืน `{ state: "scheduled", activateAt }` · โค้ดเดิมทำงานต่อ · ส่งโค้ดใหม่ซ้ำไม่ได้จนกว่าจะเปิดใช้
+  - **เปิดใช้ตอนสร้าง block B+N** (`Block` constructor → `#activateUpgrades` → `vm.activateUpgrade`) ก่อน tx ใบแรก แม้ block นั้นไม่มี tx
+    ไม่ใช่ tx (ไม่มี hash / ผู้จ่าย / ไม่อยู่ใน body) แต่ writes อยู่ใน state ของ block → เข้า stateRoot + history → **replay / rebuild ได้ผลเดิม**
+    `header.upgrades = [{ program, status, version, error }]` (มีเฉพาะ block ที่มีการเปิดใช้) · migrate ล้มตอนนั้น → ยกเลิกการอัปเกรด โค้ดเดิมทำงานต่อ
+  - ต้องมีเลข block (`recordBlocks` / ส่ง `number`) · อนุมัตินอก block → error · `simulate` ของ `initUpgrade` จำลองเป็น block ถัดไปให้เอง
+- อ่านย้อนหลัง: `vm.listCodeVersions(addr)` · `vm.getCodeVersion(addr, n)` · `vm.codeAt(blockNumber, addr)` (= `stateAt` ของ `<id>:code`)
+  `replayBlock` ของ block ก่อนอัปเกรดใช้โค้ด ณ ตอนนั้นเสมอ (อ่าน `<id>:code` ผ่าน history)
+
+### cloneProgram — โรงงานสร้างโปรแกรม (แบบ CREATE2) — เทสต์ `57-clone`
+
+```js
+const address = cloneProgram(template, initInput, { salt, value })   // ในโปรแกรม (factory)
+```
+- `template` = โปรแกรมใดก็ได้ที่**อนุมัติแล้ว** (มี `<id>:code`) · pending / rejected / ไม่มี → `NOT_FOUND`
+- address = `addressFromHash(hashData({ chainId, factory, salt, codeHash: keccak256(code) }))` — รู้ได้ก่อนสร้างด้วย `vm.cloneAddressFor(factory, salt, code)`
+  `salt` = string ที่ไม่ว่าง หรือ BigInt (ใช้ค่าตัวเลขเป็น string) · salt ซ้ำ (address มีอยู่แล้ว) → `INVALID_REQUEST`
+- **copy** โค้ดไปไว้ที่ address ใหม่ (อัปเกรด template ภายหลังไม่กระทบ clone) แล้วรัน `initialization` ทันทีใน tx เดียวกัน
+  `context.sender = factory` · `origin` เดิม · `value` (ไม่บังคับ) โอน native จาก factory → clone ก่อน initialization (เห็นที่ `params.value`)
+- metadata: `type: "program"`, `creator: factory`, `createdAt`, `template` · อนุมัติทันที (มี `<id>:this` → นับใน `/programs/approved`) · ไม่มี upgrader = แก้ไม่ได้
+- แก๊ส: `call` (ใน initialization) + `code × byte` ของโค้ด (เหมือน deploy) + `write × 7` + read 1 · ความลึกนับเหมือน `runProgram` (`maxCallDepth`)
+- **ล้มที่ไหนย้อนทั้งหมด**: initialization throw / กิ่งที่เรียก clone throw แล้วชั้นบน catch → ไม่เหลือ code / metadata / เงินที่โอน
+- trace: รายการของ clone มี `type: "create"` (`tx.calls` → receipt `trace[].type` → `txto` action `create` → callTracer `CREATE`)
+  call ธรรมดาไม่มี field `type` (receipt เดิมไม่เปลี่ยน) · template ไม่มี initialization ก็ยังมีรายการ create (`functionName: "create"`)
 
 ### params / ค่าที่ส่งกลับ — ตัวเลขเป็น BigInt
 
@@ -132,11 +176,12 @@ function program() {
 - ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
   (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
-### API ในโปรแกรม (18 ตัว)
+### API ในโปรแกรม (19 ตัว)
 
 ```
 readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
 runProgram(target, functionName, input, { value })      เรียกโปรแกรมอื่น
+cloneProgram(template, initInput, { salt, value })      สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address (ดูหัวข้อ cloneProgram)
 transferNative(to, amount)                              โอนเหรียญหลักจากโปรแกรม
 setMetadata(field, value) / emit(name, data)
 keccak256(value) / ecrecover(value, signature)
@@ -194,6 +239,17 @@ POST /sendtx
 
 `take()` เรียง tx ด้วย `sortPendingTransactions` (gasPrice มาก่อน) แล้วเช็ค `block.checkTransaction()` ทีละใบ
 
+**แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
+- nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
+- nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ gasPrice ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น)
+  ไม่ถึง → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · ไม่ระบุ gasPrice = `vm.gas.price`
+- ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 1 wei ให้ตัวเอง** (เชนไม่รับโอน 0: `amount ต้องเป็นจำนวนเต็มบวก`)
+- ไม่กิน `maxPerSender` / `maxSize` เพิ่ม แต่นับ rate limit ต่อ address · ต้องผ่าน simulate ก่อน — ไม่ผ่าน → ใบเดิมยังอยู่
+- ใบเดิมออกจากคิวแต่ยังอยู่ใน "เคยเห็น" (ส่งใบเดิมกลับมาไม่ได้) · `mempool.replacedBy(hash)` จำไว้ `ttlMs`
+  → `GET /tx/:hash` ตอบ `{ status: "replaced", hash, replacedBy }` · explorer แสดง "Replaced by …"
+- ใบแทนที่ใช้ nonce เดิม → `take()` ยังหยิบของแต่ละ address ตามลำดับ nonce · `/nonce/:address` ไม่ขยับ
+- `/evm`: txpool เห็นแค่ใบใหม่ · `eth_getTransactionByHash` ของใบเดิมตอบ `null` (แบบ geth)
+
 ### เมธอดที่น่าจะต้องใช้
 
 ```js
@@ -204,6 +260,11 @@ vm.reject({ programUuid, context, … })    // ปฏิเสธ + คืนเ
 vm.call({ programUuid, functionName, input, context, value, … })
 vm.transfer({ from, to, amount, … })
 vm.setMetadata({ metadata, context, … })
+// อัปเกรด (ดูหัวข้อ "อัปเกรดโปรแกรม") — deploy รับ upgrader เพิ่ม
+vm.upgrade({ programUuid, code, migrateInput, context, … })          // upgrader ส่งโค้ดใหม่ → pending-upgrade
+vm.setUpgrader({ programUuid, upgrader /* null = สละสิทธิ์ */, context, … })
+vm.initUpgrade({ programUuid, context, … }) / vm.rejectUpgrade(…)    // ทีมงาน (กติกาเดียวกับ init / reject)
+vm.listCodeVersions(addr) / vm.getCodeVersion(addr, n) / vm.codeAt(blockNumber, addr) / vm.cloneAddressFor(factory, salt, code)
 
 // อ่านข้อมูล
 vm.read(dbKey) / vm.listKeys(prefix, opts) / vm.listEntries(prefix, opts)
@@ -233,7 +294,8 @@ vm.applyGenesis(obj) / vm.genesisHash() / vm.checkGenesis(obj)
 
 ```js
 const block = vm.createBlock({ timestamp, feeRecipient, number?, parentHash?, checkChain?, recordBlocks?, recordHistory? });
-block.call(request)                       // และ deploy / init / reject / transfer / setMetadata
+block.call(request)                       // และ deploy / init / reject / transfer / setMetadata / upgrade / setUpgrader / initUpgrade / rejectUpgrade
+block.upgrades()                          // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนสร้าง block นี้
 block.checkTransaction(request)           // เช็คโควตา + nonce ก่อนใส่จริง
 block.header() / block.body() / block.hashes() / block.txHashes()
 block.receipt({ number })                 // receipt ของทุก tx
@@ -280,9 +342,14 @@ pending:<id>                        โปรแกรมที่ deploy แล
 <id>:storage:<a>:<b>:…              ข้อมูลของโปรแกรม (ส่วนที่ map() สร้าง, URI-encode ต่อ part)
 <addr>:nonce                        ลำดับ tx ถัดไป
 <addr>:native:received|sended|consumed    ตัวนับสะสม เพิ่มได้อย่างเดียว
-<addr>:metadata:<field>             namespace / description / type / creator / createdAt
+<addr>:metadata:<field>             namespace / description / type / creator / createdAt / upgrader / version / template
 namespace:<name>                    ชื่อ → address (ห้ามซ้ำทั้งระบบ)
+pending-upgrade:<id>                โค้ดใหม่ที่ upgrader ส่งมา รอทีมงาน  { code, context, migrateInput }
+scheduled-upgrade:<id>              อนุมัติแล้ว รอ timelock  { code, context, migrateInput, approvedAt, activateAt }
+upgradeat:<n>                       ดัชนี: โปรแกรมที่ต้องเปิดใช้โค้ดใหม่ตอนสร้าง block n  [id…] (ลบทิ้งเมื่อเปิดใช้)
+<id>:codeversion:<n>                โค้ดเวอร์ชัน n  { version, code, blockNumber, timestamp } (เฉพาะโปรแกรมที่เคยอัปเกรด)
 ```
+`pending-upgrade:` / `scheduled-upgrade:` ใช้ขีดกลาง จึงไม่ปนกับ `pending:` (รายการรออนุมัติ deploy นับด้วย prefix `pending:`)
 
 **ยอดคงเหลือ = received − sended − consumed** (`consumed` = ค่าแก๊สที่จ่ายไป) ไม่มี key ที่เก็บยอดสุทธิ
 ออกแบบให้ทุกค่าเพิ่มทางเดียว เพื่อให้ tx ที่ไม่เกี่ยวกันไม่แย่ง key เดียวกัน
@@ -331,8 +398,11 @@ vm[method](request);
 - domain `{ name: "ProgramVM", version: "1", chainId }`
 - field ที่เซ็น **ลำดับห้ามสลับ**: `action, from, to, method, input, value, nonce, gasLimit, gasPrice`
 - `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
-- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject`
-  → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata`)
+- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade`
+  → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata` · ที่เหลือชื่อเดียวกัน)
+  - `upgrade`: `to` = โปรแกรม · `code` = โค้ดใหม่ · `input` = migrateInput · `setUpgrader`: `input = { upgrader: "0x…" | null }`
+  - `deploy` มี field `upgrader` เพิ่มได้ → ถูกยุบเข้า string ที่เซ็นเป็น `canonicalJson({ input, code, upgrader })`
+    **ไม่ส่ง = ไม่มี key นี้** → tx / ลายเซ็นเดิมทุกใบได้ digest เหมือนเดิม (ใน hash ของ VM ก็เช่นกัน)
 - `sender` มาจากการ recover ลายเซ็น**เท่านั้น** `tx.from` ใช้เทียบอย่างเดียว
 
 ### tx มี 2 hash ค้นได้ทั้งคู่
@@ -357,10 +427,11 @@ vm[method](request);
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
-| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` |
+| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (ใช้ hash เท่านั้น ไม่รับ digest) |
 | `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
-| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน) |
+| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน), `pendingUpgrade` / `scheduledUpgrade` (null ถ้าไม่มี) |
+| `GET /program/:a/versions` | โค้ดทุกเวอร์ชัน `[{ version, code, blockNumber, timestamp }]` (ว่าง = ไม่เคยอัปเกรด) |
 | `GET /address/:a/tokens` | เหรียญที่ถือ `[{ address, name, ticker, decimals, totalSupply, balance }]` · ยอด 0 ไม่แสดง |
 | `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 ถ้าไม่ใช่ token |
 | `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
@@ -390,6 +461,7 @@ page เกินหน้าสุดท้าย → ได้หน้าส�
 **trace ใน receipt** (`/tx/:h/receipt` → `trace[]`): `{ depth, program, method, from, origin, input, value, result, gasUsed, status, error }`
 `input` / `value` / `result` / `gasUsed` เพิ่มเมื่อ 9 ต.ค. (เก็บใน `tx.calls` ตอนรัน ไม่ได้เขียนลง DB และไม่เข้า hash ของ block)
 `gasUsed` ของชั้นนอกรวมของชั้นในแล้ว · ข้อความ error ของ server เป็นภาษาอังกฤษ (ข้อความ error จาก VM / โปรแกรมยังเป็นไทยตามเดิม)
+`type: "create"` มีเฉพาะรายการที่สร้างโปรแกรมด้วย `cloneProgram` (call ธรรมดาไม่มี field นี้) · หน้า tx แสดงเป็น "Create #n" + tag CREATE · callTracer ของ `/evm` เป็น frame `CREATE`
 | `GET /` หรือ `/explorer` | หน้า explorer |
 
 ### เขียน
@@ -481,6 +553,10 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 | Code (`code`) | source |
 
 กดแท็บที่เปิดอยู่แล้วไม่วาดใหม่ (ค่าที่พิมพ์ในฟอร์มไม่หาย)
+
+กล่องข้อมูลของโปรแกรมมีแถว **Version** (`metadata.version` ไม่มี = 1 · มี tag "Upgrade pending review" / "Upgrade active from block N" จาก `pendingUpgrade` / `scheduledUpgrade`)
+**Upgrader** (ไม่มี = "None (immutable)") และ **Template** (เฉพาะโปรแกรมที่สร้างด้วย `cloneProgram`)
+ชื่อ action ในทุกตาราง / หน้า tx ผ่าน `ACTION_LABELS`: `upgrade` → "Upgrade", `setUpgrader` → "Set upgrader", `initUpgrade` → "Approve upgrade", `rejectUpgrade` → "Reject upgrade", `create` → "Create" (ที่เหลือแสดงชื่อเดิม)
 
 ### หน้า tx — Return value / Balance changes
 แถว "Return value" = ค่าที่โปรแกรม return เต็ม ๆ แสดงแบบเดียวกับผล Read ใน Interact (`returnValue()` ใช้ร่วมกัน) · tx ที่ล้มโชว "— (failed)"
@@ -625,6 +701,8 @@ code: function program() { function evil(p) { return process.env } return { evil
 | `40-bigint` | ตัวเลขเป็น BigInt ทั้งระบบ (ไม่มีโหมด number) |
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
+| `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
+| `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
@@ -695,6 +773,8 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
 10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
+11. สถานะ `replaced` อยู่ในหน่วยความจำของ mempool (จำแค่ `ttlMs` 5 นาที, restart แล้วหาย) และค้นด้วย VM hash เท่านั้น ไม่รับ digest
+    พ้นเวลาแล้ว `GET /tx/:hash` ของใบที่ถูกแทนที่กลับเป็น 404
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
 **ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
