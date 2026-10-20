@@ -71,3 +71,16 @@ test("DB: ข้อมูลยังอยู่หลังเปิดให�
   assert.equal(reopened.readKeys(["latestblock"])[0], 1);
   reopened.close();
 });
+
+test("DB: path เต็ม (absolute) ใช้ตามนั้น ไม่กลายเป็น path ใต้โฟลเดอร์ที่รัน", () => {
+  const target = path.join(dir, "absolute");
+  const other = new DB(target);
+  other.writeKeys([{ type: "put", dbKey: "k", value: "v" }]);
+  other.close();
+  assert.ok(fs.existsSync(target), "ไฟล์ DB ต้องอยู่ที่ path ที่ส่งมา");
+  assert.equal(fs.existsSync(path.join(process.cwd(), target)), false, "ต้องไม่สร้างไว้ใต้โฟลเดอร์ที่รัน");
+  const reopened = new DB(target);
+  assert.equal(reopened.readKeys(["k"])[0], "v");
+  assert.equal(reopened.basekey, new DB(target).basekey);   // basekey คิดจาก path ที่ส่งมาเหมือนเดิม
+  reopened.close();
+});
