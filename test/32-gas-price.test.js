@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import { TOKEN } from "./programs.js";
 
 /* gasPrice ที่ผู้ส่งกำหนดเอง: จ่ายแพงกว่าเพื่อให้ถูกเลือกเข้า block ก่อน */
@@ -17,7 +17,7 @@ function setup(options = {}) {
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.db.load({ "alice:native:received": 1_000_000, "bob:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n", "bob:native:received": "1000000n" });
   return vm;
 }
 
@@ -32,8 +32,8 @@ const transfer = (sender, nonce, gasPrice) => ({
 test("gasPrice: ไม่ส่งมา → ใช้ราคาขั้นต่ำของระบบ", () => {
   const vm = setup();
   const res = vm.call(transfer("alice", 0), { timestamp: T });
-  assert.equal(res.gasPrice, GAS.price);
-  assert.equal(res.fee, res.gasUsed * GAS.price);
+  assert.equal(res.gasPrice, `${GAS.price}n`);   // ราคา / ค่าแก๊สส่งออกเป็น "123n"
+  assert.equal(num(res.fee), res.gasUsed * GAS.price);
 });
 
 test("gasPrice: เสนอสูงกว่า → จ่ายแพงขึ้นตามสัดส่วน", () => {
@@ -41,10 +41,10 @@ test("gasPrice: เสนอสูงกว่า → จ่ายแพงข�
   const cheap = vm.call(transfer("alice", 0), { timestamp: T });
   const expensive = vm.call(transfer("bob", 0, 10), { timestamp: T });
 
-  assert.equal(expensive.gasPrice, 10);
+  assert.equal(expensive.gasPrice, "10n");
   assert.equal(expensive.gasUsed, cheap.gasUsed);          // งานเท่ากัน
-  assert.equal(expensive.fee, cheap.gasUsed * 10);         // แต่จ่ายแพงกว่า 5 เท่า
-  assert.equal(expensive.fee, cheap.fee * 5);
+  assert.equal(num(expensive.fee), cheap.gasUsed * 10);    // แต่จ่ายแพงกว่า 5 เท่า
+  assert.equal(num(expensive.fee), num(cheap.fee) * 5);
 });
 
 test("gasPrice: ผู้ปิด block ได้ส่วนแบ่งมากขึ้นตามราคาที่จ่าย", () => {
@@ -53,13 +53,13 @@ test("gasPrice: ผู้ปิด block ได้ส่วนแบ่งมา
   const expensive = block.call(transfer("alice", 0, 20));
   block.commit();
 
-  assert.equal(vm.nativeBalanceOf("miner").balance, Math.floor(expensive.fee / 2));
-  assert.equal(vm.nativeBalanceOf("alice").consumed, expensive.fee);
+  assert.equal(num(vm.nativeBalanceOf("miner").balance), Math.floor(num(expensive.fee) / 2));
+  assert.equal(num(vm.nativeBalanceOf("alice").consumed), num(expensive.fee));
 });
 
 test("gasPrice: ต่ำกว่าราคาขั้นต่ำ หรือรูปแบบผิด → ปฏิเสธ", () => {
   const vm = setup();
-  for (const gasPrice of [1, 0, -5, 1.5, "10"]) {
+  for (const gasPrice of [1, 0, -5, 1.5, "1.5", "abc"]) {
     const res = vm.call(transfer("alice", 0, gasPrice), { timestamp: T });
     assert.equal(res.error.code, "INVALID_REQUEST", `gasPrice ${gasPrice}`);
     assert.match(res.error.message, /gasPrice/);
@@ -73,11 +73,11 @@ test("gasPrice: เพดานแก๊สคิดจากราคาที�
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.db.load({ "alice:native:received": 150 }); // พอจ่าย 100 gas ที่ราคา 1 แต่ไม่พอที่ราคา 10
+  vm.db.load({ "alice:native:received": "150n" }); // พอจ่าย 100 gas ที่ราคา 1 แต่ไม่พอที่ราคา 10
 
   const res = vm.call(transfer("alice", 0, 10), { timestamp: T });
   assert.equal(res.error.code, "OUT_OF_GAS");
-  assert.equal(res.fee, 150); // จ่ายเท่าที่มี
+  assert.equal(res.fee, "150n"); // จ่ายเท่าที่มี
 });
 
 test("gasPrice: เป็นส่วนหนึ่งของ tx hash (เปลี่ยนราคา = คนละ tx)", () => {
@@ -92,8 +92,8 @@ test("gasPrice: อยู่ใน receipt ของ tx", () => {
   const vm = setup();
   const request = transfer("alice", 0, 7);
   const receipt = vm.buildReceipt(request, vm.call(request, { timestamp: T }));
-  assert.equal(receipt.gasPrice, 7);
-  assert.equal(receipt.fee, receipt.gasUsed * 7);
+  assert.equal(receipt.gasPrice, "7n");
+  assert.equal(num(receipt.fee), receipt.gasUsed * 7);
 });
 
 // ---------------------------------------------------------------------------
@@ -184,7 +184,7 @@ test("deploy: ค่าแก๊สคิดตามขนาดโค้ด (�
   assert.equal(cheap.gasUsed, GAS.call + 10 * Buffer.byteLength(VM.toOneLine(small)));
   const sizeOf = (code) => Buffer.byteLength(VM.toOneLine(code));
   assert.equal(expensive.gasUsed - cheap.gasUsed, 10 * (sizeOf(large) - sizeOf(small))); // ต่างกันตามจำนวน byte ที่เพิ่ม
-  assert.equal(expensive.fee, expensive.gasUsed * GAS.price);
+  assert.equal(num(expensive.fee), expensive.gasUsed * GAS.price);
 });
 
 test("deploy: โค้ดภาษาไทยคิดตามจำนวน byte จริง", () => {

@@ -2,6 +2,9 @@
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 
+// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei
+const gwei = (amount) => `${BigInt(amount) * 10n ** 9n}`;
+
 const API = process.argv[2] ?? "http://localhost:3000";
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const me = sign.addressOf(KEY);
@@ -15,7 +18,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function send(fields) {
   const { nonce } = await get(`/nonce/${me}`);
-  const tx = { chainId: 1, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: 1, nonce, ...fields };
+  const tx = { chainId: 1, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, KEY) });
   if (!result.queued) {
     console.error(`${tx.action} ไม่เข้าคิว:`, JSON.stringify(result).slice(0, 200));
@@ -46,7 +49,7 @@ const address = receipt.result?.programUuid ?? receipt.result;
 console.log(`โปรแกรมอยู่ที่ ${address} (block ${deployed.blockNumber})`);
 
 await confirm(await send({ action: "init", to: address }));
-await confirm(await send({ action: "transfer", to: BOB, value: 50_000 }));
+await confirm(await send({ action: "transfer", to: BOB, value: gwei(50_000) }));
 await confirm(await send({ action: "call", to: address, method: "transfer", input: { to: BOB, amount: "1200500000n" } }));
 await confirm(await send({ action: "metadata", input: { namespace: "alice", description: "ผู้ใช้คนแรก" } }));
 await confirm(await send({ action: "call", to: address, method: "transfer", input: { to: "0x1234567890123456789012345678901234567890", amount: "7n" } }));

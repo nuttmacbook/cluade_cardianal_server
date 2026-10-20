@@ -14,6 +14,15 @@ export { VM };
 
 export const TEST_TIMEOUT_MS = 300;
 
+/** ยอด native ("123n" / BigInt) → number ให้เทียบในเทสต์ได้ง่าย (ลงลึกทั้ง object / array) */
+export function num(value) {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && /^-?\d+n$/.test(value)) return Number(value.slice(0, -1));
+  if (Array.isArray(value)) return value.map(num);
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, num(item)]));
+  return value;
+}
+
 /** ตารางแก๊สที่ไม่นับขั้น (node / builtin = 0) ใช้ในเทสต์ที่ตรวจค่าแก๊สของ API แบบตัวเลขตรง ๆ */
 export const API_GAS_ONLY = { node: 0, builtin: 0 };
 

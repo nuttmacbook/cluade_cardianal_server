@@ -109,7 +109,7 @@ test("MemoryDB: snapshot / listKeys / size / has — ดูข้อมูลท
     "token:code": "",
     "token:storage:balances:alice": 700,
     "token:storage:balances:bob": 300,
-    "alice:native:received": 1000,
+    "alice:native:received": "1000n",
   });
 
   assert.equal(db.size, 4);
@@ -117,7 +117,7 @@ test("MemoryDB: snapshot / listKeys / size / has — ดูข้อมูลท
   assert.equal(db.has("nope"), false);
   assert.deepEqual(db.listKeys(), ["alice:native:received", "token:code", "token:storage:balances:alice", "token:storage:balances:bob"]);
   assert.deepEqual(db.listKeys("token:storage:"), ["token:storage:balances:alice", "token:storage:balances:bob"]);
-  assert.deepEqual(db.snapshot("alice"), { "alice:native:received": 1000 });
+  assert.deepEqual(db.snapshot("alice"), { "alice:native:received": "1000n" });
   assert.deepEqual(Object.keys(db.snapshot()), db.listKeys()); // เรียงตาม key เสมอ
 });
 
@@ -129,7 +129,7 @@ test("MemoryDB: tree — จัดกลุ่มตาม address", () => {
     "token:this": "token",
     "token:storage:balances:alice": 700,
     "token:storage:totalSupply": 1000,
-    "alice:native:received": 1000,
+    "alice:native:received": "1000n",
     "alice:nonce": 3,
     "alice:txn:0:0xabc": { status: "success" },
     "pending:shop": { code: "x" },
@@ -143,7 +143,7 @@ test("MemoryDB: tree — จัดกลุ่มตาม address", () => {
       storage: { "balances:alice": 700, totalSupply: 1000 },
     },
     alice: {
-      native: { received: 1000 },
+      native: { received: "1000n" },
       nonce: 3,
       txn: { "0:0xabc": { status: "success" } },
     },

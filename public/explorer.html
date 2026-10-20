@@ -317,6 +317,19 @@ function units(raw, decimals) {
   const frac = (abs % base).toString().padStart(d, "0").replace(/0+$/, "");
   return `${sign}${(abs / base).toLocaleString("en-US")}${frac ? "." + frac : ""}`;
 }
+/** native coin: wei (18 decimals, like ETH) → "1.5" */
+const NATIVE_DECIMALS = 18;
+const coin = (raw) => `${units(raw, NATIVE_DECIMALS)}`;
+/** typed amount in coins ("1.5") → wei as a decimal string (no floating point) */
+function toWei(text) {
+  const t = String(text ?? "").trim() || "0";
+  if (!/^\d+(\.\d+)?$/.test(t)) throw new Error("Attached value must be a number of coins, e.g. 0.5");
+  const [whole, frac = ""] = t.split(".");
+  if (frac.length > NATIVE_DECIMALS) throw new Error(`Attached value: at most ${NATIVE_DECIMALS} decimals`);
+  return (BigInt(whole) * 10n ** BigInt(NATIVE_DECIMALS) + BigInt(frac.padEnd(NATIVE_DECIMALS, "0") || "0")).toString();
+}
+/** gas price in wei → gwei text */
+const gwei = (raw) => units(raw, 9);
 const txLink = (h, label) => (h ? `<span class="mono"><a onclick="go('#tx/${h}')" title="${attr(h)}">${esc(label ?? cut(h))}</a>${copy(h)}</span>` : '<span class="dim">—</span>');
 /** safe external link: http(s) / mailto / tel · a bare email becomes mailto: · anything else is not a link */
 function safeHref(value) {
@@ -451,7 +464,7 @@ async function home(draw = el) {
       <div class="stat"><b>${num(pending.size)}</b><span>Pending txs</span></div>
       <a class="stat" data-programs="approved" onclick="openPrograms('approved')"><b>${num(programs.approved)}</b><span>Approved programs</span></a>
       <a class="stat" data-programs="pending" onclick="openPrograms('pending')"><b>${num(programs.pending)}</b><span>Awaiting approval</span></a>
-      <div class="stat"><b>${num(info.burned)}</b><span>Burned coins</span></div>
+      <div class="stat"><b>${coin(info.burned)}</b><span>Burned coins</span></div>
       <div class="stat"><b>${info.chainId}</b><span>Chain ID</span></div></div>`)
     + panel("Latest blocks", table(["Block", "Age", "Txs", "Result", "Gas", "Fee recipient"], blocks.items.map((b) => txRow(b, [
         blockNo(b.number),
@@ -476,7 +489,7 @@ async function programs(draw = el) {
   draw(tabs([
     { id: "pending", label: "Awaiting approval", count: counts.pending, body: pending.total
       ? table(["Program", "Name", "Type", "Deployer", "Value", "Code size"], pending.items.map((p) => txRow(p, [
-          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.deployer), num(p.value), bytes(p.codeSize),
+          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.deployer), coin(p.value), bytes(p.codeSize),
         ]))) + pager(pending, "setPage('pending',$)")
       : empty("No programs are waiting for approval") },
     { id: "approved", label: "Approved", count: counts.approved, body: approved.total
@@ -500,7 +513,7 @@ async function block(number, draw = el) {
       ["State root", full(header.stateRoot)],
       ["Fee recipient", addr(header.feeRecipient, header.feeRecipient)],
       ["Transactions", `${num(header.txCount)} <span class="dim">(${header.successCount} succeeded · ${header.failedCount} failed)</span>`],
-      ["Gas used", `${gas(header.gasUsed)} <span class="dim">· fee ${num(header.fee)}</span>`],
+      ["Gas used", `${gas(header.gasUsed)} <span class="dim">· fee ${coin(header.fee)}</span>`],
     ]))
     + panel(`Transactions (${num(txs.total)})`, table(["#", "Hash", "Type", "From", "To", "Method", "Status", "Gas"], txs.items.map((t) =>
         txRow(t, [t.index, txLink(t.hash), actionTag(t.action), addr(t.from), addr(t.to),
@@ -592,7 +605,7 @@ function callDetail(i) {
     <div class="call-h"><span class="tag ${ok ? "ok" : "bad"}">${ok ? "✓ Success" : "✗ Failed"}</span>
       <b>Call #${i + 1}</b><span class="dim">depth ${c.depth}</span></div>
     <div class="call-path">${addr(c.from)}${name(c.from)} <span class="dim">→</span> ${addr(c.program)}${name(c.program)}<span class="mono">.${esc(c.method)}()</span></div>
-    <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${num(c.value ?? 0)}</span></span>
+    <div class="call-m"><span>Gas ${gas(c.gasUsed ?? null)}</span><span>Value <span class="mono">${coin(c.value ?? 0)}</span></span>
       ${c.origin && c.origin !== c.from ? `<span>Origin ${addr(c.origin)}</span>` : ""}</div>
     <div class="call-b">
       ${io("Input", empty(c.input) ? '<span class="dim mono">{}</span>' : json(c.input))}
@@ -626,9 +639,9 @@ async function tx(hash, draw = el) {
       ["From", addr(r.from, r.from)],
       ["To", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],
       r.method && ["Method", `<span class="mono">${esc(r.method)}</span>`],
-      ["Value", `<span class="mono">${num(r.value ?? 0)}</span>`],
+      ["Value", `<span class="mono">${coin(r.value ?? 0)}</span>`],
       ["Nonce", r.nonce ?? "—"],
-      ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ?? 1} = ${num(r.fee)}</span>`],
+      ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ? `${gwei(r.gasPrice)} gwei` : "min price"} = ${coin(r.fee)}</span>`],
       ["Block", blockNo(r.blockNumber)],
       ["Time", when(r.timestamp)],
       ["Return value", r.status === "success" ? returnValue(r.result) : '<span class="dim">— (failed)</span>'],
@@ -651,11 +664,11 @@ const returnValue = (value) => (value === undefined || value === null
 const NATIVE_LABEL = { received: "received", sended: "sent", consumed: "gas paid" };
 function balanceLines(changes) {
   return `<div class="bal">${changes.map((n) => {
-    const delta = n.before === undefined ? null : Number(n.after ?? 0) - Number(n.before ?? 0);
+    const delta = n.before === undefined ? null : toBig(n.after) - toBig(n.before);
     const sign = n.field === "received" ? "+" : "−";   // received adds to the balance, sent / gas take from it
     return `<div class="bal-row">${addr(n.address)}<span class="dim">${esc(NATIVE_LABEL[n.field] ?? n.field)}</span>
-      <span class="mono ${n.field === "received" ? "up" : "bad"}">${delta === null ? "" : `${sign}${num(delta)}`}</span>
-      <span class="dim mono" title="Running total of this counter">total ${num(n.after)}</span></div>`;
+      <span class="mono ${n.field === "received" ? "up" : "bad"}">${delta === null ? "" : `${sign}${coin(delta)}`}</span>
+      <span class="dim mono" title="Running total of this counter">total ${coin(n.after)}</span></div>`;
   }).join("")}</div>`;
 }
 
@@ -701,7 +714,7 @@ async function sendTx(fields) {
   const info = await api("/genesis");
   const { nonce } = await api(`/nonce/${wallet}`);
   const tx = { chainId: info.chainId, action: "call", from: wallet, to: "", method: "", input: {},
-    value: 0, nonce, gasLimit: 500000, gasPrice: 1, ...fields };
+    value: "0", nonce, gasLimit: 500000, gasPrice: String(toBig(info.gasPrice ?? 1)), ...fields };   // wei per gas (the chain minimum)
 
   const message = { action: tx.action, from: tx.from, to: tx.to, method: tx.method,
     input: signingInput(tx),
@@ -918,7 +931,7 @@ function interactPanel(program) {
         <button type="button" data-mode="json" class="${ix.mode === "json" ? "on" : ""}" onclick="setMode('json')">JSON</button>
       </span></div>
     <div id="ix-input" oninput="ixSave()" onchange="ixSave()">${ixInner()}</div>
-    <label>Attached value<input id="val" value="0" inputmode="numeric"></label>
+    <label>Attached value (coins)<input id="val" value="0" inputmode="decimal"></label>
     <div class="row">
       <button class="btn" onclick="runQuery('${program.address}')">Read (no gas)</button>
       <button class="btn solid" onclick="runWrite('${program.address}')">Send transaction</button>
@@ -994,7 +1007,7 @@ const readForm = () => {
   return {
     functionName: document.getElementById("fn").value,
     input: ix.mode === "json" ? JSON.parse(ix.json || "{}") : fieldsInput(),
-    value: Number(document.getElementById("val").value || 0),
+    value: toWei(document.getElementById("val").value),
   };
 };
 // ---------- interact results: the return value up front, the full response folded underneath ----------
@@ -1284,8 +1297,8 @@ async function address(value, draw = el) {
       ["Information", `<div class="info" id="meta-info">${avatar(meta)}${meta.namespace ? `<span class="tag">${esc(meta.namespace)}</span>` : '<span class="dim">No name set</span>'}</div>`],
       meta.description && ["Description", esc(meta.description)],
       (meta.url || meta.contact) && ["Links", `<div class="links">${meta.url ? extLink("url", meta.url) : ""}${meta.contact ? extLink("contact", meta.contact) : ""}</div>`],
-      ["Balance", `<b>${num(data.native.balance)}</b>`],
-      ["Received / sent / gas paid", `${num(data.native.received)} · ${num(data.native.sended)} · ${num(data.native.consumed)}`],
+      ["Balance", `<b>${coin(data.native.balance)}</b>`],
+      ["Received / sent / gas paid", `${coin(data.native.received)} · ${coin(data.native.sended)} · ${coin(data.native.consumed)}`],
       ["Nonce", data.nonce],
       program?.token && ["Token", `<span class="ico coin"></span><b>${esc(program.token.name)}</b> <span class="tag">${esc(program.token.ticker)}</span>
         <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],

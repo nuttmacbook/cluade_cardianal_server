@@ -13,7 +13,7 @@ const user = (name) => ({ sender: name, origin: name });
 
 function setup({ rounds = 2 } = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
-  vm.db.load({ "alice:native:received": 1000, "victim:native:received": 0 });
+  vm.db.load({ "alice:native:received": "1000n", "victim:native:received": "0n" });
 
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "vault", code: VULNERABLE_VAULT, context: user("owner") });
@@ -39,8 +39,8 @@ test("⚠️ withdrawUnsafe: ถอนซ้ำได้ ดูดเงิน�
 
   assert.equal(res.status, "success");
   vm.commit(res.writes);
-  assert.equal(vm.nativeBalanceOf("attacker").balance, 300);   // ฝาก 100 แต่ถอนออกมา 300
-  assert.equal(vm.nativeBalanceOf("vault").balance, 300);      // เงินของเหยื่อหายไป 200
+  assert.equal(vm.nativeBalanceOf("attacker").balance, 300n);   // ฝาก 100 แต่ถอนออกมา 300
+  assert.equal(vm.nativeBalanceOf("vault").balance, 300n);      // เงินของเหยื่อหายไป 200
   assert.equal(vm.db.readKeys(["vault:storage:balances:attacker"])[0], 0);
 });
 
@@ -50,8 +50,8 @@ test("withdrawSafe: อัปเดตยอดก่อนเรียกออ
 
   assert.equal(res.status, "success");
   vm.commit(res.writes);
-  assert.equal(vm.nativeBalanceOf("attacker").balance, 100);   // ได้คืนเท่าที่ฝาก
-  assert.equal(vm.nativeBalanceOf("vault").balance, 500);      // เงินของเหยื่อครบ
+  assert.equal(vm.nativeBalanceOf("attacker").balance, 100n);   // ได้คืนเท่าที่ฝาก
+  assert.equal(vm.nativeBalanceOf("vault").balance, 500n);      // เงินของเหยื่อครบ
 });
 
 test("withdrawGuarded: ล็อกด้วย flag → การเรียกซ้ำถูกปฏิเสธ", () => {
@@ -61,8 +61,8 @@ test("withdrawGuarded: ล็อกด้วย flag → การเรีย�
   assert.equal(res.status, "success");
   vm.commit(res.writes);
   assert.equal(vm.db.readKeys(["attacker:storage:lastError"])[0], "กำลังทำงานอยู่");  // เรียกซ้ำไม่ผ่าน
-  assert.equal(vm.nativeBalanceOf("attacker").balance, 100);   // ได้คืนเท่าที่ฝาก
-  assert.equal(vm.nativeBalanceOf("vault").balance, 500);      // เงินของเหยื่อครบ
+  assert.equal(vm.nativeBalanceOf("attacker").balance, 100n);   // ได้คืนเท่าที่ฝาก
+  assert.equal(vm.nativeBalanceOf("vault").balance, 500n);      // เงินของเหยื่อครบ
   assert.equal(vm.db.readKeys(["vault:storage:locked"])[0], undefined); // ล็อกถูกปลดแล้ว
 });
 
@@ -84,7 +84,7 @@ test("การเรียกซ้ำเห็นข้อมูลที่�
 
 test("ความลึกของการเรียกซ้ำถูกจำกัดด้วย maxCallDepth", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { maxCallDepth: 4, recordBlocks: true });
-  vm.db.load({ "alice:native:received": 1000 });
+  vm.db.load({ "alice:native:received": "1000n" });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "vault", code: VULNERABLE_VAULT, context: user("owner") });
   block.init({ programUuid: "vault" });

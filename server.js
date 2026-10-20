@@ -1,10 +1,11 @@
 /**
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
-  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms)
+ *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
+ *   GAS_PRICE=1000000000   ราคาแก๊สขั้นต่ำ (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei)
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
- *   EVM_DECIMALS=18   ยอด native ที่ /evm ส่งให้กระเป๋า EVM = ยอดจริง × 10^EVM_DECIMALS (MetaMask บังคับ 18)
+ *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
  *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
  */
 import http from "node:http";
@@ -30,12 +31,14 @@ const BLOCK_MS = Number(process.env.BLOCK_MS ?? 3000);
 // (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
+const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต่อแก๊ส (1 gwei)
 
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
   chainId: Number(process.env.CHAIN_ID ?? 1),
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true, bigintValues: true,
   feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
+  gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
 });
@@ -44,7 +47,7 @@ export const mempool = new Mempool(vm);
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 // ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
 export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
-export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 18) });
+export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
 if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("genesis.json", "utf8")));
 
 let mining = false;
@@ -85,6 +88,7 @@ const ROUTES = {
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
+    gasPrice: vm.gas.price, decimals: 18,   // ราคาแก๊สขั้นต่ำ (wei) · native มี 18 ทศนิยม
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance }),
 };
 

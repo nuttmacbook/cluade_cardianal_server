@@ -17,7 +17,7 @@ function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), {
     requireNonce: true, chargeGas: true, recordTransactions: true, recordBlocks: true, ...options,
   });
-  vm.db.load({ [`${alice}:native:received`]: 1_000_000, [`${bob}:native:received`]: 1_000_000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000000n", [`${bob}:native:received`]: "1000000n" });
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: { sender: alice, origin: alice }, initInput: { supply: 10_000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);

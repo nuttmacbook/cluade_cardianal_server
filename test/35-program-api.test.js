@@ -42,7 +42,7 @@ test("ThisBalance: เห็นยอดล่าสุดหลังโอน�
 
   const res = call(vm, "sendAll", { to: "bob" });
   assert.equal(res.result, 0);                       // โอนออกหมดแล้ว ยอดเป็น 0 ทันที
-  assert.equal(res.writes.find((w) => w.dbKey === "bob:native:received").value, 500);
+  assert.equal(res.writes.find((w) => w.dbKey === "bob:native:received").value, "500n");
 });
 
 test("BalanceOf: ดูยอดของ address อื่นได้", () => {

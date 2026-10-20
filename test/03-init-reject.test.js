@@ -9,7 +9,7 @@ test("init: รัน initialization ด้วย context / initInput ตอน 
   ok(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 10 } }));
   const res = ok(vm.init({ programUuid: "counter" }));
 
-  assert.deepEqual(res.result, { programUuid: "counter", state: "active", initResult: "ready", value: 0 });
+  assert.deepEqual(res.result, { programUuid: "counter", state: "active", initResult: "ready", value: "0n" });
   assert.deepEqual(trace(res), ["0:counter.initialization:success"]);
   assert.equal(res.calls[0].sender, "alice");
   assert.deepEqual(dbKeys(res), [
@@ -96,7 +96,7 @@ test("initialization: user และโปรแกรมอื่นเรี�
 test("reject: ลบ pending, reject ซ้ำ NOT_FOUND, deploy id เดิมใหม่ได้", () => {
   ok(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }));
   const res = ok(vm.reject({ programUuid: "p" }));
-  assert.deepEqual(res.result, { programUuid: "p", state: "rejected", refund: 0 });
+  assert.deepEqual(res.result, { programUuid: "p", state: "rejected", refund: "0n" });
   assert.deepEqual(dbKeys(res), ["del pending:p"]);
 
   fails(vm.reject({ programUuid: "p" }), "NOT_FOUND");

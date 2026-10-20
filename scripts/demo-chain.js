@@ -1,5 +1,8 @@
 /** สร้างข้อมูลจริงหลากหลายแบบบน chain: node scripts/demo-chain.js [url] */
 import * as sign from "../src/crypto/signature.js";
+
+// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei
+const gwei = (amount) => `${BigInt(amount) * 10n ** 9n}`;
 const API = process.argv[2] ?? "http://localhost:3000";
 const KEYS = ["0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
   "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
@@ -55,7 +58,7 @@ const SHOP = `function program() {
 
 async function send(user, fields) {
   const { nonce } = await get(`/nonce/${user.address}`);
-  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: 1, nonce, ...fields };
+  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, user.key) });
   console.log(`${(fields.method || fields.action).padEnd(10)} ${user.address.slice(0, 8)} →`, result.queued ? "ok" : (result.simulation?.error ?? result.error ?? "").slice(0, 50));
   return result.hash;
@@ -74,13 +77,13 @@ const token = (await get(`/tx/${tokenHash}/receipt`)).result.programUuid;
 await confirm(await send(alice, { action: "init", to: token }));
 
 // 2) shop ที่รับเงิน
-const shopHash = await send(alice, { action: "deploy", code: SHOP, input: { token, price: 500 } });
+const shopHash = await send(alice, { action: "deploy", code: SHOP, input: { token, price: `${gwei(500)}n` } });
 await confirm(shopHash);
 const shop = (await get(`/tx/${shopHash}/receipt`)).result.programUuid;
 await confirm(await send(alice, { action: "init", to: shop }));
 
 // 3) โอนเหรียญหลักให้คนอื่น
-for (const user of [bob, carol]) await confirm(await send(alice, { action: "transfer", to: user.address, value: 100_000 }));
+for (const user of [bob, carol]) await confirm(await send(alice, { action: "transfer", to: user.address, value: gwei(100_000) }));
 
 // 4) tx หลายแบบ: สำเร็จ / ล้ม / แนบเงิน / metadata
 await send(alice, { action: "call", to: token, method: "transfer", input: { to: bob.address, amount: 25_000 } });
@@ -88,8 +91,8 @@ await send(alice, { action: "call", to: token, method: "transfer", input: { to: 
 await send(alice, { action: "metadata", input: { namespace: "alice", description: "ผู้สร้าง chain" } });
 await confirm(await send(bob, { action: "metadata", input: { namespace: "bob" } }));
 await send(bob, { action: "call", to: token, method: "transfer", input: { to: carol.address, amount: 5_000 } });
-await confirm(await send(bob, { action: "call", to: shop, method: "buy", input: {}, value: 800 }));
-await send(carol, { action: "call", to: shop, method: "buy", input: {}, value: 100 });        // จ่ายไม่ครบ → ล้ม
+await confirm(await send(bob, { action: "call", to: shop, method: "buy", input: {}, value: gwei(800) }));
+await send(carol, { action: "call", to: shop, method: "buy", input: {}, value: gwei(100) });        // จ่ายไม่ครบ → ล้ม
 await send(carol, { action: "call", to: token, method: "transfer", input: { to: bob.address, amount: 9_999_999 } }); // ยอดไม่พอ → ล้ม
 await confirm(await send(bob, { action: "call", to: shop, method: "withdraw", input: {} }));   // ไม่ใช่เจ้าของ → ล้ม
 

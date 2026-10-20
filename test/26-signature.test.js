@@ -152,12 +152,12 @@ test("flow: deploy ที่เซ็นแล้ว — address ของโป
 
 test("flow: transfer native ที่เซ็นแล้ว", () => {
   const vm = setup();
-  vm.db.load({ [`${alice}:native:received`]: 1000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000n" });
   const tx = { chainId: 1, action: "transfer", from: alice, to: bob, method: "", input: {}, value: 250, nonce: 0, gasLimit: 0 };
   const res = submit(vm, tx, sign.signTransaction(tx, ALICE_KEY));
 
-  assert.deepEqual(res.result, { from: alice, to: bob, amount: 250 });
-  assert.equal(vm.nativeBalanceOf(bob).balance, 250);
+  assert.deepEqual(res.result, { from: alice, to: bob, amount: "250n" });
+  assert.equal(vm.nativeBalanceOf(bob).balance, 250n);   // nativeBalanceOf คืน BigInt
 });
 
 test("flow: ลายเซ็นถูกเก็บไว้ตรวจย้อนหลังใน <addr>:txn:<nonce>:<hash>", () => {
@@ -185,7 +185,7 @@ test("flow: tx ที่ล้มก็เก็บลายเซ็นไว�
 
 test("flow: หลาย tx ใน block เดียว ทุกใบต้องผ่านการตรวจก่อน", () => {
   const vm = setup();
-  vm.db.load({ [`${alice}:native:received`]: 1000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000n" });
   const block = vm.createBlock({ timestamp: 1_700_000_000_000, number: 1, feeRecipient: "0xminer" });
 
   const signed = [transferTx(0), transferTx(1, { input: { to: bob, amount: 10 } })].map((tx) => ({ tx, signature: sign.signTransaction(tx, ALICE_KEY) }));

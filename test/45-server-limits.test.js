@@ -49,7 +49,7 @@ test("RateLimiter: จำ key ไม่เกิน maxKeys (ทิ้งตั�
 
 function setup() {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true });
-  vm.db.load({ [`${alice}:native:received`]: 1_000_000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000000n" });
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: { sender: alice, origin: alice }, initInput: { supply: 10_000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);

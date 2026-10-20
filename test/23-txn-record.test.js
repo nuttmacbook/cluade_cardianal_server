@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, num } from "./helpers.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
 /* keccak256 + รายการ tx ที่เขียนลง DB: <address>:txn:<nonce>:<txhash> */
@@ -18,7 +18,7 @@ function setup(options = {}) {
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.commit([{ type: "put", dbKey: "alice:native:received", value: 1_000_000 }]);
+  vm.commit([{ type: "put", dbKey: "alice:native:received", value: "1000000n" }]);
   return vm;
 }
 
@@ -67,7 +67,7 @@ test("txn: tx ที่ล้มก็ถูกบันทึก พร้อ�
   assert.equal(record.status, "throw");
   assert.deepEqual(record.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
   assert.equal(record.hash, vm.hashTransaction(request));
-  assert.ok(record.fee > 0);
+  assert.ok(num(record.fee) > 0);
 });
 
 test("txn: nonce ผิด → ไม่บันทึกอะไรเลย", () => {

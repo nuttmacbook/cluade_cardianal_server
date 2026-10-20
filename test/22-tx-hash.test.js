@@ -15,7 +15,7 @@ function setup(options = {}) {
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.commit([{ type: "put", dbKey: "alice:native:received", value: 1_000_000 }]);
+  vm.commit([{ type: "put", dbKey: "alice:native:received", value: "1000000n" }]);
   return vm;
 }
 

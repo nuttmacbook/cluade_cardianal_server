@@ -2,6 +2,9 @@
 import * as sign from "../src/crypto/signature.js";
 import fs from "node:fs";
 
+// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei
+const gwei = (amount) => `${BigInt(amount) * 10n ** 9n}`;
+
 const API = process.argv[2] ?? "http://localhost:3000";
 const KEYS = [
   "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
@@ -24,7 +27,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function send(user, fields, { expectFail = false } = {}) {
   const { nonce } = await get(`/nonce/${user.address}`);
-  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 800_000, gasPrice: 1, nonce, ...fields };
+  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 800_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, user.key) });
   const label = `${user.name.padEnd(5)} ${(fields.method || fields.action).padEnd(12)}`;
   if (result.queued) { console.log(`${label} ✓`); return result.hash; }
@@ -49,7 +52,7 @@ console.log(`\ncoin   ${coin}\nmarket ${market}\n`);
 // ---------- แจกเหรียญและ native ----------
 for (const who of [bob, carol, dave]) {
   await send(alice, { action: "call", to: coin, method: "transfer", input: { to: who.address, amount: 50_000 } });
-  await send(alice, { action: "transfer", to: who.address, value: 200_000 });
+  await send(alice, { action: "transfer", to: who.address, value: gwei(200_000) });
 }
 await wait(2000);
 
@@ -76,8 +79,8 @@ await send(carol, { action: "call", to: market, method: "buy", input: { id: ids[
 await send(bob, { action: "call", to: market, method: "cancel", input: { id: ids[2] } }, { expectFail: true }); // ไม่ใช่เจ้าของ
 
 // ---------- ฝาก-ถอน native ----------
-await confirm(await send(bob, { action: "call", to: market, method: "deposit", input: {}, value: 30_000 }));
-await confirm(await send(carol, { action: "call", to: market, method: "deposit", input: {}, value: 12_000 }));
+await confirm(await send(bob, { action: "call", to: market, method: "deposit", input: {}, value: gwei(30_000) }));
+await confirm(await send(carol, { action: "call", to: market, method: "deposit", input: {}, value: gwei(12_000) }));
 await send(dave, { action: "call", to: market, method: "withdraw", input: {} }, { expectFail: true });          // ไม่มีเงินฝาก
 await confirm(await send(bob, { action: "call", to: market, method: "withdraw", input: {} }));
 

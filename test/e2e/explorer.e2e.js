@@ -503,7 +503,7 @@ test("/evm: ethers JsonRpcProvider ต่อกับเชนได้ (chainId
   const latest = await provider.getBlock("latest");
   assert.ok(latest.number >= 1 && latest.timestamp < Date.now() / 1000 + 5);
   const native = (await get(`/address/${ME}`)).native.balance;
-  assert.equal(await provider.getBalance(ME), BigInt(native) * 10n ** 18n);
+  assert.equal(await provider.getBalance(ME), BigInt(String(native).replace(/n$/, "")));   // native เป็น wei อยู่แล้ว
   const { address: token } = await get("/name/mytoken");
   const erc20 = new Contract(token, ["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)"], provider);
   assert.equal(await erc20.symbol(), "MTK");
@@ -566,7 +566,7 @@ test("/evm สำหรับ Blockscout: ยอดย้อนหลังต�
 test("โปรแกรม: หน้าแรกบอกจำนวนที่อนุมัติแล้ว / รออนุมัติ · กดแล้วเห็นรายการแต่ละแบบ", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { nonce } = await get(`/nonce/${ME}`);
-  const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: 1, nonce,
+  const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce,
     action: "deploy", code: "function program() { function ping(params) { return 1; } return { ping }; }" };
   const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());

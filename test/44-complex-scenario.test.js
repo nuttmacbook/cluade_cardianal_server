@@ -207,11 +207,11 @@ test("ตลาด: ฝาก-ถอน native ของจริงผ่าน
 
   value(call("market", "deposit", {}, "dave", 3_000));
   value(call("market", "deposit", {}, "bob", 2_000));
-  assert.equal(vm.nativeBalanceOf("market").balance, 5_000);
+  assert.equal(vm.nativeBalanceOf("market").balance, 5_000n);
   assert.equal(read("market", "stats", {}).balance, "5000n");
 
   assert.equal(value(call("market", "withdraw", {}, "dave")), "3000n");
-  assert.equal(vm.nativeBalanceOf("market").balance, 2_000);
+  assert.equal(vm.nativeBalanceOf("market").balance, 2_000n);
   assert.match(call("market", "withdraw", {}, "carol").error.message, /ไม่มีเงินฝาก/);
 });
 
@@ -292,8 +292,8 @@ test("ค่าแก๊สและเงินในระบบ: ไม่ม
   value(call("market", "deposit", {}, "dave", 7_000));
 
   const accounts = [...PEOPLE, "coin", "market", "miner", VM.BURN_ADDRESS];
-  const total = accounts.reduce((sum, who) => sum + vm.nativeBalanceOf(who).balance, 0);
-  assert.equal(total, PEOPLE.length * 10_000_000);
-  assert.equal(vm.nativeBalanceOf("market").balance, 7_000);
+  const total = accounts.reduce((sum, who) => sum + vm.nativeBalanceOf(who).balance, 0n);
+  assert.equal(total, BigInt(PEOPLE.length * 10_000_000));
+  assert.equal(vm.nativeBalanceOf("market").balance, 7_000n);
   assert.ok(vm.nativeBalanceOf("miner").balance > 0);
 });

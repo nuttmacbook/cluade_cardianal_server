@@ -49,7 +49,7 @@ function program() {
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { bigintValues: true, recordBlocks: true, ...options });
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } });
   block.init({ programUuid: "token" });
@@ -104,7 +104,7 @@ test("transferNative รับ BigInt", () => {
   const res = call(vm, "payout", { to: "bob", amount: 400 });
   assert.equal(res.result, "600n");
   vm.commit(res.writes);
-  assert.equal(vm.nativeBalanceOf("bob").balance, 400);
+  assert.equal(vm.nativeBalanceOf("bob").balance, 400n);
 });
 
 test("event เก็บตัวเลขเป็น string ลงท้าย n", () => {

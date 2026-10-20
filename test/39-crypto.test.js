@@ -109,7 +109,7 @@ test("flow: คูปองที่ admin เซ็นไว้ล่วงห�
 test("ค่าแก๊ส: keccak256 และ ecrecover คิดตามที่ตั้งไว้", () => {
   const gas = { call: 0, read: 0, write: 0, byte: 1, event: 0, hash: 100, recover: 3000, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   const hashed = call(vm, "hash", { value: "abc" });
   assert.equal(hashed.gasUsed, gas.hash + 3);

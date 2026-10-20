@@ -21,7 +21,7 @@ const OPTIONS = {
 
 /** เชน 5 block: deploy+init แล้วโอน token ทีละ block */
 function buildChain(vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS)) {
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   const first = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   first.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 }, nonce: 0 });
@@ -232,7 +232,7 @@ test("rebuildFrom: ย้อนไป 0 = ล้างผลของทุก b
   assert.equal(vm.db.readKeys(["token:code"])[0], undefined);
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], undefined);
   assert.equal(vm.db.readKeys(["ของนอกเชน"])[0], "ยังอยู่");
-  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000); // genesis กลับมาเท่าเดิม
+  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n); // genesis กลับมาเท่าเดิม
 });
 
 test("rebuildFrom: รันใหม่ไปจุดเดิมให้ผลเหมือนกันทุกครั้ง", () => {
@@ -259,7 +259,7 @@ test("sigtx: ค้นได้ทั้ง hash ของระบบและ 
   const vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS);
   const key = sign.randomPrivateKey();
   const alice = sign.addressOf(key);
-  vm.db.load({ [`${alice}:native:received`]: 1_000_000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000000n" });
 
   const tx = { chainId: 1, action: "transfer", from: alice, to: "0xbob", method: "", input: {}, value: 100, nonce: 0, gasLimit: 0, gasPrice: 0 };
   const verified = sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, key) });

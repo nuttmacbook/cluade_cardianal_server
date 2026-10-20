@@ -88,7 +88,7 @@ test("catch / finally กลืน OUT_OF_GAS ไม่ได้", () => {
 
 test("ลูปไม่รู้จบใน block: หมดแก๊สตามยอดเงิน → เข้า block และเสียค่าแก๊ส (ผลไม่ขึ้นกับความเร็วเครื่อง)", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true, recordBlocks: true, timeoutMs: 5000 });
-  vm.db.load({ "alice:native:received": 50_000 });
+  vm.db.load({ "alice:native:received": "50000n" });
   const plain = new VM.VirtualMachine(vm.db);   // เตรียมโปรแกรมโดยไม่ต้องใช้ nonce / ค่าแก๊ส
   plain.commit(plain.deploy({ programUuid: "loops", code: LOOPS, context: as("owner") }, { timestamp: T }).writes);
   plain.commit(plain.init({ programUuid: "loops" }, { timestamp: T }).writes);
@@ -97,7 +97,7 @@ test("ลูปไม่รู้จบใน block: หมดแก๊สตา
   block.commit();
   assert.equal(res.error.code, "OUT_OF_GAS");
   assert.equal(res.accepted, true);
-  assert.equal(vm.nativeBalanceOf("alice").balance, 0);   // จ่ายเท่าที่มี
+  assert.equal(vm.nativeBalanceOf("alice").balance, 0n);   // จ่ายเท่าที่มี
   assert.equal(vm.getBlock(1).txCount, 1);
 });
 

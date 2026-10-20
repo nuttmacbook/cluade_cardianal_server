@@ -10,7 +10,7 @@ const user = (name) => ({ sender: name, origin: name });
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true, recordTransactions: true, recordBlocks: true, ...options });
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "token", code: EVENTFUL, context: user("alice"), initInput: { supply: 1000 }, nonce: 0 });
   block.init({ programUuid: "token" });
@@ -30,7 +30,7 @@ test("query: อ่านค่าได้โดยไม่กิน nonce ไ
   assert.equal(res.status, "success");
   assert.equal(res.readOnly, true);
   assert.equal(res.writes, undefined);
-  assert.equal(res.fee, 0);
+  assert.equal(res.fee, "0n");
   assert.deepEqual(res.events.map((event) => event.name), ["Transfer"]);   // ยังเห็น event ที่จะเกิด
 
   assert.deepEqual(vm.db.snapshot(), before);          // DB ไม่เปลี่ยน
