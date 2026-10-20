@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, num } from "./helpers.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
 /* block hash / txRoot / stateRoot และข้อมูล block ที่เขียนลง DB */
@@ -16,7 +16,7 @@ function setup(options = {}) {
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
   return vm;
 }
 
@@ -112,7 +112,7 @@ test("header: สรุปข้อมูลของ block", () => {
       number: 5, hash: null, parentHash: "0xp", parentStateRoot: null, timestamp: T, feeRecipient: "miner", burnPercent: 100,
       txCount: 2, successCount: 1, failedCount: 1,
       gasUsed: block.results().reduce((sum, r) => sum + r.gasUsed, 0),
-      fee: block.results().reduce((sum, r) => sum + r.fee, 0),
+      fee: `${block.results().reduce((sum, r) => sum + num(r.fee), 0)}n`,
       txRoot: null, stateRoot: null, txHashes: 2,
     },
   );

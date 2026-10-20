@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import { TOKEN, TREASURY, COUNTER } from "./programs.js";
 
 /*
@@ -15,7 +15,7 @@ const user = (name) => ({ sender: name, origin: name });
 let endpointCounter = 0;
 
 function setup({ requireNonce = true, chargeGas = true, gas, balances = {} } = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce, chargeGas, gas });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce, chargeGas, gas: { ...API_GAS_ONLY, ...gas } });
   const plain = new VM.VirtualMachine(vm.db); // VM ที่ไม่เก็บค่าแก๊ส ใช้เตรียมข้อมูล
   const save = (res) => {
     assert.equal(res.status, "success", JSON.stringify(res.error));
@@ -30,7 +30,7 @@ function setup({ requireNonce = true, chargeGas = true, gas, balances = {} } = {
   return { vm, plain };
 }
 
-const balanceOf = (vm, address) => vm.nativeBalanceOf(address).balance;
+const balanceOf = (vm, address) => num(vm.nativeBalanceOf(address).balance);
 const nonceOf = (vm, address) => vm.db.readKeys([`${address}:nonce`])[0];
 const transfer = (nonce, amount = 10) => ({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount }, context: user("alice"), nonce });
 
@@ -113,8 +113,8 @@ test("gas: คิดตามจำนวน call / read / write + ขนาด�
 
   const fee = expected * VM.DEFAULT_GAS.price;
   assert.deepEqual(res.writes.slice(-2), [
-    { type: "put", dbKey: "alice:native:consumed", value: fee },
-    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: fee }, // ไม่มี feeRecipient → เผาเข้า 0x000…000
+    { type: "put", dbKey: "alice:native:consumed", value: `${fee}n` },
+    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: `${fee}n` }, // ไม่มี feeRecipient → เผาเข้า 0x000…000
   ]);
   vm.commit(res.writes);
   assert.equal(balanceOf(vm, "alice"), 1_000_000 - fee);
@@ -133,8 +133,8 @@ test("gas: ตารางค่าแก๊สปรับได้", () => {
   const res = vm.call({ programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("alice") });
   assert.equal(res.gasUsed, 1);
   assert.deepEqual(res.writes, [
-    { type: "put", dbKey: "alice:native:consumed", value: 2 }, // 1 gas × price 2
-    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: 2 },
+    { type: "put", dbKey: "alice:native:consumed", value: "2n" }, // 1 gas × price 2
+    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: "2n" },
   ]);
 });
 
@@ -146,10 +146,10 @@ test("gas: การเรียกข้ามโปรแกรมคิดค
   assert.equal(res.gasUsed, 200); // 2 call
   const native = Object.fromEntries(res.writes.filter((w) => w.dbKey.includes(":native:")).map((w) => [w.dbKey, w.value]));
   assert.deepEqual(native, {
-    "treasury:native:sended": 5,
-    "bob:native:received": 5,
-    "alice:native:consumed": 200, // ค่าแก๊สเก็บจาก alice คนเดียว
-    [`${VM.BURN_ADDRESS}:native:received`]: 200,
+    "treasury:native:sended": "5n",
+    "bob:native:received": "5n",
+    "alice:native:consumed": "200n", // ค่าแก๊สเก็บจาก alice คนเดียว
+    [`${VM.BURN_ADDRESS}:native:received`]: "200n",
   });
 });
 
@@ -162,8 +162,8 @@ test("gas: ยอดไม่พอ → OUT_OF_GAS, ไม่มี writes ข�
   assert.match(res.error.message, /แก๊สไม่พอ/);
   assert.deepEqual(res.writes, [
     { type: "put", dbKey: "alice:nonce", value: 1 },
-    { type: "put", dbKey: "alice:native:consumed", value: 250 }, // จ่ายเท่าที่มี
-    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: 250 },
+    { type: "put", dbKey: "alice:native:consumed", value: "250n" }, // จ่ายเท่าที่มี
+    { type: "put", dbKey: `${VM.BURN_ADDRESS}:native:received`, value: "250n" },
   ]);
   vm.commit(res.writes);
   assert.equal(balanceOf(vm, "alice"), 0);
@@ -187,7 +187,7 @@ test("gas: โปรแกรม catch OUT_OF_GAS ไม่ได้", () => {
   });
   assert.equal(res.error.code, "OUT_OF_GAS");
   assert.deepEqual(res.writes.map((w) => w.dbKey), ["alice:native:consumed", `${VM.BURN_ADDRESS}:native:received`]);
-  assert.equal(res.writes[0].value, 3000); // จ่ายเท่าที่มีทั้งหมด
+  assert.equal(res.writes[0].value, "3000n"); // จ่ายเท่าที่มีทั้งหมด
 });
 
 test("gas: ปิด chargeGas → ยังนับ gasUsed แต่ไม่หักเงิน", () => {
@@ -207,8 +207,8 @@ test("transferNative: โอนจากกระเป๋าของโปร�
 
   assert.equal(res.status, "success");
   assert.deepEqual(res.writes, [
-    { type: "put", dbKey: "treasury:native:sended", value: 30 },
-    { type: "put", dbKey: "0xfabb0ac9:native:received", value: 30 },   // address ถูก normalize
+    { type: "put", dbKey: "treasury:native:sended", value: "30n" },
+    { type: "put", dbKey: "0xfabb0ac9:native:received", value: "30n" },   // address ถูก normalize
     { type: "put", dbKey: "treasury:storage:paid:0xfabb0ac9", value: 30 },
   ]);
   vm.commit(res.writes);
@@ -275,7 +275,7 @@ test("block: tx ที่ล้มยังกิน nonce และค่าแ
   assert.equal(second.error.code, "INVALID_REQUEST");
   assert.equal(block.writes().find((w) => w.dbKey === "alice:nonce").value, 2);
 
-  const feeCharged = block.writes().find((w) => w.dbKey === "alice:native:consumed").value;
+  const feeCharged = num(block.writes().find((w) => w.dbKey === "alice:native:consumed").value);
   assert.equal(feeCharged, first.gasUsed + third.gasUsed);
 
   block.commit();
@@ -289,5 +289,5 @@ test("block: ค่าแก๊สหมดกลาง block → tx ถัด�
   const results = [1, 2, 3].map(() => block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice") }));
   assert.deepEqual(results.map((r) => r.status), ["success", "throw", "throw"]);
   assert.deepEqual(results.slice(1).map((r) => r.error.code), ["OUT_OF_GAS", "OUT_OF_GAS"]);
-  assert.equal(block.writes().find((w) => w.dbKey === "alice:native:consumed").value, 2000); // ใช้จนหมด
+  assert.equal(block.writes().find((w) => w.dbKey === "alice:native:consumed").value, "2000n"); // ใช้จนหมด
 });

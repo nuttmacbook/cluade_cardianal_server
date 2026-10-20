@@ -43,7 +43,7 @@ test("programCounts / รายการ: deploy = รออนุมัติ �
 
   const pending = pagePendingPrograms(vm, { page: 1, limit: 20 });
   assert.equal(pending.total, 1);
-  assert.deepEqual(pending.items[0], { address: program(4), deployer: OWNER, name: "four", value: 0, codeSize: PLAIN.length, token: false });
+  assert.deepEqual(pending.items[0], { address: program(4), deployer: OWNER, name: "four", value: "0n", codeSize: PLAIN.length, token: false });
 
   const approved = pageApprovedPrograms(vm, { page: 1, limit: 20 });
   assert.deepEqual(approved.items.map((p) => [p.address, p.creator, p.createdAt, p.token]),

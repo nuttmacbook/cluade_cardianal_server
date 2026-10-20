@@ -147,7 +147,7 @@ import program from "./hello-world/hello.program.js";
 const code = String(program);    // ← สิ่งที่ส่งไปคือ string นี้
 
 const tx = { chainId: 1, action: "deploy", from: me, to: "", method: "",
-             input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000, gasPrice: 1 };
+             input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000, gasPrice: "1000000000" };   // 1 gwei
 await fetch("/sendtx", { method: "POST", body: JSON.stringify({ tx, signature: signTransaction(tx, key) }) });
 ```
 

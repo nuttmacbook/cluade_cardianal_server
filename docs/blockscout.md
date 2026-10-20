@@ -56,7 +56,7 @@ NEXT_PUBLIC_NETWORK_SHORT_NAME=Cardianal
 NEXT_PUBLIC_NETWORK_ID=1                     # = CHAIN_ID
 NEXT_PUBLIC_NETWORK_CURRENCY_NAME=Cardianal
 NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=CARD
-NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # = EVM_DECIMALS (ค่าเริ่มต้น 18)
+NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # เชนเก็บ native เป็น wei 18 ทศนิยม
 NEXT_PUBLIC_NETWORK_RPC_URL=http://localhost:3000/evm   # ไม่มีในไฟล์ → เพิ่มเป็นบรรทัดใหม่ (ใช้กับปุ่ม Add to MetaMask · ไม่ใส่ก็ได้)
 NEXT_PUBLIC_IS_TESTNET=false                 # ไฟล์ตั้งไว้ true → หน้าเว็บขึ้นป้าย Testnet
 ```

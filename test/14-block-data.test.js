@@ -54,7 +54,7 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
   const summary = block.summary();
   for (const result of summary.results) {
     assert.equal(typeof result.gasUsed, "number");   // นับแก๊สเสมอ แม้ยังไม่เปิดเก็บค่าแก๊ส
-    assert.equal(result.fee, 0);
+    assert.equal(result.fee, "0n");
     assert.equal(result.accepted, true);
     delete result.gasUsed;
     delete result.fee;

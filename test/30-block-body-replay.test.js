@@ -16,7 +16,7 @@ const newVm = () => new VM.VirtualMachine(new MemoryDB(), OPTIONS);
 
 /** สร้างสาย block: block 1 deploy+init, block 2 โอนเงิน */
 function buildChain(vm) {
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   const first = vm.createBlock({ timestamp: T, number: 1, parentHash: null, feeRecipient: "miner", burnPercent: 50 });
   first.deploy({ code: TOKEN, context: user("alice"), initInput: { supply: 1000 }, metadata: { namespace: "coin" }, nonce: 0 });
@@ -72,7 +72,7 @@ test("replay: node ใหม่รัน block ที่ดึงมา แล�
   const token = buildChain(source);
 
   const target = newVm();
-  target.db.load({ "alice:native:received": 1_000_000 }); // ยอดตั้งต้น (genesis) ต้องเท่ากัน
+  target.db.load({ "alice:native:received": "1000000n" }); // ยอดตั้งต้น (genesis) ต้องเท่ากัน
   replay(source, target);
 
   assert.deepEqual(target.db.snapshot(), source.db.snapshot());
@@ -88,7 +88,7 @@ test("replay: address ของโปรแกรมที่ VM คำนวณ
   const token = buildChain(source);
 
   const target = newVm();
-  target.db.load({ "alice:native:received": 1_000_000 });
+  target.db.load({ "alice:native:received": "1000000n" });
   replay(source, target);
 
   assert.match(token, /^0x[0-9a-f]{40}$/);
@@ -101,7 +101,7 @@ test("replay: ถ้าข้อมูลตั้งต้นต่างกั
   buildChain(source);
 
   const target = newVm();
-  target.db.load({ "alice:native:received": 999 }); // genesis ผิด
+  target.db.load({ "alice:native:received": "999n" }); // genesis ผิด
   // stateRoot คิดจาก writes ของ block จึงจับได้ตอนที่ยอดเงินเริ่มทำให้ผลต่างกัน (block 2)
   assert.throws(() => replay(source, target), /hash ไม่ตรง/);
 });
@@ -110,7 +110,7 @@ test("replay: block body พอสำหรับสร้าง explorer ให
   const source = newVm();
   buildChain(source);
   const target = newVm();
-  target.db.load({ "alice:native:received": 1_000_000 });
+  target.db.load({ "alice:native:received": "1000000n" });
   replay(source, target);
 
   assert.deepEqual(target.listTransactionsOf("alice").map((tx) => tx.nonce), [4, 3, 2, 1, 0]);
@@ -122,7 +122,7 @@ test("replay: block body พอสำหรับสร้าง explorer ให
 
 test("deploy ที่รันนอก block จะไม่มีใน blockbody (ต้องเรียกผ่าน block เสมอ)", () => {
   const vm = newVm();
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   vm.commit(vm.deploy({ code: COUNTER, context: user("alice"), nonce: 0 }, { timestamp: T }).writes); // นอก block
   const block = vm.createBlock({ timestamp: T, number: 1, feeRecipient: "miner" });

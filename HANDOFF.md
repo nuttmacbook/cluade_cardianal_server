@@ -6,7 +6,7 @@
 > blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
 > VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
 > มี server จริง (node:http) + explorer ไฟล์เดียว + ชุด SDK สำหรับคนเขียนโปรแกรม
-> เทสต์ 550 เคสผ่านหมด **แต่ยังไม่มี sandbox จริงและยังไม่มี gas แบบนับขั้น → ยังไม่ควรเปิดให้คนนอก deploy**
+> **มีแก๊สนับขั้นแล้ว แต่ยังไม่มี sandbox จริง → ยังไม่ควรเปิดให้คนนอก deploy**
 
 | | |
 |---|---|
@@ -127,8 +127,9 @@ function program() {
 - `10` → error `numberNotAllowed` · ต้องเขียน `10n`
 - เก็บลง DB เป็น string `"123n"` แปลงกลับเป็น BigInt อัตโนมัติตอนอ่าน
 - ค่าที่ออกไปทาง JSON ของ API ก็เป็น `"123n"` → **ฝั่ง client ห้ามใช้ `Number()`** ใช้ `BigInt(v.slice(0,-1))`
-- ยกเว้น: ค่าของระบบ (gas, nonce, เลข block, timestamp, ยอด native) ยังเป็น `number` ปกติ
-  **นี่คือหนี้ทางเทคนิคที่รู้อยู่** — native ยังติดเพดาน 2^53 (ดูหัวข้อ 9)
+- ยอด native เป็น BigInt หน่วย wei (18 ทศนิยม, 1 เหรียญ = 10^18) เก็บใน DB / receipt / tx record เป็น `"123n"`
+  `value` / `gasPrice` ที่ส่งเข้ามารับได้ทั้ง number, BigInt, `"123"` และ `"123n"` · ราคาแก๊สเริ่มต้น 1 gwei (`GAS_PRICE`)
+- ค่าของระบบที่เหลือ (gasUsed, nonce, เลข block, timestamp) ยังเป็น `number` ปกติ
 
 ### API ในโปรแกรม (18 ตัว)
 
@@ -242,8 +243,11 @@ block.commit()                            // เขียนทีเดีย�
 ### ค่าแก๊ส
 
 ```
-call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · price 1
+call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
 ```
+**แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
+(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · เมธอดในตัว (join, split, slice, JSON.stringify …) และ `obj[x](…)` ถูกเปลี่ยนเป็น `__call` คิด `builtin` ต่อตัวอักษร / สมาชิกที่เข้า-ออก
+โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` ส่งมาเองได้
 เผาทิ้ง `burnPercent` (server ใช้ 50) → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient`
 
@@ -317,7 +321,7 @@ history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed:
 import { signTransaction, verifyTransaction, buildTypedData, hashTypedData, addressOf } from "programvm/signature.js";
 
 const tx = { chainId: 1, action: "call", from, to: program, method: "transfer",
-             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: 1 };
+             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: "1000000000" };   // 1 gwei
 const signature = signTransaction(tx, privateKey);       // ฝั่ง wallet
 const { action, method, sender, hash, request } = verifyTransaction({ tx, signature });  // ฝั่ง server
 vm[method](request);
@@ -416,7 +420,7 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 - **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
   (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
 - ผล `vm.replayBlock` เก็บ cache 64 block (key = เลข + hash) → receipt ทุกใบ / `logIndex` (นับต่อเนื่องทั้ง block) / `cumulativeGasUsed` ได้จาก replay ครั้งเดียว
-- native × 10^`EVM_DECIMALS` (ค่าเริ่มต้น 18 → 1 native = 1 เหรียญใน MetaMask) · gasPrice = 1 native ต่อ gas ก็ถูกคูณเหมือนกัน
+- เชนเก็บ native เป็น wei อยู่แล้ว → `EVM_DECIMALS` ค่าเริ่มต้น 0 (ไม่คูณ) · `nativeCurrency.decimals` = 18 เสมอ · `eth_gasPrice` = `vm.gas.price` (1 gwei)
 - timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, เวลา = เวลาของ block 1) · `gasLimit` = `vm.maxBlockGas` (ไม่ได้ตั้ง → 30M)
 - status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` คำนวณจริงจาก log (receipt + block)
 - event `Transfer` ของ token มาตรฐาน → log ERC-20 (topic keccak("Transfer(address,address,uint256)")) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
@@ -673,18 +677,18 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
    `node:vm` ถูกใช้แค่จับเวลา ไม่ได้ใช้แยก context จริง
    autoreview ช่วยกรองได้มาก แต่เป็นชั้นเดียวและไม่ใช่ขอบเขตการรันจริง
    ทางเลือกที่คุยไว้: QuickJS (wasm, แยกจริง + นับขั้นได้), worker thread (แยกครึ่ง), เข้ม autoreview ต่อ (ถูกสุด อ่อนสุด)
-2. **gas ยังไม่นับขั้น** — `while(true) {}` ที่ไม่แตะ DB กินได้เต็ม `timeoutMs` (server ตั้งไว้ 2 วิ ผ่าน `TIMEOUT_MS`) โดยเสียแก๊สเท่าเดิม
-   ต้องแก้: ฉีดตัวนับเข้าไปใน loop/call ทุกจุด (หรือย้ายไป QuickJS ที่นับ instruction ได้)
+2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node, เมธอดในตัวคิดตามขนาดข้อมูล)
+   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 3M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
 3. ค่ากลางในหน่วยความจำยังไม่จำกัด — `maxValueSize` กันเฉพาะตอนเขียน / return / emit
 
 ### บล็อกการมี node ที่สอง
-4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) แต่รอข้อ 2 ก่อน
-   ไม่งั้น node สองตัวจะได้ผลต่างกันเมื่อเจอโปรแกรมที่วนนานต่างกัน
+4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) · ข้อ 2 เสร็จแล้ว ผลแก๊สไม่ขึ้นกับความเร็วเครื่อง
+   เหลือแค่กรณี timeout (ด่านสุดท้าย) ที่ tx ไม่เข้า block
 
 ### ค้างคาที่รู้อยู่
 5. **tx ที่ถูกปฏิเสธไม่เข้า block เลย** (nonce ผิด / โควตาเต็ม / timeout) → explorer แสดงไม่ได้ว่าเคยมีใบนี้
    เป็นการตัดสินใจเชิงออกแบบ ต้องเลือกว่าจะเก็บเป็น "tx ที่ล้ม" ใน chain หรือเก็บ log นอก chain
-6. **native / gas ยังเป็น `number`** ติดเพดาน 2^53 ส่วนค่าในโปรแกรมเป็น BigInt แล้ว — ทำพร้อมข้อ 2
+6. ~~native / gas ยังเป็น `number`~~ เสร็จแล้ว: native เป็น BigInt wei 18 ทศนิยม · แก๊สนับทีละขั้น (1 gas/node)
 7. `/program/:a/groups` นับได้สูงสุด 5,000 key (hard-coded ใน `server.js`)
 8. แท็บ interactions / event ยังไม่มี pagination (ต่างจากแท็บ storage ที่มีแล้ว)
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)

@@ -69,7 +69,10 @@ if (OPTIONS.wallets < 20) throw new Error("--wallets ต้องมีอย่
 const SEEDERS = 10;               // กระเป๋าที่ช่วยแจกเหรียญในเฟส 1
 const WALLET_FUND = 30_000;       // เหรียญหลักที่แต่ละกระเป๋าได้
 const SEEDER_EXTRA = 150_000;     // เผื่อค่า deploy ให้กระเป๋าแจก (คนกลุ่มนี้เป็นคน deploy โปรแกรมในเฟส 2)
-const GAS = { gasLimit: 1_000_000, gasPrice: 1 };   // VM ลด gasLimit ให้ไม่เกินยอดเงินเอง
+// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอดในสคริปต์นับเป็น gwei ตัวเลขจึงเท่ากับจำนวนแก๊สที่ซื้อได้
+const GWEI = 10n ** 9n;
+const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // ยอดที่ส่งใน tx (string เพราะเกิน 2^53 ได้)
+const GAS = { gasLimit: 1_000_000, gasPrice: gwei(1) };   // VM ลด gasLimit ให้ไม่เกินยอดเงินเอง
 const TREASURY = "0x9999999999999999999999999999999999999999";
 
 /** โปรแกรมที่จะถูก deploy ในเฟส 2: [ชนิด, block ที่ deploy (นับจากต้นเฟส 2)] */
@@ -270,7 +273,7 @@ async function phase1() {
 
   // block 1: กระเป๋าตั้งต้น → กระเป๋าแจก 10 ใบ (ได้เงินพอแจกต่อ + ค่า deploy)
   const seederFund = perSeeder * (WALLET_FUND + 1_000) + WALLET_FUND + SEEDER_EXTRA;
-  await slot("เฟส 1", 0, seeders.map((s) => () => send(funder, { action: "transfer", to: s.address, value: seederFund }, `fund seeder funder→${s.name}`)));
+  await slot("เฟส 1", 0, seeders.map((s) => () => send(funder, { action: "transfer", to: s.address, value: gwei(seederFund) }, `fund seeder funder→${s.name}`)));
 
   // block 2–10: กระเป๋าแจกโอนต่อให้คนที่เหลือ ~2 ใบต่อคนต่อ block (≈ 20 tx/block)
   const queue = wallets.slice(SEEDERS).map((to, i) => ({ from: seeders[i % SEEDERS], to }));
@@ -278,7 +281,7 @@ async function phase1() {
   const perRound = Math.ceil(queue.length / rounds);
   for (let round = 0; round < rounds && queue.length; round += 1) {
     const batch = queue.splice(0, perRound);
-    await slot("เฟส 1", round + 1, batch.map(({ from, to }) => () => send(from, { action: "transfer", to: to.address, value: WALLET_FUND }, `fund wallet ${from.name}→${to.name}`)));
+    await slot("เฟส 1", round + 1, batch.map(({ from, to }) => () => send(from, { action: "transfer", to: to.address, value: gwei(WALLET_FUND) }, `fund wallet ${from.name}→${to.name}`)));
   }
   report.phases.phase1 = { blocks: [firstBlock, lastSeen], seconds: (Date.now() - started) / 1000 };
 }
@@ -359,7 +362,7 @@ function actionFor(wallet) {
   const add = (weight, job) => { if (weight > 0) options.push([weight, job]); };
 
   // โอนเหรียญหลักให้เพื่อน
-  add(6, () => send(wallet, { action: "transfer", to: other(wallet).address, value: randomInt(10, 500) }, "transfer native"));
+  add(6, () => send(wallet, { action: "transfer", to: other(wallet).address, value: gwei(randomInt(10, 500)) }, "transfer native"));
 
   // ตั้งชื่อให้กระเป๋าตัวเอง (ครั้งเดียว)
   if (!state.named.has(wallet.address)) add(2, () => {
@@ -395,7 +398,7 @@ function actionFor(wallet) {
     const depositKey = `${wallet.address}:${market.address}`;
     add(1, () => {
       state.deposits.set(depositKey, true);
-      return send(wallet, { action: "call", to: market.address, method: "deposit", input: {}, value: randomInt(100, 1_000) }, "call market.deposit");
+      return send(wallet, { action: "call", to: market.address, method: "deposit", input: {}, value: gwei(randomInt(100, 1_000)) }, "call market.deposit");
     });
     if (state.deposits.get(depositKey)) add(2, () => {
       state.deposits.delete(depositKey);
@@ -411,7 +414,7 @@ function actionFor(wallet) {
   }
 
   // ความผิดพลาดแบบคนจริงเล็กน้อย (โดนปฏิเสธที่ /sendtx ไม่เข้า block)
-  add(0.3, () => send(wallet, { action: "transfer", to: other(wallet).address, value: 10_000_000 }, "mistake overspend"));
+  add(0.3, () => send(wallet, { action: "transfer", to: other(wallet).address, value: gwei(10n ** 18n) }, "mistake overspend"));
 
   const total = options.reduce((sum, [weight]) => sum + weight, 0);
   let roll = random() * total;
@@ -558,7 +561,7 @@ try {
   const needed = SEEDERS * (Math.ceil((wallets.length - SEEDERS) / SEEDERS) * (WALLET_FUND + 1_000) + WALLET_FUND + SEEDER_EXTRA);
   console.log(`server ${API} · chain ${CHAIN_ID} · block ล่าสุด ${lastSeen}`);
   console.log(`กระเป๋าตั้งต้น ${funder.address} ยอด ${balance} (ต้องใช้ประมาณ ${needed})`);
-  if (balance < needed) throw new Error("กระเป๋าตั้งต้นมีเงินไม่พอ (รอบก่อนใช้ไปแล้ว?) — เริ่ม chain ใหม่ (ลบโฟลเดอร์ DATA หรือรีสตาร์ท server ที่ไม่มี DATA) หรือใช้ --funder-key ที่มียอดพอ");
+  if (amountOf(balance) < BigInt(needed) * GWEI) throw new Error("กระเป๋าตั้งต้นมีเงินไม่พอ (รอบก่อนใช้ไปแล้ว?) — เริ่ม chain ใหม่ (ลบโฟลเดอร์ DATA หรือรีสตาร์ท server ที่ไม่มี DATA) หรือใช้ --funder-key ที่มียอดพอ");
   fs.writeFileSync(OPTIONS.out.replace(/\.json$/, "") + "-wallets.json", JSON.stringify(wallets.map(({ name, address, key }) => ({ name, address, key })), null, 2));
 
   await phase1();

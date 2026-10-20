@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import { WALLET, TREASURY, TOKEN } from "./programs.js";
 
 /*
@@ -13,7 +13,7 @@ const user = (name) => ({ sender: name, origin: name });
 let endpointCounter = 0;
 
 function setup(options = {}, balances = {}) {
-  const { vm: base } = { vm: new VM.VirtualMachine(new MemoryDB(), options) };
+  const { vm: base } = { vm: new VM.VirtualMachine(new MemoryDB(), { ...options, gas: { ...API_GAS_ONLY, ...options.gas } }) };
   const plain = new VM.VirtualMachine(base.db);
   const save = (res) => {
     assert.equal(res.status, "success", JSON.stringify(res.error));
@@ -28,8 +28,8 @@ function setup(options = {}, balances = {}) {
   return base;
 }
 
-const native = (vm, address) => vm.nativeBalanceOf(address).balance;
-const nativeWrites = (res) => Object.fromEntries(res.writes.filter((w) => w.dbKey.includes(":native:")).map((w) => [w.dbKey.replace(":native:", ":"), w.value]));
+const native = (vm, address) => num(vm.nativeBalanceOf(address).balance);
+const nativeWrites = (res) => Object.fromEntries(res.writes.filter((w) => w.dbKey.includes(":native:")).map((w) => [w.dbKey.replace(":native:", ":"), num(w.value)]));
 
 // ---------------------------------------------------------------------------
 //  value ที่แนบไปกับ tx
@@ -64,7 +64,7 @@ test("value: ยอดไม่พอ → ไม่มีอะไรเปล�
 
 test("value: ต้องเป็นจำนวนเต็มไม่ติดลบ", () => {
   const vm = setup({}, { alice: 1000 });
-  for (const value of [-1, 1.5, "10", null]) {
+  for (const value of [-1, 1.5, "1.5", "abc", "-5n", null]) {   // "10" / "10n" / 10n ใช้ได้ (ยอดเกิน 2^53 ส่งเป็น string)
     assert.equal(vm.call({ programUuid: "wallet", functionName: "deposit", context: user("alice"), value }).error.code, "INVALID_REQUEST");
   }
 });
@@ -193,8 +193,8 @@ test("fee: ตั้ง feeRecipient / burnPercent ต่อ block ได้ แ
 
   assert.equal(block.feeRecipient, "miner-a");
   assert.deepEqual(block.writes().filter((w) => w.dbKey.includes(":native:")), [
-    { type: "put", dbKey: "alice:native:consumed", value: 200 },   // 100 + 100
-    { type: "put", dbKey: "miner-a:native:received", value: 200 },
+    { type: "put", dbKey: "alice:native:consumed", value: "200n" },   // 100 + 100
+    { type: "put", dbKey: "miner-a:native:received", value: "200n" },
   ]);
   block.commit();
   assert.equal(native(vm, "miner-a"), 200);
@@ -226,7 +226,7 @@ test("block: value + ค่าแก๊ส + ส่วนแบ่ง ทำง�
   block.call({ programUuid: "wallet", functionName: "forward", input: { target: "wallet2", value: 100 }, context: user("alice"), value: 200, nonce: 1 });
 
   assert.deepEqual(block.results().map((r) => r.status), ["success", "success"]);
-  const writes = Object.fromEntries(block.writes().map((w) => [w.dbKey, w.value]));
+  const writes = Object.fromEntries(block.writes().map((w) => [w.dbKey, num(w.value)]));
   assert.equal(writes["alice:native:sended"], 500);     // value 300 + 200
   assert.equal(writes["alice:native:consumed"], 300);   // ค่าแก๊ส (1 + 2 call)
   assert.equal(writes["wallet:native:received"], 500);

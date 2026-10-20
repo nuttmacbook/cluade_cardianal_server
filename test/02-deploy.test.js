@@ -8,11 +8,11 @@ beforeEach(resetVM);
 test("deploy: คืน writes แค่ pending พร้อมโค้ดบรรทัดเดียว และไม่รันโค้ด", () => {
   const res = ok(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 5 } }));
 
-  assert.deepEqual(res.result, { programUuid: "counter", code: VM.toOneLine(COUNTER), state: "pending_review", value: 0 });
+  assert.deepEqual(res.result, { programUuid: "counter", code: VM.toOneLine(COUNTER), state: "pending_review", value: "0n" });
   assert.deepEqual(res.writes, [{
     type: "put",
     dbKey: "pending:counter",
-    value: { code: VM.toOneLine(COUNTER), context: user("alice"), initInput: { start: 5 }, metadata: {}, value: 0 },
+    value: { code: VM.toOneLine(COUNTER), context: user("alice"), initInput: { start: 5 }, metadata: {}, value: "0n" },
   }]);
   assert.deepEqual(res.calls, []);
   assert.deepEqual(res.loadValues, []);

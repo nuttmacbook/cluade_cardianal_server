@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { INSPECTOR, TOKEN } from "./programs.js";
 
 /* API ที่โปรแกรมเรียกได้: ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber */
@@ -9,7 +9,7 @@ const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
 
 function setup({ balances = {}, ...options } = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options, gas: { ...API_GAS_ONLY, ...options.gas } });
   vm.db.load(Object.fromEntries(Object.entries(balances).map(([address, value]) => [`${address}:native:received`, value])));
 
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
@@ -42,7 +42,7 @@ test("ThisBalance: เห็นยอดล่าสุดหลังโอน�
 
   const res = call(vm, "sendAll", { to: "bob" });
   assert.equal(res.result, 0);                       // โอนออกหมดแล้ว ยอดเป็น 0 ทันที
-  assert.equal(res.writes.find((w) => w.dbKey === "bob:native:received").value, 500);
+  assert.equal(res.writes.find((w) => w.dbKey === "bob:native:received").value, "500n");
 });
 
 test("BalanceOf: ดูยอดของ address อื่นได้", () => {

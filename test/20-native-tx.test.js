@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, num } from "./helpers.js";
 import { FUNDED, WALLET } from "./programs.js";
 
 /* vm.transfer (โอน native ระหว่าง address) และ value ที่แนบมากับ deploy */
@@ -16,8 +16,9 @@ function setup(options = {}, balances = {}) {
   return vm;
 }
 
-const native = (vm, address) => vm.nativeBalanceOf(address).balance;
-const nativeWrites = (res) => Object.fromEntries(res.writes.filter((w) => w.dbKey.includes(":native:")).map((w) => [w.dbKey.replace(":native:", ":"), w.value]));
+const native = (vm, address) => num(vm.nativeBalanceOf(address).balance);
+const balanceOf = (vm, address) => num(vm.nativeBalanceOf(address));
+const nativeWrites = (res) => Object.fromEntries(res.writes.filter((w) => w.dbKey.includes(":native:")).map((w) => [w.dbKey.replace(":native:", ":"), num(w.value)]));
 
 // ---------------------------------------------------------------------------
 //  vm.transfer
@@ -28,11 +29,11 @@ test("transfer: โอนระหว่าง wallet โดยไม่เร�
   const res = vm.transfer({ from: "alice", to: "BOB", amount: 300 });
 
   assert.equal(res.status, "success");
-  assert.deepEqual(res.result, { from: "alice", to: "bob", amount: 300 });
+  assert.deepEqual(res.result, { from: "alice", to: "bob", amount: "300n" });   // ยอด native ส่งออกเป็น "123n"
   assert.deepEqual(res.calls, []);
   assert.deepEqual(res.writes, [
-    { type: "put", dbKey: "alice:native:sended", value: 300 },
-    { type: "put", dbKey: "bob:native:received", value: 300 },
+    { type: "put", dbKey: "alice:native:sended", value: "300n" },
+    { type: "put", dbKey: "bob:native:received", value: "300n" },
   ]);
   vm.commit(res.writes);
   assert.equal(native(vm, "alice"), 700);
@@ -101,13 +102,13 @@ test("deploy พร้อม value: เงินย้ายไปที่โ�
   const vm = setup({}, { alice: 1000 });
   const deployed = vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 400 });
 
-  assert.equal(deployed.result.value, 400);
+  assert.equal(deployed.result.value, "400n");
   assert.deepEqual(nativeWrites(deployed), { "alice:sended": 400, "funded:received": 400 });
-  assert.equal(deployed.writes.find((w) => w.dbKey === "pending:funded").value.value, 400);
+  assert.equal(deployed.writes.find((w) => w.dbKey === "pending:funded").value.value, "400n");
   vm.commit(deployed.writes);
 
   const initialized = vm.init({ programUuid: "funded" });
-  assert.equal(initialized.result.value, 400);
+  assert.equal(initialized.result.value, "400n");
   vm.commit(initialized.writes);
   assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], 400);
   assert.equal(native(vm, "funded"), 400); // เงินยังอยู่ที่โปรแกรม
@@ -119,7 +120,7 @@ test("deploy พร้อม value: reject คืนเงินให้ผู�
   assert.equal(native(vm, "alice"), 600);
 
   const rejected = vm.reject({ programUuid: "funded" });
-  assert.equal(rejected.result.refund, 400);
+  assert.equal(rejected.result.refund, "400n");
   assert.deepEqual(nativeWrites(rejected), { "funded:sended": 400, "alice:received": 1400 });
   vm.commit(rejected.writes);
   assert.equal(native(vm, "alice"), 1000);
@@ -185,15 +186,15 @@ test("value ทั้งสาย: deploy → init → call พร้อม valu
 
 test("native: ยอดคงเหลือ = received - sended - consumed และทุกช่องเพิ่มอย่างเดียว", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 1000 });
-  assert.deepEqual(vm.nativeBalanceOf("alice"), { received: 1000, sended: 0, consumed: 0, balance: 1000 });
+  assert.deepEqual(balanceOf(vm, "alice"), { received: 1000, sended: 0, consumed: 0, balance: 1000 });
 
   vm.commit(vm.transfer({ from: "alice", to: "bob", amount: 200 }).writes);
-  assert.deepEqual(vm.nativeBalanceOf("alice"), { received: 1000, sended: 200, consumed: 100, balance: 700 });
-  assert.deepEqual(vm.nativeBalanceOf("bob"), { received: 200, sended: 0, consumed: 0, balance: 200 });
+  assert.deepEqual(balanceOf(vm, "alice"), { received: 1000, sended: 200, consumed: 100, balance: 700 });
+  assert.deepEqual(balanceOf(vm, "bob"), { received: 200, sended: 0, consumed: 0, balance: 200 });
 
   vm.commit(vm.transfer({ from: "bob", to: "alice", amount: 50 }).writes);
-  const alice = vm.nativeBalanceOf("alice");
-  const bob = vm.nativeBalanceOf("bob");
+  const alice = balanceOf(vm, "alice");
+  const bob = balanceOf(vm, "bob");
   assert.deepEqual(alice, { received: 1050, sended: 200, consumed: 100, balance: 750 });
   assert.deepEqual(bob, { received: 200, sended: 50, consumed: 100, balance: 50 });
   for (const value of [alice.received, alice.sended, alice.consumed, bob.received, bob.sended, bob.consumed]) assert.ok(value >= 0);
@@ -201,7 +202,7 @@ test("native: ยอดคงเหลือ = received - sended - consumed แ�
 
 test("native: address ที่ไม่เคยมีอะไรเลย → ทุกช่องเป็น 0", () => {
   const vm = setup();
-  assert.deepEqual(vm.nativeBalanceOf("ไม่มีใคร"), { received: 0, sended: 0, consumed: 0, balance: 0 });
+  assert.deepEqual(balanceOf(vm, "ไม่มีใคร"), { received: 0, sended: 0, consumed: 0, balance: 0 });
 });
 
 test("native: โปรแกรมก็มี 3 ช่องเหมือน wallet", () => {
@@ -210,8 +211,8 @@ test("native: โปรแกรมก็มี 3 ช่องเหมือน
   vm.commit(vm.init({ programUuid: "funded" }).writes);
   vm.commit(vm.call({ programUuid: "funded", functionName: "payBack", input: { amount: 150 }, context: user("alice") }).writes);
 
-  assert.deepEqual(vm.nativeBalanceOf("funded"), { received: 400, sended: 150, consumed: 0, balance: 250 });
-  assert.deepEqual(vm.nativeBalanceOf("alice"), { received: 1150, sended: 400, consumed: 0, balance: 750 }); // 1000 ตั้งต้น + 150 ที่ได้คืน
+  assert.deepEqual(balanceOf(vm, "funded"), { received: 400, sended: 150, consumed: 0, balance: 250 });
+  assert.deepEqual(balanceOf(vm, "alice"), { received: 1150, sended: 400, consumed: 0, balance: 750 }); // 1000 ตั้งต้น + 150 ที่ได้คืน
 });
 
 test("native: ยอดรวมของทั้งระบบ = เงินที่ใส่เข้ามา - ค่าแก๊สที่ถูกเผา", () => {
@@ -221,8 +222,8 @@ test("native: ยอดรวมของทั้งระบบ = เงิน
   block.transfer({ from: "bob", to: "carol", amount: 40 });
   block.commit();
 
-  const accounts = ["alice", "bob", "carol", "miner"].map((address) => vm.nativeBalanceOf(address));
+  const accounts = ["alice", "bob", "carol", "miner"].map((address) => balanceOf(vm, address));
   const total = accounts.reduce((sum, account) => sum + account.balance, 0);
-  const burned = accounts.reduce((sum, account) => sum + account.consumed, 0) - vm.nativeBalanceOf("miner").received;
+  const burned = accounts.reduce((sum, account) => sum + account.consumed, 0) - balanceOf(vm, "miner").received;
   assert.equal(total, 10_000 - burned);
 });

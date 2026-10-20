@@ -48,7 +48,7 @@ test("multiSend: แจก native หลายกระเป๋าใน tx เ
   const ok = call(OWNER, SEND, "multiSend", { recipients }, 300_000);
   assert.equal(ok.status, "success", JSON.stringify(ok.error));
   assert.deepEqual(ok.result, { count: "100n", total: "300000n" });
-  assert.equal(vm.nativeBalanceOf(recipients[99].to).balance, 3000);
+  assert.equal(vm.nativeBalanceOf(recipients[99].to).balance, 3000n);
   assert.equal(call(OWNER, SEND, "multiSend", { recipients }, 1).status, "throw");
 });
 
@@ -89,7 +89,7 @@ test("forward: token + native ผ่าน router 4 ทอด หักทอด
   for (let i = 0; i < 4; i += 1) out -= out / 100n;
   assert.deepEqual(res.result, { delivered: `${out}n`, value: "2500n", to: RECEIVER });
   assert.equal(vm.query({ programUuid: T, functionName: "balanceOf", input: { who: RECEIVER } }).result, `${out}n`);
-  assert.equal(vm.nativeBalanceOf(RECEIVER).balance, 2500);
+  assert.equal(vm.nativeBalanceOf(RECEIVER).balance, 2500n);
   assert.equal(res.events.filter((e) => e.name === "Transfer").length, 5);   // ดึงเข้า + 3 ทอด + ส่งออก
   assert.equal(Math.max(...res.calls.map((c) => c.depth)), 4);
 });

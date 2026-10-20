@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, num } from "./helpers.js";
 import { TOKEN } from "./programs.js";
 
 /*
@@ -16,7 +16,7 @@ const OPTIONS = { requireNonce: true, chargeGas: true, recordTransactions: true,
 
 function setup() {
   const vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS);
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
   const first = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   first.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 }, nonce: 0 });
   first.init({ programUuid: "token" });
@@ -128,7 +128,7 @@ test("tx ที่ล้มจากโปรแกรม (ยอดไม่พ
 
   assert.equal(res.status, "throw");
   assert.equal(res.accepted, true);   // ผ่าน nonce แล้ว จึงถือว่าเข้าระบบ
-  assert.ok(res.fee > 0);
+  assert.ok(num(res.fee) > 0);
   block.commit();
 
   assert.equal(vm.getBlock(2).failedCount, 1);
@@ -145,7 +145,7 @@ test("replay: block ที่ได้มามีแต่ tx ที่ถู�
   block.commit();
 
   const target = new VM.VirtualMachine(new MemoryDB(), OPTIONS);
-  target.db.load({ "alice:native:received": 1_000_000 });
+  target.db.load({ "alice:native:received": "1000000n" });
   for (let number = 1; number <= vm.latestBlockNumber(); number += 1) {
     const header = vm.getBlock(number);
     const replayed = target.createBlock({

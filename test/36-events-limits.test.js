@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { EVENTFUL, PROBE } from "./programs.js";
 
 /* emit ของโปรแกรม และเพดานความยาว key ของ storage */
@@ -9,7 +9,7 @@ const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
 
 function setup(options = {}) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordHistory: true, ...options, gas: { ...API_GAS_ONLY, ...options.gas } });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "token", code: EVENTFUL, context: user("alice"), initInput: { supply: 1000 } });
   block.init({ programUuid: "token" });
@@ -112,7 +112,7 @@ test("emit: ย้อนดู event ของ block เก่าได้ด้
 test("emit: คิดค่าแก๊สตามจำนวน event และขนาดข้อมูล", () => {
   const gas = { call: 0, read: 0, write: 0, byte: 0, event: 200, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   // transfer emit 1 event / relaySafe emit 1 event แต่ relay (สำเร็จ) emit 2
   const one = call(vm, "token", "transfer", { to: "bob", amount: 30 });
@@ -128,7 +128,7 @@ test("emit: คิดค่าแก๊สตามจำนวน event แล�
 test("emit: ข้อมูลใน event ยิ่งใหญ่ยิ่งแพง", () => {
   const gas = { call: 0, read: 0, write: 0, byte: 1, event: 0, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
-  vm.db.load({ "alice:native:received": 1_000_000 });
+  vm.db.load({ "alice:native:received": "1000000n" });
 
   const small = call(vm, "token", "transfer", { to: "b", amount: 1 });
   const large = call(vm, "token", "transfer", { to: "b".repeat(100), amount: 1 });

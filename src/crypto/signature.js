@@ -43,10 +43,19 @@ const keccak = (bytes) => keccak_256(bytes);
 const keccakHex = (bytes) => `0x${bytesToHex(keccak(bytes))}`;
 const encodeString = (text) => keccak(utf8ToBytes(text));
 
+/** ตัวเลขใน tx: number (จำนวนเต็มปลอดภัย), BigInt หรือ string ทศนิยม ("123" / "123n") — ยอด native เกิน 2^53 ส่งเป็น string */
+export function parseUint(value) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  if (typeof value === "string" && /^\d+n?$/.test(value)) return BigInt(value.replace(/n$/, ""));
+  return null;
+}
+
 const encodeUint = (value) => {
-  if (!Number.isSafeInteger(value) || value < 0) fail("ค่าตัวเลขใน tx ต้องเป็นจำนวนเต็มไม่ติดลบ");
+  const parsed = parseUint(value);
+  if (parsed === null || parsed < 0n || parsed >= 2n ** 256n) fail("ค่าตัวเลขใน tx ต้องเป็นจำนวนเต็มไม่ติดลบ");
   const bytes = new Uint8Array(32);
-  let rest = BigInt(value);
+  let rest = parsed;
   for (let i = 31; i >= 0 && rest > 0n; i -= 1) {
     bytes[i] = Number(rest & 0xffn);
     rest >>= 8n;
@@ -182,7 +191,8 @@ export function recoverSigner(tx, signature) {
 /** แปลง tx ที่เซ็นแล้วเป็น request ของ VM (sender / origin มาจากลายเซ็นเท่านั้น) */
 export function toVmRequest(tx, sender, signature, digest) {
   const context = { sender, origin: sender };
-  const common = { context, nonce: tx.nonce, gasLimit: tx.gasLimit || undefined, gasPrice: tx.gasPrice || undefined, signature, digest };
+  const given = (value) => (parseUint(value) ? value : undefined);   // 0 / "0" = ไม่ได้ระบุ (ใช้ค่าของระบบ)
+  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), gasPrice: given(tx.gasPrice), signature, digest };
 
   if (tx.action === "transfer") return { from: sender, to: tx.to, amount: tx.value, ...common, context: undefined };
   if (tx.action === "metadata") return { metadata: tx.input, ...common };

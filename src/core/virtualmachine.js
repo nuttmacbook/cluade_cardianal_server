@@ -2,6 +2,7 @@ import nodeVm from "node:vm";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
+import { instrument, GAS_FN, CALL_FN } from "./gasmeter.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
 /*
@@ -69,6 +70,8 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *                          ข้อมูล block และดัชนีค้น tx จาก hash — เปิดด้วย recordBlocks + ส่ง number ตอน createBlock
  *
  *  ค่าแก๊ส (เมื่อ chargeGas): call 100 + write 500 + read 100 + 1 ต่อ byte ที่อ่าน/เขียน
+ *    + 1 ต่อ node ของโค้ดที่รันผ่าน และเมธอดในตัวตามขนาดข้อมูล (ฉีดตัวนับตอนคอมไพล์ ดู gasmeter.js)
+ *    เพดานต่อ tx = maxTxGas ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS
  *    ผู้จ่ายคือ sender ของ tx ชั้นนอกสุดเสมอ, หักจาก <sender>:nativebalance
  *    user ส่ง gasLimit มาเองได้ (เพดานสูงสุดคือยอด native ที่เหลือหลังหัก value)
  *    แก๊สไม่พอ → OUT_OF_GAS (โปรแกรม catch ไม่ได้), tx ที่ล้มก็ยังกิน nonce และค่าแก๊ส
@@ -101,6 +104,7 @@ export const DEFAULT_OPTIONS = {
   maxTransactions: null,          // จำนวน tx สูงสุดต่อ block (null = ไม่จำกัด)
   maxTransactionsPerSender: null, // จำนวน tx สูงสุดต่อ address ใน 1 block
   maxBlockGas: null,              // แก๊สรวมสูงสุดต่อ block
+  maxTxGas: 10_000_000,           // แก๊สสูงสุดต่อ tx / query (ลูปไม่รู้จบหยุดที่นี่ด้วย OUT_OF_GAS แม้ไม่ได้หักค่าแก๊ส)
   admins: null,                   // address ที่เรียก init / reject ได้ (null = ใครก็ได้)
   maxCodeSize: 64 * 1024,         // ขนาดโค้ดสูงสุดต่อโปรแกรม
   maxKeySize: 1000,               // ความยาวสูงสุดของ key storage (เหลือที่ให้ history: ซ้อนทับ)
@@ -130,6 +134,8 @@ export const DEFAULT_GAS = {
   hash: 100,   // ต่อการเรียก keccak256 (บวกค่า byte ของข้อมูล)
   recover: 3000, // ต่อการเรียก ecrecover (คำนวณหนัก)
   code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
+  node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
+  builtin: 1,  // ต่อหน่วยข้อมูล (ตัวอักษร / สมาชิก) ที่เมธอดในตัวอย่าง join, split, JSON.stringify รับเข้าและส่งออก
   price: 1,    // native ต่อ 1 gas
 };
 
@@ -323,6 +329,22 @@ export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddr
 export const toInputValue = (value, label) => normalizeHexDeep(toJsonValue(value, label));
 
 /** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส */
+/** ขนาดคร่าว ๆ ของค่า (ไม่ลงลึก): string = ความยาว, array = จำนวนสมาชิก, object = จำนวน key */
+function sizeOf(value) {
+  if (typeof value === "string" || Array.isArray(value)) return value.length;
+  if (value !== null && typeof value === "object") return Object.keys(value).length;
+  return 1;
+}
+
+/** ขนาดผลที่รู้ได้ก่อนเรียก (กันการสร้างข้อมูลใหญ่ด้วยคำสั่งเดียวก่อนถูกคิดแก๊ส) */
+function expectedSize(target, method, args) {
+  const count = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0);
+  if (method === "repeat" && typeof target === "string") return target.length * count(args[0]);
+  if ((method === "padStart" || method === "padEnd") && typeof target === "string") return count(args[0]);
+  if (method === "from" && args[0] && typeof args[0] === "object") return count(args[0].length);
+  return 0;
+}
+
 export const valueSize = (value) => (value === undefined ? 0 : Buffer.byteLength(JSON.stringify(encodeBigints(value)) ?? "", "utf8"));
 
 /** ตัวเลขถูกเก็บเป็น string ลงท้ายด้วย n เช่น "1000n" เพราะ JSON ไม่มี BigInt */
@@ -357,8 +379,7 @@ export function decodeBigints(value, label = "ค่า") {
 export function fromProgramAmount(amount, label = "amount") {
   if (typeof amount === "number") fail(ERRORS.numberNotAllowed, label);
   if (typeof amount !== "bigint") fail(ERRORS.invalidAmount);
-  if (amount > BigInt(Number.MAX_SAFE_INTEGER) || amount < BigInt(-Number.MAX_SAFE_INTEGER)) fail(ERRORS.invalidAmount);
-  return Number(amount);
+  return amount;
 }
 
 /** options ของ runProgram: { value } เป็น BigInt */
@@ -556,17 +577,41 @@ export function checkContext(context) {
   if (!isNonEmptyString(context?.sender) || !isNonEmptyString(context?.origin)) fail(ERRORS.invalidContext);
 }
 
+/**
+ * ยอด native (หน่วยย่อย 18 ทศนิยม) → BigInt
+ * รับ BigInt, number ที่เป็นจำนวนเต็มปลอดภัย, "123" หรือ "123n" · อย่างอื่นคืน null
+ */
+export function parseNative(value) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") return Number.isSafeInteger(value) ? BigInt(value) : null;
+  if (typeof value === "string" && NATIVE_TEXT.test(value)) return BigInt(value.endsWith("n") ? value.slice(0, -1) : value);
+  return null;
+}
+const NATIVE_TEXT = /^-?\d+n?$/;
+
+/** BigInt → "123n" (รูปแบบที่เก็บลง DB / ส่งออกใน response, receipt, header) */
+export const encodeNative = (amount) => `${amount}n`;
+
+/** ค่าที่อ่านจาก DB / response กลับเป็น BigInt (ไม่มีค่า = 0) */
+export const readNative = (value) => (value === undefined || value === null ? 0n : parseNative(value) ?? 0n);
+
 export function checkValue(value) {
-  if (!Number.isSafeInteger(value) || value < 0) fail(ERRORS.invalidValue);
-  return value;
+  const amount = parseNative(value);
+  if (amount === null || amount < 0n) fail(ERRORS.invalidValue);
+  return amount;
 }
 
-/** gasPrice ที่ผู้ส่งเสนอ ต้องไม่ต่ำกว่าราคาขั้นต่ำของระบบ */
+/** gasPrice ที่ผู้ส่งเสนอ ต้องไม่ต่ำกว่าราคาขั้นต่ำของระบบ (คืน BigInt) */
 export function checkGasPrice(gasPrice, minimum) {
-  if (gasPrice === undefined) return minimum;
-  if (!Number.isSafeInteger(gasPrice) || gasPrice < minimum) fail(ERRORS.invalidGasPrice, minimum);
-  return gasPrice;
+  const floor = parseNative(minimum);
+  if (gasPrice === undefined || gasPrice === null) return floor;
+  const price = parseNative(gasPrice);
+  if (price === null || price < floor) fail(ERRORS.invalidGasPrice, minimum);
+  return price;
 }
+
+/** จำนวนแก๊สที่ซื้อได้ (BigInt) → number ไม่เกินเพดานที่ number แทนได้ */
+const gasUnits = (units) => Number(units > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : units);
 
 export function checkGasLimit(gasLimit) {
   if (gasLimit === undefined) return Infinity;
@@ -647,7 +692,7 @@ export class Compiler {
       this.#cache.set(oneLineCode, {
         exports: callable,
         hasInit: functionNames.includes(INIT_FUNCTION),
-        create: Compiler.buildFactory(body, functionNames),
+        create: Compiler.buildFactory(Compiler.meter(body), functionNames),
       });
     }
     return this.#cache.get(oneLineCode);
@@ -673,7 +718,16 @@ export class Compiler {
   }
 
   static source(body, tail = "") {
-    return `"use strict";\nconst { ${PROGRAM_API_NAMES.join(", ")} } = api;\n${body}\n;${tail}`;
+    return `"use strict";\nconst { ${[...PROGRAM_API_NAMES, GAS_FN, CALL_FN].join(", ")} } = api;\n${body}\n;${tail}`;
+  }
+
+  /** ฉีดตัวนับแก๊สเข้าโค้ด (ดู gasmeter.js) */
+  static meter(body) {
+    try {
+      return instrument(body);
+    } catch (err) {
+      fail(ERRORS.syntaxError, err.message);
+    }
   }
 
   /** คอมไพล์เพื่อตรวจ syntax (ไม่รันโค้ด) */
@@ -720,20 +774,21 @@ export class Transaction {
   #read;
   #readCache = new Map(); // dbKey → ค่าที่อ่านจาก DB แล้ว (อ่านแต่ละ key จาก DB ครั้งเดียวต่อ request)
 
-  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null }) {
+  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity }) {
     checkTimestamp(timestamp);
     this.#read = read;
     this.blockNumber = blockNumber;           // เลข block ที่ tx นี้อยู่ (null = รันนอก block)
     this.seed = null;                         // seed ของตัวสุ่ม (ตั้งจาก hash ของ tx)
     this.Math = Math;                         // แทนด้วยตัวสุ่มที่ผูกกับ tx เมื่อรู้ seed
     this.gas = gas;                           // ตารางค่าแก๊ส
-    this.gasPrice = gas.price;                // ราคาต่อ 1 gas ของ tx นี้ (ผู้ส่งเสนอสูงกว่าได้)
+    this.gasPrice = readNative(gas.price);    // ราคาต่อ 1 gas ของ tx นี้ (BigInt หน่วยย่อย · ผู้ส่งเสนอสูงกว่าได้)
     this.chargeGas = chargeGas;
     this.gasUsed = 0;
-    this.gasLimit = Infinity;                 // ตั้งตามยอด native ของผู้จ่ายเมื่อรู้ตัวผู้จ่าย
+    this.maxTxGas = maxTxGas;                 // เพดานแก๊สต่อ tx ไม่ว่าผู้จ่ายจะมีเงินเท่าไร
+    this.gasLimit = maxTxGas;                 // ตั้งตามยอด native ของผู้จ่ายเมื่อรู้ตัวผู้จ่าย
     this.payer = null;                        // { address, nonce } ของ tx ชั้นนอกสุด
     this.transaction = null;                  // ข้อมูลของ tx สำหรับเขียน <addr>:txn:<nonce>:<hash>
-    this.feeCharged = 0;                      // ค่าแก๊สที่เก็บจริง (native)
+    this.feeCharged = 0n;                     // ค่าแก๊สที่เก็บจริง (native BigInt)
     this.feeRecipient = feeRecipient;         // ผู้ปิด block ที่ได้ส่วนแบ่งค่าแก๊ส
     this.burnPercent = burnPercent;
     this.timestamp = timestamp;               // เวลาของ request / block ที่โปรแกรมเห็น
@@ -786,7 +841,7 @@ export class Transaction {
 
   /** ค่าแก๊สที่ต้องจ่ายเป็น native */
   gasFee() {
-    return this.chargeGas ? Math.min(this.gasUsed, this.gasLimit) * this.gasPrice : 0;
+    return this.chargeGas ? BigInt(Math.min(this.gasUsed, this.gasLimit)) * this.gasPrice : 0n;
   }
 
   /** ค่าล่าสุด: ถ้าเขียนใน request นี้แล้วใช้ค่านั้น ไม่งั้นอ่าน DB */
@@ -830,7 +885,7 @@ export class Transaction {
   // ---------- log การเรียก ----------
 
   startCall({ depth, programUuid, functionName, context, input, value = 0, gasStart = this.gasUsed }) {
-    const record = { depth, programUuid, functionName, ...pickContext(context), input, value, gasStart, status: STATUS.RUNNING };
+    const record = { depth, programUuid, functionName, ...pickContext(context), input, value: encodeNative(readNative(value)), gasStart, status: STATUS.RUNNING };
     this.calls.push(record);
     return record;
   }
@@ -885,6 +940,7 @@ export class VirtualMachine {
     maxTransactions = DEFAULT_OPTIONS.maxTransactions,
     maxTransactionsPerSender = DEFAULT_OPTIONS.maxTransactionsPerSender,
     maxBlockGas = DEFAULT_OPTIONS.maxBlockGas,
+    maxTxGas = DEFAULT_OPTIONS.maxTxGas,
     admins = DEFAULT_OPTIONS.admins,
     maxCodeSize = DEFAULT_OPTIONS.maxCodeSize,
     maxKeySize = DEFAULT_OPTIONS.maxKeySize,
@@ -911,6 +967,7 @@ export class VirtualMachine {
     this.maxTransactions = maxTransactions;
     this.maxTransactionsPerSender = maxTransactionsPerSender;
     this.maxBlockGas = maxBlockGas;
+    this.maxTxGas = maxTxGas;
     this.admins = admins === null ? null : admins.map(normalizeAddress);
     this.maxCodeSize = maxCodeSize;
     this.maxKeySize = maxKeySize;
@@ -942,9 +999,9 @@ export class VirtualMachine {
       if (!derive) checkProgramUuid(rawProgramUuid);
       checkContext(rawContext);
       checkCode(code);
-      checkValue(value);
+      const amount = checkValue(value);
       const context = this.userContext(rawContext);
-      this.preparePayer(tx, context.sender, { nonce, gasLimit, gasPrice, value });
+      this.preparePayer(tx, context.sender, { nonce, gasLimit, gasPrice, value: amount });
 
       const programUuid = derive
         // address ของโปรแกรม = hash(deployer + nonce) จึงไม่มีใครมี private key ของมัน
@@ -968,7 +1025,7 @@ export class VirtualMachine {
         fail(ERRORS.programUuidUsed, programUuid);
       }
 
-      if (value > 0) this.moveNative(tx, context.sender, programUuid, value); // เงินไปรออยู่ที่โปรแกรมเลย
+      if (amount > 0n) this.moveNative(tx, context.sender, programUuid, amount); // เงินไปรออยู่ที่โปรแกรมเลย
 
       this.checkMetadata(metadata);
       tx.put(pendingKey(programUuid), {
@@ -976,9 +1033,9 @@ export class VirtualMachine {
         context,
         initInput: toInputValue(initInput, "initInput"),
         metadata,
-        value,
+        value: encodeNative(amount),
       });
-      return { programUuid, code: oneLineCode, state: STATE.PENDING, value };
+      return { programUuid, code: oneLineCode, state: STATE.PENDING, value: encodeNative(amount) };
     }, options);
   }
 
@@ -993,7 +1050,8 @@ export class VirtualMachine {
       if (!pending) fail(ERRORS.pendingNotFound);
       if (context === undefined) this.seedRandom(tx, arguments[0], "init");
 
-      const { code, initInput, value = 0 } = pending;
+      const { code, initInput } = pending;
+      const value = readNative(pending.value);
       const deployer = pending.context;
       const initResult = this.compiler.compile(code).hasInit
         ? this.runFunction(tx, { programUuid, functionName: INIT_FUNCTION, input: initInput, context: deployer, value, code, isInit: true })
@@ -1009,7 +1067,7 @@ export class VirtualMachine {
         [METADATA_FIELD.CREATED_AT]: tx.timestamp,
       }, { allowReserved: true });
       tx.delete(pendingKey(programUuid));
-      return { programUuid, state: STATE.ACTIVE, initResult, value: pending.value ?? 0 };
+      return { programUuid, state: STATE.ACTIVE, initResult, value: encodeNative(value) };
     }, options);
   }
 
@@ -1023,11 +1081,11 @@ export class VirtualMachine {
       const pending = tx.current(pendingKey(programUuid));
       if (!pending) fail(ERRORS.pendingNotFound);
 
-      const refund = pending.value ?? 0;
-      if (refund > 0) this.moveNative(tx, programUuid, pending.context.sender, refund); // คืนเงินให้ผู้ deploy
+      const refund = readNative(pending.value);
+      if (refund > 0n) this.moveNative(tx, programUuid, pending.context.sender, refund); // คืนเงินให้ผู้ deploy
 
       tx.delete(pendingKey(programUuid));
-      return { programUuid, state: STATE.REJECTED, refund };
+      return { programUuid, state: STATE.REJECTED, refund: encodeNative(refund) };
     }, options);
   }
 
@@ -1036,17 +1094,17 @@ export class VirtualMachine {
     return this.runAction((tx) => {
       checkProgramUuid(programUuid);
       checkContext(context);
-      checkValue(value);
+      const amount = checkValue(value);
 
       const target = normalizeAddress(programUuid);
       const userContext = this.userContext(context);
       const sender = userContext.sender;
-      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value });
+      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value: amount });
       this.rememberTransaction(tx, arguments[0], "call");
       this.seedRandom(tx, arguments[0], "call");
-      if (value > 0) this.moveNative(tx, sender, target, value); // แนบเงินไปกับ tx
+      if (amount > 0n) this.moveNative(tx, sender, target, amount); // แนบเงินไปกับ tx
 
-      return this.runFunction(tx, { programUuid: target, functionName, input, context: userContext, value });
+      return this.runFunction(tx, { programUuid: target, functionName, input, context: userContext, value: amount });
     }, options);
   }
 
@@ -1054,17 +1112,18 @@ export class VirtualMachine {
   transfer({ from, to, amount, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       if (!isNonEmptyString(from) || !isNonEmptyString(to)) fail(ERRORS.invalidAddress);
-      if (!Number.isSafeInteger(amount) || amount <= 0) fail(ERRORS.invalidAmount);
+      const value = parseNative(amount);
+      if (value === null || value <= 0n) fail(ERRORS.invalidAmount);
 
       const sender = normalizeAddress(from);
       const recipient = normalizeAddress(to);
-      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value: amount });
+      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value });
       this.rememberTransaction(tx, arguments[0], "transfer");
       this.seedRandom(tx, arguments[0], "transfer");
 
       tx.useGas(tx.gas.call); // ค่าพื้นฐานของ tx
-      this.moveNative(tx, sender, recipient, amount);
-      return { from: sender, to: recipient, amount };
+      this.moveNative(tx, sender, recipient, value);
+      return { from: sender, to: recipient, amount: encodeNative(value) };
     }, options);
   }
 
@@ -1164,12 +1223,12 @@ export class VirtualMachine {
       to: normalizeAddress(isTransfer ? request.to : request.programUuid) ?? null,
       method: isTransfer ? "transfer" : request.functionName ?? action,
       input: request.input ?? null,
-      value: (isTransfer ? request.amount : request.value) ?? 0,
+      value: encodeNative(readNative(isTransfer ? request.amount : request.value)),
       result: result.result ?? null,
       error: result.error ?? null,
       gasUsed: result.gasUsed ?? 0,
-      gasPrice: request.gasPrice ?? null,
-      fee: result.fee ?? 0,
+      gasPrice: request.gasPrice === undefined || request.gasPrice === null ? null : encodeNative(readNative(request.gasPrice)),
+      fee: result.fee ?? "0n",
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
       trace: (result.calls ?? []).map((call) => ({
@@ -1179,14 +1238,14 @@ export class VirtualMachine {
         from: call.sender,
         origin: call.origin,
         input: call.input ?? null,
-        value: call.value ?? 0,
+        value: call.value ?? "0n",
         result: call.result ?? null,
         gasUsed: call.gasUsed ?? null,
         status: call.status,
         error: call.error ?? null,
       })),
       nativeChanges: pick(KEY.NATIVE).map(({ address, field, value }) => (nativeBefore
-        ? { address, field, before: nativeBefore.get(nativeKey(address, field)) ?? 0, after: value }
+        ? { address, field, before: nativeBefore.get(nativeKey(address, field)) ?? "0n", after: value }
         : { address, field, after: value })),
       stateChanges: pick(KEY.STORAGE).map(({ address, key, value }) => ({ program: address, key, after: value })),
       programChanges: changes
@@ -1304,12 +1363,12 @@ export class VirtualMachine {
   /** ยอด native ของ address จาก DB: { received, sended, consumed, balance } */
   nativeBalanceOf(address) {
     const account = normalizeAddress(address);
-    const [received = 0, sended = 0, consumed = 0] = this.db.readKeys([
+    const [received, sended, consumed] = this.db.readKeys([
       nativeKey(account, NATIVE_FIELD.RECEIVED),
       nativeKey(account, NATIVE_FIELD.SENDED),
       nativeKey(account, NATIVE_FIELD.CONSUMED),
-    ]).map((value) => value ?? 0);
-    return { received, sended, consumed, balance: received - sended - consumed };
+    ]).map(readNative);
+    return { received, sended, consumed, balance: received - sended - consumed };   // BigInt
   }
 
   /** hash ของ genesis ที่บันทึกไว้ */
@@ -1328,7 +1387,7 @@ export class VirtualMachine {
     if (this.latestBlockNumber() !== null) fail(ERRORS.genesisMismatch, "(มี block แล้ว)", hash);
 
     const writes = Object.entries(genesis.balances ?? {}).map(([address, amount]) =>
-      ({ type: WRITE.PUT, dbKey: nativeKey(normalizeAddress(address), NATIVE_FIELD.RECEIVED), value: amount }));
+      ({ type: WRITE.PUT, dbKey: nativeKey(normalizeAddress(address), NATIVE_FIELD.RECEIVED), value: encodeNative(checkValue(amount)) }));
     writes.push({ type: WRITE.PUT, dbKey: KEY.GENESIS, value: hash });
     this.commit(writes);
     return { hash, applied: true };
@@ -1587,6 +1646,7 @@ export class VirtualMachine {
       blockNumber,
       timeoutMs: this.timeoutMs,
       maxCallDepth: this.maxCallDepth,
+      maxTxGas: this.maxTxGas,
       gas: this.gas,
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
@@ -1607,8 +1667,8 @@ export class VirtualMachine {
         accepted: true,
         timestamp: tx.timestamp,
         gasUsed: tx.gasUsed,
-        gasPrice: tx.gasPrice,
-        fee: tx.feeCharged,
+        gasPrice: encodeNative(tx.gasPrice),
+        fee: encodeNative(tx.feeCharged),
         result,
         events: tx.events,
         ...summary,
@@ -1628,8 +1688,8 @@ export class VirtualMachine {
         accepted,
         timestamp: tx.timestamp,
         gasUsed: tx.gasUsed,
-        gasPrice: tx.gasPrice,
-        fee: tx.feeCharged,
+        gasPrice: encodeNative(tx.gasPrice),
+        fee: encodeNative(tx.feeCharged),
         error: { code, message },
         debug: err?.detail ?? null,   // ข้อมูลดีบัก ไม่ถูกบันทึกลง DB และไม่เข้า hash
         calls: tx.calls,
@@ -1663,7 +1723,7 @@ export class VirtualMachine {
 
   /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
   preparePayer(tx, address, { nonce, gasLimit, gasPrice, value = 0 } = {}) {
-    const requestedLimit = checkGasLimit(gasLimit);
+    const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
     tx.gasPrice = checkGasPrice(gasPrice, this.gas.price); // จ่ายแพงกว่าได้ เพื่อให้ถูกเลือกก่อน
     if (!this.requireNonce && !this.chargeGas && !this.recordTransactions) {
       tx.gasLimit = requestedLimit;
@@ -1675,9 +1735,9 @@ export class VirtualMachine {
     tx.payer = { address, nonce: current };
 
     if (tx.chargeGas) {
-      const available = this.nativeBalance(tx, address) - value; // เงินที่เหลือหลังแนบ value ไปกับ tx
-      if (available < 0) fail(ERRORS.nativeInsufficient, address);
-      tx.gasLimit = Math.min(Math.floor(available / tx.gasPrice), requestedLimit);
+      const available = this.nativeBalance(tx, address) - readNative(value); // เงินที่เหลือหลังแนบ value ไปกับ tx
+      if (available < 0n) fail(ERRORS.nativeInsufficient, address);
+      tx.gasLimit = Math.min(gasUnits(available / tx.gasPrice), requestedLimit);
     } else {
       tx.gasLimit = requestedLimit;
     }
@@ -1702,41 +1762,42 @@ export class VirtualMachine {
     return [{
       type: WRITE.PUT,
       dbKey: txnKey(address, nonce, hash),
-      value: { hash, action, nonce, status, error, timestamp: tx.timestamp, gasUsed: tx.gasUsed, fee: tx.feeCharged, signature, digest },
+      value: { hash, action, nonce, status, error, timestamp: tx.timestamp, gasUsed: tx.gasUsed, fee: encodeNative(tx.feeCharged), signature, digest },
     }];
   }
 
   /** writes ของ nonce + ค่าแก๊ส (แบ่งให้ผู้ปิด block ตาม burnPercent) */
   buildChargeWrites(tx, balance, raw) {
     const { address, nonce } = tx.payer;
-    const fee = Math.min(tx.gasFee(), balance);
+    const due = tx.gasFee();
+    const fee = due < balance ? due : balance > 0n ? balance : 0n;
     tx.feeCharged = fee;
     const writes = [];
     if (this.requireNonce) writes.push({ type: WRITE.PUT, dbKey: nonceKey(address), value: nonce + 1 });
-    if (fee <= 0) return writes;
+    if (fee <= 0n) return writes;
 
     // ค่าแก๊สเข้าช่อง consumed ของผู้จ่าย ส่วนที่ไม่ได้เผาทิ้งเข้าช่อง received ของผู้ปิด block
     writes.push({
       type: WRITE.PUT,
       dbKey: nativeKey(address, NATIVE_FIELD.CONSUMED),
-      value: this.nativeField(tx, address, NATIVE_FIELD.CONSUMED, raw) + fee,
+      value: encodeNative(this.nativeField(tx, address, NATIVE_FIELD.CONSUMED, raw) + fee),
     });
 
-    const reward = tx.feeRecipient ? Math.floor((fee * (100 - tx.burnPercent)) / 100) : 0;
-    if (reward > 0) {
+    const reward = tx.feeRecipient ? (fee * BigInt(100 - tx.burnPercent)) / 100n : 0n;
+    if (reward > 0n) {
       writes.push({
         type: WRITE.PUT,
         dbKey: nativeKey(tx.feeRecipient, NATIVE_FIELD.RECEIVED),
-        value: this.nativeField(tx, tx.feeRecipient, NATIVE_FIELD.RECEIVED, raw) + reward,
+        value: encodeNative(this.nativeField(tx, tx.feeRecipient, NATIVE_FIELD.RECEIVED, raw) + reward),
       });
     }
 
     const burned = fee - reward; // ส่วนที่เผา → ส่งไปที่ 0x000…000
-    if (burned > 0) {
+    if (burned > 0n) {
       writes.push({
         type: WRITE.PUT,
         dbKey: nativeKey(BURN_ADDRESS, NATIVE_FIELD.RECEIVED),
-        value: this.nativeField(tx, BURN_ADDRESS, NATIVE_FIELD.RECEIVED, raw) + burned,
+        value: encodeNative(this.nativeField(tx, BURN_ADDRESS, NATIVE_FIELD.RECEIVED, raw) + burned),
       });
     }
     return writes;
@@ -1745,7 +1806,7 @@ export class VirtualMachine {
   chargeOnSuccess(tx) {
     if (!tx.payer) return [];
     const balance = this.nativeBalance(tx, tx.payer.address);
-    if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, Math.floor(balance / tx.gasPrice));
+    if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, gasUnits(balance / tx.gasPrice));
     return this.buildChargeWrites(tx, balance, false);
   }
 
@@ -1790,7 +1851,7 @@ export class VirtualMachine {
       const params = {
         input: toProgram(toInputValue(input, "input") ?? {}, "input", this.bigintValues),
         context: pickContext(context),
-        value: this.bigintValues ? BigInt(value) : value,   // native ที่แนบมากับการเรียกนี้
+        value: this.toAmount(readNative(value)),   // native ที่แนบมากับการเรียกนี้
         block: { timestamp: this.bigintValues ? BigInt(tx.timestamp) : tx.timestamp },
       };
       const result = this.invokeProgram(tx, program, api, functionName, params, depth);
@@ -1826,6 +1887,8 @@ export class VirtualMachine {
       return fn(...args);
     };
     return {
+      [GAS_FN]: (nodes) => tx.useGas(nodes * tx.gas.node),
+      [CALL_FN]: (target, method, args) => this.programCallBuiltin(tx, target, method, args),
       map,
       Date: tx.Date,
       Math: tx.Math,
@@ -1834,7 +1897,7 @@ export class VirtualMachine {
       BalanceOf: guard((address) => this.toAmount(this.programNativeBalance(tx, address))),
       IsProgram: guard((address) => this.programIsProgram(tx, address)),
       MetadataOf: guard((address, field) => toProgram(this.programMetadataOf(tx, address, field) ?? null, "metadata", this.bigintValues)),
-      BlockNumber: () => (tx.blockNumber === null ? null : this.toAmount(tx.blockNumber)),
+      BlockNumber: () => (tx.blockNumber === null ? null : this.toAmount(BigInt(tx.blockNumber))),
       readDB: guard((key) => this.programReadDB(tx, programUuid, key)),
       writeDB: guard((key, value) => this.programWriteDB(tx, programUuid, key, value)),
       deleteDB: guard((key) => this.programDeleteDB(tx, programUuid, key)),
@@ -1881,7 +1944,7 @@ export class VirtualMachine {
   /** ยอดสะสมแต่ละช่อง */
   nativeField(tx, address, field, raw = false) {
     const dbKey = nativeKey(address, field);
-    return (raw ? tx.readRaw(dbKey) : tx.current(dbKey)) ?? 0;
+    return readNative(raw ? tx.readRaw(dbKey) : tx.current(dbKey));
   }
 
   /** ยอดคงเหลือ = received - sended - consumed */
@@ -1894,7 +1957,7 @@ export class VirtualMachine {
 
   /** เพิ่มยอดสะสม (ค่าเหล่านี้ลดลงไม่ได้) */
   addNative(tx, address, field, amount) {
-    tx.put(nativeKey(address, field), this.nativeField(tx, address, field) + amount);
+    tx.put(nativeKey(address, field), encodeNative(this.nativeField(tx, address, field) + amount));
   }
 
   /** โอน native ระหว่าง address (ใช้ทั้ง transferNative และ value ที่แนบมากับ call) */
@@ -1913,14 +1976,18 @@ export class VirtualMachine {
     return value;
   }
 
-  /** number → ค่าที่โปรแกรมเห็น (BigInt เมื่อเปิดโหมด bigint) */
+  /** BigInt → ค่าที่โปรแกรมเห็น (โหมด number: ต้องไม่เกินช่วงที่ number แทนได้แม่นยำ) */
   toAmount(value) {
-    return this.bigintValues ? BigInt(value) : value;
+    if (this.bigintValues) return value;
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) fail(ERRORS.invalidAmount);
+    return Number(value);
   }
 
-  /** ค่าที่โปรแกรมส่งมา → number สำหรับใช้ภายใน */
+  /** ค่าที่โปรแกรมส่งมา → BigInt สำหรับใช้ภายใน */
   fromAmount(value, label = "amount") {
-    return this.bigintValues ? fromProgramAmount(value, label) : value;
+    if (this.bigintValues) return fromProgramAmount(value, label);
+    if (!Number.isSafeInteger(value)) fail(ERRORS.invalidAmount);
+    return BigInt(value);
   }
 
   /** ยอด native คงเหลือของ address (อ่าน 3 ช่อง) */
@@ -1947,6 +2014,19 @@ export class VirtualMachine {
   }
 
   /** keccak256 ของ string หรือข้อมูล JSON (object ถูกแปลงแบบ canonical ก่อน) */
+  /**
+   * obj.method(...args) ที่ถูกเปลี่ยนเป็น __call ตอนคอมไพล์: คิดแก๊สตามขนาดข้อมูล
+   * คิดก่อนเรียก (ขนาดข้อมูลเข้า + ขนาดผลที่คาดได้ล่วงหน้า เช่น repeat) แล้วคิดขนาดผลจริงหลังเรียก
+   */
+  programCallBuiltin(tx, target, method, args) {
+    const fn = target[method];   // target เป็น null / undefined → TypeError แบบเดียวกับการเรียกปกติ
+    if (typeof fn !== "function") return fn.apply(target, args);   // ให้ error เหมือนเดิม (not a function)
+    tx.useGas(tx.gas.builtin * (sizeOf(target) + args.reduce((sum, arg) => sum + sizeOf(arg), 0) + expectedSize(target, method, args)));
+    const result = Reflect.apply(fn, target, args);
+    tx.useGas(tx.gas.builtin * sizeOf(result));
+    return result;
+  }
+
   programKeccak(tx, value) {
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ keccak256"));
     tx.useGas(tx.gas.hash + tx.gas.byte * Buffer.byteLength(text, "utf8"));
@@ -1992,18 +2072,19 @@ export class VirtualMachine {
   /** โอน native จากกระเป๋าของโปรแกรมนี้ไปยัง address อื่น */
   programTransferNative(tx, programUuid, to, amount) {
     if (!isNonEmptyString(to)) fail(ERRORS.invalidAddress);
-    if (!Number.isSafeInteger(amount) || amount <= 0) fail(ERRORS.invalidAmount);
+    if (amount <= 0n) fail(ERRORS.invalidAmount);
     this.moveNative(tx, programUuid, normalizeAddress(to), amount);
     return true;
   }
 
   /** sender = โปรแกรมที่เรียก, origin = คงเดิม; ปลายทาง error → ย้อนการเขียนของปลายทางแล้ว throw ให้ผู้เรียกจัดการ */
-  programRunProgram(tx, caller, programUuid, functionName, input, { value = 0 } = {}) {
-    checkValue(value);
+  programRunProgram(tx, caller, programUuid, functionName, input, { value = 0n } = {}) {
+    if (typeof value === "number") value = this.fromAmount(value, "value");   // โหมด number
+    value = checkValue(value);
     const savepoint = tx.savepoint();
     try {
       const target = normalizeAddress(programUuid);
-      if (value > 0) this.moveNative(tx, caller.programUuid, target, value); // แนบเงินไปกับการเรียก
+      if (value > 0n) this.moveNative(tx, caller.programUuid, target, value); // แนบเงินไปกับการเรียก
       const context = { sender: caller.programUuid, origin: caller.context.origin };
       return this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1 });
     } catch (err) {
@@ -2019,21 +2100,23 @@ export class VirtualMachine {
  */
 export function sortPendingTransactions(items, { defaultGasPrice = DEFAULT_GAS.price } = {}) {
   const senderOf = (request) => normalizeAddress(request.from ?? request.context?.sender) ?? "";
-  const priceOf = (request) => request.gasPrice ?? defaultGasPrice;
+  const priceOf = (request) => parseNative(request.gasPrice ?? defaultGasPrice) ?? 0n;
 
   // ราคาของ address = ใบที่ถูกที่สุดในคิวของคนนั้น (กันการใส่ใบแพงใบเดียวเพื่อลัดคิวทั้งชุด)
   const groups = new Map();
   for (const item of items) {
     const sender = senderOf(item.request);
-    const group = groups.get(sender) ?? { sender, items: [], price: Infinity, receivedAt: Infinity };
+    const group = groups.get(sender) ?? { sender, items: [], price: null, receivedAt: Infinity };
     group.items.push(item);
-    group.price = Math.min(group.price, priceOf(item.request));
+    const price = priceOf(item.request);
+    if (group.price === null || price < group.price) group.price = price;
     group.receivedAt = Math.min(group.receivedAt, item.receivedAt ?? 0);
     groups.set(sender, group);
   }
 
+  const byPrice = (a, b) => (a.price === b.price ? 0 : b.price > a.price ? 1 : -1);
   return [...groups.values()]
-    .sort((a, b) => b.price - a.price || a.receivedAt - b.receivedAt || (a.sender < b.sender ? -1 : 1))
+    .sort((a, b) => byPrice(a, b) || a.receivedAt - b.receivedAt || (a.sender < b.sender ? -1 : 1))
     .flatMap((group) => group.items.sort((a, b) => (a.request.nonce ?? 0) - (b.request.nonce ?? 0)));
 }
 
@@ -2377,7 +2460,7 @@ export class Block {
       successCount: statuses.filter((status) => status === STATUS.SUCCESS).length,
       failedCount: statuses.filter((status) => status === STATUS.THROW).length,
       gasUsed: this.#results.reduce((sum, result) => sum + (result.gasUsed ?? 0), 0),
-      fee: this.#results.reduce((sum, result) => sum + (result.fee ?? 0), 0),
+      fee: encodeNative(this.#results.reduce((sum, result) => sum + readNative(result.fee), 0n)),
       parentStateRoot: this.#parentStateRoot,
       txRoot,
       stateRoot,
@@ -2417,7 +2500,7 @@ export class Block {
       successCount: transactions.filter((tx) => tx.status === STATUS.SUCCESS).length,
       failedCount: transactions.filter((tx) => tx.status === STATUS.THROW).length,
       gasUsed: transactions.reduce((sum, tx) => sum + tx.gasUsed, 0),
-      fee: transactions.reduce((sum, tx) => sum + tx.fee, 0),
+      fee: encodeNative(transactions.reduce((sum, tx) => sum + readNative(tx.fee), 0n)),
       transactions,
       // event ของทั้ง block เรียงตามลำดับ tx (ใช้ทำฟีดของ explorer)
       events: transactions.flatMap((tx) => tx.events.map((event) => ({ ...event, txIndex: tx.index, txHash: tx.hash }))),
@@ -2499,7 +2582,7 @@ export class Block {
       timestamp: this.#timestamp,
       gasUsed: 0,
       gasPrice: null,
-      fee: 0,
+      fee: "0n",
       error: { code: error.code, message: error.message },
       calls: [],
       writes: [],

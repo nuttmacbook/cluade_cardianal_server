@@ -33,7 +33,7 @@ function chain() {
   assert.equal(pay.status, "success", JSON.stringify(pay.error));
   const [send] = block((b) => [b.call({ programUuid: T, functionName: "transfer", input: { to: BOB, amount: "250n" }, context: as, nonce: 2 })]);
   assert.equal(send.status, "success", JSON.stringify(send.error));
-  return { vm, rpc: createEvmRpc({ vm }) };
+  return { vm, rpc: createEvmRpc({ vm, decimals: 18 }) };   // เทสต์นี้ใส่ยอดเป็นเหรียญ (ไม่มีทศนิยม) → ให้ตัวแปลงเติม 18 ทศนิยม
 }
 const ask = (rpc, method, ...params) => {
   const reply = rpc.handle({ jsonrpc: "2.0", id: 1, method, params });
@@ -111,7 +111,7 @@ test("evm: eth_call ฟังก์ชันอ่านของ ERC-20 บน 
   assert.equal(ask(rpc, "eth_getCode", BOB, "latest"), "0x");
   const other = rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: T, data: "0xa9059cbb" }] });
   assert.equal(other.error.code, EVM_ERROR.SERVER);
-  assert.equal(vm.nativeBalanceOf(BOB).balance, 500);   // อ่านอย่างเดียว ไม่มีอะไรเปลี่ยน
+  assert.equal(vm.nativeBalanceOf(BOB).balance, 500n);   // อ่านอย่างเดียว ไม่มีอะไรเปลี่ยน
 });
 
 test("evm: ส่ง tx จากกระเป๋า EVM ไม่ได้ (error ชัดเจน) · method ที่ไม่รองรับ / batch / params ผิด", () => {
@@ -191,7 +191,7 @@ function nested({ maxBlockGas = null } = {}) {
     b.call({ programUuid: R, functionName: "boom", input: {}, context: as, nonce: 5 }),
     b.transfer({ from: OWNER, to: BOB, amount: 3, nonce: 6 }),
   ]);
-  return { vm, rpc: createEvmRpc({ vm }) };
+  return { vm, rpc: createEvmRpc({ vm, decimals: 18 }) };
 }
 
 test("evm: logIndex นับต่อเนื่องทั้ง block · eth_getBlockReceipts · eth_getLogs · ByBlockHashAndIndex · bloom", () => {

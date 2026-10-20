@@ -14,11 +14,24 @@ export { VM };
 
 export const TEST_TIMEOUT_MS = 300;
 
+/** ยอด native ("123n" / BigInt) → number ให้เทียบในเทสต์ได้ง่าย (ลงลึกทั้ง object / array) */
+export function num(value) {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && /^-?\d+n$/.test(value)) return Number(value.slice(0, -1));
+  if (Array.isArray(value)) return value.map(num);
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, num(item)]));
+  return value;
+}
+
+/** ตารางแก๊สที่ไม่นับขั้น (node / builtin = 0) ใช้ในเทสต์ที่ตรวจค่าแก๊สของ API แบบตัวเลขตรง ๆ */
+export const API_GAS_ONLY = { node: 0, builtin: 0 };
+
 /** ล้าง DB จำลองและคืนค่า config ก่อนทุกเทสต์ */
 export function resetVM() {
   vm.db.clear();
   vm.timeoutMs = TEST_TIMEOUT_MS;
   vm.maxCallDepth = 8;
+  vm.maxTxGas = Infinity;   // เทสต์เดิมทดสอบ timeout ด้วยลูปไม่รู้จบ (แก๊สนับขั้นทดสอบแยกใน 53-gas-meter)
 }
 
 export const user = (name, origin = name) => ({ sender: name, origin });
@@ -27,7 +40,7 @@ export const user = (name, origin = name) => ({ sender: name, origin });
 let extraVmCount = 0;
 export function createVm(options = {}) {
   extraVmCount += 1;
-  return new VM.VirtualMachine(new MemoryDB(), { timeoutMs: TEST_TIMEOUT_MS, ...options });
+  return new VM.VirtualMachine(new MemoryDB(), { timeoutMs: TEST_TIMEOUT_MS, maxTxGas: Infinity, ...options });
 }
 
 /** บันทึก writes ลง DB ผ่าน vm.commit → db.writeKeys (ทำเฉพาะเมื่อ success) */

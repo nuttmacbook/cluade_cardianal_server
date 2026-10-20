@@ -6,7 +6,7 @@
  *
  * อ่านอย่างเดียว: ไม่เขียน DB ไม่แตะ mempool ไม่เปลี่ยนกฎของเชน
  *   - ส่ง tx ผ่าน MetaMask ไม่ได้ (eth_sendRawTransaction) เพราะเชนรับเฉพาะลายเซ็น EIP-712 ของตัวเอง → ตอบ error
- *   - native ไม่มีทศนิยม แต่ MetaMask บังคับ 18 ตำแหน่ง → ยอดถูกคูณ 10^decimals (ค่าเริ่มต้น 18: 1 native = 1 เหรียญ)
+ *   - native ของเชนเป็นหน่วยย่อย 18 ทศนิยมแบบ wei อยู่แล้ว → ส่งตรง ๆ (decimals = ทศนิยมที่ต้องเติมเพิ่ม ค่าเริ่มต้น 0)
  *   - token มาตรฐาน (src/standards/token.js) ตอบ eth_call แบบ ERC-20 ได้ (balanceOf / decimals / symbol / name / totalSupply / allowance)
  *   - event Transfer ของ token มาตรฐาน → log แบบ ERC-20 · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
@@ -14,7 +14,7 @@
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { DEFAULT_GAS, NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress } from "../core/virtualmachine.js";
+import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress } from "../core/virtualmachine.js";
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
 
 export const EVM_ERROR = { PARSE: -32700, REQUEST: -32600, METHOD: -32601, PARAMS: -32602, INTERNAL: -32603, SERVER: -32000, LIMIT: -32005 };
@@ -84,7 +84,7 @@ const needAddress = (value) => (isAddress(value) ? normalizeAddress(value) : fai
 /**
  * @param {{ vm: import("../core/virtualmachine.js").VirtualMachine, mempool?: object, decimals?: number, clientVersion?: string, logRange?: number }} options
  */
-export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE } = {}) {
+export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE } = {}) {
   const scale = 10n ** BigInt(decimals);
   const native = (value) => toBig(value) * scale;
   const latest = () => vm.latestBlockNumber() ?? 0;
@@ -220,7 +220,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
       blockHash: block?.hash ?? null, blockNumber: quantity(found.blockNumber), transactionIndex: quantity(found.index),
       from: found.from ?? ZERO_ADDRESS, to: targetOf({ ...receipt, action: found.action }),
       value: quantity(native(receipt.value ?? 0)),
-      gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.gasPrice ?? DEFAULT_GAS.price)),
+      gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.gasPrice ?? vm.gas.price)),
       input: inputOf({ ...receipt, action: found.action }),
       type: "0x0", chainId: quantity(vm.chainId),
       ...signatureParts(found.record?.signature),
@@ -229,7 +229,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
   /** tx ที่ยังรอใน mempool (มีแค่ข้อมูลที่ mempool.list() ให้) */
   const pendingTransaction = (item) => ({
     hash: item.hash, nonce: quantity(item.nonce ?? 0), blockHash: null, blockNumber: null, transactionIndex: null,
-    from: item.sender ?? null, to: item.to ?? null, value: "0x0", gas: "0x0", gasPrice: quantity(native(item.gasPrice ?? DEFAULT_GAS.price)),
+    from: item.sender ?? null, to: item.to ?? null, value: "0x0", gas: "0x0", gasPrice: quantity(native(item.gasPrice ?? vm.gas.price)),
     input: "0x", type: "0x0", chainId: quantity(vm.chainId), v: "0x0", r: "0x0", s: "0x0",
   });
   const transactionByHash = (hash) => {
@@ -264,7 +264,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
     return {
       ...base, from: found.from ?? ZERO_ADDRESS, to: targetOf({ ...receipt, action: found.action }),
       cumulativeGasUsed: quantity(cumulativeGas), gasUsed: quantity(receipt.gasUsed ?? 0),
-      effectiveGasPrice: quantity(native(receipt.gasPrice ?? DEFAULT_GAS.price)),
+      effectiveGasPrice: quantity(native(receipt.gasPrice ?? vm.gas.price)),
       contractAddress: found.action === "deploy" ? receipt.result?.programUuid ?? null : null,
       logs, logsBloom: bloomOf(logs), type: "0x0",
       status: receipt.status === "success" ? "0x1" : "0x0",
@@ -481,7 +481,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
   const txpoolInspect = () => {
     const pending = {};
     for (const item of pendingItems()) {
-      (pending[item.sender] ??= {})[String(item.nonce ?? 0)] = `${item.action ?? "tx"}: 0 wei + 0 gas × ${native(item.gasPrice ?? DEFAULT_GAS.price)} wei`;
+      (pending[item.sender] ??= {})[String(item.nonce ?? 0)] = `${item.action ?? "tx"}: 0 wei + 0 gas × ${native(item.gasPrice ?? vm.gas.price)} wei`;
     }
     return { pending, queued: {} };
   };
@@ -499,7 +499,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
     eth_accounts: () => [],
     eth_coinbase: () => ZERO_ADDRESS,
     eth_blockNumber: () => quantity(latest()),
-    eth_gasPrice: () => quantity(native(DEFAULT_GAS.price)),
+    eth_gasPrice: () => quantity(native(vm.gas.price)),
     eth_maxPriorityFeePerGas: () => "0x0",
     eth_getBalance: ([address, tag]) => balance(address, tag),
     eth_getTransactionCount: ([address, tag]) => nonce(address, tag),
@@ -564,7 +564,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 18, clientVersion 
     chainParams({ rpcUrl, explorerUrl, name = "Cardianal", symbol = "CARD" } = {}) {
       return {
         chainId: quantity(vm.chainId), chainName: name,
-        nativeCurrency: { name, symbol, decimals },
+        nativeCurrency: { name, symbol, decimals: 18 },   // MetaMask บังคับ 18 · เชนเป็น wei อยู่แล้ว
         rpcUrls: rpcUrl ? [rpcUrl] : [], blockExplorerUrls: explorerUrl ? [explorerUrl] : [],
       };
     },

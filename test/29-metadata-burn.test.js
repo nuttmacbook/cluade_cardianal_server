@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, num } from "./helpers.js";
 import { COUNTER, PROFILE } from "./programs.js";
+
+const nativeOf = (vm, address) => num(vm.nativeBalanceOf(address));
 
 /* เงินที่ถูกเผา → 0x000…000  และ metadata ของแต่ละ address */
 
@@ -30,16 +32,16 @@ test("burn: ค่าแก๊สที่เผาเข้าไปที่ 0
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 100 }));
 
   assert.equal(VM.BURN_ADDRESS, `0x${"0".repeat(40)}`);
-  assert.deepEqual(vm.nativeBalanceOf(VM.BURN_ADDRESS), { received: 100, sended: 0, consumed: 0, balance: 100 });
+  assert.deepEqual(nativeOf(vm, VM.BURN_ADDRESS), { received: 100, sended: 0, consumed: 0, balance: 100 });
 });
 
 test("burn: แบ่งให้ผู้ปิด block ที่เหลือเข้า 0x000…000", () => {
   const vm = setup({ chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 30 }, { alice: 10_000 });
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 100 }));
 
-  assert.equal(vm.nativeBalanceOf("miner").balance, 70);
-  assert.equal(vm.nativeBalanceOf(VM.BURN_ADDRESS).balance, 30);
-  assert.equal(vm.nativeBalanceOf("alice").consumed, 100);
+  assert.equal(nativeOf(vm, "miner").balance, 70);
+  assert.equal(nativeOf(vm, VM.BURN_ADDRESS).balance, 30);
+  assert.equal(nativeOf(vm, "alice").consumed, 100);
 });
 
 test("burn: ยอดรวมทั้งระบบคงที่เสมอ (รวมกระเป๋าเผา)", () => {
@@ -50,14 +52,14 @@ test("burn: ยอดรวมทั้งระบบคงที่เสม�
   block.commit();
 
   const total = ["alice", "bob", "carol", "miner", VM.BURN_ADDRESS]
-    .reduce((sum, address) => sum + vm.nativeBalanceOf(address).balance, 0);
+    .reduce((sum, address) => sum + nativeOf(vm, address).balance, 0);
   assert.equal(total, 10_000);
 });
 
 test("burn: เงินในกระเป๋าเผาเอาออกไม่ได้ (ไม่มีใครมี key ของ 0x000…000)", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 1000 });
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 10 }));
-  assert.ok(vm.nativeBalanceOf(VM.BURN_ADDRESS).balance > 0);
+  assert.ok(nativeOf(vm, VM.BURN_ADDRESS).balance > 0);
   // ยังโอนออกได้ทางทฤษฎี แต่ต้องมีลายเซ็นของ 0x000…000 ซึ่งไม่มีใครทำได้
   assert.equal(vm.transfer({ from: VM.BURN_ADDRESS, to: "alice", amount: 999_999 }).error.code, "PROGRAM_ERROR");
 });

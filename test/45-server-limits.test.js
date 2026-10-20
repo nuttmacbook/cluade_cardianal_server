@@ -49,7 +49,7 @@ test("RateLimiter: จำ key ไม่เกิน maxKeys (ทิ้งตั�
 
 function setup() {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true });
-  vm.db.load({ [`${alice}:native:received`]: 1_000_000 });
+  vm.db.load({ [`${alice}:native:received`]: "1000000n" });
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: { sender: alice, origin: alice }, initInput: { supply: 10_000 } }).writes);
   vm.commit(plain.init({ programUuid: "token" }).writes);
@@ -112,12 +112,12 @@ after(() => server.close());
 
 const post = (path, body) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-test("server: /query ที่วนไม่รู้จบถูกหยุดตาม TIMEOUT_MS ไม่ค้าง 30 วินาที", async () => {
+test("server: /query ที่วนไม่รู้จบหมดแก๊ส (OUT_OF_GAS) ไม่ค้าง 30 วินาที", async () => {
   const started = Date.now();
   const res = await post("/query", { programUuid: "loop", functionName: "spin", input: {}, context: { sender: alice, origin: alice } });
   const elapsed = Date.now() - started;
   assert.equal(res.status, 400);
-  assert.equal((await res.json()).error.code, "TIMEOUT");
+  assert.equal((await res.json()).error.code, "OUT_OF_GAS");   // เพดาน maxTxGas ของ server
   assert.ok(elapsed < 1500, `ใช้เวลา ${elapsed}ms`);
 });
 

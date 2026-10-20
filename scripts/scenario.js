@@ -50,7 +50,10 @@ const OPTIONS = {
   out: option("out", "scenario-report.json"),
 };
 
-// ---------- งบเหรียญหลัก (genesis ให้ funder 10,000,000) ----------
+// ---------- งบเหรียญหลัก (genesis ให้ funder 10,000,000 เหรียญ) ----------
+// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → งบในสคริปต์นับเป็น gwei ตัวเลขจึงเท่ากับจำนวนแก๊สที่ซื้อได้
+const GWEI = 10n ** 9n;
+const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // ยอดที่ส่งใน tx (string เพราะเกิน 2^53 ได้)
 const UNIT = 10n ** 6n;                 // TEST 6 decimals
 const POWER = 50;                       // กระเป๋าที่ทำ tx หนัก (chain / router / multiTransfer) ได้งบมากกว่า
 const NATIVE_EACH = 3_500;              // native ต่อกระเป๋าทั่วไป (โอน token ≈ 1,700 gas · โอน native ≈ 1,300)
@@ -63,7 +66,7 @@ const TOKEN_EACH = 1_000n * UNIT;       // TEST ต่อกระเป๋า
 const TOKEN_POWER = 50_000n * UNIT;
 const TOKEN_TARGET = 1_000_000n * UNIT;
 const BATCH = 100;                      // ผู้รับต่อ multiSend / multiTransfer
-const GAS = { gasLimit: 1_000_000, gasPrice: 1 };
+const GAS = { gasLimit: 1_000_000, gasPrice: gwei(1) };
 
 // ---------- ตัวช่วย ----------
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -192,15 +195,15 @@ function planSetup() {
   // C / E แวะอ่าน balanceOf ของ TEST ระหว่างทาง → deploy หลังรู้ address ของ token
   for (const label of ["c", "e"]) deployTask(`chain-${label}`, CHAIN_PROGRAM, () => ({ label, name: `${OPTIONS.seed}-chain-${label}`, probe: P.token }), () => Boolean(P.token));
 
-  task("transfer native → target", () => true, () => send(funder, { action: "transfer", to: OPTIONS.target, value: NATIVE_TARGET }, "transfer native → target"), mustSucceed("native → target"));
+  task("transfer native → target", () => true, () => send(funder, { action: "transfer", to: OPTIONS.target, value: gwei(NATIVE_TARGET) }, "transfer native → target"), mustSucceed("native → target"));
   for (const group of chunk(wallets, BATCH)) {
-    const recipients = group.map((w) => ({ to: w.address, amount: `${NATIVE_EACH}n` }));
+    const recipients = group.map((w) => ({ to: w.address, amount: `${gwei(NATIVE_EACH)}n` }));
     task("multiSend native", () => done.has("init multisend"),
-      () => send(funder, { action: "call", to: P.multisend, method: "multiSend", input: { recipients }, value: NATIVE_EACH * group.length }, "multiSend native"),
+      () => send(funder, { action: "call", to: P.multisend, method: "multiSend", input: { recipients }, value: gwei(NATIVE_EACH * group.length) }, "multiSend native"),
       (found) => { mustSucceed("multiSend")(found); for (const w of group) budget.set(w.address, (budget.get(w.address) ?? 0) + NATIVE_EACH); });
   }
   task("multiSend native (power)", () => done.has("init multisend"), () => send(funder, { action: "call", to: P.multisend, method: "multiSend",
-    input: { recipients: power.map((w) => ({ to: w.address, amount: `${NATIVE_POWER}n` })) }, value: NATIVE_POWER * power.length }, "multiSend native (power)"),
+    input: { recipients: power.map((w) => ({ to: w.address, amount: `${gwei(NATIVE_POWER)}n` })) }, value: gwei(NATIVE_POWER * power.length) }, "multiSend native (power)"),
     (found) => { mustSucceed("multiSend power")(found); for (const w of power) budget.set(w.address, (budget.get(w.address) ?? 0) + NATIVE_POWER); });
   for (const group of chunk(wallets, BATCH)) {
     const transfers = group.map((w) => ({ to: w.address, amount: `${power.includes(w) ? TOKEN_POWER : TOKEN_EACH}n` }));
@@ -247,7 +250,7 @@ function powerJob(wallet) {
     const to = random() < 0.25 ? OPTIONS.target : pick(others(wallet, 1));
     const amount = BigInt(randomInt(10, 500)) * UNIT;
     const value = randomInt(5, 50);
-    return [COST.router + value, () => send(wallet, { action: "call", to: P["router-1"], method: "forward", value,
+    return [COST.router + value, () => send(wallet, { action: "call", to: P["router-1"], method: "forward", value: gwei(value),
       input: { token: P.token, path: [P["router-2"], P["router-3"], P["router-4"]], to, amount: `${amount}n`, pull: true } },
       to === OPTIONS.target ? "call router ×4 → target" : "call router ×4")];
   }
@@ -266,7 +269,7 @@ function normalJob(wallet) {
   }
   if (roll < 0.8 || named.has(wallet.address)) {
     const value = randomInt(1, 50);
-    return [COST.nativeTransfer + value, () => send(wallet, { action: "transfer", to: pick(others(wallet, 1)), value }, "transfer native")];
+    return [COST.nativeTransfer + value, () => send(wallet, { action: "transfer", to: pick(others(wallet, 1)), value: gwei(value) }, "transfer native")];
   }
   return [COST.metadata, () => {
     named.add(wallet.address);

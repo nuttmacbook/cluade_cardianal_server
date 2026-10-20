@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { VM, MemoryDB } from "./helpers.js";
+import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
@@ -8,7 +8,7 @@ import { TOKEN, COUNTER } from "./programs.js";
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { call: 100, read: 0, write: 0, byte: 0, price: 1 };
+const GAS = { ...API_GAS_ONLY, call: 100, read: 0, write: 0, byte: 0, price: 1 };
 
 const ADMIN_KEY = sign.randomPrivateKey();
 const admin = sign.addressOf(ADMIN_KEY);
@@ -20,10 +20,10 @@ function setup(options = {}) {
     requireNonce: true, chargeGas: true, recordTransactions: true, recordBlocks: true, gas: GAS, ...options,
   });
   vm.db.load({
-    "alice:native:received": 1_000_000,
-    "bob:native:received": 1_000_000,
-    [`${admin}:native:received`]: 1_000_000,
-    [`${outsider}:native:received`]: 1_000_000,
+    "alice:native:received": "1000000n",
+    "bob:native:received": "1000000n",
+    [`${admin}:native:received`]: "1000000n",
+    [`${outsider}:native:received`]: "1000000n",
   });
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1_000_000 } }).writes);
@@ -142,12 +142,12 @@ test("admin: init ที่เซ็นมา — กิน nonce, เสีย�
   const res = submit(vm, adminTx("init", "counter", 0), ADMIN_KEY);
   assert.equal(res.status, "success");
   assert.equal(res.result.state, "active");
-  assert.ok(res.fee > 0);
+  assert.ok(num(res.fee) > 0);
   vm.commit(res.writes);
 
   assert.equal(vm.db.readKeys([`${admin}:nonce`])[0], 1);
   assert.deepEqual(vm.listTransactionsOf(admin).map((tx) => tx.action), ["init"]);
-  assert.equal(vm.nativeBalanceOf(admin).consumed, res.fee);
+  assert.equal(vm.nativeBalanceOf(admin).consumed, VM.readNative(res.fee));
 });
 
 test("admin: reject ที่เซ็นมา คืนเงินให้ผู้ deploy ตามเดิม", () => {
@@ -155,9 +155,9 @@ test("admin: reject ที่เซ็นมา คืนเงินให้�
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), value: 500, nonce: 0 }, { timestamp: T }).writes);
 
   const res = submit(vm, adminTx("reject", "counter", 0), ADMIN_KEY);
-  assert.equal(res.result.refund, 500);
+  assert.equal(res.result.refund, "500n");
   vm.commit(res.writes);
-  assert.equal(vm.nativeBalanceOf("counter").balance, 0);
+  assert.equal(vm.nativeBalanceOf("counter").balance, 0n);
 });
 
 test("admin: คนที่ไม่อยู่ในรายชื่อ init ไม่ได้", () => {

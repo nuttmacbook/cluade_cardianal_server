@@ -74,11 +74,11 @@ test("genesis: ต่างกัน → ปฏิเสธตั้งแต่
   assert.equal(vm.genesisHash(), vm.hashData(GENESIS));
   assert.deepEqual(vm.applyGenesis(GENESIS), { hash: vm.genesisHash(), applied: false });   // ซ้ำได้ ไม่เปลี่ยนอะไร
   assert.throws(() => vm.applyGenesis({ chainId: 1, balances: { alice: 999 } }), { code: "INTERNAL", message: /genesis ไม่ตรงกัน/ });
-  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000);
+  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n);
 });
 
 test("timeout: tx ที่หมดเวลาไม่เข้า block (ผลจึงไม่ขึ้นกับความเร็วเครื่อง)", () => {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, timeoutMs: 50 });
+  const vm = new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, chargeGas: false, timeoutMs: 50, maxTxGas: Infinity });   // ไม่จำกัดแก๊ส → หยุดด้วยเวลา (มีแก๊สจะหมดแก๊สก่อน ดู 53-gas-meter)
   vm.applyGenesis(GENESIS);
   const code = "function program() {\n  function spin() { while (true) {} }\n  return { spin }\n}";
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
