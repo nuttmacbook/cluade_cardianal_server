@@ -456,7 +456,11 @@ function prelude(host, opText) {
     NODE_GAS = config.nodeGas;
     BUILTIN_GAS = config.builtinGas;
     TIMESTAMP = config.timestamp;
-    if (config.wallClock) define(G, "performance", freeze({ now: () => NumberFn(host(OP.clock, 0, "")) }));
+    if (config.wallClock) define(G, "performance", freeze({ now: () => {
+      const reply = host(OP.clock, 0, "");
+      if (reply === "f" || typeof reply !== "string") die();
+      return NumberFn(reply);
+    } }));
     return invoke;
   };
 }
@@ -782,6 +786,10 @@ export class Sandbox {
   [HOST_CALL](ctx, opHandle, pendingHandle, payloadHandle) {
     const op = ctx.getNumber(opHandle);
     if (!this.#hasHeadroom()) return ctx.newString("f");
+    if (Date.now() > this.#tx.deadline) {   // interrupt handler อาจถูกเรียกห่างเมื่อโปรแกรมเรียก host ถี่ → ตรวจที่นี่ด้วย
+      this.timedOut = true;
+      return ctx.newString("f");
+    }
     if (op === OP.check) return undefined;
     const tx = this.#tx;
     try {
