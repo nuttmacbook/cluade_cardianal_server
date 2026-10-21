@@ -17,6 +17,14 @@
  *
  * แก๊ส: __gas(n) นับใน sandbox เอง (ตัวนับของแต่ละ call) แล้วส่งยอดค้างให้ host ทุกครั้งที่เรียก API
  *   เกินยอดที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดียวกับการนับทีละครั้ง (ตัวเลขแก๊สเท่าเดิมทุกหน่วย)
+ *   tx ล้มกลางทาง (หน่วยความจำเกิน) → ยอดค้างส่งกลับใน "f<n>|" ให้ host คิดด้วย
+ *
+ * แก๊สตามขนาดข้อมูล (prelude): builtin ต่อหน่วย · 1 หน่วย = 1 สมาชิก / property หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
+ *   เมธอดในตัวที่คัดลอก / สร้างข้อมูลถูกห่อไว้ก่อนโค้ดของผู้ใช้รัน (ของจริงอยู่ใน closure เท่านั้น) → เรียกทางไหนก็คิดเท่ากัน
+ *   __spread (spread / rest ของ array) · __props (spread / rest ของ object) · __str (string จาก + / +=) — gasmeter.js แทรกให้
+ *   iterator ในตัวของ array / string / Set / Map ถูกล็อก → __spread รู้แน่ว่า engine จะคัดลอกกี่สมาชิก (คัดลอกแบบเร็วเหมือนเดิม)
+ *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError ถูกห่อด้วย Proxy (global + prototype.constructor)
+ *   Proxy ที่โปรแกรมสร้างถูกจดไว้ (ownKeys / length ตอบไม่เหมือนกันได้ทุกครั้ง → คัดลอกเองทีละ property)
  *
  * หน่วยความจำ: memory limit ในตัว QuickJS ใช้ไม่ได้บน emscripten (นับแค่ 8 ไบต์ต่อก้อน) จึงคุมที่ heap ของ WebAssembly แทน
  *   ต้น tx (หลังคืน snapshot): จองก้อน "ลูกโป่ง" ให้เหลือที่ว่างพอดี memoryLimitBytes + สำรองของ host แล้วล็อกไม่ให้ memory โต
@@ -173,27 +181,44 @@ function prelude(host, opText) {
   "use strict";
   // ---- เก็บของจริงไว้ก่อนโค้ดของผู้ใช้ได้รัน (ผู้ใช้แก้ global / prototype ทีหลังก็ไม่กระทบตัวนี้) ----
   const G = globalThis;
-  const { keys, getPrototypeOf, freeze, defineProperty, hasOwn } = Object;
+  const { keys, getPrototypeOf, freeze, defineProperty, hasOwn, getOwnPropertyDescriptor } = Object;
   const ObjectProto = Object.prototype;
   const isArray = Array.isArray;
-  const { apply, construct, get: reflectGet } = Reflect;
+  const { apply, construct, get: reflectGet, ownKeys } = Reflect;
   const jsonParse = JSON.parse;
   const jsonStringify = JSON.stringify;
   const NumberFn = Number;
-  const numberIsFinite = Number.isFinite;
   const BigIntFn = BigInt;
   const StringFn = String;
   const ArrayBufferFn = ArrayBuffer;
+  const SharedArrayBufferFn = typeof SharedArrayBuffer === "function" ? SharedArrayBuffer : null;
+  const isView = ArrayBuffer.isView;
+  const TypedArray = getPrototypeOf(Int8Array);
+  const typedLength = getOwnPropertyDescriptor(TypedArray.prototype, "length").get;
+  const viewByteLength = getOwnPropertyDescriptor(DataView.prototype, "byteLength").get;
+  const bufferByteLength = getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get;
+  const sharedByteLength = SharedArrayBufferFn && getOwnPropertyDescriptor(SharedArrayBufferFn.prototype, "byteLength").get;
+  const setSize = getOwnPropertyDescriptor(Set.prototype, "size").get;
+  const mapSize = getOwnPropertyDescriptor(Map.prototype, "size").get;
+  const regexpSource = getOwnPropertyDescriptor(RegExp.prototype, "source").get;
+  const fnToString = Function.prototype.toString;
   const ProxyFn = Proxy;
+  const proxyRevocable = Proxy.revocable;
   const DateFn = Date;
   const MathObj = Math;
+  const ceil = Math.ceil;
+  const floor = Math.floor;
   const WeakMapFn = WeakMap;
+  const WeakSetFn = WeakSet;
   const wmGet = WeakMap.prototype.get;
   const wmSet = WeakMap.prototype.set;
   const wmHas = WeakMap.prototype.has;
+  const wsAdd = WeakSet.prototype.add;
+  const wsHas = WeakSet.prototype.has;
   const indexOf = String.prototype.indexOf;
   const ErrorFn = Error;
   const EvalErrorFn = EvalError;
+  const TypeErrorFn = TypeError;
   const ERROR_TYPES = { __proto__: null, Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError };
 
   const OP = jsonParse(opText);
@@ -213,6 +238,7 @@ function prelude(host, opText) {
     dead = true;
     throw DEAD;
   };
+  let ACT = null;     // ตัวนับแก๊สของ call ที่กำลังรันใน context นี้ (invoke ตั้ง / คืนค่าเดิมเมื่อจบ — เรียกซ้อนกลับมาโปรแกรมเดิมได้)
 
   // ---- แปลงค่าเป็นข้อความ ----
   const opaque = (type) => '{"\\u0000":"x","t":"' + type + '"}';
@@ -347,23 +373,396 @@ function prelude(host, opText) {
   define(G, "eval", function evalDisabled() { deny(); });
   define(G, "console", freeze({ log() {}, info() {}, warn() {}, error() {}, debug() {} }));   // ใช้ได้แต่ไม่พิมพ์อะไร
 
+  // ---- แก๊สตามขนาดข้อมูล (ราคา BUILTIN_GAS ต่อ "หน่วย") ----
+  //   1 หน่วย = 1 สมาชิก (array / typed array / Set / Map / property ของ object / argument) หรือ 32 ตัวอักษร / 32 byte (ปัดขึ้น)
+  //   ตัวเลข / BigInt / boolean / function / null / undefined = 1 หน่วย
+  // คิดก่อนทำงานเมื่อรู้ขนาดล่วงหน้า (ข้อมูลเข้า, repeat / padStart / ArrayBuffer(n) …) และคิดขนาดผลลัพธ์อีกครั้งหลังทำ
+  const CHUNK = 32;
+  const STRING_MAX = 1073741823;   // ความยาว string สูงสุดของ QuickJS — เกินนี้ engine throw RangeError เอง (ไม่คิดแก๊สล่วงหน้า)
+  const BYTES_MAX = 2147483647;    // ขนาด ArrayBuffer สูงสุด — เกินนี้ engine throw RangeError เอง
+  const textUnits = (length) => ceil(length / CHUNK);
+  /** จำนวนเต็ม ≥ 0 จากค่าใดก็ได้ (แบบ ToIntegerOrInfinity ที่ติดลบ / NaN = 0) */
+  const toCount = (value) => {
+    const n = NumberFn(value);
+    return n > 0 ? floor(n) : 0;
+  };
+  function brandSize(getter, value) {
+    try {
+      return apply(getter, value, []);
+    } catch {
+      return -1;
+    }
+  }
+  function sizeOf(value) {
+    switch (typeof value) {
+      case "string": return textUnits(value.length);
+      case "object": break;
+      default: return 1;
+    }
+    if (value === null) return 1;
+    if (isArray(value)) return toCount(value.length);
+    if (isView(value)) {
+      const length = brandSize(typedLength, value);
+      return length >= 0 ? length : textUnits(apply(viewByteLength, value, []));
+    }
+    let proto = getPrototypeOf(value);
+    for (let depth = 0; proto !== null && proto !== ObjectProto && depth < 32; depth++) {
+      let size = -1;
+      if (proto === SetProto) size = brandSize(setSize, value);
+      else if (proto === MapProto) size = brandSize(mapSize, value);
+      else if (proto === BufferProto) size = textUnitsOf(bufferByteLength, value);
+      else if (proto === SharedProto) size = textUnitsOf(sharedByteLength, value);
+      if (size >= 0) return size;
+      proto = getPrototypeOf(proto);
+    }
+    return keys(value).length;
+  }
+  const SetProto = Set.prototype;
+  const MapProto = Map.prototype;
+  const BufferProto = ArrayBuffer.prototype;
+  const SharedProto = SharedArrayBufferFn ? SharedArrayBufferFn.prototype : null;
+  function textUnitsOf(getter, value) {
+    const bytes = brandSize(getter, value);
+    return bytes >= 0 ? textUnits(bytes) : -1;
+  }
+
+  /** ส่งยอดค้างให้ host (เกินยอดที่เหลือ → host ตอบ "f" = OUT_OF_GAS) */
+  function hostCall(act, op, payload) {
+    if (dead) throw DEAD;
+    const pending = act.pending;
+    act.pending = 0;
+    return receive(act, host(op, pending, payload));
+  }
+  function chargeGas(act, amount) {
+    if (dead) throw DEAD;
+    act.pending += amount;
+    if (act.pending > act.budget) hostCall(act, OP.sync, "");
+  }
+  /** คิดแก๊สตามจำนวนหน่วยให้ call ที่กำลังรัน (ไม่มี call = โค้ดของ VM เอง ไม่คิด) */
+  function chargeUnits(units) {
+    if (dead) throw DEAD;
+    if (ACT !== null && units > 0 && BUILTIN_GAS !== 0) chargeGas(ACT, units * BUILTIN_GAS);
+  }
+
+  // ---- เมธอดในตัว: ห่อของจริงไว้ (ของเดิมอยู่ใน closure นี้เท่านั้น โค้ดของโปรแกรมเอื้อมไม่ถึง) ----
+  // สูตรทั่วไป: ก่อนเรียก = ขนาดของ this + ทุก argument (+ ขนาดที่รู้ล่วงหน้า) · หลังเรียก = ขนาดของผลลัพธ์
+  // เรียกทางไหนก็คิดเท่ากัน: a.join() · Array.prototype.join.call(a) · Reflect.apply(…) · const j = a.join · แปลง array เป็น string โดยนัย
+  // (Array.prototype.toString / ToPrimitive เรียก this.join → ตัวที่ห่อแล้ว)
+  const WRAPPED = new WeakMapFn();     // ตัวห่อ → ของจริง (Function.prototype.toString แสดงของจริง)
+  const WRAPPER_OF = new WeakMapFn();  // ของจริง → ตัวห่อ (ฟังก์ชันเดียวกันใน 2 ที่ เช่น trimLeft / trimStart ได้ตัวห่อเดียวกัน)
+  // argument ได้ไม่เกิน 65,535 ตัว (เกิน = engine throw RangeError เอง) → คิดไม่เกินนั้น
+  const MAX_ARGS = 65536;
+  const listUnits = (list) => {
+    const n = list !== null && typeof list === "object" ? toCount(list.length) : 0;
+    return n < MAX_ARGS ? n : MAX_ARGS;
+  };
+  // ขนาดที่รู้ก่อนสร้างผลลัพธ์ (ค่าที่อ่านแล้วถูกใส่กลับใน args → engine เห็นค่าเดียวกับที่คิดแก๊ส)
+  const EXPECT = new WeakMapFn();
+  const expect = (fn, measure) => apply(wmSet, EXPECT, [fn, measure]);
+  /**
+   * ตัวเลขใน args[index] → ToNumber ครั้งเดียว (valueOf ของโปรแกรมรันครั้งเดียว) แล้วใส่ผลกลับให้ engine ใช้ค่าเดียวกัน
+   * คืนจำนวนเต็ม ≥ 0 สำหรับคิดแก๊ส · BigInt / Symbol ไม่แตะ (engine throw TypeError เอง) · ค่าติดลบ / ใหญ่เกินส่งต่อให้ engine throw RangeError
+   */
+  function countArg(args, index) {
+    if (index >= args.length) return 0;
+    const value = args[index];
+    if (typeof value === "bigint" || typeof value === "symbol") return 0;
+    const n = +value;
+    args[index] = n;
+    return n > 0 ? floor(n) : 0;
+  }
+  expect(String.prototype.repeat, (self, args) => {
+    const total = typeof self === "string" ? self.length * countArg(args, 0) : 0;
+    return total <= STRING_MAX ? textUnits(total) : 0;
+  });
+  const padTo = (self, args) => {
+    const n = countArg(args, 0);
+    return n <= STRING_MAX ? textUnits(n) : 0;
+  };
+  expect(String.prototype.padStart, padTo);
+  expect(String.prototype.padEnd, padTo);
+  const fromLength = (self, args) => (args[0] !== null && typeof args[0] === "object" ? toCount(args[0].length) : 0);
+  expect(Array.from, fromLength);
+  expect(TypedArray.from, fromLength);
+  const resizeTo = (self, args) => {
+    const n = countArg(args, 0);
+    return n <= BYTES_MAX ? textUnits(n) : 0;
+  };
+  if (BufferProto.resize) expect(BufferProto.resize, resizeTo);
+  if (SharedProto?.grow) expect(SharedProto.grow, resizeTo);
+  // คิดแทนสูตรทั่วไป (ไม่นับ this / ตัวอื่น): apply / construct คัดลอก array ของ argument
+  const MEASURE = new WeakMapFn();
+  apply(wmSet, MEASURE, [Function.prototype.apply, (self, args) => listUnits(args[1])]);
+  apply(wmSet, MEASURE, [Reflect.apply, (self, args) => 1 + listUnits(args[2])]);
+  apply(wmSet, MEASURE, [Reflect.construct, (self, args) => 1 + listUnits(args[1])]);
+  const PROMISE_ALL = ["all", "allSettled", "any", "race"];
+  for (let i = 0; i < PROMISE_ALL.length; i++) apply(wmSet, MEASURE, [Promise[PROMISE_ALL[i]], (self, args) => spreadFirst(args)]);
+
+  function meterMethod(target, key) {
+    const desc = getOwnPropertyDescriptor(target, key);
+    if (desc === undefined || typeof desc.value !== "function") return;
+    const original = desc.value;
+    let wrapper = apply(wmGet, WRAPPER_OF, [original]);
+    if (wrapper === undefined) {
+      const extra = apply(wmGet, EXPECT, [original]);
+      const measure = apply(wmGet, MEASURE, [original]);
+      const name = typeof key === "symbol" ? "[" + key.description + "]" : key;
+      wrapper = { [name](...args) {
+        if (dead) throw DEAD;
+        const metering = ACT !== null && BUILTIN_GAS !== 0;
+        let prepaid = 0;   // ขนาดผลลัพธ์ที่คิดล่วงหน้าแล้ว (repeat / padStart …) → หลังทำคิดเฉพาะส่วนที่เกิน
+        if (metering) {
+          let units;
+          if (measure !== undefined) units = measure(this, args);
+          else {
+            units = sizeOf(this);
+            for (let i = 0; i < args.length; i++) units += sizeOf(args[i]);
+            if (extra !== undefined) {
+              prepaid = extra(this, args);
+              units += prepaid;
+            }
+          }
+          chargeUnits(units);
+        }
+        const result = apply(original, this, args);
+        // apply / construct: ผลลัพธ์คือผลของฟังก์ชันปลายทาง (คิดเองแล้วถ้าเป็นเมธอดในตัว) → ไม่คิดซ้ำ
+        if (metering && measure === undefined) chargeUnits(sizeOf(result) - prepaid);
+        return result;
+      } }[name];
+      defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+      apply(wmSet, WRAPPED, [wrapper, original]);
+      apply(wmSet, WRAPPER_OF, [original, wrapper]);
+    }
+    defineProperty(target, key, { value: wrapper, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
+  }
+
+  const ARRAY_METHODS = ["copyWithin", "every", "fill", "filter", "find", "findIndex", "findLast", "findLastIndex", "forEach", "includes",
+    "indexOf", "join", "lastIndexOf", "map", "reduce", "reduceRight", "reverse", "slice", "some", "sort", "toLocaleString",
+    "toReversed", "toSorted", "with"];
+  const METERED = [
+    [Array, ["from", "of"]],
+    [Array.prototype, ARRAY_METHODS.concat(["concat", "flat", "flatMap", "shift", "splice", "toSpliced", "unshift"])],
+    [TypedArray, ["from", "of"]],
+    [TypedArray.prototype, ARRAY_METHODS.concat(["set"])],
+    [String, ["fromCharCode", "fromCodePoint", "raw"]],
+    [String.prototype, ["concat", "endsWith", "includes", "indexOf", "isWellFormed", "lastIndexOf", "localeCompare", "match", "matchAll",
+      "normalize", "padEnd", "padStart", "repeat", "replace", "replaceAll", "search", "slice", "split", "startsWith", "substr", "substring",
+      "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toUpperCase", "toWellFormed", "trim", "trimEnd", "trimStart", "trimLeft", "trimRight",
+      "anchor", "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link", "small", "strike", "sub", "sup"]],
+    [Object, ["assign", "create", "defineProperties", "entries", "freeze", "fromEntries", "getOwnPropertyDescriptors", "getOwnPropertyNames",
+      "getOwnPropertySymbols", "groupBy", "isFrozen", "isSealed", "keys", "seal", "values"]],
+    [Map, ["groupBy"]],
+    [Set.prototype, ["difference", "forEach", "intersection", "isDisjointFrom", "isSubsetOf", "isSupersetOf", "symmetricDifference", "union"]],
+    [Map.prototype, ["forEach"]],
+    [Reflect, ["apply", "construct", "ownKeys"]],
+    [Promise, PROMISE_ALL],
+    [typeof Iterator === "function" ? Iterator.prototype : null, ["toArray"]],
+    [Function.prototype, ["apply"]],
+    [JSON, ["parse", "stringify"]],
+    [RegExp.prototype, [Symbol.match, Symbol.matchAll, Symbol.replace, Symbol.search, Symbol.split, "toString"]],
+    [Number.prototype, ["toString"]],
+    [BigInt.prototype, ["toString"]],
+    [Error.prototype, ["toString"]],
+    [BufferProto, ["resize", "slice", "transfer", "transferToFixedLength"]],
+    [SharedProto, ["grow", "slice"]],
+    [G, ["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "unescape"]],
+  ];
+  for (let i = 0; i < METERED.length; i++) {
+    const target = METERED[i][0];
+    const names = METERED[i][1];
+    if (target === null) continue;
+    for (let j = 0; j < names.length; j++) meterMethod(target, names[j]);
+  }
+  // Function.prototype.toString: ตัวห่อแสดงเป็นของจริง ("[native code]")
+  define(Function.prototype, "toString", { toString() {
+    if (dead) throw DEAD;
+    const original = typeof this === "function" ? apply(wmGet, WRAPPED, [this]) : undefined;
+    const result = apply(fnToString, original === undefined ? this : original, []);
+    chargeUnits(sizeOf(result));
+    return result;
+  } }.toString);
+
+  // ---- spread / rest ของ array: [...a] · f(...a) · new F(...a) · const [x, ...r] = a → __spread(a) ----
+  // ล็อก iterator ในตัวของ array / string / Set / Map (แก้ไม่ได้) → รู้แน่ว่า engine จะคัดลอกกี่สมาชิก
+  // array / string / Set / Map ธรรมดา = คิดตามขนาดแล้วให้ engine คัดลอกแบบเร็วเหมือนเดิม
+  // อย่างอื่น (iterator ที่สร้างไว้ก่อน / generator / Proxy / ตัวที่มี [Symbol.iterator] ของตัวเอง) = วนเองทีละสมาชิก คิด 1 หน่วยต่อสมาชิก
+  const SymbolIterator = Symbol.iterator;
+  const ArrayProto = Array.prototype;
+  const fixProperty = (target, key) => {
+    const desc = getOwnPropertyDescriptor(target, key);
+    defineProperty(target, key, { value: desc.value, writable: false, enumerable: desc.enumerable, configurable: false });
+  };
+  const ITERABLES = [ArrayProto, String.prototype, Set.prototype, Map.prototype];
+  for (let i = 0; i < ITERABLES.length; i++) {
+    fixProperty(ITERABLES[i], SymbolIterator);
+    fixProperty(getPrototypeOf(ITERABLES[i][SymbolIterator].call(i === 1 ? "" : i === 0 ? [] : i === 2 ? new Set() : new Map())), "next");
+  }
+  function spreadUnits(value) {
+    if (typeof value === "string") return value.length;
+    if (apply(wsHas, PROXIES, [value]) || hasOwn(value, SymbolIterator)) return -1;
+    const proto = getPrototypeOf(value);
+    if (proto === ArrayProto && isArray(value)) return toCount(value.length);
+    if (proto === SetProto) return brandSize(setSize, value);
+    if (proto === MapProto) return brandSize(mapSize, value);
+    return -1;
+  }
+  function spreadValue(value) {
+    if (dead) throw DEAD;
+    if (value === null || (typeof value !== "object" && typeof value !== "function" && typeof value !== "string")) return value;   // engine throw "not iterable" เอง
+    const units = spreadUnits(value);
+    if (units >= 0) {
+      chargeUnits(units);
+      return value;
+    }
+    const iterator = value[SymbolIterator]();
+    const next = iterator.next;
+    const out = [];
+    for (let n = 0; ; n++) {
+      const step = apply(next, iterator, []);
+      if (step === null || (typeof step !== "object" && typeof step !== "function")) throw new TypeErrorFn("iterator result is not an object");
+      if (step.done) return out;
+      chargeUnits(1);
+      defineProperty(out, n, { value: step.value, writable: true, enumerable: true, configurable: true });
+    }
+  }
+
+  // ---- constructor ที่จองหน่วยความจำตามตัวเลขที่ส่งมา ----
+  // ห่อด้วย Proxy แล้วชี้ global + prototype.constructor มาที่ตัวห่อ (subclass / species ผ่านตัวห่อด้วย)
+  // Array(n) ไม่ต้องห่อ: QuickJS ไม่จองที่ให้สมาชิกจนกว่าจะใส่ค่า (fill / map / spread … คิดตาม length อยู่แล้ว)
+  function meterConstructor(name, before, after, callable = false) {
+    const Ctor = G[name];
+    if (typeof Ctor !== "function") return;
+    const handler = {
+      construct(target, args, newTarget) {
+        if (dead) throw DEAD;
+        chargeUnits(before(args));
+        const object = construct(target, args, newTarget);
+        if (after !== undefined) chargeUnits(after(args, object));
+        return object;
+      },
+    };
+    // เรียกแบบไม่มี new: typed array / ArrayBuffer throw TypeError เอง · RegExp(…) สร้างได้ → คิดแบบเดียวกัน
+    if (callable) {
+      handler.apply = (target, self, args) => {
+        if (dead) throw DEAD;
+        chargeUnits(before(args));
+        return apply(target, self, args);
+      };
+    }
+    const Wrapped = new ProxyFn(Ctor, handler);
+    apply(wmSet, WRAPPED, [Wrapped, Ctor]);
+    define(G, name, Wrapped);
+    define(Ctor.prototype, "constructor", Wrapped);
+  }
+  const bufferUnits = (args) => {
+    const length = countArg(args, 0);
+    let max = length;
+    const options = args[1];
+    if (options !== null && typeof options === "object") {
+      const limit = [options.maxByteLength];   // อ่านครั้งเดียว แล้วส่งค่าที่อ่านต่อให้ engine
+      if (limit[0] !== undefined) {
+        max = countArg(limit, 0);
+        args[1] = { maxByteLength: limit[0] };
+      }
+    }
+    if (max < length) max = length;
+    return max <= BYTES_MAX ? textUnits(max) : 0;
+  };
+  meterConstructor("ArrayBuffer", bufferUnits);
+  if (SharedArrayBufferFn) meterConstructor("SharedArrayBuffer", bufferUnits);
+  const TYPED_NAMES = ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+    "Float16Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"];
+  const isBuffer = (value) => textUnitsOf(bufferByteLength, value) >= 0 || (sharedByteLength !== undefined && sharedByteLength !== null && textUnitsOf(sharedByteLength, value) >= 0);
+  for (let i = 0; i < TYPED_NAMES.length; i++) {
+    const Ctor = G[TYPED_NAMES[i]];
+    if (typeof Ctor !== "function") continue;
+    const width = Ctor.BYTES_PER_ELEMENT;
+    meterConstructor(TYPED_NAMES[i], (args) => {
+      const source = args[0];
+      if (source !== null && typeof source === "object") return 0;   // คัดลอกจาก array / iterable → คิดหลังสร้าง
+      const length = countArg(args, 0);
+      return length * width <= BYTES_MAX ? length : 0;
+    }, (args, object) => {
+      const source = args[0];
+      if (source === null || typeof source !== "object" || isBuffer(source)) return 0;   // มุมมองบน buffer เดิม = ไม่คัดลอก
+      return apply(typedLength, object, []);
+    });
+  }
+  // ตัวที่รับ iterable แล้วคัดลอกทุกสมาชิก: แทน iterable ด้วยผลของ __spread (คิดแก๊สแล้ว)
+  const spreadFirst = (args) => {
+    if (args.length && args[0] !== null && args[0] !== undefined) args[0] = spreadValue(args[0]);
+    return 0;
+  };
+  const COLLECTIONS = ["Set", "Map", "WeakSet", "WeakMap"];
+  for (let i = 0; i < COLLECTIONS.length; i++) meterConstructor(COLLECTIONS[i], spreadFirst);
+  meterConstructor("AggregateError", spreadFirst, undefined, true);
+  // RegExp: คอมไพล์ pattern ตามความยาว
+  meterConstructor("RegExp", (args) => {
+    const pattern = args[0];
+    if (typeof pattern === "string") return textUnits(pattern.length);
+    if (pattern !== null && typeof pattern === "object") {
+      const source = brandSize(regexpSource, pattern);
+      return typeof source === "string" ? textUnits(source.length) : 0;
+    }
+    return 0;
+  }, undefined, true);
+
+  // ---- Proxy ที่โปรแกรมสร้าง: จดไว้ (ownKeys / length ของ Proxy ตอบไม่เหมือนกันได้ทุกครั้งที่ถาม) ----
+  const PROXIES = new WeakSetFn();
+  const revocable = { revocable(target, handler) {
+    const result = apply(proxyRevocable, ProxyFn, [target, handler]);
+    apply(wsAdd, PROXIES, [result.proxy]);
+    return result;
+  } }.revocable;
+  define(ProxyFn, "revocable", revocable);   // ของเดิมเก็บไว้ใน proxyRevocable เท่านั้น
+  define(G, "Proxy", new ProxyFn(ProxyFn, {
+    construct(target, args, newTarget) {
+      const proxy = construct(target, args, newTarget);
+      apply(wsAdd, PROXIES, [proxy]);
+      return proxy;
+    },
+  }));
+
+  /** a + b · a += b → ผลเป็น string = คิดตามความยาว (QuickJS ต่อแบบ rope แล้วคัดลอกจริงตอนใช้งาน — ก้อนใหญ่จึงต้องคิดตอนต่อ) */
+  function meterString(value) {
+    if (typeof value === "string") chargeUnits(textUnits(value.length));
+    return value;
+  }
+  /** { ...x } และ const { a, ...rest } = x → คิดตามจำนวน property ที่จะถูกคัดลอก */
+  function meterProps(value) {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") {
+      chargeUnits(value.length);   // { ..."abc" } = 1 property ต่อตัวอักษร
+      return value;
+    }
+    if (typeof value !== "object" && typeof value !== "function") return value;
+    if (apply(wsHas, PROXIES, [value])) return copyProxy(value);
+    if (isArray(value)) chargeUnits(toCount(value.length));
+    else if (isView(value)) chargeUnits(brandSize(typedLength, value));
+    else chargeUnits(keys(value).length);
+    return value;
+  }
+  /** Proxy: คัดลอกเองทีละ property (คิดแก๊สตามรายการที่ ownKeys ตอบจริง) แล้วให้ engine คัดลอกสำเนาธรรมดาต่อ */
+  function copyProxy(proxy) {
+    const list = ownKeys(proxy);
+    const length = list.length;
+    chargeUnits(length);
+    const out = {};
+    for (let i = 0; i < length; i++) {
+      const key = list[i];
+      const desc = getOwnPropertyDescriptor(proxy, key);
+      if (desc !== undefined && desc.enumerable) {
+        defineProperty(out, key, { value: reflectGet(proxy, key, proxy), writable: true, enumerable: true, configurable: true });
+      }
+    }
+    return out;
+  }
+
   // ---- API ของแต่ละ call ----
   function makeMap(...parts) {
     const key = {};
     apply(wmSet, MAP_PARTS, [key, parts]);
     return key;
-  }
-  function sizeOf(value) {
-    if (typeof value === "string" || isArray(value)) return value.length;
-    if (value !== null && typeof value === "object") return keys(value).length;
-    return 1;
-  }
-  const count = (value) => (numberIsFinite(NumberFn(value)) && NumberFn(value) > 0 ? NumberFn(value) : 0);
-  function expectedSize(target, method, args) {
-    if (method === "repeat" && typeof target === "string") return target.length * count(args[0]);
-    if ((method === "padStart" || method === "padEnd") && typeof target === "string") return count(args[0]);
-    if (method === "from" && args[0] && typeof args[0] === "object") return count(args[0].length);
-    return 0;
   }
 
   const ENCODERS = { k: encodeShallow, p: encodeShallow, d: encode,
@@ -373,29 +772,11 @@ function prelude(host, opText) {
       ? '{"salt":' + encodeShallow(options.salt) + ',"value":' + encodeShallow(options.value) + "}" : encodeShallow(options)) };
 
   function makeApi(act, address, blockNumber) {
-    const call = (op, payload) => {
-      if (dead) throw DEAD;
-      const pending = act.pending;
-      act.pending = 0;
-      return receive(act, host(op, pending, payload));
-    };
-    const charge = (amount) => {
-      if (dead) throw DEAD;
-      act.pending += amount;
-      if (act.pending > act.budget) call(OP.sync, "");
-    };
     const api = {
-      __gas: (nodes) => charge(nodes * NODE_GAS),
-      __call: (target, method, args) => {
-        const fn = target[method];   // target เป็น null / undefined → TypeError แบบเดียวกับการเรียกปกติ
-        if (typeof fn !== "function") return fn.apply(target, args);
-        let size = sizeOf(target);
-        for (let i = 0; i < args.length; i++) size += sizeOf(args[i]);
-        charge(BUILTIN_GAS * (size + expectedSize(target, method, args)));
-        const result = apply(fn, target, args);
-        charge(BUILTIN_GAS * sizeOf(result));
-        return result;
-      },
+      __gas: (nodes) => chargeGas(act, nodes * NODE_GAS),
+      __str: meterString,
+      __props: meterProps,
+      __spread: spreadValue,
       map: makeMap,
       Date: BLOCK_DATE,
       Math: SEEDED_MATH,
@@ -409,7 +790,7 @@ function prelude(host, opText) {
         const args = [a, b, c, d];
         let payload = "[";
         for (let j = 0; j < kinds.length; j++) payload += (j ? "," : "") + ENCODERS[kinds[j]](args[j]);
-        return call(op, payload + "]");
+        return hostCall(act, op, payload + "]");
       };
     }
     return freeze(api);
@@ -429,9 +810,14 @@ function prelude(host, opText) {
     return '{"t":"s","text":' + jsonStringify(StringFn(error)) + "}";
   }
 
-  /** รัน 1 call: ผล = "v<แก๊สค้าง>|<ค่า>" · "e<แก๊สค้าง>|<error>" · "a<แก๊สค้าง>|" (async) · "f" (tx ล้มทั้งใบ) */
+  /**
+   * รัน 1 call: ผล = "v<แก๊สค้าง>|<ค่า>" · "e<แก๊สค้าง>|<error>" · "a<แก๊สค้าง>|" (async) · "f<แก๊สค้าง>|" (tx ล้มทั้งใบ)
+   * แก๊สค้างของ "f" = งานที่ทำไปแล้วแต่ยังไม่ได้ส่ง host (หน่วยความจำเกินกลางทาง) → host คิดด้วย (ไม่เกิน gasLimit)
+   */
   function invoke(factory, name, paramsText, address, blockNumberText, budget) {
     const act = { pending: 0, budget };
+    const outer = ACT;   // โปรแกรมเดียวกันถูกเรียกซ้อน (A → B → A) → คืนตัวนับของชั้นนอกเมื่อจบ
+    ACT = act;
     let outcome;
     try {
       const api = makeApi(act, address, blockNumberText === "" ? null : BigIntFn(blockNumberText));
@@ -439,11 +825,12 @@ function prelude(host, opText) {
       outcome = typeof result?.then === "function" ? "a" + act.pending + "|" : "v" + act.pending + "|" + encode(result);
     } catch (error) {
       try {
-        outcome = dead ? "f" : "e" + act.pending + "|" + describe(error);
+        outcome = dead ? "f" + act.pending + "|" : "e" + act.pending + "|" + describe(error);
       } catch {
-        outcome = dead ? "f" : "e" + act.pending + '|{"t":"s","text":"โปรแกรมทำงานผิดพลาด"}';
+        outcome = dead ? "f" + act.pending + "|" : "e" + act.pending + '|{"t":"s","text":"โปรแกรมทำงานผิดพลาด"}';
       }
     }
+    ACT = outer;
     // ต้องเหลือที่ว่างให้ส่งผลกลับ host (เต็มพอดีโดยไม่ล้ม = ให้ host ตรวจ / ปล่อยที่สำรอง)
     try {
       new ArrayBufferFn(4096);
@@ -610,7 +997,8 @@ function selfCheck() {
   dirty.dispose();
   const second = run();
   restoreSnapshot();
-  if (first !== second || !first.startsWith('v0|[200,"y","undefined",0,{"\\u0000":"b","v":"597"}]')) {
+  // แก๊สค้าง (v<n>|) = ค่าของ "x".repeat(i) ที่คิดตามขนาดข้อมูล — ต้องเท่ากันทั้งสองรอบ
+  if (first !== second || !/^v\d+\|\[200,"y","undefined",0,\{"\\u0000":"b","v":"597"\}\]/.test(first)) {
     throw new Error(`sandbox self-check ไม่ผ่าน: ${first} / ${second}`);
   }
 }
@@ -873,13 +1261,15 @@ export class Sandbox {
     }
     const text = ctx.getString(result.value);
     result.value.dispose();
-    if (this.outOfMemory) return this.#fatal();
-    if (text === "f") {
+    const bar = text.indexOf("|");
+    const pending = Number(text.slice(1, bar));
+    if (this.outOfMemory || text[0] === "f") {
+      // tx ล้มทั้งใบ: ยังคิดแก๊สของงานที่ทำไปแล้ว (หน่วยความจำเกิน = เสียค่าแก๊สเท่าที่ใช้จริง ไม่ใช่แค่ส่วนที่ส่งมาก่อนหน้า)
+      if (pending > 0) tx.gasUsed = Math.min(tx.gasLimit, tx.gasUsed + pending);
+      if (this.outOfMemory) return this.#fatal();
       if (!tx.fatal) tx.abort(this.timedOut ? "timeout" : "memory");
       return { kind: "fatal" };
     }
-    const bar = text.indexOf("|");
-    const pending = Number(text.slice(1, bar));
     if (pending > 0) tx.useGas(pending);   // ไม่เกินยอดที่เหลือเสมอ (เกินถูกส่งมาให้ตรวจทันทีแล้ว)
     const body = text.slice(bar + 1);
     switch (text[0]) {

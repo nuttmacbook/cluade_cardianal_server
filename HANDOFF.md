@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 774 เคส |
+| เทสต์ | `npm test` → 787 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 774 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 787 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -242,7 +242,7 @@ API ที่เทียบกับ EVM (ทุกตัว deterministic · �
 
 แล้วฉีดตัวนับแก๊ส (`gasmeter.js`) และประกอบเป็น **ซอร์ส** (string) ของ factory
 ```js
-(function (api) { "use strict"; const { readDB, writeDB, …, __gas, __call } = api; ${body} ;return { … }; })
+(function (api) { "use strict"; const { readDB, writeDB, …, __gas, __str, __props, __spread } = api; ${body} ;return { … }; })
 ```
 → API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) · ซอร์สนี้ถูกรันใน sandbox (QuickJS) ไม่ใช่ใน V8 ของ server
 syntax ถูกตรวจทั้งกับ V8 (ข้อความ error เดิม) และกับ QuickJS (`checkGuestSyntax` — ตัวที่รันจริง) ก่อนรับโค้ด
@@ -264,7 +264,7 @@ syntax ถูกตรวจทั้งกับ V8 (ข้อความ erro
 | 1 โปรแกรมใน tx | = 1 context (global แยกกัน) · factory ถูกเรียกใหม่ทุก call → ตัวแปรระดับบนสุดไม่ค้างข้าม call |
 | ค่าข้ามเขตแดน | เป็นข้อความ JSON เสมอ (BigInt / undefined / NaN / -0 / map(...) ติดป้ายด้วย key `"\u0000"`) → ได้สำเนาใหม่ทุกครั้ง · function / symbol / object ที่ไม่ใช่ข้อมูลส่งเป็น "ไม่ใช่ข้อมูล" แล้ว host ปฏิเสธเหมือนเดิม · error ของ host ที่โปรแกรมได้รับเป็น `Error` ของฝั่งโปรแกรม (มี `code`) ถ้า throw ต่อ host ได้ error ตัวเดิมคืน |
 | global | built-in มาตรฐานของ JS + `Date` / `Math` ของ block (Math.random ถาม host) · `eval` / `new Function` / constructor ของ async / generator function ถูกปิด (EvalError) เพราะโค้ดที่สร้างตอนรันไม่ผ่านตัวนับแก๊ส · `console.*` เรียกได้แต่ไม่พิมพ์ · ไม่มี `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
-| แก๊ส | `__gas(n)` / `__call` ทำงานในฝั่งโปรแกรม (ไม่ข้ามไป host ทุกครั้ง) · ยอดค้างส่งให้ host ทุกครั้งที่เรียก API · ยอดค้างเกินที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดิม **ตัวเลขแก๊สเท่าเดิมทุกหน่วย** |
+| แก๊ส | `__gas(n)` / `__str` / `__props` / `__spread` และเมธอดในตัวที่ถูกห่อไว้ ทำงานในฝั่งโปรแกรม (ไม่ข้ามไป host ทุกครั้ง) · ยอดค้างส่งให้ host ทุกครั้งที่เรียก API · ยอดค้างเกินที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดิม **ตัวเลขแก๊สเท่าเดิมทุกหน่วย** |
 | แก๊สหมด / หมดเวลา / DB พัง / หน่วยความจำเกิน | host ตอบ "ตาย" → ทุก `__gas` / API หลังจากนั้น throw ซ้ำ (ทุก catch / finally ขึ้นต้นด้วย `__gas`) จึง catch ไม่ได้ · ลูปที่ไม่เรียกอะไรเลยถูกหยุดด้วย interrupt handler ของ QuickJS (catch ไม่ได้เช่นกัน) |
 | stack | `maxStackBytes` ค่าเริ่ม 256 KB (~1,400 ชั้นของการเรียกซ้อน — V8 เดิม ~10,000) · ล้น = `PROGRAM_ERROR (RangeError)` ที่ catch ได้ · ตั้งได้ 16–256 KB เท่านั้น (512 KB ทำให้ stack ของ Node ล้นจน wasm พัง) |
 | หน่วยความจำ | `memoryLimitBytes` ค่าเริ่ม 32 MB ต่อ tx (ตั้งได้ 1 MB–1 GB) · เกิน = **`OUT_OF_MEMORY`** (code ใหม่) |
@@ -274,6 +274,7 @@ syntax ถูกตรวจทั้งกับ V8 (ข้อความ erro
 ต้น tx (หลังคืน snapshot) จอง "ลูกโป่ง" ให้เหลือที่ว่างพอดี `memoryLimitBytes` + ที่สำรองของ host 2 MB แล้วล็อกไม่ให้ memory โต
 → malloc ล้มที่จุดเดียวกันทุกเครื่องเสมอ (heap ต้น tx เหมือนกันทุกไบต์ และไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · มีการแตะล็อกเมื่อไร = OUT_OF_MEMORY
 OUT_OF_MEMORY ทำตัวเหมือน OUT_OF_GAS: ทั้ง tx ล้ม catch / finally ไม่ได้ ไม่มี writes ของโปรแกรม **เข้า block (`accepted: true`) กิน nonce และเสียค่าแก๊สเท่าที่ใช้ไป**
+(ยอดแก๊สที่ยังค้างในฝั่งโปรแกรมตอน malloc ล้มถูกส่งกลับมาด้วย `"f<n>|"` → จอง 32 MB จ่ายจริง ~1,000,000 gas ไม่ใช่แค่ส่วนที่ส่งให้ host ไปแล้ว)
 ⚠️ ทุก node ในเครือข่ายต้องตั้ง `MEMORY_LIMIT_MB` / `STACK_LIMIT_KB` เท่ากัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
 
 **snapshot — ข้อสมมติที่ต้องรู้ก่อนขยับเวอร์ชัน quickjs-emscripten**: memory ของ wasm = [ข้อมูล static ~90 KB | stack ของ C 5 MB | heap ของ dlmalloc]
@@ -294,7 +295,7 @@ stack ล้นเป็น `InternalError` ในฝั่งโปรแกร
 - ทางเร่งที่คิดไว้แต่ยังไม่ทำ: เก็บ context ที่คอมไพล์โปรแกรมยอดนิยมไว้แล้วใน snapshot — **ต้องระวัง** snapshot จะต่างกันตามประวัติของแต่ละ node → heap ต้น tx ไม่เหมือนกัน → จุดที่หน่วยความจำเกินอาจต่างกัน ต้องทำให้ชุดโปรแกรมใน snapshot เป็นส่วนหนึ่งของ state ของ chain ก่อน
 - bytecode ของ QuickJS ข้าม runtime / snapshot ไม่ได้ใน quickjs-emscripten (ไม่มี API อ่าน / เขียน bytecode) จึง cache เป็นซอร์สที่ฉีดตัวนับแล้วแทน
 - ถ้าจะใช้ memory limit ของ QuickJS เองในอนาคต ต้องเป็น build ที่มี `malloc_usable_size`
-- พบระหว่างทำ (ยังไม่แก้ เป็นของเดิม): `gasmeter.js` แปลง `(255).toString(36)` เป็นโค้ดที่ syntax ผิด → deploy ไม่ผ่าน (ตัวเลขในวงเล็บตามด้วยเมธอด)
+- ~~`gasmeter.js` แปลง `(255).toString(36)` เป็นโค้ดที่ syntax ผิด~~ หมดไปแล้ว: ไม่มีการแปลงการเรียกเป็น `__call` อีก (เมธอดในตัวถูกห่อใน prelude แทน)
 
 ### วงจรชีวิตของ tx หนึ่งใบ
 
@@ -403,8 +404,21 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 10
 ```
 `emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
-(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · เมธอดในตัว (join, split, slice, JSON.stringify …) และ `obj[x](…)` ถูกเปลี่ยนเป็น `__call` คิด `builtin` ต่อตัวอักษร / สมาชิกที่เข้า-ออก
-โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · ตำแหน่ง `.` `[` `]` `(` ของการเรียกหาจาก token จริง (acorn tokenizer) ไม่ใช่จากช่วงของ node — ช่วงของค่าในวงเล็บไม่รวมวงเล็บ เช่น `(255).toString(36)` (เคยแปลงเป็น `__call((255,…` ที่ syntax ผิด) · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
+(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` `__str` `__props` `__spread` `__call` สงวนไว้
+
+**แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง** (เทสต์ `76-gas-bulk-copy`): `builtin` (1) ต่อ **หน่วย** · 1 หน่วย = 1 สมาชิก / property / argument หรือ 32 ตัวอักษร / byte (ปัดขึ้น) · ค่าเดี่ยว = 1
+- spread / rest: `[...a]` `f(...a)` `new F(...a)` `const [x, ...r] = a` → `__spread` คิด 1 ต่อสมาชิก · `{ ...o }` `const { x, ...r } = o` → `__props` คิด 1 ต่อ property
+  (rest ใน pattern ที่ไม่มีนิพจน์ให้ห่อ — พารามิเตอร์ / for-of / catch / ซ้อน → deploy ไม่ผ่าน · `function f(...args)` ใช้ได้)
+- `a + b` / `a += b` → `__str` คิดตามความยาวผลลัพธ์ถ้าเป็น string (QuickJS ต่อแบบ rope แล้วค่อยคัดลอก ก้อนใหญ่จึงต้องคิดตอนต่อ) · template ใช้ `"".concat` ที่ถูกห่อแล้ว
+- เมธอดในตัว (Array / TypedArray / String / Object / JSON / Reflect / RegExp / Set / Map / Promise / URI …) ถูกห่อใน prelude ก่อนโค้ดของผู้ใช้รัน
+  ของจริงอยู่ใน closure เท่านั้น → `a.join()` / `.call` / `Reflect.apply` / เก็บใส่ตัวแปร คิดเท่ากัน · การแปลงเป็น string โดยนัย (`a + ""`, `${a}`) ผ่าน `join` ที่ห่อไว้
+  คิด `this` + argument ก่อนทำ และผลลัพธ์หลังทำ · `repeat` `padStart` `padEnd` `Array.from({length})` คิดขนาดผลลัพธ์ก่อนสร้าง
+- `ArrayBuffer` / typed array / `RegExp` / `Set` / `Map` / `WeakSet` / `WeakMap` / `AggregateError` ถูกห่อด้วย Proxy (คิดก่อนจอง) · `Array(n)` ไม่คิด (ยังไม่จองจริง)
+- iterator ในตัวของ array / string / Set / Map ถูกล็อก (แก้ไม่ได้) → spread ใช้ทางคัดลอกเร็วของ engine และรู้จำนวนสมาชิกแน่นอน · Proxy ที่โปรแกรมสร้างถูกจดไว้ (spread แล้วคัดลอกเองทีละ property)
+- `runProgram` / `cloneProgram`: 1 ต่อ 32 byte ของ input (JSON) และของค่าที่ return
+- ผล: ลูป `a = [...a, ...a]` จาก ~230 gas ต่อ 32 MB → หมดแก๊สที่ 3M ก่อนถึงเพดานหน่วยความจำ · string / ArrayBuffer 32 MB ≈ 1,050,000 gas
+- ยังไม่ได้คิดตามขนาด: CPU ของ regex ที่ backtrack · BigInt ใหญ่ (`**`) · array-like ที่ getter ของ `length` โกหก (จองก่อนคิดหลังทำ — ถูกเพดานหน่วยความจำกันอยู่)
+เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
 ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
 
@@ -458,7 +472,8 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 10
 
 - ไม่มีอะไรลง DB จนกว่าจะ `commit()`
 - timeout / DB พัง / แก๊สหมด / หน่วยความจำเกิน → ทั้ง tx ล้ม โปรแกรม `catch` ไม่ได้
-- **หน่วยความจำเกิน (`OUT_OF_MEMORY`) → เข้า block กิน nonce เสียค่าแก๊สเท่าที่ใช้** (เหมือนแก๊สหมด)
+- **หน่วยความจำเกิน (`OUT_OF_MEMORY`) → เข้า block กิน nonce เสียค่าแก๊สเท่าที่ใช้** (เหมือนแก๊สหมด · รวมยอดที่ค้างในฝั่งโปรแกรม)
+- **คัดลอก / สร้างข้อมูลทั้งก้อนเสียแก๊สตามขนาด** (spread / rest / `+` ที่ได้ string / เมธอดในตัว) เรียกทางไหนก็เท่ากัน (เทสต์ `76`)
 - `runProgram` ปลายทางล้มแล้วผู้เรียก catch → writes + event ของกิ่งนั้นถูกย้อน
 - **nonce ผิด / เกินโควตา / timeout → ไม่เข้า block ไม่กิน nonce ไม่เสียแก๊ส** (`accepted: false`)
 - **โปรแกรม throw / เงินไม่พอ → เข้า block กิน nonce เสียแก๊ส** (`status: "throw"`, `accepted: true`)
@@ -879,7 +894,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 73 ไฟล์ · 774 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 76 ไฟล์ · 787 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -908,6 +923,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `71-indexed-events` | emit indexed (ตรวจ options · แก๊ส topic) · ดัชนี + cursor + หลาย field · eth_getLogs ตาม topic · token มาตรฐาน |
 | `72-abi` | checkAbi (schema ทุกข้อ) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
 | `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
+| `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
@@ -983,8 +999,10 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
 - ข้าม: `TIMEOUT_MS` (แก๊ส 3M หมดก่อนเสมอ ~60 ms · เทสต์ 08 / 58 คุม timeout อยู่แล้ว)
 - พบระหว่างทำ (แก้แล้ว · เทสต์ `75-simulate-block-number`): `simulate` ใช้ `number: null` → `BlockNumber()` เป็น null ตอน /sendtx
   โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธทั้งที่ใน block รันได้ → ตอนนี้จำลองเป็น block ถัดไปเสมอ (ไม่ commit / ไม่จองเลข)
-- พบระหว่างทำ (ยังไม่แก้): spread `[...a, ...a]` ไม่ถูกคิดแก๊สตามจำนวนสมาชิก (gasmeter ไม่ห่อ SpreadElement / การแปลง array เป็น string โดยนัยก็เช่นกัน)
-  → จองหน่วยความจำ 32 MB ได้ด้วย ~230 แก๊ส (`memoryIfArmed` ใช้วิธีนี้) · ถูกจำกัดด้วย `MEMORY_LIMIT_MB` / `TIMEOUT_MS` แต่ CPU ต่อแก๊สสูงกว่าโค้ดปกติมาก
+- พบระหว่างทำ (แก้แล้ว · เทสต์ `76-gas-bulk-copy`): spread `[...a, ...a]` ไม่ถูกคิดแก๊สตามจำนวนสมาชิก (รวมการแปลง array เป็น string โดยนัย)
+  → เดิมจองหน่วยความจำ 32 MB ได้ด้วย ~230 แก๊ส · ตอนนี้คิด 1 ต่อสมาชิก / 32 byte (หัวข้อ "ค่าแก๊ส") ลูปเดิมหมดแก๊สที่ 3M ก่อน
+  `memoryIfArmed` จึงเปลี่ยนเป็นสร้าง string 1 MB (`s + s`) แล้ว `keep.push([s].join(""))` วนไป (`repeat` ถูก autoreview ห้าม) + `gasLimit` 1,500,000 → ยัง OUT_OF_MEMORY ใน block (จ่าย ~1.05M gas · สคริปต์ตรวจว่า gasUsed อยู่ระหว่าง 500K–1.5M)
+- ท้ายรายงานพิมพ์ gasUsed ของ tx ที่น่าดูแต่ละตัว + แก๊สรวมทุก block ของรอบนั้น (`gasByTx` / `gasUsed` ในไฟล์รายงาน) · `npm run scenario` ก็พิมพ์ gas/tx ต่อชนิดและแก๊สรวม
 
 ---
 
@@ -994,7 +1012,7 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
 1. ~~ไม่มี sandbox จริง~~ เสร็จแล้ว: โปรแกรมรันใน QuickJS (WebAssembly) — `src/core/sandbox.js` (หัวข้อ 4 "Sandbox")
    แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
    ที่เหลือ: ความเร็ว (token transfer ~1.4 ms/tx เทียบ ~0.6 เดิม) และ fuzz / review ความปลอดภัยของตัวแปลงค่าข้ามเขตแดน
-2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node, เมธอดในตัวคิดตามขนาดข้อมูล)
+2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node) · การคัดลอก / สร้างข้อมูลคิดตามขนาด (spread / rest / string `+` / เมธอดในตัว · 1 ต่อสมาชิกหรือ 32 byte)
    `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 3M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
 3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
 

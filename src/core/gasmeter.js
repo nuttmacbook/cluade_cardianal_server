@@ -10,33 +10,39 @@
  *   ทางย่อยในนิพจน์ (a && b, c ? x : y) นับรวมในช่วงที่อยู่ จึงคิดเต็มทุกทางเสมอ
  *   เงื่อนไข / update ของลูปนับเพิ่มในทุกรอบ
  *
- * เมธอดในตัวที่ทำงานกับข้อมูลทั้งก้อนในคำสั่งเดียว (join, split, slice, JSON.stringify …)
- * และการเรียกแบบ obj[name](…) ถูกเปลี่ยนเป็น __call(obj, "method", [args])
- * เพื่อให้ VM คิดแก๊สตามขนาดข้อมูลเข้า / ออก
+ * แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง (คิดใน sandbox ดู sandbox.js "แก๊สตามขนาดข้อมูล"):
+ *   a + b · a += b                → __str(…)       ผลเป็น string = คิดตามความยาว (string ที่ต่อด้วย operator ไม่ผ่านเมธอดใด ๆ)
+ *     (template `…${x}…` ไม่ต้องครอบ: QuickJS สร้างด้วย "".concat(…) ซึ่งห่อไว้ใน sandbox แล้ว — เทสต์ 76 คุมอยู่)
+ *   { ...x }                      → { ...__props(x) }   คิดตามจำนวน property ที่ถูกคัดลอก
+ *   const { a, ...rest } = x      → … = __props(x)      (และ ({ a, ...rest } = x))
+ *   [...a] · f(...a) · new F(...a) → ...__spread(a)  คิดตามจำนวนสมาชิกที่ถูกคัดลอก
+ *   const [x, ...rest] = a        → … = __spread(a)     (และ ([x, ...rest] = a))
+ *   ...rest ใน pattern ตำแหน่งอื่น (พารามิเตอร์แบบ { ...r } / [ ...r ] · for…of · catch · ซ้อนใน pattern อื่น) → deploy ไม่ผ่าน
+ *     เพราะไม่มีนิพจน์ให้ครอบ (ค่าที่ถูกคัดลอกไม่ได้มาจากนิพจน์ในโค้ด) — ใช้ const [ ...rest ] = ค่า ในตัวฟังก์ชันแทน
+ *     (function f(...args) ใช้ได้ตามปกติ: argument มาจากการเรียกซึ่งคิดแก๊สแล้ว)
+ *   เมธอดในตัว (join, split, slice, JSON.stringify …) ถูกห่อใน sandbox เอง ไม่ต้องแปลงการเรียก
+ *     (เรียกผ่าน .call / Reflect.apply / ตัวแปรที่เก็บเมธอดไว้ ก็ถูกคิดเท่ากัน)
  *
  * บรรทัดของโค้ดไม่เปลี่ยน (ข้อความ error ยังชี้บรรทัดเดิม) แต่คอลัมน์เลื่อน
  */
-import { parse, tokenizer } from "acorn";
+import { parse } from "acorn";
 
 export const GAS_FN = "__gas";
+export const STR_FN = "__str";
+export const PROPS_FN = "__props";
+export const SPREAD_FN = "__spread";
+/** ชื่อเดิมของตัวเรียกเมธอดในตัว (ไม่ใช้แล้ว แต่ยังสงวนไว้) */
 export const CALL_FN = "__call";
-
-/** เมธอดที่คิดแก๊สตามขนาดข้อมูล */
-export const SIZED_METHODS = new Set([
-  "repeat", "padStart", "padEnd", "join", "split", "concat", "slice", "splice", "substring", "substr",
-  "indexOf", "lastIndexOf", "includes", "fill", "sort", "reverse", "flat", "replace", "replaceAll",
-  "trim", "trimStart", "trimEnd", "toUpperCase", "toLowerCase", "startsWith", "endsWith",
-  "stringify", "parse", "keys", "values", "entries", "fromEntries", "from", "assign", "toString",
-  "map", "filter", "forEach", "reduce", "reduceRight", "find", "findIndex", "findLast", "findLastIndex",
-  "some", "every", "flatMap", "toSorted", "toReversed", "toSpliced",
-]);
+/** ฟังก์ชันของ VM ที่โค้ดที่ฉีดแล้วเรียก (destructure จาก api ใน factory ของโปรแกรม) */
+export const METER_FNS = [GAS_FN, STR_FN, PROPS_FN, SPREAD_FN];
+const RESERVED = new Set([...METER_FNS, CALL_FN]);
 
 const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
 const LOOP_TYPES = new Set(["ForStatement", "ForInStatement", "ForOfStatement", "WhileStatement", "DoWhileStatement"]);
 const SKIP_KEYS = new Set(["start", "end", "loc", "range"]);
 
-// ลำดับของข้อความที่แทรกตรงตำแหน่งเดียวกัน: ตัวนับก่อน แล้วตัวครอบช่วง แล้วการเรียก
-const PRIORITY = { gas: 3, region: 2, call: 1 };
+// ลำดับของข้อความที่แทรกตรงตำแหน่งเดียวกัน (ช่วงยาวเท่ากัน): ตัวนับก่อน แล้วตัวครอบช่วง แล้ว __props / __spread แล้ว __str
+const PRIORITY = { gas: 4, region: 3, props: 2, str: 1 };
 
 function children(node) {
   const list = [];
@@ -49,16 +55,20 @@ function children(node) {
   return list;
 }
 
+const hasObjectRest = (pattern) => pattern?.type === "ObjectPattern" && pattern.properties.some((p) => p.type === "RestElement");
+const hasArrayRest = (pattern) => pattern?.type === "ArrayPattern" && pattern.elements.some((p) => p?.type === "RestElement");
+const SPREAD_PARENTS = new Set(["ArrayExpression", "CallExpression", "NewExpression"]);
+
 /** @param {string} body โค้ดภายใน program() @returns {string} โค้ดที่มีตัวนับแก๊ส */
 export function instrument(body) {
   const ast = parse(body, { ecmaVersion: "latest", allowReturnOutsideFunction: true });
-  const edits = [];          // { at, end?, text, open, span, priority }
+  const edits = [];          // { at, text, open, span, priority }
   const regionRoots = new Set([ast]);
   const regions = [];        // { nodes: node[], place(n) }
+  const allowedRest = new Set();   // pattern ที่มี ...rest และค่าที่ถูกคัดลอกถูกครอบด้วย __props / __spread แล้ว
 
-  const open = (at, text, span, priority) => edits.push({ at, end: at, text, open: true, span, priority });
-  const close = (at, text, span) => edits.push({ at, end: at, text, open: false, span, priority: 0 });
-  const replace = (at, end, text) => edits.push({ at, end, text, open: false, span: -1, priority: 0, replace: true });
+  const open = (at, text, span, priority) => edits.push({ at, text, open: true, span, priority });
+  const close = (at, text, span) => edits.push({ at, text, open: false, span, priority: 0 });
 
   const statementGas = (at) => (n) => open(at, `${GAS_FN}(${n});`, Infinity, PRIORITY.gas);
   const region = (node, extra = []) => {
@@ -75,8 +85,17 @@ export function instrument(body) {
     return regions.push({ nodes, place: (n) => { open(node.start, `(${GAS_FN}(${n}),`, span, PRIORITY.region); close(node.end, ")", span); } });
   };
 
-  const visit = (node) => {
-    if (node.type === "Identifier" && (node.name === GAS_FN || node.name === CALL_FN)) {
+  // ครอบนิพจน์ด้วย fn( … ) · ช่วงของ node ไม่รวมวงเล็บรอบตัวมัน → ครอบอยู่ในวงเล็บเดิม
+  // a, b (SequenceExpression) ต้องมีวงเล็บของตัวเองไม่งั้นกลายเป็น argument 2 ตัว
+  const wrap = (node, fn, priority) => {
+    const span = node.end - node.start;
+    const sequence = node.type === "SequenceExpression";
+    open(node.start, sequence ? `${fn}((` : `${fn}(`, span, priority);
+    close(node.end, sequence ? "))" : ")", span);
+  };
+
+  const visit = (node, parent) => {
+    if (node.type === "Identifier" && RESERVED.has(node.name)) {
       throw new SyntaxError(`ชื่อ ${node.name} สงวนไว้สำหรับ VM`);
     }
     if (FUNCTION_TYPES.has(node.type)) region(node.body);
@@ -91,56 +110,30 @@ export function instrument(body) {
       region(node.block);
       if (node.handler) region(node.handler.body);
       if (node.finalizer) region(node.finalizer);
-    } else if (node.type === "CallExpression") rewriteCall(node);
-    for (const child of children(node)) visit(child);
-  };
-
-  // token ของโค้ด (ไม่รวมคอมเมนต์) — ใช้หาตำแหน่ง . [ ] ( ) จริง เพราะช่วงของ node ที่อยู่ในวงเล็บ
-  // ไม่รวมวงเล็บของมันเอง เช่น (255).toString(36): ช่วงของ 255 จบก่อน ")" — ห้ามตัดข้อความตามช่วง node ตรง ๆ
-  let tokens = null;
-  const tokensFrom = (pos) => {
-    tokens ??= [...tokenizer(body, { ecmaVersion: "latest", allowReturnOutsideFunction: true })];
-    let lo = 0, hi = tokens.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (tokens[mid].start < pos) lo = mid + 1; else hi = mid; }
-    return lo;
-  };
-  const keepLines = (from, to) => "\n".repeat((body.slice(from, to).match(/\n/g) ?? []).length);
-  const drop = (token) => replace(token.start, token.end, "");
-
-  // obj.method(a, b) → __call(obj,"method",[a, b])   ·   obj[expr](a) → __call(obj,(expr),[a])
-  // วงเล็บรอบ obj / expr คงไว้ · วงเล็บรอบตัว callee เช่น (obj.method)(a) ถูกลบ (this ยังเป็น obj เหมือนเดิม)
-  const rewriteCall = (node) => {
-    const callee = node.callee;
-    if (callee.type !== "MemberExpression" || node.optional || callee.optional || callee.object.type === "Super") return;
-    const { object, property, computed } = callee;
-    if (!computed && !(property.type === "Identifier" && SIZED_METHODS.has(property.name))) return;
-    const span = node.end - node.start;
-    // ")" ที่ปิดตัว obj อยู่ก่อน "." / "[" → token "." / "[" ตัวแรกหลัง obj คือตัวเชื่อม member
-    let i = tokensFrom(object.end);
-    while (tokens[i].type.label === ")") i += 1;
-    const member = tokens[i];
-    // ")" หลัง callee = วงเล็บที่ครอบ callee → ตามด้วย "(" ของการเรียก
-    let j = tokensFrom(callee.end);
-    const calleeParens = [];
-    while (tokens[j].type.label === ")") calleeParens.push(tokens[j++]);
-    const paren = tokens[j];
-    // "(" ที่เปิดครอบ callee อยู่ระหว่างต้นการเรียกกับต้น callee (นับจากด้านใน)
-    for (let k = tokensFrom(callee.start) - 1, n = calleeParens.length; n > 0; k -= 1, n -= 1) drop(tokens[k]);
-    for (const token of calleeParens) drop(token);
-    open(node.start, `${CALL_FN}(`, span, PRIORITY.call);
-    if (computed) {
-      replace(member.start, member.end, ",(");
-      replace(callee.end - 1, callee.end, ")");   // "]" ปิดของ obj[expr]
-      replace(paren.start, paren.end, ",[");
-    } else {
-      replace(member.start, property.end, `,"${property.name}"${keepLines(member.start, property.end)}`);
-      replace(paren.start, paren.end, ",[");
+    } else if (node.type === "BinaryExpression" && node.operator === "+") wrap(node, STR_FN, PRIORITY.str);
+    else if (node.type === "AssignmentExpression" && node.operator === "+=") wrap(node, STR_FN, PRIORITY.str);
+    else if (node.type === "SpreadElement" && (parent?.type === "ObjectExpression" || SPREAD_PARENTS.has(parent?.type))) {
+      // { ...x } → { ...__props(x) } · [...x] / f(...x) → ...__spread(x)
+      // ช่วงของ SpreadElement รวมวงเล็บรอบ x แล้ว: { ...(a, b) } → { ...__props((a, b)) }
+      const at = node.start + 3;
+      const span = node.end - at;
+      open(at, `${parent.type === "ObjectExpression" ? PROPS_FN : SPREAD_FN}(`, span, PRIORITY.props);
+      close(node.end, ")", span);
+    } else if (node.type === "VariableDeclarator" && node.init && (hasObjectRest(node.id) || hasArrayRest(node.id))) {
+      allowedRest.add(node.id);
+      wrap(node.init, node.id.type === "ObjectPattern" ? PROPS_FN : SPREAD_FN, PRIORITY.props);
+    } else if (node.type === "AssignmentExpression" && node.operator === "=" && (hasObjectRest(node.left) || hasArrayRest(node.left))) {
+      allowedRest.add(node.left);
+      wrap(node.right, node.left.type === "ObjectPattern" ? PROPS_FN : SPREAD_FN, PRIORITY.props);
+    } else if ((hasObjectRest(node) || hasArrayRest(node)) && !allowedRest.has(node)) {
+      throw new SyntaxError("...rest ใน pattern ใช้ได้เฉพาะ const { a, ...rest } = ค่า / const [a, ...rest] = ค่า หรือ ({ a, ...rest } = ค่า) / ([a, ...rest] = ค่า) "
+        + "(ตำแหน่งอื่น เช่น พารามิเตอร์ / for…of / catch / ซ้อนใน pattern คิดแก๊สตามขนาดที่คัดลอกไม่ได้)");
     }
-    close(node.end - 1, "]", span);
+    for (const child of children(node)) visit(child, node);
   };
 
   regions.push({ nodes: [ast], place: statementGas(0) });
-  visit(ast);
+  visit(ast, null);
 
   // จำนวน node ของแต่ละช่วง (ไม่นับช่วงลูกที่ซ้อนอยู่)
   const count = (node, root) => {
@@ -160,23 +153,12 @@ function applyEdits(source, edits) {
     at.get(edit.at).push(edit);
   }
   let out = "";
-  let i = 0;
-  while (i <= source.length) {
+  for (let i = 0; i <= source.length; i++) {
     const here = at.get(i) ?? [];
-    // ปิดของเดิมก่อน (ช่วงเล็กก่อน) → แทนที่ → เปิดของใหม่ (ช่วงใหญ่ก่อน / ตัวนับก่อน)
-    for (const edit of here.filter((e) => !e.open && !e.replace).sort((a, b) => a.span - b.span)) out += edit.text;
-    const replacement = here.find((e) => e.replace);
-    const opens = here.filter((e) => e.open).sort((a, b) => b.span - a.span || b.priority - a.priority);
-    if (replacement) {
-      for (const edit of opens) out += edit.text;
-      out += replacement.text;
-      i = replacement.end;
-      // ตำแหน่งปลายของการแทนที่อาจมีข้อความที่ต้องแทรกต่อ
-      if (replacement.end !== replacement.at) continue;
-    }
-    if (!replacement) for (const edit of opens) out += edit.text;
+    // ปิดของเดิมก่อน (ช่วงเล็กก่อน) → เปิดของใหม่ (ช่วงใหญ่ก่อน / ลำดับความสำคัญสูงก่อน)
+    for (const edit of here.filter((e) => !e.open).sort((a, b) => a.span - b.span)) out += edit.text;
+    for (const edit of here.filter((e) => e.open).sort((a, b) => b.span - a.span || b.priority - a.priority)) out += edit.text;
     if (i < source.length) out += source[i];
-    i += 1;
   }
   return out;
 }

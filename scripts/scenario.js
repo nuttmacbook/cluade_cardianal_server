@@ -344,6 +344,7 @@ async function verify() {
     const found = await get(`/tx/${item.hash}`);
     if (!found?.blockNumber) { missing.push(item); continue; }
     report.byLabel[item.label][found.status === "success" ? "success" : "throw"] += 1;
+    report.byLabel[item.label].gas = (report.byLabel[item.label].gas ?? 0) + (found.gasUsed ?? 0);
   }
   report.missing = missing.length;
   report.programs = P;
@@ -358,7 +359,8 @@ async function verify() {
   const histogram = {};
   for (const n of counts) histogram[n] = (histogram[n] ?? 0) + 1;
   report.blocks = { range: [headers[0]?.number, latest], txPerBlock: histogram,
-    avg: +(counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length)).toFixed(2) };
+    avg: +(counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length)).toFixed(2),
+    gasUsed: headers.reduce((sum, h) => sum + (h.gasUsed ?? 0), 0) };
 
   const holders = await get(`/token/${P.token}/holders?limit=1`);
   const target = await get(`/address/${OPTIONS.target}?limit=1`);
@@ -378,12 +380,15 @@ function summary() {
   line("tx sent / queued / rejected", `${report.sent} / ${report.queued} / ${report.rejected}`);
   line("queued but not in a block", report.missing);
   line("tx per block (count of blocks)", JSON.stringify(report.blocks.txPerBlock));
+  line("gas used (all blocks)", report.blocks.gasUsed);
   line("token holders", report.token.holders);
   line("target native / TEST", `${report.target.native.balance} / ${report.target.test}`);
   line("funder native left", report.funderLeft);
-  console.log("\n  label                                     sent  queued  ok  throw");
+  console.log("\n  label                                     sent  queued  ok  throw  gas/tx");
   for (const [label, s] of Object.entries(report.byLabel).sort()) {
-    console.log(`  ${label.padEnd(40)} ${String(s.sent).padStart(5)} ${String(s.queued).padStart(7)} ${String(s.success).padStart(4)} ${String(s.throw).padStart(6)}${s.expectThrow ? "  (expected to throw)" : ""}`);
+    const done = s.success + s.throw;
+    const gas = done ? Math.round((s.gas ?? 0) / done) : 0;
+    console.log(`  ${label.padEnd(40)} ${String(s.sent).padStart(5)} ${String(s.queued).padStart(7)} ${String(s.success).padStart(4)} ${String(s.throw).padStart(6)} ${String(gas).padStart(7)}${s.expectThrow ? "  (expected to throw)" : ""}`);
   }
   if (report.rejected) {
     console.log("\n  rejected at /sendtx");

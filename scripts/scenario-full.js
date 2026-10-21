@@ -697,7 +697,8 @@ async function main() {
       const { nonce } = await get(`/nonce/${erin.address}`);
       const arm = await send(erin, { action: "call", to: gasLab, method: "arm" }, { nonce });
       const loop = await send(erin, { action: "call", to: gasLab, method: "loopIfArmed", gasLimit: 400_000 }, { nonce: nonce + 1 });
-      const memory = await send(erin, { action: "call", to: gasLab, method: "memoryIfArmed", gasLimit: 400_000 }, { nonce: nonce + 2 });
+      // หน่วยความจำ 32 MB ≈ 1.05M gas (ข้อมูลคิดแก๊สตามขนาด) → gasLimit ต้องพอให้ถึงเพดานหน่วยความจำก่อน
+      const memory = await send(erin, { action: "call", to: gasLab, method: "memoryIfArmed", gasLimit: 1_500_000 }, { nonce: nonce + 2 });
       if (arm.queued && loop.queued && memory.queued) items = { arm, loop, memory };
       else if (arm.queued) await mined(arm.hash);
     }
@@ -709,7 +710,8 @@ async function main() {
     eq("ลูปใน block → OUT_OF_GAS", loopReceipt.error?.code, "OUT_OF_GAS");
     check("OUT_OF_GAS: เข้า block · ใช้แก๊สเต็ม gasLimit · เสียค่าแก๊ส", found[items.loop.hash].blockNumber && loopReceipt.gasUsed >= 400_000 && big(loopReceipt.fee) > 0n, JSON.stringify([loopReceipt.gasUsed, loopReceipt.fee]));
     eq("หน่วยความจำใน block → OUT_OF_MEMORY", memoryReceipt.error?.code, "OUT_OF_MEMORY");
-    check("OUT_OF_MEMORY: เข้า block · เสียค่าแก๊สเท่าที่ใช้", found[items.memory.hash].blockNumber && memoryReceipt.gasUsed > 0 && big(memoryReceipt.fee) > 0n, JSON.stringify([memoryReceipt.gasUsed, memoryReceipt.fee]));
+    // เสียค่าแก๊สตามข้อมูลที่จองไปจริง (~1M สำหรับ 32 MB) ไม่ใช่แค่ไม่กี่ร้อยแบบก่อนคิดแก๊สตามขนาดข้อมูล
+    check("OUT_OF_MEMORY: เข้า block · เสียค่าแก๊สตามข้อมูลที่จองไป (≥ 500,000)", found[items.memory.hash].blockNumber && memoryReceipt.gasUsed >= 500_000 && memoryReceipt.gasUsed <= 1_500_000 && big(memoryReceipt.fee) > 0n, JSON.stringify([memoryReceipt.gasUsed, memoryReceipt.fee]));
     const evmLoop = await rpc("eth_getTransactionReceipt", [items.loop.hash]);
     check("/evm: tx ที่ล้มใน block → status 0x0 + gasUsed > 0", evmLoop.status === "0x0" && BigInt(evmLoop.gasUsed) > 0n, JSON.stringify(evmLoop).slice(0, 200));
     report.txs["failed in block (OUT_OF_GAS)"] = items.loop.hash;
@@ -897,9 +899,19 @@ async function summary() {
   console.log("\n  tx ที่น่าดู (hash ของ VM = hash ที่ Blockscout ใช้ · explorer ของเราค้นได้ทั้ง VM hash และ digest ที่เซ็น)");
   report.vmHashes = {};
   for (const [label, digest] of Object.entries(report.txs).filter(([label]) => /permit|safeTransfer|Batch|aggregate|nested|STATICCALL|caught|probe|cloneProgram|initUpgrade|replace|rejected|failed|legacy|EIP-1559|value 0/.test(label))) {
-    const hash = (await get(`/tx/${digest}`).catch(() => null))?.hash ?? digest;
+    const found = await get(`/tx/${digest}`).catch(() => null);
+    const hash = found?.hash ?? digest;
     report.vmHashes[label] = hash;
-    console.log(`  ${label.padEnd(48)} ${API}/#tx/${hash}  ·  ${OPTIONS.blockscout}/tx/${hash}`);
+    report.gasByTx ??= {};
+    if (typeof found?.gasUsed === "number") report.gasByTx[label] = found.gasUsed;
+    console.log(`  ${label.padEnd(48)} ${String(found?.gasUsed ?? "-").padStart(9)} gas  ${API}/#tx/${hash}  ·  ${OPTIONS.blockscout}/tx/${hash}`);
+  }
+  const latest = await get("/block/latest").catch(() => null);
+  if (latest?.number >= report.firstBlock) {
+    let gasUsed = 0;
+    for (let n = report.firstBlock; n <= latest.number; n += 1) gasUsed += (await get(`/block/${n}`).catch(() => null))?.gasUsed ?? 0;
+    report.gasUsed = gasUsed;
+    console.log(`  แก๊สรวมทุก block ของรอบนี้: ${gasUsed}`);
   }
   console.log(`\n  กระเป๋า: ${Object.entries(report.wallets).map(([n, a]) => `${n} ${short(a)}`).join(" · ")}`);
   console.log(`  Blockscout: ตั้ง ETHEREUM_JSONRPC_HTTP_URL=${API}/evm (ดู docs/blockscout.md) · รายงาน: ${OPTIONS.out}`);

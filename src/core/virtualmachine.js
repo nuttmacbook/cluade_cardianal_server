@@ -4,7 +4,7 @@ import { ripemd160 } from "@noble/hashes/legacy.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
-import { instrument, GAS_FN, CALL_FN } from "./gasmeter.js";
+import { instrument, METER_FNS } from "./gasmeter.js";
 import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
@@ -90,7 +90,8 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *                          ข้อมูล block และดัชนีค้น tx จาก hash — เปิดด้วย recordBlocks + ส่ง number ตอน createBlock
  *
  *  ค่าแก๊ส (เมื่อ chargeGas): call 100 + write 500 + read 100 + 1 ต่อ byte ที่อ่าน/เขียน
- *    + 1 ต่อ node ของโค้ดที่รันผ่าน และเมธอดในตัวตามขนาดข้อมูล (ฉีดตัวนับตอนคอมไพล์ ดู gasmeter.js)
+ *    + 1 ต่อ node ของโค้ดที่รันผ่าน (ฉีดตัวนับตอนคอมไพล์ ดู gasmeter.js) + builtin ต่อหน่วยข้อมูลที่คัดลอก / สร้าง
+ *      (1 สมาชิก หรือ 32 ตัวอักษร / byte: เมธอดในตัว · spread · string ที่ต่อกัน · input / ผลของ runProgram — ดู sandbox.js)
  *    เพดานต่อ tx = maxTxGas ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS
  *    ผู้จ่ายคือ sender ของ tx ชั้นนอกสุดเสมอ, หักจาก <sender>:nativebalance
  *    user ส่ง gasLimit มาเองได้ (เพดานสูงสุดคือยอด native ที่เหลือหลังหัก value)
@@ -178,7 +179,9 @@ export const DEFAULT_GAS = {
   topic: 375,     // ต่อ field ที่ emit แบบ indexed (เขียนดัชนีถาวร 1 key ต่อ field — แบบ LOG topic ของ EVM)
   code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
   node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
-  builtin: 1,  // ต่อหน่วยข้อมูล (ตัวอักษร / สมาชิก) ที่เมธอดในตัวอย่าง join, split, JSON.stringify รับเข้าและส่งออก
+  builtin: 1,  // ต่อหน่วยข้อมูลที่ถูกคัดลอก / สร้าง: 1 สมาชิก (array / property / Set / Map / argument) หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
+               //   เมธอดในตัว (join, split, slice, JSON.stringify …) · spread [...a] f(...a) { ...o } · a + b ที่ได้ string · template
+               //   ArrayBuffer / typed array / RegExp ตามขนาด · input / ผลของ runProgram (ดู sandbox.js "แก๊สตามขนาดข้อมูล")
   price: 1,    // native ต่อ 1 gas
 };
 
@@ -415,8 +418,11 @@ export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddr
 /** input ของโปรแกรม: copy แบบ JSON แล้ว normalize address */
 export const toInputValue = (value, label) => normalizeHexDeep(toJsonValue(value, label));
 
-/** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส (แก๊สของเมธอดในตัว __call คิดใน sandbox ดู sandbox.js) */
+/** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส (แก๊สตามขนาดข้อมูลภายในโปรแกรมคิดใน sandbox ดู sandbox.js) */
 export const valueSize = (value) => (value === undefined ? 0 : Buffer.byteLength(JSON.stringify(encodeBigints(value)) ?? "", "utf8"));
+
+/** หน่วยข้อมูลของค่าที่คัดลอกข้ามเขตแดนระหว่างโปรแกรม: 1 หน่วยต่อ 32 byte ของ JSON (ปัดขึ้น) — หน่วยเดียวกับ sandbox */
+export const copyUnits = (value) => Math.ceil(valueSize(value) / 32);
 
 /** ตัวเลขถูกเก็บเป็น string ลงท้ายด้วย n เช่น "1000n" เพราะ JSON ไม่มี BigInt */
 const BIGINT_TEXT = /^-?\d+n$/;
@@ -1143,7 +1149,7 @@ export class Compiler {
   }
 
   static source(body, tail = "") {
-    return `"use strict";\nconst { ${[...PROGRAM_API_NAMES, GAS_FN, CALL_FN].join(", ")} } = api;\n${body}\n;${tail}`;
+    return `"use strict";\nconst { ${[...PROGRAM_API_NAMES, ...METER_FNS].join(", ")} } = api;\n${body}\n;${tail}`;
   }
 
   /** ฉีดตัวนับแก๊สเข้าโค้ด (ดู gasmeter.js) */
@@ -2681,7 +2687,7 @@ export class VirtualMachine {
 
   /**
    * API ฝั่ง host ที่โปรแกรมเรียกผ่าน sandbox (ค่าที่ได้รับเป็นสำเนาจากโปรแกรมเสมอ)
-   * __gas / __call / map / Date / Math / ThisAddress / BlockNumber อยู่ใน sandbox เอง (ดู sandbox.js)
+   * __gas / __str / __props / __spread / map / Date / Math / ThisAddress / BlockNumber อยู่ใน sandbox เอง (ดู sandbox.js)
    * ทุกฟังก์ชันหยุดทันทีถ้า DB พังไปแล้วใน request นี้
    * caller.readonly (เรียกด้วย runProgram แบบ { readonly: true } ชั้นใดชั้นหนึ่งด้านบน) → API ที่แก้ state throw (catch ได้)
    */
@@ -2955,8 +2961,12 @@ export class VirtualMachine {
       const target = normalizeAddress(programUuid);
       if (value > 0n) this.moveNative(tx, caller.programUuid, target, value); // แนบเงินไปกับการเรียก
       const context = { sender: caller.programUuid, origin: caller.context.origin };
-      return this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1,
+      // input / ค่าที่ return ถูกคัดลอกข้ามเขตแดน (JSON) → builtin ต่อ 32 byte (ปัดขึ้น) ทั้งขาไปและขากลับ
+      tx.useGas(tx.gas.builtin * copyUnits(input));
+      const result = this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1,
         readonly, callType: readonly ? "staticcall" : undefined });
+      tx.useGas(tx.gas.builtin * copyUnits(result));
+      return result;
     } catch (err) {
       tx.rollbackTo(savepoint);
       throw err;
@@ -3002,6 +3012,7 @@ export class VirtualMachine {
     try {
       if (amount > 0n) this.moveNative(tx, factory, address, amount);
       const context = { sender: factory, origin: caller.context.origin };
+      tx.useGas(tx.gas.builtin * copyUnits(initInput));   // initInput ถูกคัดลอกข้ามเขตแดนเหมือน input ของ runProgram
       if (this.compiler.compile(code).hasInit) {
         this.runFunction(tx, { programUuid: address, functionName: INIT_FUNCTION, input: initInput, context, value: amount, depth, code, isInit: true, callType: "create" });
       } else {
