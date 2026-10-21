@@ -120,6 +120,24 @@ test("rebuildFrom: สร้าง block ใหม่พร้อมรายก
   assert.deepEqual(vm.listRejectedOf(alice).map(({ value }) => value.hash), [HASH(2), HASH(1)]);
 });
 
+test("BlockHash(n) ของ block ที่มีรายการถูกปฏิเสธ = hash ใน header (รวม rejectedRoot) · replay block ที่เรียก BlockHash ได้ hash ตรง", () => {
+  const vm = setup();
+  const plain = new VM.VirtualMachine(vm.db);
+  const code = "function program() { function h(params) { return BlockHash(params.input.n) } return { h } }";
+  vm.commit(plain.deploy({ programUuid: "hasher", code, context: { sender: alice, origin: alice } }).writes);
+  vm.commit(plain.init({ programUuid: "hasher" }).writes);
+  const first = vm.createBlock({ timestamp: T });
+  first.recordRejected(entry(1));
+  first.commit();
+  const second = vm.createBlock({ timestamp: T + 1000 });
+  const res = second.call({ programUuid: "hasher", functionName: "h", input: { n: "1n" }, context: { sender: alice, origin: alice }, nonce: 0 });
+  assert.equal(res.result, vm.getBlock(1).hash);
+  second.recordRejected(entry(2));
+  second.commit();
+  assert.equal(vm.replayBlock(2).hash, vm.getBlock(2).hash);
+  assert.equal(vm.replayBlock(2).transactions[0].result, vm.getBlock(1).hash);
+});
+
 test("sync: ผู้อ่านใส่รายการตามที่ส่งมาแล้วเทียบ hash · ไม่ส่ง / ส่งไม่ครบ = ไม่ตรง หยุดทันที", () => {
   const source = setup();
   const block = source.createBlock({ timestamp: T, feeRecipient: "miner" });
