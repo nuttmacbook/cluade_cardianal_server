@@ -200,6 +200,7 @@ export const ERRORS = {
   invalidTimestamp: [INVALID_REQUEST, "timestamp ต้องเป็นจำนวนเต็มมิลลิวินาทีที่ไม่ติดลบ"],
   invalidNonce: [INVALID_REQUEST, (expected, got) => `nonce ไม่ถูกต้อง: ต้องเป็น ${expected} แต่ได้ ${got}`],
   invalidAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มบวก"],
+  invalidTransferAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ"],   // โอน native (tx) โอน 0 ได้แบบ EVM
   invalidAddress: [INVALID_REQUEST, "address ต้องเป็น string ที่ไม่ว่าง"],
   invalidValue: [INVALID_REQUEST, "value ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
   invalidGasLimit: [INVALID_REQUEST, "gasLimit ต้องเป็นจำนวนเต็มบวก"],
@@ -1366,7 +1367,8 @@ export class VirtualMachine {
     return this.runAction((tx) => {
       if (!isNonEmptyString(from) || !isNonEmptyString(to)) fail(ERRORS.invalidAddress);
       const value = parseNative(amount);
-      if (value === null || value <= 0n) fail(ERRORS.invalidAmount);
+      // โอน 0 ได้แบบ EVM (ยังคิดแก๊สและกิน nonce) → ยกเลิกใบที่ค้างในคิวด้วยการโอน 0 ให้ตัวเองได้
+      if (value === null || value < 0n) fail(ERRORS.invalidTransferAmount);
 
       const sender = normalizeAddress(from);
       const recipient = normalizeAddress(to);

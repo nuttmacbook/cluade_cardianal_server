@@ -52,14 +52,32 @@ test("transfer: ยอดไม่พอ / ค่าไม่ถูกต้อ�
   for (const request of [
     { from: "", to: "bob", amount: 1 },
     { from: "alice", to: "", amount: 1 },
-    { from: "alice", to: "bob", amount: 0 },
     { from: "alice", to: "bob", amount: -5 },
+    { from: "alice", to: "bob", amount: "-1n" },
     { from: "alice", to: "bob", amount: 1.5 },
     {},
   ]) {
     assert.equal(vm.transfer(request).error.code, "INVALID_REQUEST");
   }
   assert.equal(native(vm, "alice"), 100);
+});
+
+test("transfer: โอน 0 ได้ (แบบ EVM) · ยังคิดค่าแก๊สและกิน nonce · โอน 0 ให้ตัวเองก็ได้", () => {
+  const vm = setup({ requireNonce: true, chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 0 }, { alice: 10_000 });
+  const res = vm.transfer({ from: "alice", to: "bob", amount: 0, nonce: 0 });
+  assert.equal(res.status, "success");
+  assert.deepEqual(res.result, { from: "alice", to: "bob", amount: "0n" });
+  assert.equal(res.gasUsed, GAS.call);
+  assert.equal(res.writes.find((w) => w.dbKey === "alice:nonce").value, 1);
+  vm.commit(res.writes);
+  assert.deepEqual([native(vm, "alice"), native(vm, "bob")], [10_000 - 100, 0]);   // จ่ายแค่ค่าแก๊ส
+
+  const self = vm.transfer({ from: "alice", to: "alice", amount: "0n", nonce: 1 });   // ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง
+  assert.equal(self.status, "success");
+  vm.commit(self.writes);
+  assert.equal(native(vm, "alice"), 10_000 - 200);
+  assert.equal(vm.checkTransaction({ from: "alice", nonce: -1 }).expectedNonce, 2);
+  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: -1, nonce: 2 }).error.message, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ");
 });
 
 test("transfer: คิดค่าแก๊สและกิน nonce เหมือน tx อื่น", () => {
