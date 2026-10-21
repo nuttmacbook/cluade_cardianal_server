@@ -108,6 +108,39 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 | `ripemd160` | 300 + 1 ต่อ byte ของข้อมูล |
 | `modexp` | 200 + ⌊word² × bit ของ exponent ÷ 3⌋ (word = 8 byte ของตัวที่ยาวสุดระหว่าง base / modulus) |
 | `runProgram` แบบ `readonly` | เท่าการเรียกปกติ |
+| `runProgram` / `cloneProgram` | 100 (`call`) + 1 ต่อ 32 byte (ปัดขึ้น) ของ input (JSON) และอีก 1 ต่อ 32 byte ของค่าที่ return |
+
+### แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง
+
+นอกจาก 1 gas ต่อ node ของโค้ดที่รันผ่าน ทุกงานที่คัดลอกหรือสร้างข้อมูลทั้งก้อนในคำสั่งเดียวคิด **1 gas ต่อหน่วย** (`builtin`)
+
+- **1 หน่วย = 1 สมาชิก** (สมาชิกของ array / typed array · property ของ object · สมาชิกของ Set / Map · argument)
+- **หรือ 32 ตัวอักษร / 32 byte** (string / ArrayBuffer · ปัดขึ้น: 1–32 ตัวอักษร = 1 หน่วย)
+- ตัวเลข / BigInt / boolean / null / undefined / function = 1 หน่วย
+
+| ทำอะไร | คิดเท่าไร |
+|---|---|
+| `[...a]` · `f(...a)` · `new F(...a)` · `const [x, ...rest] = a` · `f.apply(t, a)` · `new Set(a)` / `new Map(a)` | 1 ต่อสมาชิกที่ถูกคัดลอก |
+| `{ ...o }` · `const { x, ...rest } = o` | 1 ต่อ property |
+| `a + b` / `a += b` ที่ได้ string | 1 ต่อ 32 ตัวอักษรของผลลัพธ์ (ตัวเลข / BigInt บวกกันไม่คิด) |
+| template `` `…${x}…` `` | เหมือน `"".concat(…)`: ข้อมูลเข้า + ผลลัพธ์ |
+| เมธอดในตัว (`join` `split` `slice` `concat` `map` `filter` `sort` `JSON.stringify` `JSON.parse` `Object.keys` `Object.assign` `repeat` `padStart` `replaceAll` …) | ขนาดของ `this` + ทุก argument (ก่อนทำ) + ขนาดผลลัพธ์ (หลังทำ) |
+| `repeat` / `padStart` / `padEnd` / `Array.from({ length: n })` | ขนาดผลลัพธ์คิด**ก่อน**สร้าง → `"x".repeat(1e9)` หมดแก๊สทันทีโดยไม่จองหน่วยความจำ |
+| แปลง array เป็น string โดยนัย (`a + ""` · `` `${a}` `` · `String(a)`) | เท่า `a.join()` (+ ส่วนที่ต่อ string) |
+| `new ArrayBuffer(n)` | 1 ต่อ 32 byte (คิดก่อนจอง) |
+| `new Uint8Array(n)` และ typed array อื่น | 1 ต่อสมาชิก (คิดก่อนจอง) |
+| `new RegExp(p)` | 1 ต่อ 32 ตัวอักษรของ pattern |
+| `Array(n)` / `new Array(n)` | ไม่คิด (ยังไม่จองที่ให้สมาชิก) — `fill` / `map` / spread … คิดตาม `length` ตอนใช้ |
+
+เรียกทางไหนก็คิดเท่ากัน: `a.join()` · `Array.prototype.join.call(a)` · `Reflect.apply(…)` · เก็บเมธอดใส่ตัวแปรก่อน
+ตัวอย่าง: `[...a, ...a]` ของ a 1,000 สมาชิก = 2,000 gas · ลูป `a = [...a, ...a]` จึงหมดแก๊สก่อนถึงเพดานหน่วยความจำ (เดิมจอง 32 MB ได้ด้วย ~230 gas)
+หน่วยความจำ 32 MB ≈ 1,000,000 gas (string / ArrayBuffer) · หน่วยความจำเกินก็ยังเสียแก๊สของงานที่ทำไปจริง
+
+ข้อจำกัดที่มากับการคิดแก๊สนี้:
+- `...rest` ใน pattern ใช้ได้เฉพาะ `const { a, ...rest } = ค่า` / `const [a, ...rest] = ค่า` (และ `({ a, ...rest } = ค่า)` / `([a, ...rest] = ค่า)`)
+  ใส่ในพารามิเตอร์ (`function f({ a, ...rest })`) · `for (const [a, ...rest] of …)` · catch · ซ้อนใน pattern อื่น → deploy ไม่ผ่าน (ไม่มีนิพจน์ให้คิดแก๊ส) · `function f(...args)` ใช้ได้ตามปกติ
+- iterator ในตัวของ array / string / Set / Map แก้ไม่ได้ (`Array.prototype[Symbol.iterator] = …` → TypeError)
+- ชื่อ `__gas` `__str` `__props` `__spread` `__call` สงวนไว้
 
 ### event แบบ indexed
 

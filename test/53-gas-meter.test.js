@@ -1,11 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
-import { instrument } from "../src/core/gasmeter.js";
+import { instrument, METER_FNS } from "../src/core/gasmeter.js";
 
 /* แก๊สแบบนับขั้น: ตัวนับที่ฉีดตอนคอมไพล์ (src/core/gasmeter.js) */
 
 const T = 1_700_000_000_000;
+
+/** รันโค้ดที่ฉีดตัวนับแล้วใน V8 (ตัวช่วยตามขนาดข้อมูลเป็น identity) → { result, gas } */
+function runInstrumented(body) {
+  let gas = 0;
+  const helpers = { __gas: (n) => { gas += n; }, __str: (v) => v, __props: (v) => v, __spread: (v) => v };
+  const result = new Function(...METER_FNS, instrument(body))(...METER_FNS.map((name) => helpers[name]));
+  return { result, gas };
+}
 const as = (who) => ({ sender: who, origin: who });
 
 function setup(options = {}) {
@@ -46,13 +54,13 @@ test("ผลลัพธ์ของโค้ดที่ฉีดตัวน�
     const dynamic = [1, 2][name]("-");
     const json = JSON.parse(JSON.stringify({ a: [1, { b: 2 }] }));
     let n = 0; for (const v of [1, 2, 3]) n += v; do { n++ } while (n < 10); while (n < 12) n++;
-    return [pick(3), pick(1), pick(0), kind(1), kind(3), kind(9), safe(() => { throw new Error("x") }), safe(() => 5), log.length, doubled, text, sorted, dynamic, json, n, Object.keys({ p: 1, q: 2 })];
+    const spread = [...doubled, ...[7, 8]]; const merged = { ...obj, extra: Math.max(...spread) };
+    const { list, ...others } = merged; const [first, ...tail] = spread; let joined = ""; joined += \`\${first}-\${tail.length}\` + "!";
+    return [pick(3), pick(1), pick(0), kind(1), kind(3), kind(9), safe(() => { throw new Error("x") }), safe(() => 5), log.length, doubled, text, sorted, dynamic, json, n, Object.keys({ p: 1, q: 2 }), spread, others, list, joined];
   `;
   const expected = new Function(body)();
-  let gas = 0;
-  const metered = new Function("__gas", "__call", instrument(body));
-  const actual = metered((n) => { gas += n; }, (target, method, args) => target[method](...args));
-  assert.deepEqual(actual, expected);
+  const { result, gas } = runInstrumented(body);
+  assert.deepEqual(result, expected);
   assert.ok(gas > 0);
 });
 
@@ -111,7 +119,9 @@ test("เมธอดในตัวคิดแก๊สตามขนาด�
   activate("b", code);
   const small = call("b", "joinN", { n: 1_000 }).gasUsed;
   const big = call("b", "joinN", { n: 2_000 }).gasUsed;
-  assert.equal(big - small, 4_000);   // fill (เข้า + ออก) + join (เข้า + ออก) = 4 ต่อสมาชิกที่เพิ่ม × 1,000
+  // fill (เข้า + ออก) + join (เข้า) = 3 ต่อสมาชิกที่เพิ่ม × 1,000 · ผลของ join คิดต่อ 32 ตัวอักษร: ⌈2000/32⌉ − ⌈1000/32⌉ = 31
+  // (เดิม 4,000 เมื่อ string คิด 1 ต่อตัวอักษร — ตอนนี้ string คิด 1 ต่อ 32 ตัวอักษรเหมือนทุกทางที่สร้าง string)
+  assert.equal(big - small, 3_031);
   const started = Date.now();
   assert.equal(call("b", "huge").error.code, "OUT_OF_GAS");
   assert.ok(Date.now() - started < 1000);
@@ -126,11 +136,14 @@ test("ราคาต่อ node / builtin ปรับได้ · ตั้ง
   assert.ok(priced.call("loops", "count", { n: 5 }).gasUsed > base);
 });
 
-test("ชื่อ __gas / __call สงวนไว้ → deploy ไม่ผ่าน", () => {
+test("ชื่อ __gas / __call / __str / __props / __spread สงวนไว้ → deploy ไม่ผ่าน", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   for (const code of [
     "function program() { function f() { const __gas = () => 0; while (true) {} } return { f } }",
     "function program() { function f() { return __call } return { f } }",
+    "function program() { function f() { const __str = (v) => v; return __str } return { f } }",
+    "function program() { function f(__props) { return 1 } return { f } }",
+    "function program() { function f() { return __spread } return { f } }",
   ]) {
     const res = vm.deploy({ programUuid: "x", code, context: as("owner") }, { timestamp: T });
     assert.equal(res.status, "throw");
@@ -138,6 +151,8 @@ test("ชื่อ __gas / __call สงวนไว้ → deploy ไม่ผ�
   }
 });
 
+// เดิม gasmeter แปลงการเรียกเมธอดเป็น __call(…) และเคยแปลง (255).toString(36) ผิด — ตอนนี้ไม่แปลงการเรียกแล้ว (ห่อเมธอดใน sandbox)
+// แต่ยังตรวจไว้ว่าโค้ดลักษณะนี้ฉีดตัวนับแล้วยังถูกต้องและบรรทัดไม่เปลี่ยน
 test("เรียกเมธอดบนตัวเลข / ค่าในวงเล็บ: (255).toString(36) · 1..toString() · (1n).toString(16) แปลงแล้วยังเป็นโค้ดที่ถูกต้อง", () => {
   const cases = [
     "(255).toString(36)", "1..toString()", "1.5.toString()", "(1n).toString(16)", "((255)) . toString ( 2 )",
@@ -148,10 +163,7 @@ test("เรียกเมธอดบนตัวเลข / ค่าใน�
     const body = `const list = ["a", "b", "c"]; const name = "join"; return ${expr};`;
     const expected = new Function(body)();
     const code = instrument(body);
-    const calls = [];
-    const actual = new Function("__gas", "__call", code)(() => {}, (target, method, args) => { calls.push(method); return target[method](...args); });
-    assert.equal(actual, expected, `${expr} → ${code}`);
-    assert.ok(calls.length > 0, `${expr} ต้องผ่าน __call`);
+    assert.equal(runInstrumented(body).result, expected, `${expr} → ${code}`);
     assert.equal(code.split("\n").length, body.split("\n").length, `${expr}: บรรทัดต้องเท่าเดิม`);
   }
 });

@@ -210,13 +210,14 @@ export const GAS_LAB_PROGRAM = `function program() {
     while (true) i = i + 1n
   }
 
+  // ข้อมูลใหม่ทุกก้อนคิดแก๊สตามขนาด (1 gas ต่อ 32 ตัวอักษร) → 32 MB ≈ 1.05M gas
+  // ส่งด้วย gasLimit ≥ 1.5M → ถึงเพดานหน่วยความจำ (OUT_OF_MEMORY) ก่อนแก๊สหมด · gasLimit น้อยกว่านั้น = OUT_OF_GAS
+  // (repeat / padStart ถูก autoreview ห้าม → สร้างก้อน 1 MB ด้วย s + s แล้วคัดลอกใหม่ทุกรอบด้วย join)
   function grow() {
-    let row = [1n, 2n, 3n, 4n]
+    let s = "x"
+    while (s.length < 1048576) s = s + s
     const keep = []
-    while (true) {
-      row = [...row, ...row]
-      keep.push(row)
-    }
+    while (true) keep.push([s].join(""))
   }
 
   function arm() {
