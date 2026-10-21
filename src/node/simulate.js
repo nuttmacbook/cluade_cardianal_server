@@ -16,12 +16,13 @@ const MINER = "0x1111111111111111111111111111111111111111";
  * @param {{ method: string, request: object }} item ผลจาก verifyTransaction
  */
 export function simulate(vm, item, { feeRecipient = MINER, timestamp = Date.now() } = {}) {
-  // อนุมัติการอัปเกรดแบบมี timelock ต้องรู้เลข block (นัดเปิดใช้ที่ block + N) → จำลองเป็น block ถัดไป
-  const needsNumber = item.method === "initUpgrade" && vm.upgradeDelayBlocks > 0;
+  // จำลองเป็น block ถัดไปเสมอ: BlockNumber() / BlockHash() ในโปรแกรมได้ค่าเดียวกับตอนเข้า block จริง
+  // (เดิมใช้ number: null → BlockNumber() เป็น null ตอน simulate → โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธที่ /sendtx ทั้งที่ใน block รันได้)
+  // และอนุมัติการอัปเกรดแบบมี timelock ต้องรู้เลข block (นัดเปิดใช้ที่ block + N)
   const preview = vm.createBlock({
     timestamp,
     feeRecipient,
-    number: needsNumber ? (vm.latestBlockNumber() ?? 0) + 1 : null,   // ปกติไม่จองเลข block
+    number: (vm.latestBlockNumber() ?? 0) + 1,   // ไม่จองเลขจริง (recordBlocks: false · ไม่ commit)
     checkChain: false,     // ไม่ตรวจสายของ block
     recordBlocks: false,
     recordHistory: false,

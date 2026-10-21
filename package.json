@@ -24,7 +24,8 @@
     "demo:market": "node scripts/demo-market.js",
     "demo:chain": "node scripts/demo-chain.js",
     "simulate": "node scripts/simulate-users.js",
-    "scenario": "node scripts/scenario.js"
+    "scenario": "node scripts/scenario.js",
+    "scenario:full": "node scripts/scenario-full.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
