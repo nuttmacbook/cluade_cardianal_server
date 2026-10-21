@@ -17,10 +17,13 @@
  * replacedLog (ไม่บังคับ · ดู src/node/txlog.js): ใบที่ถูกแทนที่ → { hash, replacedBy, sender, nonce, at } บันทึกแบบ off-chain
  * (การแทนที่เป็นเรื่องปกติ ไม่ใช่การปฏิเสธ จึงไม่เข้า block) · มีไฟล์ = อยู่รอด restart
  *
- * การแทนที่ (replace-by-fee): ส่ง nonce เดิมของใบที่ยังรออยู่ + gasPrice สูงกว่าเดิมอย่างน้อย replaceBumpPercent %
- * ใบใหม่จะเป็น action อะไรก็ได้ → ยกเลิกใบเดิมได้ด้วยการโอน 0 ให้ตัวเอง
+ * การแทนที่ (replace-by-fee แบบ geth): ส่ง nonce เดิมของใบที่ยังรออยู่ + ทั้ง maxFeePerGas และ maxPriorityFeePerGas
+ * สูงกว่าเดิมอย่างน้อย replaceBumpPercent % (แบบเดิม gasPrice = ทั้งสองค่า) · ใบใหม่จะเป็น action อะไรก็ได้ → ยกเลิกใบเดิมได้ด้วยการโอน 0 ให้ตัวเอง
+ *
+ * EIP-1559: take(block) เรียงตาม tip ที่ผู้ผลิตได้จริง = min(priority, maxFee - baseFee ของ block)
+ * ใบที่ maxFee < baseFee ของ block ยังไม่ถูกหยิบ (รอในคิวจน base fee ลง หรือหมดอายุ ttlMs)
  */
-import { sortPendingTransactions, parseNative } from "../core/virtualmachine.js";
+import { sortPendingTransactions, parseNative, effectiveTip } from "../core/virtualmachine.js";
 import { verifyTransaction } from "../crypto/signature.js";
 
 export const DEFAULT_MEMPOOL = {
@@ -37,6 +40,8 @@ export const DEFAULT_MEMPOOL = {
 };
 
 const DUPLICATE = "tx นี้ถูกส่งมาแล้ว";
+/** tx ที่เซ็นแบบ EIP-1559 (มี maxFeePerGas / maxPriorityFeePerGas) */
+const isFeeMarket = (tx) => (tx?.maxFeePerGas ?? null) !== null || (tx?.maxPriorityFeePerGas ?? null) !== null;
 export const EXPIRED_REASON = "ค้างในคิวเกินเวลาที่กำหนด (ไม่ได้เข้า block)";
 
 export class Mempool {
@@ -61,7 +66,8 @@ export class Mempool {
   /** ใบที่รออยู่ (ข้อมูลย่อสำหรับ /pending) */
   list() {
     return [...this.#items.values()].map(({ hash, sender, tx, receivedAt }) =>
-      ({ hash, sender, action: tx.action, nonce: tx.nonce, gasPrice: tx.gasPrice ?? null, receivedAt }));
+      ({ hash, sender, action: tx.action, to: typeof tx.to === "string" && tx.to ? tx.to.toLowerCase() : null, nonce: tx.nonce, gasPrice: tx.gasPrice ?? null,
+        ...(isFeeMarket(tx) ? { maxFeePerGas: String(tx.maxFeePerGas ?? 0), maxPriorityFeePerGas: String(tx.maxPriorityFeePerGas ?? 0) } : {}), receivedAt }));
   }
 
   has(hash) {
@@ -175,12 +181,25 @@ export class Mempool {
       nonce: Number.isSafeInteger(tx?.nonce) ? tx.nonce : null,
       action: typeof tx?.action === "string" ? tx.action : "call",
       to: typeof tx?.to === "string" && tx.to ? tx.to.toLowerCase() : null,
-      gasPrice: String(this.#priceOf(tx?.gasPrice)),
+      gasPrice: String(this.feesOf(tx).maxFee),   // แบบ EIP-1559 = maxFeePerGas
       reason: text.length > 500 ? text.slice(0, 500) : text,
       code: code ?? null,
       stage,
     });
     while (this.#rejections.size > this.#options.maxRejectedQueue) this.#rejections.delete(this.#rejections.keys().next().value);
+  }
+
+  /** ราคาที่ tx เสนอ → { maxFee, priority } (BigInt) · แบบเดิม gasPrice = ทั้งสองค่า (ไม่ส่ง = ราคาตั้งต้นของ VM) */
+  feesOf(tx) {
+    if (isFeeMarket(tx)) return { maxFee: parseNative(tx.maxFeePerGas ?? 0) ?? 0n, priority: parseNative(tx.maxPriorityFeePerGas ?? 0) ?? 0n };
+    const price = this.#priceOf(tx?.gasPrice);
+    return { maxFee: price, priority: price };
+  }
+
+  /** ค่าขั้นต่ำที่ใบแทนที่ต้องเสนอ: ทั้ง maxFee และ priority เพิ่มอย่างน้อย replaceBumpPercent % (ปัดขึ้น) */
+  minimumReplacementFees(oldTx) {
+    const { maxFee, priority } = this.feesOf(oldTx);
+    return { maxFee: this.minimumReplacementPrice(maxFee), priority: this.minimumReplacementPrice(priority) };
   }
 
   /** gasPrice ขั้นต่ำที่ใบแทนที่ต้องเสนอ (BigInt) */
@@ -198,10 +217,14 @@ export class Mempool {
     const { sender, hash, method, request } = verified;
     if (!this.#allowRate(sender, now)) return { ok: false, hash, sender, reason: "ส่งถี่เกินกำหนด" };
 
-    const minimum = this.minimumReplacementPrice(target.tx.gasPrice);
-    if (this.#priceOf(tx.gasPrice) < minimum) {
-      return { ok: false, hash, sender, reason: `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย ${minimum})`,
-        replaces: target.hash, minimumGasPrice: `${minimum}` };
+    const minimum = this.minimumReplacementFees(target.tx);
+    const offered = this.feesOf(tx);
+    if (offered.maxFee < minimum.maxFee || offered.priority < minimum.priority) {
+      const legacy = !isFeeMarket(target.tx) && !isFeeMarket(tx);
+      return { ok: false, hash, sender, replaces: target.hash,
+        reason: legacy ? `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย ${minimum.maxFee})`
+          : `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้อง maxFeePerGas ≥ ${minimum.maxFee} และ maxPriorityFeePerGas ≥ ${minimum.priority})`,
+        minimumGasPrice: `${minimum.maxFee}`, minimumMaxFeePerGas: `${minimum.maxFee}`, minimumMaxPriorityFeePerGas: `${minimum.priority}` };
     }
 
     this.#recent.set(sender, [...(this.#recent.get(sender) ?? []), now]);
@@ -246,8 +269,10 @@ export class Mempool {
     this.prune({ now });   // ใบที่หมดอายุ → ถูกปฏิเสธ (expired) และบันทึกใน block นี้
     const included = [];
     // ใบของ address เดียวกันถูกหยิบตามลำดับ nonce เสมอ (ใบแทนที่ใช้ nonce เดิม → ลำดับไม่เสีย)
-    for (const item of sortPendingTransactions([...this.#items.values()], { defaultGasPrice: this.#vm.gas.price })) {
+    const baseFee = block.baseFee ?? 0n;
+    for (const item of sortPendingTransactions([...this.#items.values()], { defaultGasPrice: this.#vm.gas.price, baseFee })) {
       if (included.length >= limit) break;
+      if (effectiveTip(item.request, baseFee, { defaultGasPrice: this.#vm.gas.price }) === null) continue;   // maxFee < baseFee → รอ block ที่ถูกลง
       if (!block.checkTransaction(item.request).ok) continue;   // nonce ยังไม่ถึงคิว หรือโควตา block เต็ม
       const result = block[item.method](item.request);
       // VM ไม่รับเข้า block (TIMEOUT / แก๊สของ block เต็ม ฯลฯ) → หลุดจากคิวไปเลย จึงบันทึกไว้ให้ /tx ตอบได้

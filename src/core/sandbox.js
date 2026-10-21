@@ -99,11 +99,11 @@ export function checkGuestSyntax(source) {
  */
 export const API_OPS = [
   ["readDB", "k"], ["writeDB", "kd"], ["deleteDB", "k"],
-  ["runProgram", "ppdR"], ["transferNative", "pp"], ["setMetadata", "pd"], ["emit", "pd"],
+  ["runProgram", "ppdR"], ["transferNative", "pp"], ["setMetadata", "pd"], ["emit", "pdd"],
   ["keccak256", "d"], ["ecrecover", "dp"], ["cloneProgram", "pdC"],
   ["ThisBalance", ""], ["BalanceOf", "p"], ["IsProgram", "p"], ["MetadataOf", "pp"],
   ["sha256", "d"], ["ripemd160", "d"], ["blake2b", "d"], ["modexp", "ppp"],
-  ["BlockHash", "p"], ["ChainId", ""], ["Coinbase", ""], ["BlockGasLimit", ""], ["GasPrice", ""], ["GasLeft", ""],
+  ["BlockHash", "p"], ["ChainId", ""], ["Coinbase", ""], ["BlockGasLimit", ""], ["GasPrice", ""], ["BaseFee", ""], ["GasLeft", ""],
   ["CodeHashOf", "p"], ["CodeSizeOf", "p"],
 ];
 const OP = { sync: 0, random: 1, clock: 2, check: 3, api: 10 };

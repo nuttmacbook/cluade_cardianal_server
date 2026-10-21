@@ -4,7 +4,10 @@
  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
  *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
  *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
- *   GAS_PRICE=1000000000   ราคาแก๊สขั้นต่ำ (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei)
+ *   GAS_PRICE=1000000000   base fee ต่ำสุด (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei) — EIP-1559: base fee ของแต่ละ block ไม่ต่ำกว่านี้
+ *   GAS_TARGET=1500000     แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
+ *   BASE_FEE_DENOMINATOR=8 base fee เปลี่ยนได้ไม่เกิน 1/ค่านี้ ต่อ block (8 = 12.5% แบบ Ethereum)
+ *   BURN_PERCENT=100       ส่วนของ base fee ที่เผาทิ้ง (tip เข้าผู้ปิด block เสมอ) — ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
@@ -30,7 +33,7 @@ import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
   programCounts, pagePendingPrograms, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
-  storageGroups, pageRejected } from "./src/node/explorer-api.js";
+  storageGroups, pageRejected, indexedFilterOf, cursorIndexedEvents, programAbi } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -48,7 +51,10 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
   chainId: Number(process.env.CHAIN_ID ?? 1),
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true,
-  feeRecipient: MINER, burnPercent: 50, timeoutMs: TIMEOUT_MS,
+  // EIP-1559: base fee (ปรับตามความเต็มของ block) เผาทิ้ง · tip (maxPriorityFeePerGas) เข้าผู้ปิด block
+  feeRecipient: MINER, burnPercent: Number(process.env.BURN_PERCENT ?? 100), timeoutMs: TIMEOUT_MS,
+  minBaseFee: GAS_PRICE, gasTarget: process.env.GAS_TARGET ? Number(process.env.GAS_TARGET) : null,
+  baseFeeChangeDenominator: Number(process.env.BASE_FEE_DENOMINATOR ?? 8),
   memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
@@ -111,7 +117,8 @@ const ROUTES = {
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
-    gasPrice: vm.gas.price, decimals: 18,   // ราคาแก๊สขั้นต่ำ (wei) · native มี 18 ทศนิยม
+    gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
+    baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance }),
 };
 
@@ -178,6 +185,8 @@ const DYNAMIC = [
   }],
   // โค้ดทุกเวอร์ชันของโปรแกรมที่เคยอัปเกรด [{ version, code, blockNumber, timestamp }]
   [/^\/program\/([^/]+)\/versions$/, (m) => vm.listCodeVersions(m[1])],
+  // ABI ที่โปรแกรมประกาศใน metadata.abi (ไม่มี = null) + แบบ JSON ABI ของ Ethereum
+  [/^\/program\/([^/]+)\/abi$/, (m) => programAbi(vm, m[1])],
   // นับ key ตามชื่อ key แรก ทีละช่วง ?scan=<key ต่อครั้ง ≤ 50,000>&cursor=<next> → { total, groups, scanned, next, complete }
   [/^\/program\/([^/]+)\/groups$/, (m, query) => storageGroups(vm, m[1], { cursor: query.get("cursor") || undefined, scan: query.get("scan") })],
   // แบบ cursor (ไม่นับทั้งรายการ): ?limit=&cursor=<next> → { items, next }
@@ -191,7 +200,9 @@ const DYNAMIC = [
   [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
   [/^\/address\/([^/]+)\/incoming$/, (m, query) => (query.has("cursor") ? cursorTransactionsTo(vm, m[1], cursorOf(query)) : pageTransactionsTo(vm, m[1], pageOf(query)))],
   // ?page= → เลขหน้า (นับรวมไม่เกิน 50,000) · ?cursor= (ว่างได้ = หน้าแรก) → แบบ cursor ไม่มีเพดาน
-  [/^\/program\/([^/]+)\/events$/, (m, query) => (query.has("cursor") ? cursorEvents(vm, m[1], cursorOf(query), query.get("name") ?? "")
+  // ?name=<event>&<field>=<ค่า> → ค้นด้วยดัชนีของ field ที่ emit แบบ indexed (cursor) — ดู indexedEventsQuery
+  [/^\/program\/([^/]+)\/events$/, (m, query) => (indexedFilterOf(query) ? cursorIndexedEvents(vm, m[1], query.get("name") ?? "", indexedFilterOf(query), cursorOf(query))
+    : query.has("cursor") ? cursorEvents(vm, m[1], cursorOf(query), query.get("name") ?? "")
     : pageEvents(vm, m[1], pageOf(query), query.get("name") ?? ""))],
   [/^\/address\/([^/]+)\/rejected$/, (m, query) => pageRejected(vm, { address: m[1], ...cursorOf(query) })],
   [/^\/program\/([^/]+)\/entries$/, (m, query) => pageStorageMap(vm, m[1], query.get("name") ?? "", pageOf(query))],

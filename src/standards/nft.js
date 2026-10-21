@@ -122,7 +122,7 @@ export const NFT_PROGRAM = `function program() {
     addBalance(to, 1n)
     writeDB("totalSupply", readDB("totalSupply") + 1n)
     if (params.input.uri) writeDB(map("uris", tokenId), params.input.uri)
-    emit("Transfer", { from: ZERO, to: to, tokenId: tokenId })
+    emit("Transfer", { from: ZERO, to: to, tokenId: tokenId }, { indexed: ["from", "to", "tokenId"] })
     return tokenId
   }
 
@@ -136,7 +136,7 @@ export const NFT_PROGRAM = `function program() {
     deleteDB(map("uris", tokenId))
     addBalance(holder, -1n)
     writeDB("totalSupply", readDB("totalSupply") - 1n)
-    emit("Transfer", { from: holder, to: ZERO, tokenId: tokenId })
+    emit("Transfer", { from: holder, to: ZERO, tokenId: tokenId }, { indexed: ["from", "to", "tokenId"] })
     return true
   }
 
@@ -150,7 +150,7 @@ export const NFT_PROGRAM = `function program() {
     if (to === holder) throw new Error("approve to the current owner")
     if (to === ZERO) deleteDB(map("approved", tokenId))
     else writeDB(map("approved", tokenId), to)
-    emit("Approval", { owner: holder, approved: to, tokenId: tokenId })
+    emit("Approval", { owner: holder, approved: to, tokenId: tokenId }, { indexed: ["owner", "approved", "tokenId"] })
     return true
   }
 
@@ -159,7 +159,7 @@ export const NFT_PROGRAM = `function program() {
     if (operator === params.context.sender) throw new Error("approve to caller")
     const approved = params.input.approved === true
     writeDB(map("operators", params.context.sender, operator), approved)
-    emit("ApprovalForAll", { owner: params.context.sender, operator: operator, approved: approved })
+    emit("ApprovalForAll", { owner: params.context.sender, operator: operator, approved: approved }, { indexed: ["owner", "operator"] })
     return true
   }
 
@@ -177,7 +177,7 @@ export const NFT_PROGRAM = `function program() {
     addBalance(from, -1n)
     addBalance(to, 1n)
     writeDB(map("owners", tokenId), to)
-    emit("Transfer", { from: from, to: to, tokenId: tokenId })
+    emit("Transfer", { from: from, to: to, tokenId: tokenId }, { indexed: ["from", "to", "tokenId"] })
     return true
   }
 

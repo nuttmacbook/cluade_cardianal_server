@@ -18,7 +18,7 @@ export const PROGRAM_API = [
   "keccak256", "ecrecover", "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber",
   "cloneProgram",   // สร้างโปรแกรมใหม่จากโปรแกรมต้นแบบที่อนุมัติแล้ว (แบบ CREATE2)
   "sha256", "ripemd160", "blake2b", "modexp",   // precompile แบบ EVM
-  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "GasLeft", "CodeHashOf", "CodeSizeOf",
+  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "BaseFee", "GasLeft", "CodeHashOf", "CodeSizeOf",
   "params",
 ];
 

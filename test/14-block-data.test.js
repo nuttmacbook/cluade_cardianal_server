@@ -60,6 +60,10 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
     delete result.fee;
     delete result.accepted;
     delete result.gasPrice;
+    assert.deepEqual([result.baseFee, result.burnedFee, result.producerFee], ["1n", "0n", "0n"]);   // ไม่เก็บค่าแก๊ส → ไม่มีส่วนที่เผา
+    delete result.baseFee;
+    delete result.burnedFee;
+    delete result.producerFee;
     assert.deepEqual(result.events, []);
     delete result.events;
     delete result.debug;

@@ -52,8 +52,9 @@ runProgram(address, "method", input, { value })   // เรียกโปรแ
 runProgram(address, "method", input, { readonly: true })   // เรียกแบบอ่านอย่างเดียว (STATICCALL) — ดูด้านล่าง
 cloneProgram(template, initInput, { salt, value })   // สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address ใหม่ (แบบ CREATE2)
 transferNative(to, amount)   // โอนเงินจากกระเป๋าของโปรแกรมเอง
-setMetadata(field, value)    // ตั้ง namespace / description ของโปรแกรม
+setMetadata(field, value)    // ตั้ง namespace / description / abi ของโปรแกรม
 emit("Transfer", { from, to, amount })   // บันทึก event ให้ explorer (ถูกย้อนถ้ากิ่งนั้นล้ม)
+emit("Transfer", { from, to, amount }, { indexed: ["from", "to"] })   // field ที่ค้นด้วยค่าได้ (ไม่เกิน 3) — ดูด้านล่าง
 ThisAddress()                // address ของโปรแกรมตัวเอง
 keccak256(value)             // hash ของ string หรือ object (object เรียง key ให้เอง)
 ecrecover(message, signature) // → address ผู้เซ็น หรือ null ถ้าลายเซ็นใช้ไม่ได้
@@ -70,7 +71,8 @@ BlockHash(n)                 // hash ของ block n (BigInt) ย้อนไ�
 ChainId()                    // chainId ของระบบ (BigInt)                                       (CHAINID)
 Coinbase()                   // ผู้ปิด block (feeRecipient) หรือ null ถ้าไม่มี                     (COINBASE)
 BlockGasLimit()              // แก๊สสูงสุดต่อ block (BigInt) หรือ null ถ้าไม่จำกัด                (GASLIMIT)
-GasPrice()                   // ราคาต่อ 1 gas ของ tx นี้ (BigInt wei) — ไม่มี base fee จึงไม่มี BaseFee()   (GASPRICE)
+GasPrice()                   // ราคาจริงต่อ 1 gas ของ tx นี้ = min(maxFee, baseFee + tip) (BigInt wei)   (GASPRICE)
+BaseFee()                    // base fee ของ block นี้ (BigInt wei · EIP-1559)   (BASEFEE)
 GasLeft()                    // แก๊สที่เหลือของ tx (BigInt) หลังหักค่าของตัวเองแล้ว                (GAS)
 CodeHashOf(address)          // keccak256 ของโค้ดที่ address นั้นใช้อยู่ · ไม่ใช่โปรแกรม → null       (EXTCODEHASH)
 CodeSizeOf(address)          // ความยาวโค้ดเป็น byte (BigInt) · ไม่ใช่โปรแกรม → 0n                 (EXTCODESIZE)
@@ -98,13 +100,39 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 
 | API | แก๊ส |
 |---|---|
-| `ChainId` / `Coinbase` / `BlockGasLimit` / `GasPrice` / `GasLeft` | 10 (`env`) |
+| `ChainId` / `Coinbase` / `BlockGasLimit` / `GasPrice` / `BaseFee` / `GasLeft` | 10 (`env`) |
+| `emit` | 200 (`event`) + 1 ต่อ byte ของ data + 375 (`topic`) ต่อ field ที่ indexed |
 | `BlockHash` / `CodeSizeOf` | 100 (`read`) |
 | `CodeHashOf` | 100 (`read`) + 100 (`hash`) + 1 ต่อ byte ของโค้ด (ไม่ใช่โปรแกรม = 100) |
 | `sha256` / `blake2b` | 100 + 1 ต่อ byte ของข้อมูล |
 | `ripemd160` | 300 + 1 ต่อ byte ของข้อมูล |
 | `modexp` | 200 + ⌊word² × bit ของ exponent ÷ 3⌋ (word = 8 byte ของตัวที่ยาวสุดระหว่าง base / modulus) |
 | `runProgram` แบบ `readonly` | เท่าการเรียกปกติ |
+
+### event แบบ indexed
+
+`emit(name, data, { indexed: ["from", "to"] })` สร้างดัชนีต่อ (โปรแกรม, ชื่อ event, field, ค่า) → ค้นได้โดยไม่ต้องไล่ทุก event
+
+- ไม่เกิน 3 field · ต้องมีใน `data` · ห้ามซ้ำ (ผิด = throw)
+- `GET /program/<address>/events?name=Transfer&to=0x…` (หลาย field = ต้องตรงทุกตัว) · เครื่องมือ EVM ค้นด้วย `eth_getLogs` ตาม topic ได้
+- log แบบ EVM: topic0 = `keccak256("Transfer(address,address,uint256)")` (ชนิดเดาจากค่า: address / uint256 / bool / string …) ตามด้วยค่าของ field ที่ indexed → token ที่ index `from` / `to` อ่านได้เหมือน ERC-20 จริง
+
+### ABI ของโปรแกรม (`metadata.abi` ไม่บังคับ)
+
+ประกาศฟังก์ชัน / event ให้ explorer สร้างฟอร์มและอ่าน event ได้ถูกชนิด (และ `/evm` คืนเป็น JSON ABI ผ่าน `cardianal_getAbi`)
+
+```js
+function initialization() {
+  setMetadata("abi", {
+    functions: [{ name: "transfer", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint" }], outputs: [{ type: "bool" }] },
+                { name: "balanceOf", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint" }], readonly: true }],
+    events: [{ name: "Transfer", fields: [{ name: "from", type: "address", indexed: true }, { name: "to", type: "address", indexed: true }, { name: "amount", type: "uint" }] }],
+  })
+}
+```
+
+ชนิด: `address` `uint` `int` `bool` `string` `bytes` `object` `array` `any` · ชื่อห้ามซ้ำ · `readonly` กับ `payable` ใช้คู่กันไม่ได้ · ไม่เกิน 64 ฟังก์ชัน / 32 event / 16 field / 16 KB
+ส่งพร้อม deploy (`metadata: { abi }`) ก็ได้ — ฟังก์ชันที่ประกาศต้อง export จริง
 
 **ห้ามใช้** `process`, `fetch`, `globalThis`, `performance`, `async`/`await`, `setTimeout` และการ import ทุกชนิด โค้ดที่ใช้สิ่งเหล่านี้จะไม่ผ่านการรีวิว
 
@@ -177,7 +205,7 @@ api.store / api.native / api.events / api.transfers   // ตรวจผลไ�
 รองรับ API ครบทุกตัวยกเว้น `runProgram` และ `cloneProgram` ซึ่งต้องใช้ `createChain()`
 (`keccak256` / `ecrecover` / `CodeHashOf` ของโปรแกรมที่มีโค้ดก็ต้องใช้ `createChain()` เพราะ `node:crypto` ไม่มี keccak · `GasLeft()` คืน `null` เพราะโหมดนี้ไม่นับแก๊ส)
 
-ค่าของ block / chain ตั้งได้: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
+ค่าของ block / chain ตั้งได้: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, baseFee: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
 
 `createChain()` รันบน VM ตัวจริง พฤติกรรมจึงเหมือนบน chain ทุกอย่าง ทั้งการย้อนข้อมูลเมื่อ throw, ค่าแก๊ส และเวลาของ block
 
@@ -247,7 +275,8 @@ import program from "./hello-world/hello.program.js";
 const code = String(program);    // ← สิ่งที่ส่งไปคือ string นี้
 
 const tx = { chainId: 1, action: "deploy", from: me, to: "", method: "",
-             input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000, gasPrice: "1000000000" };   // 1 gwei
+             input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000,
+             maxFeePerGas: "2000000000", maxPriorityFeePerGas: "0" };   // EIP-1559: จ่ายไม่เกิน 2 gwei · ไม่ให้ tip (แบบเดิม gasPrice ก็ยังใช้ได้)
 await fetch("/sendtx", { method: "POST", body: JSON.stringify({ tx, signature: signTransaction(tx, key) }) });
 ```
 

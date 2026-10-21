@@ -56,17 +56,18 @@ const GWEI = 10n ** 9n;
 const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // ยอดที่ส่งใน tx (string เพราะเกิน 2^53 ได้)
 const UNIT = 10n ** 6n;                 // TEST 6 decimals
 const POWER = 50;                       // กระเป๋าที่ทำ tx หนัก (chain / router / multiTransfer) ได้งบมากกว่า
-const NATIVE_EACH = 3_500;              // native ต่อกระเป๋าทั่วไป (โอน token ≈ 1,700 gas · โอน native ≈ 1,300)
-const NATIVE_POWER = 40_000;            // native เพิ่มให้กระเป๋า power (forward 4 ทอด ≈ 21,500 gas · chain 6 ทอด ≈ 8,100)
+const NATIVE_EACH = 4_500;              // native ต่อกระเป๋าทั่วไป (โอน token ≈ 2,570 gas รวม indexed from / to · โอน native ≈ 1,300)
+const NATIVE_POWER = 60_000;            // native เพิ่มให้กระเป๋า power (forward 4 ทอด ≈ 21,500 gas · chain 6 ทอด ≈ 8,100 · multiTransfer ≈ 2,300 ต่อผู้รับ)
 const NATIVE_TARGET = 500_000;          // ให้ --target ไว้จ่ายค่าแก๊สเอง
 // ค่าใช้จ่ายโดยประมาณ (gas + value) ของงานแต่ละแบบ → ไม่ส่งงานที่กระเป๋าจ่ายไม่ไหว (ถูกปฏิเสธที่ /sendtx)
-const COST = { chainHop: 1_500, chainBase: 2_000, router: 24_000, approve: 2_000, multiPer: 1_600, multiBase: 2_000,
-  tokenTransfer: 1_900, nativeTransfer: 1_400, metadata: 2_500 };
+const COST = { chainHop: 1_500, chainBase: 2_000, router: 24_000, approve: 2_000, multiPer: 2_500, multiBase: 2_000,
+  tokenTransfer: 2_700, nativeTransfer: 1_400, metadata: 2_500 };   // tokenTransfer รวม topic 375 × 2 (Transfer index from / to)
 const TOKEN_EACH = 1_000n * UNIT;       // TEST ต่อกระเป๋า
 const TOKEN_POWER = 50_000n * UNIT;
 const TOKEN_TARGET = 1_000_000n * UNIT;
 const BATCH = 100;                      // ผู้รับต่อ multiSend / multiTransfer
-const GAS = { gasLimit: 1_000_000, gasPrice: gwei(1) };
+// EIP-1559: จ่ายไม่เกิน 10 gwei ต่อแก๊ส (base fee ขึ้นได้ตอน block แน่น) · ไม่ให้ tip → จ่ายแค่ base fee
+const GAS = { gasLimit: 1_000_000, maxFeePerGas: gwei(10), maxPriorityFeePerGas: "0" };
 
 // ---------- ตัวช่วย ----------
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -222,6 +223,14 @@ function planSetup() {
 const approved = new Set();
 const named = new Set();
 const budget = new Map();   // address → native ที่เหลือโดยประมาณ (ตั้งเมื่อ multiSend เข้า block)
+// EIP-1559: งบนับเป็นแก๊สที่ราคา 1 gwei · base fee ขึ้นตอน block แน่น (เช่น multiSend 100 คน) → ค่าใช้จ่ายคูณ base fee / 1 gwei
+//   (+13% เผื่อ base fee ขึ้นอีกหนึ่ง block ก่อน tx เข้า) — ไม่ส่งงานที่กระเป๋าจ่ายไม่ไหว
+let feeFactor = 1;
+async function refreshFeeFactor() {
+  const { baseFee } = await get("/genesis");
+  const ratio = Number((BigInt(String(baseFee ?? GWEI).replace(/n$/, "")) * 1000n) / GWEI) / 1000;
+  feeFactor = ratio > 1 ? ratio * 1.13 : 1;
+}
 const others = (wallet, n) => { const set = new Set(); while (set.size < n) { const w = pick(wallets); if (w !== wallet) set.add(w.address); } return [...set]; };
 const CHAIN_ORDER = ["chain-a", "chain-b", "chain-c", "chain-d", "chain-e", "chain-f"];
 
@@ -282,7 +291,8 @@ function assign(pool, makeJob, busy) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const wallet = pick(pool);
     if (busy.has(wallet)) continue;
-    const [cost, job] = makeJob(wallet);
+    const [estimate, job] = makeJob(wallet);
+    const cost = Math.ceil(estimate * feeFactor);
     if ((budget.get(wallet.address) ?? 0) < cost) continue;
     budget.set(wallet.address, budget.get(wallet.address) - cost);
     busy.add(wallet);
@@ -305,6 +315,7 @@ async function runAll() {
     }
     const setup = jobs.length;
     if (activitySlots < OPTIONS.blocks) {
+      await refreshFeeFactor();
       const busy = new Set();
       for (let n = 0; n < 3 && jobs.length < OPTIONS.perBlock; n += 1) { const job = assign(power, powerJob, busy); if (job) jobs.push(job); }
       while (jobs.length < OPTIONS.perBlock) { const job = assign(normal, normalJob, busy); if (!job) break; jobs.push(job); }
