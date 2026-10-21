@@ -68,7 +68,7 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *
  *  API ในโปรแกรม: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
  *                 keccak256 / ecrecover / ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
- *                 sha256 / ripemd160 / blake2b / modexp / BlockHash / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft
+ *                 sha256 / ripemd160 / blake2b / modexp / BlockHash / ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
  *                 CodeHashOf / CodeSizeOf · runProgram(..., { readonly: true }) = เรียกแบบอ่านอย่างเดียว (STATICCALL)
  *  ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น เช่น 10n (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
  *    ยอด native (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() เป็น BigInt
@@ -95,7 +95,10 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *    ผู้จ่ายคือ sender ของ tx ชั้นนอกสุดเสมอ, หักจาก <sender>:nativebalance
  *    user ส่ง gasLimit มาเองได้ (เพดานสูงสุดคือยอด native ที่เหลือหลังหัก value)
  *    แก๊สไม่พอ → OUT_OF_GAS (โปรแกรม catch ไม่ได้), tx ที่ล้มก็ยังกิน nonce และค่าแก๊ส
- *    ค่าแก๊สแบ่งให้ผู้ปิด block (feeRecipient) ตามสัดส่วน ที่เหลือเผาทิ้ง (burnPercent)
+ *    ค่าแก๊สแบบ EIP-1559 (ดู resolveFees / nextBaseFee):
+ *      แต่ละ block มี baseFeePerGas (ใน header + hash) ปรับตามแก๊สที่ block ก่อนหน้าใช้เทียบกับ gasTarget (±12.5% ต่อ block, ไม่ต่ำกว่า minBaseFee)
+ *      tx ส่ง maxFeePerGas + maxPriorityFeePerGas (หรือ gasPrice แบบเดิม = ทั้งสองค่า) → ราคาจริง = min(maxFee, baseFee + priority)
+ *      ส่วน base fee (gas × baseFee) เผาทิ้ง burnPercent % (ค่าเริ่มต้น 100) ที่เหลือ + tip ทั้งหมด เข้าผู้ปิด block (feeRecipient)
  *
  *  แนบเงินไปกับ tx: vm.call({ ..., value: 20 })  → โอน native จาก sender ไปยังโปรแกรม
  *    deploy ก็แนบได้: เงินย้ายไปที่โปรแกรมตั้งแต่ deploy, initialization เห็นที่ params.value, reject คืนเงิน
@@ -114,7 +117,10 @@ export const DEFAULT_OPTIONS = {
   maxCallDepth: 8,     // runProgram ซ้อนได้กี่ชั้น
   requireNonce: false, // บังคับให้ทุก tx ของ user ส่ง nonce มาด้วย
   chargeGas: false,    // หักค่าแก๊สจาก <sender>:nativebalance
-  burnPercent: 100,    // ค่าแก๊สที่เผาทิ้ง (%) ที่เหลือเข้ากระเป๋า feeRecipient
+  burnPercent: 100,    // ส่วนของ base fee ที่เผาทิ้ง (%) ที่เหลือเข้ากระเป๋า feeRecipient · tip (priority fee) เข้า feeRecipient เสมอ
+  minBaseFee: null,              // base fee ต่ำสุด (และของ block แรก) — null = gas.price
+  gasTarget: null,               // แก๊สเป้าหมายต่อ block (EIP-1559) — null = maxBlockGas / 2 · ไม่มีทั้งคู่ = base fee คงที่ที่ minBaseFee
+  baseFeeChangeDenominator: 8,   // base fee เปลี่ยนได้ไม่เกิน 1/8 (12.5%) ต่อ block
   feeRecipient: null,  // ผู้ปิด block (ตั้งต่อ block ได้ที่ createBlock)
   chainId: 1,          // กัน tx ของระบบหนึ่งถูกนำไปใช้ซ้ำในอีกระบบ
   recordTransactions: false, // เขียน <address>:txn:<nonce>:<txhash> ลงไปกับ writes ของ tx ด้วย
@@ -168,7 +174,8 @@ export const DEFAULT_GAS = {
   ripemd160: 300, // ต่อการเรียก ripemd160 (บวกค่า byte ของข้อมูล — ช้ากว่า sha256 ราว 3 เท่า)
   blake2b: 100,   // ต่อการเรียก blake2b (บวกค่า byte ของข้อมูล)
   modexp: 200,    // ต่อการเรียก modexp ขั้นต่ำ บวก ⌊word² × bit ของ exponent / 3⌋ (word = 8 byte ของตัวที่ยาวสุดใน base / mod แบบ EIP-2565)
-  env: 10,        // ต่อการเรียก ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft
+  env: 10,        // ต่อการเรียก ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
+  topic: 375,     // ต่อ field ที่ emit แบบ indexed (เขียนดัชนีถาวร 1 key ต่อ field — แบบ LOG topic ของ EVM)
   code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
   node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
   builtin: 1,  // ต่อหน่วยข้อมูล (ตัวอักษร / สมาชิก) ที่เมธอดในตัวอย่าง join, split, JSON.stringify รับเข้าและส่งออก
@@ -225,6 +232,13 @@ export const ERRORS = {
   invalidGasLimit: [INVALID_REQUEST, "gasLimit ต้องเป็นจำนวนเต็มบวก"],
   invalidGasPrice: [INVALID_REQUEST, (min) => `gasPrice ต้องเป็นจำนวนเต็มและไม่ต่ำกว่า ${min}`],
   invalidBurnPercent: [INVALID_REQUEST, "burnPercent ต้องเป็นจำนวนเต็ม 0-100"],
+  invalidFeeFields: [INVALID_REQUEST, "ใช้ gasPrice คู่กับ maxFeePerGas / maxPriorityFeePerGas ไม่ได้ (เลือกแบบเดียว)"],
+  invalidFeeValue: [INVALID_REQUEST, (field) => `${field} ต้องเป็นจำนวนเต็มไม่ติดลบ`],
+  priorityAboveMax: [INVALID_REQUEST, "maxPriorityFeePerGas ต้องไม่มากกว่า maxFeePerGas"],
+  feeBelowBaseFee: [INVALID_REQUEST, (maxFee, baseFee) => `maxFeePerGas (${maxFee}) ต่ำกว่า base fee ของ block (${baseFee})`],
+  invalidBaseFeeOption: [INVALID_REQUEST, (name) => `${name} ไม่ถูกต้อง`],
+  invalidIndexed: [INVALID_REQUEST, (detail) => `emit: indexed ไม่ถูกต้อง — ${detail}`],
+  invalidAbi: [INVALID_REQUEST, (detail) => `metadata.abi ไม่ถูกต้อง: ${detail}`],
   invalidDb: [INTERNAL, "db ต้องมี readKeys(keys) และ writeKeys(writes)"],
   numberNotAllowed: [INVALID_REQUEST, (label) => `${label}: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)`],
   invalidSignature: [INVALID_REQUEST, "signature ต้องเป็น hex 65 byte (r + s + v)"],
@@ -273,7 +287,7 @@ export const ERRORS = {
 const INIT_FUNCTION = "initialization";
 const MIGRATE_FUNCTION = "migrate";   // รันครั้งเดียวตอนอัปเกรด — เหมือน initialization คือเรียกจากภายนอกไม่ได้
 const KEY = { SEPARATOR: ":", PENDING: "pending", CODE: "code", CONTEXT: "context", STORAGE: "storage", THIS: "this", NONCE: "nonce", NATIVE: "native", TXN: "txn",
-  METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", TX_TO: "txto",
+  METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", EVENT_INDEX: "eventidx", EVENT_SIG: "eventsig", TX_TO: "txto",
   BLOCK: "block", BLOCK_BODY: "blockbody", BLOCK_HASH: "blockhash", LATEST_BLOCK: "latestblock", TX: "tx", GENESIS: "genesis",
   HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding",
   PENDING_UPGRADE: "pending-upgrade", SCHEDULED_UPGRADE: "scheduled-upgrade", UPGRADE_AT: "upgradeat", CODE_VERSION: "codeversion" };
@@ -282,7 +296,7 @@ const PROGRAM_API_NAMES = [
   "keccak256", "ecrecover", "cloneProgram",
   "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber", "Date", "Math",
   "sha256", "ripemd160", "blake2b", "modexp",
-  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "GasLeft", "CodeHashOf", "CodeSizeOf",
+  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "BaseFee", "GasLeft", "CodeHashOf", "CodeSizeOf",
 ];
 
 /** BlockHash ย้อนได้กี่ block (เหมือน BLOCKHASH ของ EVM) */
@@ -519,6 +533,7 @@ export const METADATA_FIELD = {
   UPGRADER: "upgrader",     // ผู้มีสิทธิ์ส่งโค้ดใหม่ (ไม่มี = โปรแกรมแก้ไม่ได้ตลอดไป)
   VERSION: "version",       // เวอร์ชันของโค้ด (ไม่มี = 1) — เพิ่มทีละ 1 ทุกครั้งที่อัปเกรด
   TEMPLATE: "template",     // โปรแกรมต้นแบบ (เฉพาะโปรแกรมที่สร้างด้วย cloneProgram)
+  ABI: "abi",               // คำอธิบายฟังก์ชัน / event (ไม่บังคับ · ตรวจด้วย checkAbi) — explorer ใช้สร้างฟอร์มและอ่าน event
 };
 export const RESERVED_METADATA = [METADATA_FIELD.TYPE, METADATA_FIELD.CREATOR, METADATA_FIELD.CREATED_AT,
   METADATA_FIELD.UPGRADER, METADATA_FIELD.VERSION, METADATA_FIELD.TEMPLATE];
@@ -540,6 +555,15 @@ export const eventKey = (program, name, number, txIndex, eventIndex) =>
     String(number).padStart(BLOCK_NUMBER_WIDTH, "0"),
     String(txIndex).padStart(4, "0"),
     String(eventIndex).padStart(4, "0"));
+/**
+ * ดัชนีของ field ที่ emit แบบ indexed (เขียนตอนปิด block · 1 key ต่อ field ต่อ event · ค่า = dbKey ของ event:)
+ *   eventidx:<program>:<name>:<field>:<topic>:<block>:<txIndex>:<eventIndex>   topic = topicOf(ค่า) (0x + 64 hex)
+ *   eventsig:<topic0>:<program>:<name>  → { program, name, indexed }  (topic0 ของ log แบบ EVM → ชื่อ event / field ที่ indexed · ใช้กับ eth_getLogs)
+ */
+export const eventIndexPrefix = (program, name, field, topic) => `${joinKey(KEY.EVENT_INDEX, program, name, field, String(topic).toLowerCase())}${KEY.SEPARATOR}`;
+export const eventIndexKey = (program, name, field, topic, number, txIndex, eventIndex) =>
+  `${eventIndexPrefix(program, name, field, topic)}${joinKey(String(number).padStart(BLOCK_NUMBER_WIDTH, "0"), String(txIndex).padStart(4, "0"), String(eventIndex).padStart(4, "0"))}`;
+export const eventSigKey = (topic0, program, name) => joinKey(KEY.EVENT_SIG, String(topic0).toLowerCase(), program, name);
 /** ดัชนี "address นี้เคยได้รับเหรียญจากโปรแกรมนี้" (จาก event Transfer) — ยอดจริงอ่านจาก balanceOf ของโปรแกรม */
 export const holdingKey = (address, program) => joinKey(KEY.HOLDING, address, program);
 /** event ที่ทำดัชนี holding: (มี data.from / data.to) — Transfer ของ token / NFT, TransferSingle / TransferBatch ของ multi-token */
@@ -636,6 +660,11 @@ export function decodeDbKey(dbKey) {
     const [program, name, number, txIndex, eventIndex] = rest;
     return { kind: KEY.EVENT, program, name, number: Number(number), txIndex: Number(txIndex), eventIndex: Number(eventIndex) };
   }
+  if (head === KEY.EVENT_INDEX) {
+    const [program, name, field, topic, number, txIndex, eventIndex] = rest;
+    return { kind: KEY.EVENT_INDEX, program, name, field, topic, number: Number(number), txIndex: Number(txIndex), eventIndex: Number(eventIndex) };
+  }
+  if (head === KEY.EVENT_SIG) return { kind: KEY.EVENT_SIG, topic: rest[0], program: rest[1], name: rest[2] };
   if (head === KEY.BLOCK_UNDO) return { kind: KEY.BLOCK_UNDO, number: Number(rest[0]) };
   if (head === KEY.HISTORY) {
     const number = Number(rest.at(-1));
@@ -695,6 +724,311 @@ export function checkGasPrice(gasPrice, minimum) {
   const price = parseNative(gasPrice);
   if (price === null || price < floor) fail(ERRORS.invalidGasPrice, minimum);
   return price;
+}
+
+/** ฟิลด์ค่าแก๊สแบบ EIP-1559 ของ request (ไม่ส่ง = undefined) */
+export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined });
+
+/** request นี้ใช้ค่าแก๊สแบบ EIP-1559 (type 2) ไหม */
+export const isFeeMarketRequest = (request) => (request?.maxFeePerGas ?? null) !== null || (request?.maxPriorityFeePerGas ?? null) !== null;
+
+/**
+ * ราคาแก๊สของ tx ใน block ที่มี baseFee (BigInt ทั้งหมด)
+ *   แบบเดิม: gasPrice = maxFee = priority (ต้อง ≥ baseFee) · ไม่ส่งอะไรเลย = จ่ายเท่า baseFee ไม่มี tip
+ *   EIP-1559: maxFeePerGas (ไม่ส่ง = baseFee + priority) + maxPriorityFeePerGas (ไม่ส่ง = 0) · maxFee ต้อง ≥ baseFee และ ≥ priority
+ *   ราคาจริง price = min(maxFee, baseFee + priority) · tip = price - baseFee (ต่อแก๊ส)
+ * @returns {{ type: 0 | 2, maxFee: bigint, maxPriority: bigint, price: bigint, tip: bigint }}
+ */
+export function resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas } = {}, baseFee) {
+  const given = (value) => value !== undefined && value !== null;
+  if (!given(maxFeePerGas) && !given(maxPriorityFeePerGas)) {
+    if (!given(gasPrice)) return { type: 0, maxFee: baseFee, maxPriority: 0n, price: baseFee, tip: 0n };
+    const price = parseNative(gasPrice);
+    if (price === null || price < baseFee) fail(ERRORS.invalidGasPrice, baseFee);
+    return { type: 0, maxFee: price, maxPriority: price, price, tip: price - baseFee };
+  }
+  if (given(gasPrice)) fail(ERRORS.invalidFeeFields);
+  const priority = given(maxPriorityFeePerGas) ? parseNative(maxPriorityFeePerGas) : 0n;
+  if (priority === null || priority < 0n) fail(ERRORS.invalidFeeValue, "maxPriorityFeePerGas");
+  const maxFee = given(maxFeePerGas) ? parseNative(maxFeePerGas) : baseFee + priority;
+  if (maxFee === null || maxFee < 0n) fail(ERRORS.invalidFeeValue, "maxFeePerGas");
+  if (priority > maxFee) fail(ERRORS.priorityAboveMax);
+  if (maxFee < baseFee) fail(ERRORS.feeBelowBaseFee, maxFee, baseFee);
+  const price = maxFee < baseFee + priority ? maxFee : baseFee + priority;
+  return { type: 2, maxFee, maxPriority: priority, price, tip: price - baseFee };
+}
+
+/**
+ * tip ต่อแก๊สที่ผู้ผลิตได้ถ้าใส่ request นี้ใน block ที่มี baseFee (ใช้เรียงคิว) · maxFee < baseFee → null (ยังใส่ไม่ได้)
+ * ไม่ระบุราคาเลย = จ่ายเท่า baseFee (tip 0) · แบบเดิม gasPrice = ทั้ง maxFee และ priority
+ */
+export function effectiveTip(request = {}, baseFee = 0n, { defaultGasPrice = null } = {}) {
+  let maxFee;
+  let priority;
+  if (isFeeMarketRequest(request)) {
+    priority = parseNative(request.maxPriorityFeePerGas ?? 0) ?? 0n;
+    maxFee = (request.maxFeePerGas ?? null) === null ? baseFee + priority : parseNative(request.maxFeePerGas) ?? 0n;
+  } else if ((request.gasPrice ?? null) === null) {
+    // ไม่ระบุราคา = จ่ายเท่า baseFee เสมอ (ใส่ได้ทุก block) · นับ tip เท่าราคาตั้งต้นที่เกิน baseFee
+    const fallback = parseNative(defaultGasPrice ?? 0) ?? 0n;
+    return fallback > baseFee ? fallback - baseFee : 0n;
+  } else {
+    maxFee = parseNative(request.gasPrice) ?? 0n;
+    priority = maxFee;
+  }
+  if (maxFee < baseFee) return null;
+  const room = maxFee - baseFee;
+  return priority < room ? priority : room;
+}
+
+/**
+ * base fee ของ block ถัดไปจาก block ก่อนหน้า (สูตร EIP-1559)
+ *   ใช้แก๊สเท่า target → เท่าเดิม · มากกว่า → เพิ่ม base × (used - target) / target / denominator (อย่างน้อย 1)
+ *   น้อยกว่า → ลด base × (target - used) / target / denominator · ไม่ต่ำกว่า minimum · ไม่มี target = minimum เสมอ
+ */
+export function nextBaseFee({ parentBaseFee, parentGasUsed = 0, gasTarget, denominator = 8, minimum = 0n }) {
+  if (!gasTarget) return minimum;
+  const base = parentBaseFee === null || parentBaseFee === undefined || parentBaseFee < minimum ? minimum : parentBaseFee;
+  const used = BigInt(parentGasUsed);
+  const target = BigInt(gasTarget);
+  const divisor = BigInt(denominator);
+  let next = base;
+  if (used > target) {
+    const delta = (base * (used - target)) / target / divisor;
+    next = base + (delta > 1n ? delta : 1n);
+  } else if (used < target) {
+    next = base - (base * (target - used)) / target / divisor;
+  }
+  return next < minimum ? minimum : next;
+}
+
+// ---------- log แบบ EVM (ใช้ทำ logsBloom / receiptsRoot ใน header และ /evm) ----------
+
+const ADDRESS_TEXT = /^0x[0-9a-f]{40}$/i;
+const UINT256 = 2n ** 256n;
+/** ชนิดแบบ ABI ของค่าใน event (ค่าที่เก็บแล้ว: BigInt = "123n") — ใช้ทำ topic0 = keccak(ชื่อ(ชนิด,...)) */
+export function eventValueType(value) {
+  if (typeof value === "string" && BIGINT_TEXT.test(value)) return "uint256";
+  if (typeof value === "string" && ADDRESS_TEXT.test(value)) return "address";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "string") return "string";
+  if (Array.isArray(value) && value.every((item) => typeof item === "string" && BIGINT_TEXT.test(item))) return "uint256[]";
+  if (Array.isArray(value) && value.every((item) => typeof item === "string" && ADDRESS_TEXT.test(item))) return "address[]";
+  return "bytes";
+}
+const word64 = (big) => (((big % UINT256) + UINT256) % UINT256).toString(16).padStart(64, "0");
+/** ค่าเดี่ยว (uint256 / address / bool) → 1 word (64 hex) */
+const staticWord = (type, value) => (type === "uint256" ? word64(BigInt(value.slice(0, -1)))
+  : type === "address" ? value.slice(2).toLowerCase().padStart(64, "0") : word64(value ? 1n : 0n));
+/** ABI encode ของ tuple (uint256 / address / bool / string / uint256[] / address[]) แบบ head + tail → hex ไม่มี 0x */
+function abiEncode(types, values) {
+  const dynamic = (type) => type === "string" || type.endsWith("[]");
+  let head = "";
+  let tail = "";
+  const headSize = types.length * 32;
+  types.forEach((type, i) => {
+    if (!dynamic(type)) { head += staticWord(type, values[i]); return; }
+    head += word64(BigInt(headSize + tail.length / 2));
+    if (type === "string") {
+      const hex = bytesToHex(utf8ToBytes(values[i]));
+      tail += word64(BigInt(hex.length / 2)) + hex.padEnd(Math.ceil(hex.length / 64) * 64, "0");
+    } else {
+      const itemType = type.slice(0, -2);
+      tail += word64(BigInt(values[i].length)) + values[i].map((item) => staticWord(itemType, item)).join("");
+    }
+  });
+  return head + tail;
+}
+/**
+ * ค่า 1 ค่า → topic 32 byte (0x + 64 hex) แบบ indexed ของ EVM
+ *   BigInt → uint256 (ติดลบ = two's complement) · address → เติม 0 ซ้าย · bool → 0/1
+ *   string → keccak256(ข้อความ) · อย่างอื่น (object / null) → keccak256(canonical JSON)
+ */
+export function topicOf(value) {
+  const type = eventValueType(value);
+  if (type === "uint256") return `0x${word64(BigInt(value.slice(0, -1)))}`;
+  if (type === "address") return `0x${value.slice(2).toLowerCase().padStart(64, "0")}`;
+  if (type === "bool") return `0x${word64(value ? 1n : 0n)}`;
+  if (type === "string") return keccak256Hex(value);
+  return keccak256Hex(canonicalJson(value ?? null));
+}
+const jsonHex = (value) => `0x${bytesToHex(utf8ToBytes(JSON.stringify(value ?? null)))}`;
+
+/**
+ * event ของเชน → log แบบ EVM { address, topics, data } (ขึ้นกับข้อมูลของ event อย่างเดียว จึงรันซ้ำได้ผลเดิม)
+ *   มี indexed: topic0 = keccak("ชื่อ(ชนิดของทุก field ตามลำดับ)") เช่น Transfer(address,address,uint256)
+ *               topic1..3 = ค่าของ field ที่ indexed · data = field ที่เหลือ ABI encode (uint256 / address / bool / string / uint256[] / address[])
+ *               มี field ชนิดอื่น (object ฯลฯ) → data = JSON ของ field ที่เหลือ
+ *   ไม่มี indexed: topic0 = keccak(ชื่อ) · data = JSON ของข้อมูลทั้งก้อน
+ */
+export function eventLog(event) {
+  const data = event?.data && typeof event.data === "object" && !Array.isArray(event.data) ? event.data : {};
+  const address = event?.program ?? BURN_ADDRESS;
+  const indexed = Array.isArray(event?.indexed) ? event.indexed : [];
+  if (!indexed.length) return { address, topics: [keccak256Hex(String(event?.name))], data: jsonHex(event?.data ?? {}) };
+  const fields = Object.keys(data);
+  const signature = `${event.name}(${fields.map((field) => eventValueType(data[field])).join(",")})`;
+  const rest = fields.filter((field) => !indexed.includes(field));
+  const encodable = rest.every((field) => eventValueType(data[field]) !== "bytes");
+  return {
+    address,
+    topics: [keccak256Hex(signature), ...indexed.map((field) => topicOf(data[field]))],
+    data: !rest.length ? "0x" : encodable ? `0x${abiEncode(rest.map((field) => eventValueType(data[field])), rest.map((field) => data[field]))}`
+      : jsonHex(Object.fromEntries(rest.map((field) => [field, data[field]]))),
+  };
+}
+
+/** byte ของ address / topic ที่ใส่ bloom (address ที่ไม่ใช่ hex เช่นชื่อโปรแกรมในเทสต์ = byte ของข้อความ) */
+const bloomBytes = (item) => {
+  const text = String(item ?? "");
+  return /^0x(?:[0-9a-f]{2})+$/i.test(text) ? hexToBytesStrict(text.toLowerCase()) : utf8ToBytes(text);
+};
+
+/** logsBloom แบบ EVM (2048 bit): address + ทุก topic ของทุก log */
+export function logsBloom(logs) {
+  const bits = new Uint8Array(256);
+  for (const log of logs) {
+    for (const item of [log.address, ...log.topics]) {
+      const hash = keccak_256(bloomBytes(item));
+      for (let i = 0; i < 6; i += 2) {
+        const bit = ((hash[i] << 8) | hash[i + 1]) & 2047;
+        bits[255 - (bit >> 3)] |= 1 << (bit & 7);
+      }
+    }
+  }
+  return `0x${bytesToHex(bits)}`;
+}
+
+/** bloom นี้อาจมี item (address / topic) อยู่ไหม (false = ไม่มีแน่นอน) */
+export function bloomContains(bloom, item) {
+  if (typeof bloom !== "string" || bloom.length !== 514) return true;
+  const bits = hexToBytesStrict(bloom);
+  const hash = keccak_256(bloomBytes(item));
+  for (let i = 0; i < 6; i += 2) {
+    const bit = ((hash[i] << 8) | hash[i + 1]) & 2047;
+    if (!(bits[255 - (bit >> 3)] & (1 << (bit & 7)))) return false;
+  }
+  return true;
+}
+
+// ---------- ABI ของโปรแกรม (metadata.abi) ----------
+
+/** ชนิดที่ใช้ใน metadata.abi */
+export const ABI_TYPES = ["address", "uint", "int", "bool", "string", "bytes", "object", "array", "any"];
+export const ABI_LIMITS = { functions: 64, events: 32, fields: 16, size: 16 * 1024, description: 200 };
+const ABI_NAME = /^[A-Za-z_$][\w$]{0,31}$/;
+
+/**
+ * ตรวจ metadata.abi (คำอธิบายฟังก์ชัน / event ให้ explorer สร้างฟอร์มและอ่าน event)
+ *   { functions: [{ name, inputs: [{ name, type }], outputs: [{ name?, type }], readonly?, payable?, description? }],
+ *     events: [{ name, fields: [{ name, type, indexed? }], description? }] }
+ * type ∈ ABI_TYPES · ชื่อห้ามซ้ำ · event มี indexed ได้ไม่เกิน 3 field
+ */
+export function checkAbi(abi) {
+  const bad = (detail) => fail(ERRORS.invalidAbi, detail);
+  if (abi === null || typeof abi !== "object" || Array.isArray(abi)) bad("ต้องเป็น object { functions, events }");
+  const unknown = Object.keys(abi).find((key) => !["functions", "events"].includes(key));
+  if (unknown) bad(`ไม่รู้จัก '${unknown}'`);
+  if (valueSize(abi) > ABI_LIMITS.size) bad(`ใหญ่เกิน ${ABI_LIMITS.size} ไบต์`);
+  const list = (value, label, max) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) bad(`${label} ต้องเป็น array`);
+    if (value.length > max) bad(`${label} มีได้ไม่เกิน ${max} รายการ`);
+    return value;
+  };
+  const description = (item, label) => {
+    if (item.description !== undefined && (typeof item.description !== "string" || item.description.length > ABI_LIMITS.description)) {
+      bad(`${label}.description ต้องเป็น string ยาวไม่เกิน ${ABI_LIMITS.description}`);
+    }
+  };
+  const fields = (value, label, { named = true, allowIndexed = false } = {}) => {
+    const names = new Set();
+    for (const [i, field] of list(value, label, ABI_LIMITS.fields).entries()) {
+      const where = `${label}[${i}]`;
+      if (field === null || typeof field !== "object" || Array.isArray(field)) bad(`${where} ต้องเป็น { name, type }`);
+      const extra = Object.keys(field).find((key) => !["name", "type", "description", ...(allowIndexed ? ["indexed"] : [])].includes(key));
+      if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
+      if ((named || field.name !== undefined) && (typeof field.name !== "string" || !ABI_NAME.test(field.name))) bad(`${where}.name ไม่ถูกต้อง`);
+      if (field.name !== undefined && names.has(field.name)) bad(`${where}.name '${field.name}' ซ้ำ`);
+      names.add(field.name);
+      if (!ABI_TYPES.includes(field.type)) bad(`${where}.type ต้องเป็นหนึ่งใน ${ABI_TYPES.join(" / ")}`);
+      if (field.indexed !== undefined && typeof field.indexed !== "boolean") bad(`${where}.indexed ต้องเป็น true / false`);
+      description(field, where);
+    }
+    return value ?? [];
+  };
+  const seen = new Set();
+  for (const [i, fn] of list(abi.functions, "functions", ABI_LIMITS.functions).entries()) {
+    const where = `functions[${i}]`;
+    if (fn === null || typeof fn !== "object" || Array.isArray(fn)) bad(`${where} ต้องเป็น object`);
+    const extra = Object.keys(fn).find((key) => !["name", "inputs", "outputs", "readonly", "payable", "description"].includes(key));
+    if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
+    if (typeof fn.name !== "string" || !ABI_NAME.test(fn.name)) bad(`${where}.name ไม่ถูกต้อง`);
+    if (seen.has(`f:${fn.name}`)) bad(`ฟังก์ชัน '${fn.name}' ซ้ำ`);
+    seen.add(`f:${fn.name}`);
+    for (const flag of ["readonly", "payable"]) if (fn[flag] !== undefined && typeof fn[flag] !== "boolean") bad(`${where}.${flag} ต้องเป็น true / false`);
+    if (fn.readonly && fn.payable) bad(`${where}: readonly กับ payable ใช้คู่กันไม่ได้`);
+    fields(fn.inputs, `${where}.inputs`);
+    fields(fn.outputs, `${where}.outputs`, { named: false });
+    description(fn, where);
+  }
+  for (const [i, event] of list(abi.events, "events", ABI_LIMITS.events).entries()) {
+    const where = `events[${i}]`;
+    if (event === null || typeof event !== "object" || Array.isArray(event)) bad(`${where} ต้องเป็น object`);
+    const extra = Object.keys(event).find((key) => !["name", "fields", "description"].includes(key));
+    if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
+    if (typeof event.name !== "string" || !METADATA_FIELD_PATTERN.test(event.name)) bad(`${where}.name ไม่ถูกต้อง`);
+    if (seen.has(`e:${event.name}`)) bad(`event '${event.name}' ซ้ำ`);
+    seen.add(`e:${event.name}`);
+    const declared = fields(event.fields, `${where}.fields`, { allowIndexed: true });
+    if (declared.filter((field) => field.indexed).length > MAX_INDEXED) bad(`${where}: indexed ได้ไม่เกิน ${MAX_INDEXED} field`);
+    description(event, where);
+  }
+  return abi;
+}
+
+/** ABI ของเชน → JSON ABI แบบ Ethereum (ให้เครื่องมือ EVM อ่าน) */
+export function toEvmAbi(abi) {
+  const solidity = { address: "address", uint: "uint256", int: "int256", bool: "bool", string: "string", bytes: "bytes", object: "string", array: "string", any: "string" };
+  const param = (field) => ({ name: field.name ?? "", type: solidity[field.type] ?? "string" });
+  return [
+    ...(abi?.functions ?? []).map((fn) => ({ type: "function", name: fn.name, inputs: (fn.inputs ?? []).map(param), outputs: (fn.outputs ?? []).map(param),
+      stateMutability: fn.readonly ? "view" : fn.payable ? "payable" : "nonpayable" })),
+    ...(abi?.events ?? []).map((event) => ({ type: "event", name: event.name, anonymous: false,
+      inputs: (event.fields ?? []).map((field) => ({ ...param(field), indexed: Boolean(field.indexed) })) })),
+  ];
+}
+
+/** ค่าจาก query string (หรือค่าจริง) → topic ทุกแบบที่เป็นไปได้: "0x…40" = address · ตัวเลข = BigInt หรือ string · true/false = bool หรือ string */
+export function indexedTopicCandidates(value) {
+  if (typeof value === "bigint") return [topicOf(`${value}n`)];
+  if (typeof value === "boolean") return [topicOf(value)];
+  const text = String(value ?? "");
+  const topics = new Set([topicOf(ADDRESS_TEXT.test(text) ? text.toLowerCase() : text)]);
+  if (/^-?\d+n?$/.test(text)) topics.add(topicOf(`${text.replace(/n$/, "")}n`));
+  if (text === "true" || text === "false") topics.add(topicOf(text === "true"));
+  return [...topics];
+}
+
+/** emit แบบ indexed ได้ไม่เกินกี่ field (เท่า LOG4 ของ EVM: topic0 + 3) */
+export const MAX_INDEXED = 3;
+
+/** options ของ emit: { indexed: ["field", ...] } — ชื่อต้องไม่ซ้ำ มีอยู่ใน data และไม่เกิน MAX_INDEXED → รายชื่อ (ไม่ส่ง = []) */
+export function checkIndexed(options, data) {
+  if (options === undefined || options === null) return [];
+  if (typeof options !== "object" || Array.isArray(options)) fail(ERRORS.invalidIndexed, "options ต้องเป็น { indexed: [...] }");
+  const extra = Object.keys(options).find((key) => key !== "indexed");
+  if (extra) fail(ERRORS.invalidIndexed, `ไม่รู้จัก '${extra}'`);
+  const { indexed } = options;
+  if (indexed === undefined || indexed === null) return [];
+  if (!Array.isArray(indexed)) fail(ERRORS.invalidIndexed, "indexed ต้องเป็น array ของชื่อ field");
+  if (indexed.length > MAX_INDEXED) fail(ERRORS.invalidIndexed, `ได้ไม่เกิน ${MAX_INDEXED} field`);
+  for (const field of indexed) {
+    if (typeof field !== "string" || !METADATA_FIELD_PATTERN.test(field)) fail(ERRORS.invalidIndexed, `ชื่อ field ไม่ถูกต้อง: '${field}'`);
+    if (!Object.hasOwn(data ?? {}, field)) fail(ERRORS.invalidIndexed, `ไม่มี field '${field}' ใน data`);
+  }
+  if (new Set(indexed).size !== indexed.length) fail(ERRORS.invalidIndexed, "ชื่อ field ซ้ำ");
+  return [...indexed];
 }
 
 /** จำนวนแก๊สที่ซื้อได้ (BigInt) → number ไม่เกินเพดานที่ number แทนได้ */
@@ -868,7 +1202,7 @@ export class Transaction {
   #sandbox = null;
   #sandboxOptions;
 
-  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity,
+  constructor({ read, timeoutMs, maxCallDepth, timestamp = RealDate.now(), gas = DEFAULT_GAS, chargeGas = false, feeRecipient = null, burnPercent = 100, blockNumber = null, maxTxGas = Infinity, baseFee,
     memoryLimitBytes = DEFAULT_OPTIONS.memoryLimitBytes, maxStackBytes = DEFAULT_OPTIONS.maxStackBytes, wallClock = false }) {
     checkTimestamp(timestamp);
     this.#read = read;
@@ -877,7 +1211,11 @@ export class Transaction {
     this.seed = null;                         // seed ของตัวสุ่ม (ตั้งจาก hash ของ tx)
     this.Math = Math;                         // แทนด้วยตัวสุ่มที่ผูกกับ tx เมื่อรู้ seed
     this.gas = gas;                           // ตารางค่าแก๊ส
-    this.gasPrice = readNative(gas.price);    // ราคาต่อ 1 gas ของ tx นี้ (BigInt หน่วยย่อย · ผู้ส่งเสนอสูงกว่าได้)
+    this.baseFee = baseFee === undefined || baseFee === null ? readNative(gas.price) : readNative(baseFee);   // base fee ของ block (BigInt)
+    this.gasPrice = this.baseFee;             // ราคาจริงต่อ 1 gas ของ tx นี้ = min(maxFee, baseFee + priority) — ตั้งใน preparePayer
+    this.fees = null;                         // ผลของ resolveFees (ราคาที่ผู้ส่งเสนอ) — ตั้งใน preparePayer
+    this.feeBurned = 0n;                      // ค่าแก๊สส่วนที่เผา (ส่วนของ base fee × burnPercent)
+    this.feeReward = 0n;                      // ค่าแก๊สที่เข้าผู้ปิด block (tip + ส่วนของ base fee ที่ไม่ได้เผา)
     this.chargeGas = chargeGas;
     this.gasUsed = 0;
     this.maxTxGas = maxTxGas;                 // เพดานแก๊สต่อ tx ไม่ว่าผู้จ่ายจะมีเงินเท่าไร
@@ -1056,6 +1394,9 @@ export class VirtualMachine {
     chargeGas = DEFAULT_OPTIONS.chargeGas,
     burnPercent = DEFAULT_OPTIONS.burnPercent,
     feeRecipient = DEFAULT_OPTIONS.feeRecipient,
+    minBaseFee = DEFAULT_OPTIONS.minBaseFee,
+    gasTarget = DEFAULT_OPTIONS.gasTarget,
+    baseFeeChangeDenominator = DEFAULT_OPTIONS.baseFeeChangeDenominator,
     chainId = DEFAULT_OPTIONS.chainId,
     recordTransactions = DEFAULT_OPTIONS.recordTransactions,
     recordBlocks = DEFAULT_OPTIONS.recordBlocks,
@@ -1112,7 +1453,38 @@ export class VirtualMachine {
     this.wallClock = wallClock;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
+    // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
+    this.minBaseFee = parseNative(minBaseFee ?? this.gas.price);
+    if (this.minBaseFee === null || this.minBaseFee < 0n) fail(ERRORS.invalidBaseFeeOption, "minBaseFee");
+    const target = gasTarget ?? (Number.isSafeInteger(maxBlockGas) && maxBlockGas > 0 ? Math.max(1, Math.floor(maxBlockGas / 2)) : null);
+    if (target !== null && (!Number.isSafeInteger(target) || target <= 0)) fail(ERRORS.invalidBaseFeeOption, "gasTarget");
+    this.gasTarget = target;
+    if (!Number.isSafeInteger(baseFeeChangeDenominator) || baseFeeChangeDenominator <= 0) fail(ERRORS.invalidBaseFeeOption, "baseFeeChangeDenominator");
+    this.baseFeeChangeDenominator = baseFeeChangeDenominator;
     this.compiler = new Compiler();
+  }
+
+  /** base fee ของ block ที่ต่อจาก header นี้ (ไม่มี header = block แรก → minBaseFee) */
+  baseFeeAfter(header) {
+    if (!header) return this.minBaseFee;
+    return nextBaseFee({
+      parentBaseFee: parseNative(header.baseFeePerGas ?? null) ?? this.minBaseFee,
+      parentGasUsed: header.gasUsed ?? 0,
+      gasTarget: this.gasTarget,
+      denominator: this.baseFeeChangeDenominator,
+      minimum: this.minBaseFee,
+    });
+  }
+
+  /** base fee ของ block ถัดไป (ต่อจาก block ล่าสุดใน DB) */
+  currentBaseFee() {
+    if (!this.gasTarget) return this.minBaseFee;   // ไม่มีเป้าหมาย = base fee คงที่ ไม่ต้องอ่าน DB
+    try {
+      const latest = this.latestBlockNumber();
+      return this.baseFeeAfter(latest === null ? null : this.getBlock(latest));
+    } catch {
+      return this.minBaseFee;   // DB อ่านไม่ได้ → tx จะล้มเองตอนอ่าน DB (INTERNAL)
+    }
   }
 
   /** อ่าน 1 key ผ่าน db.readKeys */
@@ -1137,7 +1509,7 @@ export class VirtualMachine {
       const amount = checkValue(value);
       const upgraderAddress = checkUpgrader(upgrader);
       const context = this.userContext(rawContext);
-      this.preparePayer(tx, context.sender, { nonce, gasLimit, gasPrice, value: amount });
+      this.preparePayer(tx, context.sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice, value: amount });
 
       const programUuid = derive
         // address ของโปรแกรม = hash(deployer + nonce) จึงไม่มีใครมี private key ของมัน
@@ -1164,6 +1536,9 @@ export class VirtualMachine {
       if (amount > 0n) this.moveNative(tx, context.sender, programUuid, amount); // เงินไปรออยู่ที่โปรแกรมเลย
 
       this.checkMetadata(metadata);
+      // ABI ที่ส่งมาตอน deploy: ฟังก์ชันที่ประกาศต้อง export จริง
+      const missing = (metadata?.abi?.functions ?? []).find((fn) => !this.compiler.compile(oneLineCode).exports.includes(fn.name));
+      if (missing) fail(ERRORS.invalidAbi, `ฟังก์ชัน '${missing.name}' ไม่ได้ export`);
       tx.put(pendingKey(programUuid), {
         code: oneLineCode,
         context,
@@ -1247,7 +1622,7 @@ export class VirtualMachine {
       checkCode(code);
       const programUuid = normalizeAddress(rawProgramUuid);
       const userContext = this.userContext(context);
-      this.preparePayer(tx, userContext.sender, { nonce, gasLimit, gasPrice });
+      this.preparePayer(tx, userContext.sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice });
       this.rememberTransaction(tx, arguments[0], "upgrade");
       this.seedRandom(tx, arguments[0], "upgrade");
 
@@ -1277,7 +1652,7 @@ export class VirtualMachine {
       const programUuid = normalizeAddress(rawProgramUuid);
       const next = checkUpgrader(upgrader);
       const userContext = this.userContext(context);
-      this.preparePayer(tx, userContext.sender, { nonce, gasLimit, gasPrice });
+      this.preparePayer(tx, userContext.sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice });
       this.rememberTransaction(tx, arguments[0], "setUpgrader");
       this.seedRandom(tx, arguments[0], "setUpgrader");
       tx.useGas(tx.gas.call + tx.gas.write);
@@ -1404,7 +1779,7 @@ export class VirtualMachine {
       const target = normalizeAddress(programUuid);
       const userContext = this.userContext(context);
       const sender = userContext.sender;
-      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value: amount });
+      this.preparePayer(tx, sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice, value: amount });
       this.rememberTransaction(tx, arguments[0], "call");
       this.seedRandom(tx, arguments[0], "call");
       if (amount > 0n) this.moveNative(tx, sender, target, amount); // แนบเงินไปกับ tx
@@ -1423,7 +1798,7 @@ export class VirtualMachine {
 
       const sender = normalizeAddress(from);
       const recipient = normalizeAddress(to);
-      this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice, value });
+      this.preparePayer(tx, sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice, value });
       this.rememberTransaction(tx, arguments[0], "transfer");
       this.seedRandom(tx, arguments[0], "transfer");
 
@@ -1440,7 +1815,9 @@ export class VirtualMachine {
    */
   transactionPayload(request = {}, { action = guessAction(request), blockNumber = null, index = null } = {}) {
     const base = { chainId: this.chainId, action };
-    const fee = { nonce: request.nonce ?? null, gasLimit: request.gasLimit ?? null, gasPrice: request.gasPrice ?? null };
+    // maxFeePerGas / maxPriorityFeePerGas: ไม่ส่ง = ไม่อยู่ใน hash (hash ของ tx แบบเดิมไม่เปลี่ยน · canonicalJson ข้าม undefined)
+    const fee = { nonce: request.nonce ?? null, gasLimit: request.gasLimit ?? null, gasPrice: request.gasPrice ?? null,
+      ...Object.fromEntries(Object.entries(feeFields(request)).filter(([, value]) => value !== undefined)) };
     if (action === "transfer") {
       return { ...base, from: normalizeAddress(request.from) ?? null, to: normalizeAddress(request.to) ?? null, amount: request.amount ?? 0, ...fee };
     }
@@ -1498,8 +1875,10 @@ export class VirtualMachine {
    * hash ของ block
    *   txRoot    = hash ของรายการ tx hash ทั้งหมด (เรียงตาม index)
    *   stateRoot = hash ของ stateRoot ก่อนหน้า + writes ทั้งหมดของ block นี้ (เรียงตาม dbKey)
+   *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed มาจาก Block (ดู Block.receiptEntries) และอยู่ใน hash ด้วย
    */
-  hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [] }) {
+  hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [],
+    baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null }) {
     const txRoot = this.hashData(txHashes);
     // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี (block ที่ไม่มี hash เหมือนเดิมทุกไบต์)
     const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
@@ -1511,6 +1890,8 @@ export class VirtualMachine {
     const hash = this.hashData({
       chainId: this.chainId, number, parentHash: parentHash ?? null, timestamp,
       feeRecipient: feeRecipient ?? null, burnPercent, txCount: txHashes.length, txRoot, stateRoot,
+      // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
+      baseFeePerGas, gasUsed, receiptsRoot, logsBloom: bloom,
       ...(rejectedRoot ? { rejectedCount: rejected.length, rejectedRoot } : {}),
     });
     return { hash, txRoot, stateRoot, rejectedRoot };
@@ -1545,6 +1926,14 @@ export class VirtualMachine {
       error: result.error ?? null,
       gasUsed: result.gasUsed ?? 0,
       gasPrice: request.gasPrice === undefined || request.gasPrice === null ? null : encodeNative(readNative(request.gasPrice)),
+      // EIP-1559: ราคาจริงที่จ่าย · base fee ของ block · ราคาที่ผู้ส่งเสนอ (แบบเดิม = gasPrice ทั้งสองช่อง) · แยกส่วนที่เผา / ผู้ปิด block ได้
+      type: isFeeMarketRequest(request) ? 2 : 0,
+      effectiveGasPrice: result.gasPrice ?? null,
+      baseFeePerGas: result.baseFee ?? null,
+      maxFeePerGas: result.maxFeePerGas ?? (isFeeMarketRequest(request) ? null : request.gasPrice ?? null ? encodeNative(readNative(request.gasPrice)) : null),
+      maxPriorityFeePerGas: result.maxPriorityFeePerGas ?? (isFeeMarketRequest(request) ? null : request.gasPrice ?? null ? encodeNative(readNative(request.gasPrice)) : null),
+      burnedFee: result.burnedFee ?? "0n",
+      producerFee: result.producerFee ?? "0n",
       fee: result.fee ?? "0n",
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
@@ -1581,6 +1970,7 @@ export class VirtualMachine {
       if (!METADATA_FIELD_PATTERN.test(field)) fail(ERRORS.invalidMetadataField, field);
       if (!allowReserved && RESERVED_METADATA.includes(field)) fail(ERRORS.reservedMetadata, field);
       if (value !== null) toJsonValue(value, `metadata.${field}`);
+      if (field === METADATA_FIELD.ABI && value !== null) checkAbi(value);   // ABI ต้องตรงตาม schema (ดู checkAbi)
     }
     return metadata;
   }
@@ -1630,7 +2020,7 @@ export class VirtualMachine {
     const sender = this.userContext(context).sender;
     if (this.admins && !this.admins.includes(sender)) fail(ERRORS.notAdmin, sender);
 
-    this.preparePayer(tx, sender, { nonce, gasLimit, gasPrice });
+    this.preparePayer(tx, sender, { ...feeFields(request), nonce, gasLimit, gasPrice });
     this.rememberTransaction(tx, request, action);
     this.seedRandom(tx, request, action);
     tx.useGas(tx.gas.call);
@@ -1643,7 +2033,7 @@ export class VirtualMachine {
       const userContext = this.userContext(context);
       const address = userContext.sender;
 
-      this.preparePayer(tx, address, { nonce, gasLimit, gasPrice });
+      this.preparePayer(tx, address, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice });
       this.rememberTransaction(tx, arguments[0], "metadata");
       this.seedRandom(tx, arguments[0], "metadata");
       tx.useGas(tx.gas.call);
@@ -1740,6 +2130,42 @@ export class VirtualMachine {
       ? joinKey(KEY.EVENT, normalizeAddress(program), name ? `${name}${KEY.SEPARATOR}` : "")
       : `${KEY.EVENT}${KEY.SEPARATOR}`;
     return this.listEntries(prefix, { limit, reverse, start }).map((entry) => entry.value);
+  }
+
+  /**
+   * event ที่ field ที่ indexed มีค่านี้ (ใช้ดัชนี eventidx: ไม่ไล่ event ทั้งหมด) — ใหม่ไปเก่า
+   *   value = ค่าที่ต้องการ (string / BigInt / "123n" / bool) หรือ topic = topic 0x…64 hex ตรง ๆ
+   *   string ที่เป็นตัวเลข / true / false อาจเป็นได้หลายชนิด → ค้นทุกแบบที่เป็นไปได้แล้วรวมกัน
+   * → { items: [event], next } · next = cursor (dbKey ของ event ถัดไป) ส่งกลับมาเป็น cursor
+   */
+  listIndexedEvents({ program, name, field, value, topic, limit = 20, cursor, fromBlock = null, toBlock = null } = {}) {
+    const address = normalizeAddress(program);
+    const topics = topic !== undefined ? [String(topic).toLowerCase()] : indexedTopicCandidates(value);
+    const refs = [];
+    for (const candidate of topics) {
+      refs.push(...this.indexedEventRefs({ program: address, name, field, topic: candidate, fromBlock, toBlock }));
+    }
+    const sorted = [...new Set(refs)].sort().reverse();
+    const start = typeof cursor === "string" ? sorted.indexOf(cursor) : 0;
+    const page = sorted.slice(Math.max(start, 0), Math.max(start, 0) + limit);
+    return { items: page.map((dbKey) => this.read(dbKey)).filter(Boolean), next: sorted[Math.max(start, 0) + limit] ?? null, limit };
+  }
+
+  /** dbKey ของ event (event:…) ที่ field = topic ในช่วง block [fromBlock, toBlock] (เก่าไปใหม่) */
+  indexedEventRefs({ program, name, field, topic, fromBlock = null, toBlock = null, max = 100_000 }) {
+    const prefix = eventIndexPrefix(normalizeAddress(program), name, field, topic);
+    const start = fromBlock === null ? undefined : `${prefix}${String(fromBlock).padStart(BLOCK_NUMBER_WIDTH, "0")}`;
+    const refs = [];
+    for (const dbKey of this.listKeys(prefix, { start, limit: max })) {
+      if (toBlock !== null && decodeDbKey(dbKey).number > toBlock) break;
+      refs.push(this.read(dbKey));
+    }
+    return refs.filter(Boolean);
+  }
+
+  /** event ที่มี topic0 นี้ (log แบบ EVM) → [{ program, name, indexed }] */
+  listEventSignatures(topic0) {
+    return this.listEntries(`${joinKey(KEY.EVENT_SIG, String(topic0).toLowerCase())}${KEY.SEPARATOR}`, { limit: 1000 }).map((entry) => entry.value);
   }
 
   /** tx ดิบของ block (สำหรับ replay / explorer) */
@@ -1975,11 +2401,12 @@ export class VirtualMachine {
   // ---------- Transaction / Response ----------
 
   /** options: { read, timestamp } */
-  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent } = {}) {
+  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee } = {}) {
     return new Transaction({
       read,
       timestamp,
       blockNumber,
+      baseFee: baseFee ?? this.currentBaseFee(),   // รันนอก block = base fee ของ block ถัดไป
       timeoutMs: this.timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
@@ -2015,6 +2442,7 @@ export class VirtualMachine {
         timestamp: tx.timestamp,
         gasUsed: tx.gasUsed,
         gasPrice: encodeNative(tx.gasPrice),
+        ...this.feeSummary(tx),
         fee: encodeNative(tx.feeCharged),
         result,
         events: tx.events,
@@ -2036,6 +2464,7 @@ export class VirtualMachine {
         timestamp: tx.timestamp,
         gasUsed: tx.gasUsed,
         gasPrice: encodeNative(tx.gasPrice),
+        ...this.feeSummary(tx),
         fee: encodeNative(tx.feeCharged),
         error: { code, message },
         debug: err?.detail ?? null,   // ข้อมูลดีบัก ไม่ถูกบันทึกลง DB และไม่เข้า hash
@@ -2044,6 +2473,16 @@ export class VirtualMachine {
         writes,
       };
     }
+  }
+
+  /** ค่าแก๊สแยกส่วน (อยู่ในผลของทุก tx): baseFee ของ block · ส่วนที่เผา · ส่วนที่ผู้ปิด block ได้ · type 2 = ส่ง maxFee / priority มา */
+  feeSummary(tx) {
+    return {
+      baseFee: encodeNative(tx.baseFee),
+      burnedFee: encodeNative(tx.feeBurned),
+      producerFee: encodeNative(tx.feeReward),
+      ...(tx.fees?.type === 2 ? { feeType: 2, maxFeePerGas: encodeNative(tx.fees.maxFee), maxPriorityFeePerGas: encodeNative(tx.fees.maxPriority) } : {}),
+    };
   }
 
   /** tx ถูกรับเข้าระบบแล้วหรือยัง (ผ่าน nonce และมีผู้จ่ายแล้ว) */
@@ -2069,9 +2508,11 @@ export class VirtualMachine {
   // ---------- nonce / ค่าแก๊ส ----------
 
   /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
-  preparePayer(tx, address, { nonce, gasLimit, gasPrice, value = 0 } = {}) {
+  preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, value = 0 } = {}) {
     const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
-    tx.gasPrice = checkGasPrice(gasPrice, this.gas.price); // จ่ายแพงกว่าได้ เพื่อให้ถูกเลือกก่อน
+    // ราคาจริง = min(maxFee, baseFee + priority) · maxFee ต่ำกว่า baseFee ของ block → ไม่รับ (ไม่กิน nonce)
+    tx.fees = resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas }, tx.baseFee);
+    tx.gasPrice = tx.fees.price;
     if (!this.requireNonce && !this.chargeGas && !this.recordTransactions) {
       tx.gasLimit = requestedLimit;
       return;
@@ -2084,7 +2525,7 @@ export class VirtualMachine {
     if (tx.chargeGas) {
       const available = this.nativeBalance(tx, address) - readNative(value); // เงินที่เหลือหลังแนบ value ไปกับ tx
       if (available < 0n) fail(ERRORS.nativeInsufficient, address);
-      tx.gasLimit = Math.min(gasUnits(available / tx.gasPrice), requestedLimit);
+      tx.gasLimit = tx.gasPrice > 0n ? Math.min(gasUnits(available / tx.gasPrice), requestedLimit) : requestedLimit;
     } else {
       tx.gasLimit = requestedLimit;
     }
@@ -2113,7 +2554,7 @@ export class VirtualMachine {
     }];
   }
 
-  /** writes ของ nonce + ค่าแก๊ส (แบ่งให้ผู้ปิด block ตาม burnPercent) */
+  /** writes ของ nonce + ค่าแก๊ส (ส่วน base fee เผาตาม burnPercent · tip เข้าผู้ปิด block) */
   buildChargeWrites(tx, balance, raw) {
     const { address, nonce } = tx.payer;
     const due = tx.gasFee();
@@ -2130,7 +2571,12 @@ export class VirtualMachine {
       value: encodeNative(this.nativeField(tx, address, NATIVE_FIELD.CONSUMED, raw) + fee),
     });
 
-    const reward = tx.feeRecipient ? (fee * BigInt(100 - tx.burnPercent)) / 100n : 0n;
+    // EIP-1559: ส่วน base fee (แก๊ส × baseFee) เผา burnPercent % · tip (ส่วนที่เกิน baseFee) เข้าผู้ปิด block ทั้งหมด
+    const baseDue = BigInt(Math.min(tx.gasUsed, tx.gasLimit)) * tx.baseFee;
+    const basePart = baseDue < fee ? baseDue : fee;
+    const reward = tx.feeRecipient ? fee - basePart + (basePart * BigInt(100 - tx.burnPercent)) / 100n : 0n;
+    tx.feeReward = reward;
+    tx.feeBurned = fee - reward;
     if (reward > 0n) {
       writes.push({
         type: WRITE.PUT,
@@ -2153,7 +2599,7 @@ export class VirtualMachine {
   chargeOnSuccess(tx) {
     if (!tx.payer) return [];
     const balance = this.nativeBalance(tx, tx.payer.address);
-    if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, gasUnits(balance / tx.gasPrice));
+    if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, tx.gasPrice > 0n ? gasUnits(balance / tx.gasPrice) : tx.gasLimit);
     return this.buildChargeWrites(tx, balance, false);
   }
 
@@ -2260,7 +2706,7 @@ export class VirtualMachine {
       deleteDB: mutating("deleteDB", (key) => this.programDeleteDB(tx, programUuid, key)),
       transferNative: mutating("transferNative", (to, amount) => this.programTransferNative(tx, programUuid, to, fromProgramAmount(amount))),
       setMetadata: mutating("setMetadata", (field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata"))),
-      emit: mutating("emit", (name, data) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"))),
+      emit: mutating("emit", (name, data, options) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"), options)),
       keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ keccak256"))),
       ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ ecrecover"), signature)),
       runProgram: guard((target, functionName, input, options) => toProgram(
@@ -2279,7 +2725,8 @@ export class VirtualMachine {
       ChainId: guard(() => this.programEnv(tx, BigInt(this.chainId))),
       Coinbase: guard(() => this.programEnv(tx, tx.feeRecipient ?? null)),
       BlockGasLimit: guard(() => this.programEnv(tx, this.maxBlockGas === null || this.maxBlockGas === undefined ? null : BigInt(this.maxBlockGas))),
-      GasPrice: guard(() => this.programEnv(tx, tx.gasPrice)),
+      GasPrice: guard(() => this.programEnv(tx, tx.gasPrice)),   // ราคาจริงของ tx นี้ = min(maxFee, baseFee + priority)
+      BaseFee: guard(() => this.programEnv(tx, tx.baseFee)),     // base fee ของ block (EIP-1559 · BASEFEE)
       GasLeft: guard(() => {
         tx.useGas(tx.gas.env);   // หักค่าของตัวเองก่อน แล้วค่อยนับที่เหลือ
         const left = tx.gasLimit - tx.gasUsed;
@@ -2466,12 +2913,17 @@ export class VirtualMachine {
     }
   }
 
-  /** บันทึก event ให้ explorer อ่าน (ถูกย้อนพร้อม writes ถ้ากิ่งนั้นล้ม) */
-  programEmit(tx, programUuid, depth, name, data = {}) {
+  /**
+   * บันทึก event ให้ explorer อ่าน (ถูกย้อนพร้อม writes ถ้ากิ่งนั้นล้ม)
+   *   emit(name, data, { indexed: ["from", "to"] }) → ค้นด้วยค่าของ field เหล่านั้นได้ (GET /program/:a/events?name=&to= · eth_getLogs ตาม topic)
+   */
+  programEmit(tx, programUuid, depth, name, data = {}, options) {
     if (!isNonEmptyString(name) || !METADATA_FIELD_PATTERN.test(name)) fail(ERRORS.invalidEventName);
     const value = this.checkValueSize(toInputValue(data, `event '${name}'`) ?? {}, "event");
-    tx.useGas(tx.gas.event + tx.gas.byte * valueSize(value));
-    tx.events.push({ index: tx.events.length, depth, program: programUuid, name, data: value });
+    const indexed = checkIndexed(options, value);
+    // indexed: ต่อ field เขียนดัชนีถาวร 1 key (eventidx:) → คิดเพิ่ม topic ต่อ field
+    tx.useGas(tx.gas.event + tx.gas.byte * valueSize(value) + tx.gas.topic * indexed.length);
+    tx.events.push({ index: tx.events.length, depth, program: programUuid, name, data: value, ...(indexed.length ? { indexed } : {}) });
     return true;
   }
 
@@ -2576,12 +3028,14 @@ export class VirtualMachine {
 }
 
 /**
- * เรียง tx ที่รออยู่: จ่ายแพงกว่าได้ก่อน แต่ของแต่ละ address ยังเรียงตาม nonce เสมอ
+ * เรียง tx ที่รออยู่: tip ต่อแก๊สสูงกว่าได้ก่อน แต่ของแต่ละ address ยังเรียงตาม nonce เสมอ
+ *   tip = min(maxPriorityFeePerGas, maxFeePerGas - baseFee) (แบบเดิม gasPrice = ทั้งสองค่า) · ดู effectiveTip
+ *   baseFee ไม่ส่ง = 0 → เรียงตามราคาที่เสนอตรง ๆ แบบเดิม · ใบที่ maxFee < baseFee นับ tip = -1 (ไปท้ายสุด — Mempool.take ข้ามให้)
  * @param {Array<{ request: object, receivedAt?: number }>} items
  */
-export function sortPendingTransactions(items, { defaultGasPrice = DEFAULT_GAS.price } = {}) {
+export function sortPendingTransactions(items, { defaultGasPrice = DEFAULT_GAS.price, baseFee = 0n } = {}) {
   const senderOf = (request) => normalizeAddress(request.from ?? request.context?.sender) ?? "";
-  const priceOf = (request) => parseNative(request.gasPrice ?? defaultGasPrice) ?? 0n;
+  const priceOf = (request) => effectiveTip(request, readNative(baseFee), { defaultGasPrice }) ?? -1n;
 
   // ราคาของ address = ใบที่ถูกที่สุดในคิวของคนนั้น (กันการใส่ใบแพงใบเดียวเพื่อลัดคิวทั้งชุด)
   const groups = new Map();
@@ -2643,6 +3097,7 @@ export class Block {
   #recordBlocks;
   #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
+  #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -2683,6 +3138,9 @@ export class Block {
     }
     this.#feeRecipient = feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient);
     this.#burnPercent = checkBurnPercent(burnPercent);
+    // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
+    // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
+    this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous);
     if (this.#number !== null) this.#activateUpgrades();
   }
 
@@ -2702,6 +3160,7 @@ export class Block {
         blockNumber: this.#number,
         feeRecipient: this.#feeRecipient,
         burnPercent: this.#burnPercent,
+        baseFee: this.#baseFee,
       });
       if (result.status === STATUS.SUCCESS) {
         for (const write of result.writes ?? []) this.#state.set(write.dbKey, copyValue(write));
@@ -2716,6 +3175,11 @@ export class Block {
   /** โปรแกรมที่ถูกเปิดใช้โค้ดใหม่ตอนเริ่ม block นี้ (timelock ครบ) */
   upgrades() {
     return this.#upgrades.map(copyValue);
+  }
+
+  /** base fee ของ block นี้ (BigInt wei ต่อแก๊ส) */
+  get baseFee() {
+    return this.#baseFee;
   }
 
   /** ผู้ปิด block ที่ได้ส่วนแบ่งค่าแก๊ส */
@@ -2864,6 +3328,7 @@ export class Block {
   hashes() {
     const writes = this.stateWrites();
     const txHashes = this.txHashes();
+    const { receiptsRoot, logsBloom: bloom } = this.receiptRoots(txHashes);
     const { hash, txRoot, stateRoot, rejectedRoot } = this.#vm.hashBlock({
       number: this.#number,
       parentHash: this.#parentHash,
@@ -2874,8 +3339,40 @@ export class Block {
       txHashes,
       writes,
       rejected: this.#rejectedTxs,
+      baseFeePerGas: encodeNative(this.#baseFee),
+      gasUsed: this.#gasUsed,
+      receiptsRoot,
+      logsBloom: bloom,
     });
-    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot };
+    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot, receiptsRoot, logsBloom: bloom };
+  }
+
+  /**
+   * receipt ย่อของทุก tx (ข้อมูลที่ได้จากการรัน — ไม่มีใน txRoot) เรียงตาม index
+   *   { hash, status, gasUsed, cumulativeGasUsed, effectiveGasPrice, fee, error, logs: [{ address, topics, data }] }
+   * receiptsRoot = hash ของรายการนี้ · logsBloom = bloom ของทุก log (แบบ EVM) → อยู่ใน header และ hash ของ block
+   */
+  receiptEntries(txHashes = this.txHashes()) {
+    let cumulative = 0;
+    return this.#results.map((result, index) => {
+      cumulative += result.gasUsed ?? 0;
+      return {
+        hash: txHashes[index],
+        status: result.status,
+        gasUsed: result.gasUsed ?? 0,
+        cumulativeGasUsed: cumulative,
+        effectiveGasPrice: result.gasPrice ?? null,
+        fee: result.fee ?? "0n",
+        error: result.error?.code ?? null,
+        logs: (result.events ?? []).map(eventLog),
+      };
+    });
+  }
+
+  /** { receiptsRoot, logsBloom } ของ block นี้ */
+  receiptRoots(txHashes = this.txHashes()) {
+    const entries = this.receiptEntries(txHashes);
+    return { receiptsRoot: this.#vm.hashData(entries), logsBloom: logsBloom(entries.flatMap((entry) => entry.logs)) };
   }
 
   /**
@@ -2939,6 +3436,7 @@ export class Block {
       });
     }
 
+    const signatures = new Set();   // eventsig: เขียนครั้งเดียวต่อ block
     header.txHashes.forEach((hash, index) => {
       const { request, action } = this.#requests[index];
       const result = this.#results[index];
@@ -2955,6 +3453,10 @@ export class Block {
           status: result.status,
           from: normalizeAddress(action === "transfer" ? request.from : request.context?.sender) ?? null,
           nonce: request.nonce ?? null,
+          // ค่าแก๊ส (eth_feeHistory อ่านจากตรงนี้โดยไม่ต้อง replay)
+          gasUsed: result.gasUsed ?? 0,
+          gasPrice: result.gasPrice ?? null,
+          tip: encodeNative(readNative(result.gasPrice) > this.#baseFee ? readNative(result.gasPrice) - this.#baseFee : 0n),
         },
       });
       // ค้นจาก hash ที่ผู้ใช้เซ็น (EIP-712) กลับมาหา tx ได้ด้วย
@@ -3000,6 +3502,18 @@ export class Block {
           dbKey: eventKey(event.program, event.name, this.#number, index, event.index),
           value: { ...event, blockNumber: this.#number, txIndex: index, txHash: hash, timestamp: this.#timestamp },
         });
+        // field ที่ indexed → eventidx:<program>:<name>:<field>:<topic>:… (ค้นด้วยค่าได้ไม่ต้องไล่ทุก event) + eventsig: (topic0 → ชื่อ)
+        if (event.indexed?.length) {
+          const ref = eventKey(event.program, event.name, this.#number, index, event.index);
+          for (const field of event.indexed) {
+            writes.push({ type: WRITE.PUT, dbKey: eventIndexKey(event.program, event.name, field, topicOf(event.data?.[field]), this.#number, index, event.index), value: ref });
+          }
+          const sigKey = eventSigKey(eventLog(event).topics[0], event.program, event.name);
+          if (!signatures.has(sigKey)) {
+            signatures.add(sigKey);
+            writes.push({ type: WRITE.PUT, dbKey: sigKey, value: { program: event.program, name: event.name, indexed: event.indexed } });
+          }
+        }
         // event Transfer ของ token / NFT และ TransferSingle / TransferBatch ของ multi-token → จำว่า address นี้ถือของของโปรแกรมนี้
         // (ยอดจริงอ่านจากโปรแกรมตอนแสดง)
         if (HOLDING_EVENTS.has(event.name) && result.status === STATUS.SUCCESS) {
@@ -3022,8 +3536,9 @@ export class Block {
   /** header ของ block (ไม่มีรายละเอียด tx) */
   header() {
     const txHashes = this.txHashes();
-    const { hash, txRoot, stateRoot } = this.hashes();
+    const { hash, txRoot, stateRoot, receiptsRoot, logsBloom: bloom } = this.hashes();
     const statuses = this.#results.map((result) => result.status);
+    const sum = (field) => encodeNative(this.#results.reduce((total, result) => total + readNative(result[field]), 0n));
     return {
       number: this.#number,
       hash,
@@ -3036,9 +3551,15 @@ export class Block {
       failedCount: statuses.filter((status) => status === STATUS.THROW).length,
       gasUsed: this.#results.reduce((sum, result) => sum + (result.gasUsed ?? 0), 0),
       fee: encodeNative(this.#results.reduce((sum, result) => sum + readNative(result.fee), 0n)),
+      baseFeePerGas: encodeNative(this.#baseFee),   // EIP-1559 (อยู่ใน hash)
+      gasTarget: this.#vm.gasTarget,                // แก๊สเป้าหมายต่อ block (null = base fee คงที่)
+      burnedFee: sum("burnedFee"),                  // ค่าแก๊สที่เผาทั้ง block
+      producerFee: sum("producerFee"),              // ค่าแก๊สที่ผู้ปิด block ได้ (tip + base fee ส่วนที่ไม่ได้เผา)
       parentStateRoot: this.#parentStateRoot,
       txRoot,
       stateRoot,
+      receiptsRoot,                                  // hash ของ receipt ย่อทุกใบ (อยู่ใน hash)
+      logsBloom: bloom,                              // bloom ของ log ทุกใบแบบ EVM (อยู่ใน hash)
       txHashes,
       ...(this.#rejectedTxs.length ? { rejectedCount: this.#rejectedTxs.length, rejectedRoot: this.hashes().rejectedRoot } : {}),
       ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
@@ -3073,6 +3594,9 @@ export class Block {
       time: new Date(this.#timestamp).toISOString(),
       feeRecipient,
       burnPercent: this.#burnPercent,
+      baseFeePerGas: encodeNative(this.#baseFee),
+      receiptsRoot: this.hashes().receiptsRoot,
+      logsBloom: this.hashes().logsBloom,
       txCount: transactions.length,
       successCount: transactions.filter((tx) => tx.status === STATUS.SUCCESS).length,
       failedCount: transactions.filter((tx) => tx.status === STATUS.THROW).length,
@@ -3183,6 +3707,7 @@ export class Block {
       blockNumber: this.#number,
       feeRecipient: this.#feeRecipient,
       burnPercent: this.#burnPercent,
+      baseFee: this.#baseFee,
     });
     if (result.accepted === false) {
       this.#rejected.push({ action, request: copyValue(request) ?? {}, error: result.error });

@@ -114,7 +114,7 @@ const callWith = (read, programUuid, functionName, input) =>
   runWith(read, (tx) => vm.runFunction(tx, { programUuid, functionName, input, context: ctxA }));
 
 test("DB พังตอนโหลดโค้ดโปรแกรม → INTERNAL", () => {
-  const { timestamp, gasUsed, gasPrice, fee, accepted, events, debug, ...res } = callWith(() => { throw new Error("db down"); }, "p", "x");
+  const { timestamp, gasUsed, gasPrice, fee, accepted, events, debug, baseFee, burnedFee, producerFee, ...res } = callWith(() => { throw new Error("db down"); }, "p", "x");
   assert.equal(typeof timestamp, "number");
   assert.deepEqual(res, { status: "throw", error: { code: "INTERNAL", message: DB_DOWN }, calls: [], writes: [] });
 });

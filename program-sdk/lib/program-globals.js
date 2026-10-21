@@ -46,7 +46,8 @@ const digest = (algorithm) => (value) =>
  * @param {number} [options.chainId]
  * @param {string|null} [options.coinbase]           ผู้ปิด block
  * @param {number|null} [options.blockGasLimit]
- * @param {bigint} [options.gasPrice]
+ * @param {bigint} [options.gasPrice]               ราคาจริงของ tx (GasPrice())
+ * @param {bigint} [options.baseFee]                base fee ของ block (BaseFee() · EIP-1559)
  */
 export function createFakeApi({
   storage = {},
@@ -62,6 +63,7 @@ export function createFakeApi({
   coinbase = null,
   blockGasLimit = null,
   gasPrice = 1_000_000_000n,
+  baseFee = 1_000_000_000n,
 } = {}) {
   const store = new Map(Object.entries(storage));
   const meta = new Map(Object.entries(metadata));
@@ -118,10 +120,13 @@ export function createFakeApi({
     },
 
     // ---------- event / block ----------
-    /** @param {string} name @param {object} [data] */
-    emit: (name, data = {}) => {
+    /** @param {string} name @param {object} [data] @param {{ indexed?: string[] }} [options] field ที่ค้นด้วยค่าได้ (ไม่เกิน 3) */
+    emit: (name, data = {}, options) => {
       if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(name)) throw new Error("ชื่อ event ไม่ถูกต้อง");
-      events.push({ index: events.length, name, data });
+      const indexed = options?.indexed ?? [];
+      if (!Array.isArray(indexed) || indexed.length > 3 || new Set(indexed).size !== indexed.length
+        || indexed.some((field) => !Object.hasOwn(data, field))) throw new Error("emit: indexed ไม่ถูกต้อง");
+      events.push({ index: events.length, name, data, ...(indexed.length ? { indexed: [...indexed] } : {}) });
       return true;
     },
     BlockNumber: () => BigInt(blockNumber),
@@ -135,6 +140,7 @@ export function createFakeApi({
     Coinbase: () => (coinbase === null ? null : lower(coinbase)),
     BlockGasLimit: () => (blockGasLimit === null ? null : BigInt(blockGasLimit)),
     GasPrice: () => BigInt(gasPrice),
+    BaseFee: () => BigInt(baseFee),
     /** โหมดนี้ไม่นับแก๊ส → null เสมอ (ใช้ createChain() ถ้าต้องการค่าจริง) */
     GasLeft: () => null,
 

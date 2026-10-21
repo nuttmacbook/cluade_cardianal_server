@@ -31,6 +31,19 @@ export const TRANSACTION_TYPE = [
   { name: "gasPrice", type: "uint256" },
 ];
 
+/**
+ * tx แบบ EIP-1559 (มี maxFeePerGas หรือ maxPriorityFeePerGas): แทน gasPrice ด้วยสองฟิลด์นี้
+ * ชื่อชนิดยังเป็น "Transaction" แต่ฟิลด์ต่างกัน → digest ไม่ชนกับแบบเดิม · tx แบบเดิมเซ็น / ตรวจได้เหมือนเดิมทุกไบต์
+ */
+export const TRANSACTION_TYPE_1559 = [
+  ...TRANSACTION_TYPE.filter((field) => field.name !== "gasPrice"),
+  { name: "maxFeePerGas", type: "uint256" },
+  { name: "maxPriorityFeePerGas", type: "uint256" },
+];
+
+/** tx นี้ใช้ค่าแก๊สแบบ EIP-1559 ไหม */
+export const isFeeMarketTx = (tx = {}) => (tx.maxFeePerGas ?? null) !== null || (tx.maxPriorityFeePerGas ?? null) !== null;
+
 const ACTIONS = new Set(["call", "deploy", "transfer", "metadata", "init", "reject",
   "upgrade", "setUpgrader", "initUpgrade", "rejectUpgrade"]);
 const HASH_LENGTH = 32;
@@ -90,8 +103,15 @@ export function normalizeTransaction(tx = {}) {
     value: tx.value ?? 0,
     nonce: tx.nonce ?? 0,
     gasLimit: tx.gasLimit ?? 0,
-    gasPrice: tx.gasPrice ?? 0,   // 0 = ใช้ราคาขั้นต่ำของระบบ
+    ...feeOf(tx),
   };
+}
+
+/** ค่าแก๊สของ tx: แบบเดิม { gasPrice } (0 = ราคาของระบบ) · EIP-1559 { maxFeePerGas (0 = baseFee + priority), maxPriorityFeePerGas } */
+function feeOf(tx) {
+  if (!isFeeMarketTx(tx)) return { gasPrice: tx.gasPrice ?? 0 };   // 0 = จ่ายเท่า base fee ของ block
+  if (parseUint(tx.gasPrice ?? 0)) fail("ใช้ gasPrice คู่กับ maxFeePerGas / maxPriorityFeePerGas ไม่ได้");
+  return { maxFeePerGas: tx.maxFeePerGas ?? 0, maxPriorityFeePerGas: tx.maxPriorityFeePerGas ?? 0 };
 }
 
 /** โครงสร้าง EIP-712 ที่ wallet ใช้แสดงให้ผู้ใช้ดูก่อนเซ็น */
@@ -105,7 +125,7 @@ export function buildTypedData(rawTx) {
         { name: "version", type: "string" },
         { name: "chainId", type: "uint256" },
       ],
-      Transaction: TRANSACTION_TYPE,
+      Transaction: isFeeMarketTx(tx) ? TRANSACTION_TYPE_1559 : TRANSACTION_TYPE,
     },
     primaryType: "Transaction",
     message: {
@@ -118,7 +138,7 @@ export function buildTypedData(rawTx) {
       value: tx.value,
       nonce: tx.nonce,
       gasLimit: tx.gasLimit,
-      gasPrice: tx.gasPrice,
+      ...(isFeeMarketTx(tx) ? { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas } : { gasPrice: tx.gasPrice }),
     },
   };
 }
@@ -195,7 +215,11 @@ export function recoverSigner(tx, signature) {
 export function toVmRequest(tx, sender, signature, digest) {
   const context = { sender, origin: sender };
   const given = (value) => (parseUint(value) ? value : undefined);   // 0 / "0" = ไม่ได้ระบุ (ใช้ค่าของระบบ)
-  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), gasPrice: given(tx.gasPrice), signature, digest };
+  // EIP-1559: maxFeePerGas 0 = ไม่ได้ระบุ (VM ใช้ baseFee + priority) · maxPriorityFeePerGas 0 = ไม่ให้ tip (ระบุเสมอ = tx แบบ 1559)
+  const fees = isFeeMarketTx(tx)
+    ? { maxFeePerGas: given(tx.maxFeePerGas), maxPriorityFeePerGas: String(parseUint(tx.maxPriorityFeePerGas ?? 0) ?? 0n) }
+    : { gasPrice: given(tx.gasPrice) };
+  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), ...fees, signature, digest };
 
   if (tx.action === "transfer") return { from: sender, to: tx.to, amount: tx.value, ...common, context: undefined };
   if (tx.action === "metadata") return { metadata: tx.input, ...common };

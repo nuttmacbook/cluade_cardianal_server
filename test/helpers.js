@@ -62,7 +62,9 @@ export function fails(res, code, message) {
   assert.equal(res.error.code, code, res.error.message);
   if (message instanceof RegExp) assert.match(res.error.message, message);
   else if (message !== undefined) assert.equal(res.error.message, message);
-  assert.deepEqual(Object.keys(res).sort(), ["accepted", "calls", "debug", "error", "events", "fee", "gasPrice", "gasUsed", "status", "timestamp", "writes"], "throw ต้องไม่มี loadValues / afterValues");
+  // ค่าแก๊สแยกส่วน (baseFee / burnedFee / producerFee และ maxFee / priority ของ tx แบบ EIP-1559) มีได้ทั้ง success และ throw
+  const feeKeys = ["baseFee", "burnedFee", "producerFee", "feeType", "maxFeePerGas", "maxPriorityFeePerGas"];
+  assert.deepEqual(Object.keys(res).filter((key) => !feeKeys.includes(key)).sort(), ["accepted", "calls", "debug", "error", "events", "fee", "gasPrice", "gasUsed", "status", "timestamp", "writes"], "throw ต้องไม่มี loadValues / afterValues");
   assert.deepEqual(res.writes, [], "throw ต้องไม่มี writes ของโปรแกรม (ยกเว้น nonce / ค่าแก๊ส)");
   return res;
 }

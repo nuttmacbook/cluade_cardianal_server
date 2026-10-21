@@ -114,6 +114,9 @@ test("header: สรุปข้อมูลของ block", () => {
       gasUsed: block.results().reduce((sum, r) => sum + r.gasUsed, 0),
       fee: `${block.results().reduce((sum, r) => sum + num(r.fee), 0)}n`,
       txRoot: null, stateRoot: null, txHashes: 2,
+      // EIP-1559 + receipt (ไม่ได้ตั้ง maxBlockGas → base fee คงที่ที่ราคาขั้นต่ำ · ไม่มี event → bloom ว่าง)
+      baseFeePerGas: "1n", gasTarget: null, burnedFee: "0n", producerFee: "0n",
+      receiptsRoot: block.receiptRoots().receiptsRoot, logsBloom: `0x${"0".repeat(512)}`,
     },
   );
 });
@@ -133,9 +136,11 @@ test("writes: มี block:<number> / blockhash:<hash> / latestblock / tx:<hash>
   assert.equal(blockWrites[3].value, 42);
 
   assert.deepEqual(blockWrites.slice(4).filter((w) => w.dbKey.startsWith("tx:")).map((w) => w.dbKey), header.txHashes.map((hash) => `tx:${hash}`));
-  assert.deepEqual(blockWrites[4].value, {
+  const { gasUsed, gasPrice, tip, ...entry } = blockWrites[4].value;
+  assert.deepEqual(entry, {
     hash: header.txHashes[0], digest: null, blockNumber: 42, index: 0, action: "call", status: "success", from: "alice", nonce: 0,
   });
+  assert.deepEqual([gasUsed, gasPrice, tip], [block.results()[0].gasUsed, "1n", "0n"]);   // ค่าแก๊สของ tx (eth_feeHistory อ่านจากที่นี่)
 
   // writes() = writes ของ tx + ข้อมูล block
   assert.deepEqual(block.writes(), [...block.stateWrites(), ...blockWrites]);
@@ -154,7 +159,8 @@ test("writes: commit แล้วค้นข้อมูลจาก DB ได�
   // ค้น tx จาก hash → รู้ว่าอยู่ block ไหน index ไหน แล้วไปอ่าน record เต็มของ address ต่อ
   const [okHash, failedHash] = header.txHashes;
   const found = vm.db.readKeys([`tx:${okHash}`])[0];
-  assert.deepEqual(found, { hash: okHash, digest: null, blockNumber: 7, index: 0, action: "call", status: "success", from: "alice", nonce: 0 });
+  const { gasUsed: _gas, gasPrice: _price, tip: _tip, ...found2 } = found;
+  assert.deepEqual(found2, { hash: okHash, digest: null, blockNumber: 7, index: 0, action: "call", status: "success", from: "alice", nonce: 0 });
   assert.equal(vm.db.readKeys([`tx:${failedHash}`])[0].status, "throw");
   assert.equal(vm.db.readKeys([`alice:txn:${found.nonce}:${found.hash}`])[0].gasUsed > 0, true);
 });
@@ -244,7 +250,8 @@ test("writes: init / reject ก็มี tx hash ใน block (แต่ไม�
   block.commit();
 
   const initEntry = vm.db.readKeys([`tx:${header.txHashes[1]}`])[0];
-  assert.deepEqual(initEntry, { hash: header.txHashes[1], digest: null, blockNumber: 9, index: 1, action: "init", status: "success", from: null, nonce: null });
+  const { gasUsed: _g, gasPrice: _p, tip: _t, ...initOnly } = initEntry;
+  assert.deepEqual(initOnly, { hash: header.txHashes[1], digest: null, blockNumber: 9, index: 1, action: "init", status: "success", from: null, nonce: null });
   assert.deepEqual(vm.db.listKeys("alice:txn:").length, 1); // เฉพาะ deploy
 });
 

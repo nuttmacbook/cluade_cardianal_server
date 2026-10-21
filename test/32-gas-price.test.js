@@ -53,7 +53,10 @@ test("gasPrice: ผู้ปิด block ได้ส่วนแบ่งมา
   const expensive = block.call(transfer("alice", 0, 20));
   block.commit();
 
-  assert.equal(num(vm.nativeBalanceOf("miner").balance), Math.floor(num(expensive.fee) / 2));
+  // EIP-1559: ส่วน base fee (แก๊ส × 2) เผาครึ่งหนึ่งตาม burnPercent · ส่วนที่จ่ายเกิน base fee (tip) เข้าผู้ปิด block ทั้งหมด
+  const base = expensive.gasUsed * GAS.price;
+  assert.equal(num(vm.nativeBalanceOf("miner").balance), num(expensive.fee) - base + Math.floor(base / 2));
+  assert.equal(num(expensive.producerFee) + num(expensive.burnedFee), num(expensive.fee));
   assert.equal(num(vm.nativeBalanceOf("alice").consumed), num(expensive.fee));
 });
 

@@ -59,7 +59,7 @@ export const TOKEN_PROGRAM = `function program() {
     if (params.input.url) setMetadata("url", params.input.url)
     if (params.input.contact) setMetadata("contact", params.input.contact)
     if (params.input.description) setMetadata("description", params.input.description)
-    emit("Transfer", { from: "${ZERO_ADDRESS}", to: owner, amount: params.input.supply })
+    emit("Transfer", { from: "${ZERO_ADDRESS}", to: owner, amount: params.input.supply }, { indexed: ["from", "to"] })
   }
 
   function name() { return readDB("name") }
@@ -75,7 +75,7 @@ export const TOKEN_PROGRAM = `function program() {
     if (balance < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance - amount)
     writeDB(map("balances", to), (readDB(map("balances", to)) || 0n) + amount)
-    emit("Transfer", { from: from, to: to, amount: amount })
+    emit("Transfer", { from: from, to: to, amount: amount }, { indexed: ["from", "to"] })
   }
 
   function transfer(params) {
@@ -95,7 +95,7 @@ export const TOKEN_PROGRAM = `function program() {
 
   function setAllowance(owner, spender, amount) {
     writeDB(map("allowance", owner, spender), amount)
-    emit("Approval", { owner: owner, spender: spender, amount: amount })
+    emit("Approval", { owner: owner, spender: spender, amount: amount }, { indexed: ["owner", "spender"] })
   }
 
   function approve(params) {

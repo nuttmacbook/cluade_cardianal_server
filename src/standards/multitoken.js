@@ -103,14 +103,14 @@ export const MULTITOKEN_PROGRAM = `function program() {
     checkId(id)
     checkAmount(amount)
     move(from, to, id, amount)
-    emit("TransferSingle", { operator: operator, from: from, to: to, id: id, amount: amount })
+    emit("TransferSingle", { operator: operator, from: from, to: to, id: id, amount: amount }, { indexed: ["operator", "from", "to"] })
     if (to !== ZERO) accept("onERC1155Received", "${ERC1155_RECEIVED}", { operator: operator, from: from, to: to, id: id, amount: amount, data: data })
   }
 
   function batch(operator, from, to, ids, amounts, data) {
     checkLists(ids, amounts)
     ids.forEach((id, i) => move(from, to, id, amounts.at(i)))
-    emit("TransferBatch", { operator: operator, from: from, to: to, ids: ids, amounts: amounts })
+    emit("TransferBatch", { operator: operator, from: from, to: to, ids: ids, amounts: amounts }, { indexed: ["operator", "from", "to"] })
     if (to !== ZERO) accept("onERC1155BatchReceived", "${ERC1155_BATCH_RECEIVED}", { operator: operator, from: from, to: to, ids: ids, amounts: amounts, data: data })
   }
 
@@ -145,7 +145,7 @@ export const MULTITOKEN_PROGRAM = `function program() {
     const id = checkId(params.input.id)
     if (typeof params.input.uri !== "string") throw new Error("uri must be a string")
     writeDB(map("uris", id), params.input.uri)
-    emit("URI", { value: params.input.uri, id: id })
+    emit("URI", { value: params.input.uri, id: id }, { indexed: ["id"] })
     return true
   }
 
@@ -154,7 +154,7 @@ export const MULTITOKEN_PROGRAM = `function program() {
     if (operator === params.context.sender) throw new Error("approve to caller")
     const approved = params.input.approved === true
     writeDB(map("operators", params.context.sender, operator), approved)
-    emit("ApprovalForAll", { account: params.context.sender, operator: operator, approved: approved })
+    emit("ApprovalForAll", { account: params.context.sender, operator: operator, approved: approved }, { indexed: ["account", "operator"] })
     return true
   }
 

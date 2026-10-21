@@ -79,7 +79,7 @@ export const WALLET_PROGRAM = `function program() {
   function transferOwnership(params) {
     onlyOwner(params)
     if (typeof params.input.owner !== "string" || params.input.owner.length !== 42) throw new Error("owner must be an address")
-    emit("OwnershipTransferred", { previousOwner: readDB("owner"), newOwner: params.input.owner })
+    emit("OwnershipTransferred", { previousOwner: readDB("owner"), newOwner: params.input.owner }, { indexed: ["previousOwner", "newOwner"] })
     writeDB("owner", params.input.owner)
     return true
   }
