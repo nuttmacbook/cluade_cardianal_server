@@ -17,6 +17,8 @@ export const PROGRAM_API = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
   "keccak256", "ecrecover", "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber",
   "cloneProgram",   // สร้างโปรแกรมใหม่จากโปรแกรมต้นแบบที่อนุมัติแล้ว (แบบ CREATE2)
+  "sha256", "ripemd160", "blake2b", "modexp",   // precompile แบบ EVM
+  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "GasLeft", "CodeHashOf", "CodeSizeOf",
   "params",
 ];
 

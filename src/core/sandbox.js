@@ -95,13 +95,16 @@ export function checkGuestSyntax(source) {
 /**
  * API ที่เรียกข้ามไป host: [ชื่อ, ชนิดของ argument แต่ละตัว]
  *   k = key (string / map(...))   p = ค่าเดี่ยว (object ถูกส่งเป็น "ไม่ใช่ข้อมูล")   d = ข้อมูลทั้งก้อน
- *   R = options ของ runProgram ({ value })   C = options ของ cloneProgram ({ salt, value })
+ *   R = options ของ runProgram ({ value, readonly })   C = options ของ cloneProgram ({ salt, value })
  */
 export const API_OPS = [
   ["readDB", "k"], ["writeDB", "kd"], ["deleteDB", "k"],
   ["runProgram", "ppdR"], ["transferNative", "pp"], ["setMetadata", "pd"], ["emit", "pd"],
   ["keccak256", "d"], ["ecrecover", "dp"], ["cloneProgram", "pdC"],
   ["ThisBalance", ""], ["BalanceOf", "p"], ["IsProgram", "p"], ["MetadataOf", "pp"],
+  ["sha256", "d"], ["ripemd160", "d"], ["blake2b", "d"], ["modexp", "ppp"],
+  ["BlockHash", "p"], ["ChainId", ""], ["Coinbase", ""], ["BlockGasLimit", ""], ["GasPrice", ""], ["GasLeft", ""],
+  ["CodeHashOf", "p"], ["CodeSizeOf", "p"],
 ];
 const OP = { sync: 0, random: 1, clock: 2, check: 3, api: 10 };
 
@@ -365,7 +368,7 @@ function prelude(host, opText) {
 
   const ENCODERS = { k: encodeShallow, p: encodeShallow, d: encode,
     R: (options) => (options !== null && (typeof options === "object" || typeof options === "function")
-      ? '{"value":' + encodeShallow(options.value) + "}" : encodeShallow(options)),
+      ? '{"value":' + encodeShallow(options.value) + ',"readonly":' + encodeShallow(options.readonly) + "}" : encodeShallow(options)),
     C: (options) => (options !== null && (typeof options === "object" || typeof options === "function")
       ? '{"salt":' + encodeShallow(options.salt) + ',"value":' + encodeShallow(options.value) + "}" : encodeShallow(options)) };
 
