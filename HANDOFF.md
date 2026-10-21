@@ -178,11 +178,12 @@ const address = cloneProgram(template, initInput, { salt, value })   // ใน�
 - ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
   (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
-### API ในโปรแกรม (19 ตัว)
+### API ในโปรแกรม (31 ตัว)
 
 ```
 readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
 runProgram(target, functionName, input, { value })      เรียกโปรแกรมอื่น
+runProgram(target, functionName, input, { readonly: true })   แบบ STATICCALL: ปลายทาง + ทุกชั้นที่เรียกต่อแก้ state ไม่ได้
 cloneProgram(template, initInput, { salt, value })      สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address (ดูหัวข้อ cloneProgram)
 transferNative(to, amount)                              โอนเหรียญหลักจากโปรแกรม
 setMetadata(field, value) / emit(name, data)
@@ -190,9 +191,29 @@ keccak256(value) / ecrecover(value, signature)
 ThisAddress() / ThisBalance() / BalanceOf(addr) / IsProgram(addr) / MetadataOf(addr, field) / BlockNumber()
 Date        เวลาของ block (Date.now() ได้ค่าเดียวกันทุก tx ใน block)
 Math        random() ผูกกับ tx hash → รันซ้ำได้ผลเดิม
+sha256(value) / ripemd160(value) / blake2b(value)        precompile hash (รับแบบเดียวกับ keccak256 · blake2b = BLAKE2b-512)
+modexp(base, exponent, modulus)                          BigInt · modulus 0n → 0n · แต่ละค่า ≤ 1024 byte (MODEXP_MAX_BYTES)
+BlockHash(n) / ChainId() / Coinbase() / BlockGasLimit() / GasPrice() / GasLeft()
+CodeHashOf(addr) / CodeSizeOf(addr)                      keccak256 / byte ของโค้ดที่เก็บ · ไม่ใช่โปรแกรม → null / 0n
 ```
 
-**เพิ่ม API ใหม่ต้องแก้ 3 ที่**: `PROGRAM_API_NAMES`, `createProgramApi()` (ทั้งคู่ใน `virtualmachine.js`) และ `PROGRAM_API` ใน `autoreview.js` — ถ้าลืมที่สาม autoreview จะปฏิเสธโค้ดที่ใช้ API ใหม่ว่า "ไม่รู้จัก"
+API ที่เทียบกับ EVM (ทุกตัว deterministic · คืน BigInt / string / null):
+
+| API | EVM | พฤติกรรม | แก๊ส |
+|---|---|---|---|
+| `BlockHash(n)` | BLOCKHASH | `block:<n>.hash` ย้อนได้ 256 block (`BLOCK_HASH_WINDOW`) · block ปัจจุบัน / อนาคต / เก่ากว่า / block 0 → `null` · query นอก block นับ block ถัดจากล่าสุดเป็นปัจจุบัน · `n` ต้องเป็น BigInt | `read` |
+| `ChainId()` | CHAINID | `vm.chainId` | `env` 10 |
+| `Coinbase()` | COINBASE | `feeRecipient` ของ block (null ถ้าไม่มี) | `env` |
+| `BlockGasLimit()` | GASLIMIT | `vm.maxBlockGas` (null = ไม่จำกัด · ใช้ค่าของ VM ไม่ใช่ของ Block จึง replay ได้ผลเดิม) | `env` |
+| `GasPrice()` | GASPRICE | `tx.gasPrice` — ไม่มี base fee จึงไม่มี `BaseFee()` | `env` |
+| `GasLeft()` | GAS | `gasLimit - gasUsed` หลังหัก `env` ของตัวเอง (null ถ้าไม่มีเพดาน) | `env` |
+| `CodeHashOf(a)` | EXTCODEHASH | `keccak256(<a>:code)` = codeHash เดียวกับที่ `cloneProgram` ใช้คำนวณ address | `read` + `hash` + `byte` × ขนาดโค้ด |
+| `CodeSizeOf(a)` | EXTCODESIZE | byte ของ `<a>:code` | `read` |
+| `sha256` / `ripemd160` / `blake2b` | precompile 0x02 / 0x03 / (BLAKE2F) | hex `0x…` | `sha256` 100 / `ripemd160` 300 / `blake2b` 100 + `byte` × ขนาดข้อมูล |
+| `modexp` | precompile 0x05 | square-and-multiply | `modexp` 200 + ⌊word² × max(bit ของ exp, 1) ÷ 3⌋ (คิดก่อนคำนวณ) |
+| `runProgram(..., { readonly: true })` | STATICCALL | `caller.readonly` ส่งต่อทุกชั้น · `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` → `ERRORS.readonlyCall` (FORBIDDEN, catch ได้) · แนบ value ไม่ได้ (`readonlyValue`) · trace `type: "staticcall"` → callTracer `STATICCALL` | เท่า call ปกติ |
+
+**เพิ่ม API ใหม่ต้องแก้ 4 ที่**: `PROGRAM_API_NAMES`, `createProgramApi()` (ทั้งคู่ใน `virtualmachine.js`), `API_OPS` ใน `sandbox.js` (ชื่อ + ชนิด argument — ไม่มี = โปรแกรมเรียกไม่ถึง host) และ `PROGRAM_API` ใน `autoreview.js` — ถ้าลืมที่สุดท้าย autoreview จะปฏิเสธโค้ดที่ใช้ API ใหม่ว่า "ไม่รู้จัก" · อย่าลืม API ปลอมใน `program-sdk/lib/program-globals.js` และ README ของ SDK
 
 ---
 
@@ -358,7 +379,7 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 
 ```
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
 (n = จำนวน node ของ AST ในช่วงนั้น × `node`) · เมธอดในตัว (join, split, slice, JSON.stringify …) และ `obj[x](…)` ถูกเปลี่ยนเป็น `__call` คิด `builtin` ต่อตัวอักษร / สมาชิกที่เข้า-ออก
-โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
+โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · ตำแหน่ง `.` `[` `]` `(` ของการเรียกหาจาก token จริง (acorn tokenizer) ไม่ใช่จากช่วงของ node — ช่วงของค่าในวงเล็บไม่รวมวงเล็บ เช่น `(255).toString(36)` (เคยแปลงเป็น `__call((255,…` ที่ syntax ผิด) · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` ส่งมาเองได้
 เผาทิ้ง `burnPercent` (server ใช้ 50) → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient`
 
@@ -753,6 +774,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 | `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
+| `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก

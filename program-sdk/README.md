@@ -49,6 +49,7 @@ writeDB(key, value)          // เขียน (ค่าต้องเป็�
 deleteDB(key)
 map("balances", address)     // ประกอบ key หลายส่วน → "balances:0x…"
 runProgram(address, "method", input, { value })   // เรียกโปรแกรมอื่น
+runProgram(address, "method", input, { readonly: true })   // เรียกแบบอ่านอย่างเดียว (STATICCALL) — ดูด้านล่าง
 cloneProgram(template, initInput, { salt, value })   // สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address ใหม่ (แบบ CREATE2)
 transferNative(to, amount)   // โอนเงินจากกระเป๋าของโปรแกรมเอง
 setMetadata(field, value)    // ตั้ง namespace / description ของโปรแกรม
@@ -63,7 +64,47 @@ MetadataOf(address, field)   // อ่าน metadata เช่น namespace / c
 BlockNumber()                // เลข block ที่ tx นี้อยู่
 Date.now()                   // เวลาของ block (เท่ากันทุก tx ใน block เดียว)
 Math.random()                // สุ่มแบบ deterministic (รันซ้ำได้ค่าเดิม)
+
+// ---- ข้อมูลของ chain / block / tx (แบบเดียวกับ opcode ของ EVM) ----
+BlockHash(n)                 // hash ของ block n (BigInt) ย้อนได้ 256 block · block ปัจจุบัน / อนาคต / เก่ากว่านั้น → null   (BLOCKHASH)
+ChainId()                    // chainId ของระบบ (BigInt)                                       (CHAINID)
+Coinbase()                   // ผู้ปิด block (feeRecipient) หรือ null ถ้าไม่มี                     (COINBASE)
+BlockGasLimit()              // แก๊สสูงสุดต่อ block (BigInt) หรือ null ถ้าไม่จำกัด                (GASLIMIT)
+GasPrice()                   // ราคาต่อ 1 gas ของ tx นี้ (BigInt wei) — ไม่มี base fee จึงไม่มี BaseFee()   (GASPRICE)
+GasLeft()                    // แก๊สที่เหลือของ tx (BigInt) หลังหักค่าของตัวเองแล้ว                (GAS)
+CodeHashOf(address)          // keccak256 ของโค้ดที่ address นั้นใช้อยู่ · ไม่ใช่โปรแกรม → null       (EXTCODEHASH)
+CodeSizeOf(address)          // ความยาวโค้ดเป็น byte (BigInt) · ไม่ใช่โปรแกรม → 0n                 (EXTCODESIZE)
+
+// ---- precompile (ข้อมูลเข้าแบบเดียวกับ keccak256: string หรือ object → hex "0x…") ----
+sha256(value)                // SHA-256 (32 byte)
+ripemd160(value)             // RIPEMD-160 (20 byte)
+blake2b(value)               // BLAKE2b-512 (64 byte)
+modexp(base, exponent, modulus)   // (base ** exponent) % modulus แบบ BigInt · modulus = 0n → 0n · แต่ละค่าไม่เกิน 1024 byte
 ```
+
+### เรียกแบบอ่านอย่างเดียว (`readonly`)
+
+`runProgram(target, fn, input, { readonly: true })` ทำงานแบบ `STATICCALL` ของ EVM: ปลายทาง **และทุกชั้นที่มันเรียกต่อ**
+อ่านได้ตามปกติ แต่ `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` จะ throw
+`"writeDB() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว …"` (code `FORBIDDEN`) ซึ่ง catch ได้เหมือน error ทั่วไป
+แนบ `value` ไปด้วยไม่ได้ · ใน trace / `debug_traceTransaction` แสดงเป็น `STATICCALL`
+
+```js
+// อ่านราคาจาก oracle โดยมั่นใจว่า oracle แอบแก้ state หรือเรียกกลับมา (reentrancy) ไม่ได้
+const price = runProgram(oracle, "price", {}, { readonly: true });
+```
+
+### ค่าแก๊สของ API เหล่านี้
+
+| API | แก๊ส |
+|---|---|
+| `ChainId` / `Coinbase` / `BlockGasLimit` / `GasPrice` / `GasLeft` | 10 (`env`) |
+| `BlockHash` / `CodeSizeOf` | 100 (`read`) |
+| `CodeHashOf` | 100 (`read`) + 100 (`hash`) + 1 ต่อ byte ของโค้ด (ไม่ใช่โปรแกรม = 100) |
+| `sha256` / `blake2b` | 100 + 1 ต่อ byte ของข้อมูล |
+| `ripemd160` | 300 + 1 ต่อ byte ของข้อมูล |
+| `modexp` | 200 + ⌊word² × bit ของ exponent ÷ 3⌋ (word = 8 byte ของตัวที่ยาวสุดระหว่าง base / modulus) |
+| `runProgram` แบบ `readonly` | เท่าการเรียกปกติ |
 
 **ห้ามใช้** `process`, `fetch`, `globalThis`, `performance`, `async`/`await`, `setTimeout` และการ import ทุกชนิด โค้ดที่ใช้สิ่งเหล่านี้จะไม่ผ่านการรีวิว
 
@@ -81,7 +122,7 @@ if (balance < params.input.amount) throw new Error("ยอดไม่พอ");
 ```
 
 - `params.input` ที่เป็นตัวเลขถูกแปลงเป็น BigInt ให้อัตโนมัติ ไม่ว่า client จะส่ง `30` หรือ `"30n"` มา
-- `params.value`, `params.block.timestamp`, `ThisBalance()`, `BalanceOf()`, `BlockNumber()` เป็น BigInt ทั้งหมด
+- `params.value`, `params.block.timestamp`, `ThisBalance()`, `BalanceOf()`, `BlockNumber()`, `ChainId()`, `GasPrice()`, `GasLeft()`, `CodeSizeOf()`, `modexp()` เป็น BigInt ทั้งหมด (`BlockHash()` ก็รับเลข block เป็น BigInt)
 - ค่าที่ return ออกไปและ event จะกลายเป็น string ลงท้าย `n` เช่น `"970n"` เพราะ JSON ไม่มี BigInt
 - ใช้ `number` ที่ไหนก็ตามจะถูกปฏิเสธพร้อมข้อความบอกจุดที่ผิด
 - `Date.now()` / `Math.*` ในโปรแกรมยังคืน number ตามปกติ ห่อด้วย `BigInt(...)` ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งออกเป็น string)
@@ -134,6 +175,9 @@ api.store / api.native / api.events / api.transfers   // ตรวจผลไ�
 ```
 
 รองรับ API ครบทุกตัวยกเว้น `runProgram` และ `cloneProgram` ซึ่งต้องใช้ `createChain()`
+(`keccak256` / `ecrecover` / `CodeHashOf` ของโปรแกรมที่มีโค้ดก็ต้องใช้ `createChain()` เพราะ `node:crypto` ไม่มี keccak · `GasLeft()` คืน `null` เพราะโหมดนี้ไม่นับแก๊ส)
+
+ค่าของ block / chain ตั้งได้: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
 
 `createChain()` รันบน VM ตัวจริง พฤติกรรมจึงเหมือนบน chain ทุกอย่าง ทั้งการย้อนข้อมูลเมื่อ throw, ค่าแก๊ส และเวลาของ block
 
