@@ -174,6 +174,10 @@ export class Mempool {
   /** จำ tx ที่ถูกปฏิเสธ (hash เดิมถูกปฏิเสธซ้ำ = ย้ายไปท้าย เหลืออันล่าสุด) */
   #reject(tx, { hash, sender, reason, code, stage }) {
     if (!this.#options.recordRejected) return;
+    // ใบเดิมเป๊ะ (hash เดิม) ถูกบันทึกว่าถูกปฏิเสธใน block ก่อนแล้ว และยังไม่เคยเข้า block จริง → ไม่บันทึกซ้ำ
+    // 1 hash อยู่ใน block เดียวเสมอ: explorer กับ /evm (Blockscout) เห็นตรงกัน และส่งซ้ำรัว ๆ ไม่สร้าง block ใหม่
+    if (typeof this.#vm.getRejectedTransaction === "function" && this.#vm.getRejectedTransaction(hash)
+      && !this.#vm.getTransaction?.(hash)) return;
     const text = String(reason ?? "");
     this.#rejections.delete(hash);
     this.#rejections.set(hash, {

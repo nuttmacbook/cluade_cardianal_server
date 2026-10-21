@@ -320,13 +320,16 @@ POST /sendtx
 - mempool จำตามลำดับที่เกิด (`#rejections`, ≤ `maxRejectedQueue` 100,000) → `take()` ใส่ลง block ด้วย `block.recordRejected(entry)`
   ไม่เกิน `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, ค่าเริ่ม 1,000) ที่เหลือยกไป block ถัดไป · มีแค่ใบที่ถูกปฏิเสธก็ปิด block ได้
   ส่งใบเดิมใหม่แล้วผ่าน → ถูกลบออกจากรายการที่รอ (ไม่ถูกบันทึกว่าปฏิเสธ)
+  **ใบเดิมเป๊ะ (hash เดิม) ที่บันทึกว่าถูกปฏิเสธใน block ก่อนแล้ว และยังไม่เคยเข้า block จริง → ไม่บันทึกซ้ำ** (ผู้ส่งยังได้ error เหมือนเดิม)
+  1 hash อยู่ใน block เดียว → explorer กับ `/evm` / Blockscout เห็นตรงกัน และส่งซ้ำรัว ๆ ไม่สร้าง block ใหม่ (เดิม `/evm` ย้าย hash ไป block ล่าสุด แต่ Blockscout index ไปแล้ว → เห็นไม่ตรงกัน)
 - entry: `{ hash, sender, nonce, action, to, gasPrice, reason (≤ 500 ตัว), code, stage }` · **ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส** (กติกาเชนเดิม)
 - header มี `rejectedCount` + `rejectedRoot` (= hash ของรายการตามลำดับ) **อยู่ใน hash ของ block** · block ที่ไม่มีรายการ hash เหมือนเดิมทุกไบต์
 - เก็บเป็นข้อมูล block: `blockrejected:<n>` (รายการ) · `rejtx:<hash>` · `rejfrom:<sender>:<n>:<i>` (ดัชนี อยู่ใน history/undo → `rebuildFrom` ล้างให้)
 - `replayBlock` / `rebuildFrom` / `sync` (`applyBlock(vm, { header, body, rejected })`, `/sync` ส่ง `rejected` มาด้วย) ใส่รายการเดิมแล้วเทียบ hash
 - `/evm`: ต่อท้าย tx จริงของ block เป็น tx ที่ล้ม (`status 0x0`, `gasUsed 0`, `effectiveGasPrice` จาก tx, ไม่มี log, `cumulativeGasUsed` = ของ tx จริงใบสุดท้าย)
   index = จำนวน tx จริง + ลำดับ · hash ที่ภายหลังเข้า block จริง / ถูกปฏิเสธซ้ำใน block หลัง ไม่ถูกแสดงซ้ำ · `eth_getTransactionCount` ไม่เปลี่ยน
-- เทสต์ `60-rejected-in-block` · `61-rejected-server`
+- เทสต์ `60-rejected-in-block` · `61-rejected-server` · `77-rejected-once`
+- explorer หน้ารายการ block: block ที่มีใบถูกปฏิเสธแสดงป้าย `Rejected N` (block ที่มีแต่ใบถูกปฏิเสธไม่ขึ้น Empty)
 
 **แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
 - nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
@@ -924,6 +927,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `72-abi` | checkAbi (schema ทุกข้อ) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
 | `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
 | `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
+| `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง

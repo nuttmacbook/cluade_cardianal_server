@@ -804,6 +804,9 @@ test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejecte
   assert.match(await page.locator("#rejected-panel").textContent(), /Rejected \(1\)/);
   assert.equal(await page.locator("#rejected-panel a[title]").first().getAttribute("title"), sent.hash);
   assert.match(await view(), /Rejected1 \(recorded only/);
+  await open("");   // รายการ block หน้าแรก: block ที่มีแต่ใบถูกปฏิเสธบอก Rejected ไม่ใช่ Empty
+  const row = page.locator("#view tbody tr").filter({ has: page.locator("a", { hasText: new RegExp(`^${found.block}$`) }) }).first();
+  assert.match(await row.textContent(), /Rejected 1/);
 
   await open(`#address/${ME}`);
   await tab("Rejected");
