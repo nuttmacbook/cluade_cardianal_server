@@ -23,7 +23,7 @@ import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
-import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
+import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
   programCounts, pagePendingPrograms, pageApprovedPrograms } from "./src/node/explorer-api.js";
 
@@ -136,7 +136,8 @@ const DYNAMIC = [
       pendingUpgrade: vm.read(`pending-upgrade:${lower(m[1])}`) ?? null, scheduledUpgrade: vm.read(`scheduled-upgrade:${lower(m[1])}`) ?? null,
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),
       interactions: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
-      events: vm.listEvents({ program: m[1], limit: limitOf(query) }), token: tokenInfo(vm, m[1]) };
+      events: vm.listEvents({ program: m[1], limit: limitOf(query) }), token: tokenInfo(vm, m[1]),
+      collection: collectionInfo(vm, m[1]) };   // NFT (ERC-721) / multi-token (ERC-1155) มาตรฐาน · ไม่ใช่ = null
   }],
   [/^\/program\/([^/]+)\/storage$/, (m, query) => {
     const address = lower(m[1]);
@@ -171,6 +172,8 @@ const DYNAMIC = [
   // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
   // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
   [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
+  // NFT / multi-token ที่ address ถือ (โปรแกรมจากดัชนี holding: · ชิ้นจาก storage ของโปรแกรม)
+  [/^\/address\/([^/]+)\/nfts$/, (m) => nftHoldings(vm, m[1])],
   [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "Not a standard token" } }],
   [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
   [/^\/address\/([^/]+)\/incoming$/, (m, query) => pageTransactionsTo(vm, m[1], pageOf(query))],
