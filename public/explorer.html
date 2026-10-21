@@ -255,6 +255,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 <header><div class="bar">
   <div class="brand" onclick="go('')">Program VM<span id="tick"></span></div>
   <input id="q" placeholder="Search block / tx / address / name" onkeydown="if(event.key==='Enter')search()">
+  <button class="btn" id="dbtn" onclick="go('#deploy')">Deploy</button>
   <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>
 </div></header>
 <main id="view"></main>
@@ -355,7 +356,10 @@ const extLink = (label, value) => {
 /** hash in a table → short · on a detail page → full (wraps on small screens) */
 const plain = (v) => (v ? `<span class="mono" title="${attr(v)}">${esc(cut(v))}${copy(v)}</span>` : '<span class="dim">—</span>');
 const full = (v) => (v ? `<span class="mono full">${esc(v)}${copy(v)}</span>` : '<span class="dim">—</span>');
-const STATUS = { success: "Success", throw: "Failed", pending: "Pending" };
+const STATUS = { success: "Success", throw: "Failed", pending: "Pending", rejected: "Rejected" };
+/** where a rejected tx was turned away (it never ran: no state change, no nonce used, no fee) */
+const STAGE_LABEL = { sendtx: "At submission", block: "At block time", expired: "Expired in the queue" };
+const stageTag = (s) => `<span class="tag">${esc(STAGE_LABEL[s] ?? s ?? "—")}</span>`;
 const state = (s) => `<span class="tag ${s === "success" ? "ok" : s === "pending" ? "" : "bad"}">${STATUS[s] ?? esc(s)}</span>`;
 
 function copyText(value) {
@@ -457,6 +461,34 @@ function pager(res, handler) {
 const paged = (path, id, limit = 20) => api(`${path}${path.includes("?") ? "&" : "?"}page=${pageOf(id)}&limit=${limit}`)
   .catch(() => ({ items: [], total: 0, page: 1, pages: 1, limit }));
 
+// ---------- cursor pagination (same idea as the storage maps: the server reads only one page, no counting) ----------
+//   { items, next } · the cursors of the pages seen so far are kept per explorer page + list, so "Newer" can go back
+const cursorState = {};
+const cursorStack = (id) => (cursorState[pageKey(id)] ??= [""]);
+function cursorGo(id, step) {
+  const stack = cursorStack(id);
+  if (step > 0 && cursorNext[pageKey(id)]) stack.push(cursorNext[pageKey(id)]);
+  else if (step < 0 && stack.length > 1) stack.pop();
+  else return;
+  render(true);
+}
+const cursorNext = {};
+const cursored = (path, id, limit = 20) => {
+  const stack = cursorStack(id);
+  return api(`${path}${path.includes("?") ? "&" : "?"}limit=${limit}&cursor=${encodeURIComponent(stack.at(-1))}`)
+    .catch(() => ({ items: [], next: null, limit }))
+    .then((res) => { cursorNext[pageKey(id)] = res.next ?? null; return { ...res, pageNo: stack.length }; });
+};
+/** "‹ Newer · Page N · Older ›" below a cursor list */
+function cursorPager(res, id) {
+  if (!res || (!res.items?.length && res.pageNo <= 1)) return "";
+  return `<div class="pager" data-cursor="${attr(id)}"><span>Page ${num(res.pageNo)} · ${plural(res.items.length, "item")}</span>
+    <div class="pages">
+      <button class="pg" title="Newer" onclick="cursorGo('${id}',-1)" ${res.pageNo <= 1 ? "disabled" : ""}>‹ Newer</button>
+      <button class="pg" title="Older" onclick="cursorGo('${id}',1)" ${res.next ? "" : "disabled"}>Older ›</button>
+    </div></div>`;
+}
+
 // ---------- home ----------
 async function home(draw = el) {
   const [info, blocks, pending, programs] = await Promise.all([api("/genesis"), paged("/blocks/page", "blocks", 15), api("/pending"),
@@ -490,9 +522,12 @@ async function programs(draw = el) {
   const empty = (text) => `<div class="empty">${text}</div>`;
   draw(tabs([
     { id: "pending", label: "Awaiting approval", count: counts.pending, body: pending.total
-      ? table(["Program", "Name", "Type", "Deployer", "Value", "Code size"], pending.items.map((p) => txRow(p, [
+      ? `<div class="pad">${walletRow("Approving or rejecting needs an admin wallet (any wallet when the chain has no admin list)")}</div>`
+        + table(["Program", "Name", "Type", "Deployer", "Value", "Code size", "Review"], pending.items.map((p) => txRow(p, [
           addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.deployer), coin(p.value), bytes(p.codeSize),
-        ]))) + pager(pending, "setPage('pending',$)")
+          `<span class="row"><button class="btn sm solid" data-review="init" onclick="reviewProgram('${p.address}','init')">Approve</button>
+           <button class="btn sm" data-review="reject" onclick="reviewProgram('${p.address}','reject')">Reject</button></span>`,
+        ]))) + pager(pending, "setPage('pending',$)") + '<div class="pad"><div class="out" id="review-out">Nothing sent yet</div></div>'
       : empty("No programs are waiting for approval") },
     { id: "approved", label: "Approved", count: counts.approved, body: approved.total
       ? table(["Program", "Name", "Type", "Creator", "Approved", "Code size"], approved.items.map((p) => txRow(p, [
@@ -516,14 +551,38 @@ async function block(number, draw = el) {
       ["Fee recipient", addr(header.feeRecipient, header.feeRecipient)],
       ["Transactions", `${num(header.txCount)} <span class="dim">(${header.successCount} succeeded · ${header.failedCount} failed)</span>`],
       ["Gas used", `${gas(header.gasUsed)} <span class="dim">· fee ${coin(header.fee)}</span>`],
+      (header.rejectedCount ?? data.rejected?.length) && ["Rejected", `${num(header.rejectedCount ?? data.rejected.length)} <span class="dim">(recorded only: never ran, no state change, no fee)</span>`],
     ]))
     + panel(`Transactions (${num(txs.total)})`, table(["#", "Hash", "Type", "From", "To", "Method", "Status", "Gas"], txs.items.map((t) =>
         txRow(t, [t.index, txLink(t.hash), actionTag(t.action), addr(t.from), addr(t.to),
           t.method ? `<span class="mono">${esc(t.method)}</span>` : '<span class="dim">—</span>',
           state(t.status), gas(t.gasUsed)]))) + pager(txs, "setPage('txs',$)"))
+    + (data.rejected?.length ? rejectedPanel(data.rejected, pageOf("rej")) : "")
     + `<div class="nav"><a onclick="go('#block/${header.number - 1}')">← Previous block</a>
         <a onclick="go('#block/${header.number + 1}')">Next block →</a></div>`);
 }
+
+/** rejected txs recorded in a block: signature checked, then turned away (they never ran) */
+function rejectedPanel(list, page) {
+  const rows = slicePage(list, page);
+  return `<section class="panel" id="rejected-panel"><h2>Rejected (${num(list.length)})</h2><div class="body">${table(["#", "Hash", "Type", "From", "Nonce", "Stage", "Reason"],
+    rows.items.map((r, i) => txRow(r, [(rows.page - 1) * rows.limit + i, txLink(r.hash), actionTag(r.action), addr(r.sender), r.nonce ?? "—",
+      stageTag(r.stage), `<span class="bad">${esc(r.reason)}</span>`])))}${pager(rows, "setPage('rej',$)")}</div></section>`;
+}
+
+/** a rejected tx (GET /tx/:hash → status "rejected") */
+const rejectedView = (r, hash) => panel("Transaction", kv([
+  ["Status", `${state("rejected")} <span class="bad">${esc(r.reason)}</span>`],
+  ["Tx hash", full(hash)],
+  ["Stage", `${stageTag(r.stage)}${r.code ? ` <span class="tag bad">${esc(r.code)}</span>` : ""} <span class="dim">never ran: no state change, no nonce used, no fee</span>`],
+  ["Type", actionTag(r.action)],
+  ["From", addr(r.sender, r.sender)],
+  ["To", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],
+  ["Nonce", r.nonce ?? "—"],
+  ["Gas price", r.gasPrice ? `${gwei(r.gasPrice)} gwei` : "—"],
+  ["Recorded in block", r.block ? blockNo(r.block) : '<span class="dim">waiting for the next block</span>'],
+  r.timestamp && ["Time", when(r.timestamp)],
+]));
 
 // ---------- transaction ----------
 //   Program calls = a small top-down tree: one numbered box per call (order only), arrows from caller to callee
@@ -627,15 +686,17 @@ function pickCall(i) {
 }
 
 async function tx(hash, draw = el) {
-  const r = await api(`/tx/${hash}/receipt`);
+  // where the tx is first: in a block, waiting in the mempool, replaced (same nonce, higher gas price) or rejected (never ran)
+  const queued = await api(`/tx/${hash}`).catch(() => null);
+  const inBlock = queued && !queued.error && queued.status !== "pending" && queued.status !== "replaced" && queued.status !== "rejected";
+  const r = inBlock ? await api(`/tx/${hash}/receipt`) : { error: queued?.error ?? "Transaction not found" };
   if (r.error && !r.hash) {
-    // not in a block: it may still wait in the mempool, or have been replaced (same nonce, higher gas price)
-    const queued = await api(`/tx/${hash}`).catch(() => null);
     if (queued?.status === "replaced") return draw(panel("Transaction", kv([
       ["Status", `<span class="tag bad">Replaced</span> <span class="dim">by a transaction with the same nonce and a higher gas price</span>`],
       ["Tx hash", full(hash)],
       ["Replaced by", txLink(queued.replacedBy, queued.replacedBy)],
     ])));
+    if (queued?.status === "rejected") return draw(rejectedView(queued, hash));
     if (queued?.status === "pending") return draw(panel("Transaction", kv([
       ["Status", state("pending") + ' <span class="dim">waiting for the next block</span>'],
       ["Tx hash", full(hash)],
@@ -711,7 +772,8 @@ function signingInput(tx) {
   const lower = (v) => (typeof v === "string" && /^0x[0-9a-f]+$/i.test(v) ? v.toLowerCase() : v);
   const deep = (v) => (Array.isArray(v) ? v.map(deep)
     : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [lower(k), deep(x)])) : lower(v));
-  return canonical({ input: deep(tx.input ?? {}), code: tx.code ?? null });
+  // deploy with an upgrader: upgrader joins input + code (no upgrader = left out, so the signed text is unchanged)
+  return canonical({ input: deep(tx.input ?? {}), code: tx.code ?? null, ...(tx.upgrader ? { upgrader: String(tx.upgrader).toLowerCase() } : {}) });
 }
 
 /** rerender = false while sending a tx — redrawing would remove the result box (#out) */
@@ -1092,7 +1154,10 @@ async function runWrite(program) {
         return showResult({ ok: false, label: `Transaction · ${functionName}()`, error: "Replaced by another transaction with the same nonce",
           full: found, link: txLinkBtn(found.replacedBy) });
       }
-      if (!found?.blockNumber) continue;
+      if (found?.status === "rejected" && found.block) {
+        return showResult({ ok: false, label: `Transaction · ${functionName}()`, error: `Rejected: ${found.reason}`, full: found, link: txLinkBtn(sent.hash) });
+      }
+      if (!found?.blockNumber || found.status === "rejected") continue;
       const receipt = await api(`/tx/${sent.hash}/receipt`);
       if (seq !== outSeq || !box.isConnected) return;
       return showResult({ ok: receipt.status === "success",
@@ -1247,13 +1312,18 @@ function pickTab(id) {
 async function address(value, draw = el) {
   const [data, tokens] = await Promise.all([api(`/address/${value}?limit=1`), api(`/address/${value}/tokens`).catch(() => [])]);
   const program = data.isProgram ? await api(`/program/${value}?limit=1`) : null;
-  const [incoming, outgoing, events, holders] = await Promise.all([
-    paged(`/address/${value}/incoming`, "in"),
+  // programs: calls and events page by cursor (no counting cap) · the tab counts come from one cheap counted request
+  const [incoming, outgoing, events, holders, , rejected, callCount, eventCount] = await Promise.all([
+    program ? cursored(`/program/${value}/interactions`, "in") : paged(`/address/${value}/incoming`, "in"),
     paged(`/address/${value}/txs`, "out"),
-    program ? paged(`/program/${value}/events`, "events") : null,
+    program ? cursored(`/program/${value}/events`, "events") : null,
     program?.token ? paged(`/token/${value}/holders`, "holders", 25) : null,
     program ? loadLayout(program.address) : null,
+    cursored(`/address/${value}/rejected`, "rej"),
+    program ? api(`/address/${value}/incoming?limit=1`).catch(() => null) : null,
+    program ? api(`/program/${value}/events?limit=1`).catch(() => null) : null,
   ]);
+  const countOf = (res) => (res ? `${num(res.total)}${res.truncated ? "+" : ""}` : undefined);
 
   // Status = the whole tx (same as the tx page) · a nested call that failed inside a successful tx says so beside it
   const callState = (t) => {
@@ -1292,19 +1362,26 @@ async function address(value, draw = el) {
       body: table(["Rank", "Address", "Balance", "Share"], holderRows) + pager(holders, "setPage('holders',$)") });
   }
   groups.push(
-    { id: "in", label: program ? "Calls" : "Incoming", count: incoming.total,
-      body: table(["Hash", "From", "Type", "Method", "Status", "Block", "Age"], inRows) + pager(incoming, "setPage('in',$)") },
+    { id: "in", label: program ? "Calls" : "Incoming", count: program ? countOf(callCount) : incoming.total,
+      body: table(["Hash", "From", "Type", "Method", "Status", "Block", "Age"], inRows) + (program ? cursorPager(incoming, "in") : pager(incoming, "setPage('in',$)")) },
     { id: "out", label: "Outgoing", count: outgoing.total,
       body: table(["Hash", "Type", "Nonce", "Status", "Gas", "Age"], outRows) + pager(outgoing, "setPage('out',$)") },
   );
+  // txs this address sent that were turned away (recorded in blocks, never ran)
+  if (rejected.items.length || rejected.pageNo > 1) {
+    groups.push({ id: "rejected", label: "Rejected", body: table(["Hash", "Type", "Nonce", "Stage", "Reason", "Block", "Age"], rejected.items.map((r) => txRow(r, [
+      txLink(r.hash), actionTag(r.action), r.nonce ?? "—", stageTag(r.stage), `<span class="bad">${esc(r.reason)}</span>`, blockNo(r.blockNumber),
+      `<span class="dim" title="${when(r.timestamp)}">${age(r.timestamp)}</span>`]))) + cursorPager(rejected, "rej") });
+  }
   if (program) {
     groups.push({ id: "code", label: "Code", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
     groups.push({ id: "interact", label: "Interact", body: interactPanel(program) });
-    groups.push({ id: "event", label: "Events", count: events.total,
+    groups.push({ id: "event", label: "Events", count: countOf(eventCount),
       body: table(["Name", "Data", "Tx", "Block"], events.items.map((e) =>
         `<tr><td><span class="tag">${esc(e.name)}</span></td><td>${json(e.data)}</td>
-         <td>${txLink(e.txHash)}</td><td>${blockNo(e.blockNumber)}</td></tr>`)) + pager(events, "setPage('events',$)") });
+         <td>${txLink(e.txHash)}</td><td>${blockNo(e.blockNumber)}</td></tr>`)) + cursorPager(events, "events") });
     groups.push({ id: "storage", label: "Storage", count: storageView.layout?.scanned, body: storagePanel() });
+    groups.push({ id: "upgrade", label: "Upgrade", body: upgradePanel(program, data.metadata ?? {}) });
   } else {
     // a wallet sets its own metadata (signed by that wallet) · a program's metadata comes from its code (setMetadata)
     groups.push({ id: "meta", label: "Edit metadata", body: metaPanel(data) });
@@ -1329,6 +1406,176 @@ async function address(value, draw = el) {
       program && ["Upgrader", meta.upgrader ? addr(meta.upgrader) : '<span class="dim">None (immutable)</span>'],
       program && meta.template && ["Template", addr(meta.template)],
     ])) + tabs(groups));
+}
+
+// ---------- signed actions with a status box: send, wait for the block, report ----------
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const writeOut = (id, v) => { const box = document.getElementById(id); if (box) box.innerHTML = typeof v === "string" ? v : jsonHtml(v); };
+
+/** wait until the tx is in a block (→ receipt) or recorded as rejected (→ { status: "rejected" }) · null = still waiting */
+async function waitForTx(hash, tries = 90) {
+  for (let i = 0; i < tries; i += 1) {
+    await sleep(700);
+    const found = await api(`/tx/${hash}`).catch(() => null);
+    if (found?.status === "rejected" && found.block) return found;
+    if (found?.status === "replaced") return found;
+    if (found?.blockNumber && found.status !== "rejected") return api(`/tx/${hash}/receipt`);
+  }
+  return null;
+}
+
+/** sign + send fields, wait for the outcome and write it to the box #outId · returns the receipt when it succeeded */
+async function signedAction(outId, label, fields) {
+  const out = (v) => writeOut(outId, v);
+  try {
+    out(esc(`${label}: waiting for the wallet signature…`));
+    const sent = await sendTx(fields);
+    if (!sent.queued) { out(sent); return null; }
+    out(`${esc(label)}: sent · waiting for the next block…${txLinkBtn(sent.hash)}`);
+    const result = await waitForTx(sent.hash);
+    if (!result) { out(`${esc(label)}: still waiting for a block — check the transaction page${txLinkBtn(sent.hash)}`); return null; }
+    if (result.status !== "success") {
+      out(`<span class="tag bad">✗ ${esc(STATUS[result.status] ?? result.status)}</span> ${esc(label)}: ${esc(result.reason ?? result.error?.message ?? "")}${txLinkBtn(sent.hash)}`);
+      return null;
+    }
+    out(`<span class="tag ok">✓ Success</span> ${esc(label)} · block ${num(result.blockNumber)}${txLinkBtn(sent.hash)}`);
+    return result;
+  } catch (error) { out(esc(`Error: ${error.message}`)); return null; }
+}
+
+/** typed JSON (input / migrate input) → object with whole numbers as "123n" */
+function jsonInput(id, label) {
+  const raw = document.getElementById(id)?.value.trim() || "{}";
+  let value;
+  try { value = JSON.parse(raw); } catch { throw new Error(`${label} must be JSON, e.g. { "supply": 1000 }`); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be a JSON object { … }`);
+  return bigints(value);
+}
+
+// ---------- review a deployed program (admin: init / reject) ----------
+async function reviewProgram(address, action) {
+  const done = await signedAction("review-out", action === "init" ? "Approve program" : "Reject program", { action, to: address });
+  if (done) { await render(true); writeOut("review-out", `<span class="tag ok">✓ Success</span> ${action === "init" ? "Approved" : "Rejected"} ${addr(address)}`); decorate(); }
+}
+
+// ---------- upgrade tab of a program: new code (upgrader) · upgrade rights · admin review ----------
+const sourceOf = (code) => { try { return JSON.parse(`"${code}"`); } catch { return String(code ?? ""); } };
+let renounceArmed = null;   // program whose "Renounce" button was clicked once (a second click sends)
+
+function upgradePanel(program, meta) {
+  const upgrader = meta.upgrader ?? null;
+  const pending = program.pendingUpgrade, scheduled = program.scheduledUpgrade;
+  const mine = wallet && upgrader === wallet;
+  const head = (text) => `<div class="ix-head"><span><b>${text}</b></span></div>`;
+  return `<div class="pad form" id="upgrade-panel">
+    ${walletRow("Upgrades are signed by the wallet: new code and rights by the upgrader, review by an admin")}
+    <div class="row"><span>Version <b id="up-version">${esc(meta.version ?? 1)}</b></span><span class="dim">·</span>
+      <span>Upgrader ${upgrader ? addr(upgrader) : '<span class="dim">None (immutable)</span>'}</span>
+      ${upgrader && wallet ? `<span class="tag ${mine ? "ok" : "bad"}">${mine ? "You are the upgrader" : "This wallet is not the upgrader"}</span>` : ""}</div>
+    ${pending ? `${head("Pending upgrade · awaiting review")}
+      <div class="dim">Submitted by ${addr(pending.context?.sender)} · migrate input</div>${json(pending.migrateInput ?? {})}
+      <pre id="up-pending-code">${esc(sourceOf(pending.code))}</pre>
+      <div class="row"><button class="btn solid" id="up-approve" onclick="reviewUpgrade('${program.address}','initUpgrade')">Approve upgrade</button>
+        <button class="btn" id="up-reject" onclick="reviewUpgrade('${program.address}','rejectUpgrade')">Reject upgrade</button>
+        <span class="dim">Admin only</span></div>` : ""}
+    ${scheduled ? `<div class="dim">An approved upgrade becomes active at block ${esc(scheduled.activateAt)}</div>` : ""}
+    ${upgrader ? `${head("Submit new code")}
+      <label>New code<textarea id="up-code" rows="10" spellcheck="false">${esc(sourceOf(program.code))}</textarea></label>
+      <label>Migrate input (JSON, passed to migrate)<textarea id="up-input" rows="2" spellcheck="false">{}</textarea></label>
+      <div class="row"><button class="btn solid" id="up-send" onclick="sendUpgrade('${program.address}')">Send upgrade</button>
+        <span class="dim">The new code waits for admin review before it runs</span></div>
+      ${head("Upgrade rights")}
+      <label>New upgrader<input id="up-next" placeholder="0x…" spellcheck="false" autocomplete="off"></label>
+      <div class="row"><button class="btn" id="up-transfer" onclick="transferUpgrader('${program.address}')">Transfer upgrade rights</button>
+        <button class="btn" id="up-renounce" onclick="renounceUpgrader('${program.address}')">${renounceArmed === program.address ? "Click again to renounce for good" : "Renounce (make immutable)"}</button></div>`
+      : '<div class="dim">This program has no upgrader, so its code can never change.</div>'}
+    <div class="out" id="up-out">Nothing sent yet</div>
+  </div>`;
+}
+
+/** after a confirmed upgrade action: redraw the program (version / upgrader / pending) and keep the result line */
+async function upgradeDone(label, receipt) {
+  if (!receipt) return;
+  await render(true);
+  writeOut("up-out", `<span class="tag ok">✓ Success</span> ${esc(label)} · block ${num(receipt.blockNumber)}${txLinkBtn(receipt.hash)}`);
+}
+
+async function sendUpgrade(program) {
+  let fields;
+  try {
+    const code = document.getElementById("up-code").value;
+    if (!code.trim()) throw new Error("Enter the new code");
+    fields = { action: "upgrade", to: program, code, input: jsonInput("up-input", "Migrate input") };
+  } catch (error) { return writeOut("up-out", esc(error.message)); }
+  upgradeDone("Upgrade submitted for review", await signedAction("up-out", "Upgrade", fields));
+}
+
+async function transferUpgrader(program) {
+  const next = document.getElementById("up-next").value.trim();
+  if (!isAddress(next)) return writeOut("up-out", esc("New upgrader must be an address 0x… (40 hex characters)"));
+  upgradeDone("Upgrade rights transferred", await signedAction("up-out", "Transfer upgrade rights", { action: "setUpgrader", to: program, input: { upgrader: next.toLowerCase() } }));
+}
+
+async function renounceUpgrader(program) {
+  if (renounceArmed !== program) {   // two clicks: renouncing can never be undone
+    renounceArmed = program;
+    document.getElementById("up-renounce").textContent = "Click again to renounce for good";
+    return;
+  }
+  renounceArmed = null;
+  upgradeDone("Upgrade rights renounced", await signedAction("up-out", "Renounce upgrade rights", { action: "setUpgrader", to: program, input: { upgrader: null } }));
+}
+
+async function reviewUpgrade(program, action) {
+  const label = action === "initUpgrade" ? "Upgrade approved" : "Upgrade rejected";
+  upgradeDone(label, await signedAction("up-out", action === "initUpgrade" ? "Approve upgrade" : "Reject upgrade", { action, to: program }));
+}
+
+// ---------- deploy a program (signed by the wallet, then waits for review) ----------
+let deployDraft = { code: "function program() {\n  function initialization(params) {}\n  function ping(params) { return 1n; }\n  return { ping };\n}", input: "{}", value: "0", upgrader: "" };
+
+function deployPage(draw = el) {
+  const d = deployDraft;
+  draw(panel("Deploy a program", `<div class="pad form" id="deploy-form">
+    ${walletRow("Deploying sends a signed transaction · the program runs after an admin approves it")}
+    <label>Code<textarea id="dp-code" rows="12" spellcheck="false">${esc(d.code)}</textarea></label>
+    <label>Init input (JSON, passed to initialization)<textarea id="dp-input" rows="2" spellcheck="false">${esc(d.input)}</textarea></label>
+    <label>Attached value (coins)<input id="dp-value" value="${attr(d.value)}" inputmode="decimal"></label>
+    <label>Upgrader (optional · empty = the code can never change)<input id="dp-upgrader" value="${attr(d.upgrader)}" placeholder="0x…" spellcheck="false" autocomplete="off"></label>
+    <div class="row"><button class="btn" onclick="useMyWallet()">Use my wallet as upgrader</button>
+      <button class="btn solid" id="dp-send" onclick="sendDeploy()">Deploy (send transaction)</button></div>
+    <div class="out" id="dp-out">Not sent yet</div>
+  </div>`));
+}
+
+function saveDeployDraft() {
+  for (const field of ["code", "input", "value", "upgrader"]) {
+    const input = document.getElementById(`dp-${field}`);
+    if (input) deployDraft[field] = input.value;
+  }
+}
+
+async function useMyWallet() {
+  saveDeployDraft();
+  try { if (!wallet) await connect(false); } catch (error) { return writeOut("dp-out", esc(error.message)); }
+  deployDraft.upgrader = wallet;
+  document.getElementById("dp-upgrader").value = wallet;
+}
+
+async function sendDeploy() {
+  saveDeployDraft();
+  let fields;
+  try {
+    const { code, upgrader } = deployDraft;
+    if (!code.trim()) throw new Error("Enter the program code");
+    if (upgrader.trim() && !isAddress(upgrader.trim())) throw new Error("Upgrader must be an address 0x… (40 hex characters) or empty");
+    fields = { action: "deploy", code, input: jsonInput("dp-input", "Init input"), value: toWei(deployDraft.value),
+      ...(upgrader.trim() ? { upgrader: upgrader.trim().toLowerCase() } : {}) };
+  } catch (error) { return writeOut("dp-out", esc(error.message)); }
+  const receipt = await signedAction("dp-out", "Deploy", fields);
+  const program = receipt?.result?.programUuid;
+  if (program) writeOut("dp-out", `<span class="tag ok">✓ Deployed</span> ${addr(program, program)} <span class="dim">awaiting approval</span>${txLinkBtn(receipt.hash)}`);
+  decorate();
 }
 
 // ---------- edit metadata (signed by the wallet) ----------
@@ -1416,6 +1663,7 @@ async function render(soft) {
   else if (kind === "tx") await tx(value, draw);
   else if (kind === "address") await address(value, draw);
   else if (kind === "programs") await programs(draw);
+  else if (kind === "deploy") deployPage(draw);
   else await home(draw);
   if (soft && seq === renderSeq) scrollTo(0, y);
 }

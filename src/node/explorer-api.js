@@ -254,3 +254,80 @@ export function pageApprovedPrograms(vm, paging) {
       codeSize: codeSize(code), token: checkTokenStandard(code ?? "").ok };
   }) };
 }
+
+// ---------- แบบ cursor (เหมือนแถบ storage): อ่านแค่ limit + 1 key ต่อครั้ง ไม่ต้องนับทั้งรายการ ----------
+
+/** อ่าน limit / cursor จาก query string */
+export function cursorOf(query) {
+  const limit = Math.min(Math.max(Math.floor(Number(query?.get?.("limit"))) || 20, 1), MAX_PAGE_SIZE);
+  return { limit, cursor: query?.get?.("cursor") || undefined };
+}
+
+/** ใหม่ไปเก่า → { items, next } · next = dbKey ของรายการแรกของหน้าถัดไป (ส่งกลับมาเป็น cursor) · null = หมดแล้ว */
+export function cursorEntries(vm, prefix, { limit = 20, cursor } = {}, map = (dbKey) => vm.read(dbKey)) {
+  const start = typeof cursor === "string" && cursor.startsWith(prefix) ? cursor : undefined;   // cursor ของรายการอื่น = เริ่มใหม่
+  const keys = vm.listKeys(prefix, { limit: limit + 1, reverse: true, start });
+  return { items: keys.slice(0, limit).map(map), next: keys.length > limit ? keys[limit] : null, limit };
+}
+
+/** tx ที่เข้ามาหา address / โปรแกรม (รวม call ซ้อน) แบบ cursor */
+export const cursorTransactionsTo = (vm, address, options) => cursorEntries(vm, `txto${SEP}${lower(address)}${SEP}`, options);
+
+/** event ของโปรแกรมแบบ cursor · name = เฉพาะชื่อนั้น */
+export const cursorEvents = (vm, program, options, name = "") =>
+  cursorEntries(vm, `event${SEP}${lower(program)}${SEP}${name ? `${name}${SEP}` : ""}`, options);
+
+// ---------- กลุ่มของ storage (นับครบทุก key แบบแบ่งช่วง) ----------
+
+export const GROUP_SCAN = 20_000;      // key ต่อ request ตั้งต้น
+export const MAX_GROUP_SCAN = 50_000;  // เพดานต่อ request
+
+/**
+ * นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (ไม่เกิน scan key ต่อ request → ต้นทุนต่อ request มีเพดาน)
+ *   → { total, groups: [{ name, count }], scanned, next, complete }
+ * total / groups = เฉพาะช่วงนี้ · ยังไม่ครบ (next ไม่ใช่ null) → ส่ง cursor=next มาอีกครั้งแล้วบวกผลรวมกันเอง
+ */
+export function storageGroups(vm, address, { cursor, scan = GROUP_SCAN } = {}) {
+  const base = baseOf(address);
+  const limit = Math.min(Math.max(Math.floor(Number(scan)) || GROUP_SCAN, 1), MAX_GROUP_SCAN);
+  const start = typeof cursor === "string" && cursor.startsWith(base) ? cursor : undefined;
+  const keys = vm.listKeys(base, { start, limit: limit + 1 });
+  const counts = new Map();
+  for (const dbKey of keys.slice(0, limit)) {
+    const [head] = dbKey.slice(base.length).split(SEP);
+    counts.set(head, (counts.get(head) ?? 0) + 1);
+  }
+  const scanned = Math.min(keys.length, limit);
+  const next = keys.length > limit ? keys[limit] : null;
+  return { total: scanned, groups: [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1)),
+    scanned, next, complete: next === null };
+}
+
+// ---------- tx ที่ถูกปฏิเสธ (บันทึกอยู่ใน block) ----------
+
+export const REJECTED_SCAN_BLOCKS = 1000;   // ไล่ไม่เกินเท่านี้ block ต่อ request (ไม่ระบุ address)
+
+/**
+ * tx ที่ถูกปฏิเสธ ใหม่ไปเก่า → { items, next }
+ *   address = เฉพาะผู้ส่งคนนี้ (ดัชนี rejfrom: · cursor = dbKey)
+ *   ไม่ระบุ = ทั้งเชน ไล่ block จากใหม่ไปเก่า (cursor = "<block>:<index>") ไม่เกิน REJECTED_SCAN_BLOCKS block ต่อครั้ง
+ *            ไล่ครบเพดานแล้วยังไม่ครบ limit → items น้อยกว่า limit และมี next ให้ไล่ต่อ
+ */
+export function pageRejected(vm, { address, limit = 20, cursor } = {}) {
+  if (address) return cursorEntries(vm, `rejfrom${SEP}${lower(address)}${SEP}`, { limit, cursor });
+  const latest = vm.latestBlockNumber() ?? 0;
+  const [rawBlock, rawIndex] = String(cursor ?? "").split(SEP);
+  let number = Number(rawBlock) > 0 && Number.isSafeInteger(Number(rawBlock)) ? Math.min(Number(rawBlock), latest) : latest;
+  let from = rawIndex !== undefined && rawIndex !== "" && Number.isSafeInteger(Number(rawIndex)) ? Number(rawIndex) : Infinity;
+  const items = [];
+  for (let scanned = 0; number > 0 && scanned < REJECTED_SCAN_BLOCKS; number -= 1, scanned += 1, from = Infinity) {
+    const header = vm.getBlock(number);
+    if (!header?.rejectedCount) continue;
+    const list = vm.getBlockRejected(number);
+    for (let index = Math.min(from, list.length - 1); index >= 0; index -= 1) {
+      if (items.length === limit) return { items, next: `${number}${SEP}${index}`, limit };
+      items.push({ ...list[index], blockNumber: number, index, timestamp: header.timestamp });
+    }
+  }
+  return { items, next: number > 0 ? String(number) : null, limit };
+}
