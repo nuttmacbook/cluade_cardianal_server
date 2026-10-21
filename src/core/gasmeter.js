@@ -16,7 +16,7 @@
  *
  * บรรทัดของโค้ดไม่เปลี่ยน (ข้อความ error ยังชี้บรรทัดเดิม) แต่คอลัมน์เลื่อน
  */
-import { parse } from "acorn";
+import { parse, tokenizer } from "acorn";
 
 export const GAS_FN = "__gas";
 export const CALL_FN = "__call";
@@ -95,21 +95,46 @@ export function instrument(body) {
     for (const child of children(node)) visit(child);
   };
 
+  // token ของโค้ด (ไม่รวมคอมเมนต์) — ใช้หาตำแหน่ง . [ ] ( ) จริง เพราะช่วงของ node ที่อยู่ในวงเล็บ
+  // ไม่รวมวงเล็บของมันเอง เช่น (255).toString(36): ช่วงของ 255 จบก่อน ")" — ห้ามตัดข้อความตามช่วง node ตรง ๆ
+  let tokens = null;
+  const tokensFrom = (pos) => {
+    tokens ??= [...tokenizer(body, { ecmaVersion: "latest", allowReturnOutsideFunction: true })];
+    let lo = 0, hi = tokens.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tokens[mid].start < pos) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  const keepLines = (from, to) => "\n".repeat((body.slice(from, to).match(/\n/g) ?? []).length);
+  const drop = (token) => replace(token.start, token.end, "");
+
   // obj.method(a, b) → __call(obj,"method",[a, b])   ·   obj[expr](a) → __call(obj,(expr),[a])
+  // วงเล็บรอบ obj / expr คงไว้ · วงเล็บรอบตัว callee เช่น (obj.method)(a) ถูกลบ (this ยังเป็น obj เหมือนเดิม)
   const rewriteCall = (node) => {
     const callee = node.callee;
     if (callee.type !== "MemberExpression" || node.optional || callee.optional || callee.object.type === "Super") return;
     const { object, property, computed } = callee;
     if (!computed && !(property.type === "Identifier" && SIZED_METHODS.has(property.name))) return;
     const span = node.end - node.start;
-    const paren = body.indexOf("(", computed ? body.indexOf("]", property.end) : property.end);
-    const keepLines = (from, to) => "\n".repeat((body.slice(from, to).match(/\n/g) ?? []).length);
+    // ")" ที่ปิดตัว obj อยู่ก่อน "." / "[" → token "." / "[" ตัวแรกหลัง obj คือตัวเชื่อม member
+    let i = tokensFrom(object.end);
+    while (tokens[i].type.label === ")") i += 1;
+    const member = tokens[i];
+    // ")" หลัง callee = วงเล็บที่ครอบ callee → ตามด้วย "(" ของการเรียก
+    let j = tokensFrom(callee.end);
+    const calleeParens = [];
+    while (tokens[j].type.label === ")") calleeParens.push(tokens[j++]);
+    const paren = tokens[j];
+    // "(" ที่เปิดครอบ callee อยู่ระหว่างต้นการเรียกกับต้น callee (นับจากด้านใน)
+    for (let k = tokensFrom(callee.start) - 1, n = calleeParens.length; n > 0; k -= 1, n -= 1) drop(tokens[k]);
+    for (const token of calleeParens) drop(token);
     open(node.start, `${CALL_FN}(`, span, PRIORITY.call);
     if (computed) {
-      replace(object.end, property.start, `,(${keepLines(object.end, property.start)}`);
-      replace(property.end, paren + 1, `),[${keepLines(property.end, paren + 1)}`);
+      replace(member.start, member.end, ",(");
+      replace(callee.end - 1, callee.end, ")");   // "]" ปิดของ obj[expr]
+      replace(paren.start, paren.end, ",[");
     } else {
-      replace(object.end, paren + 1, `,"${property.name}",[${keepLines(object.end, paren + 1)}`);
+      replace(member.start, property.end, `,"${property.name}"${keepLines(member.start, property.end)}`);
+      replace(paren.start, paren.end, ",[");
     }
     close(node.end - 1, "]", span);
   };

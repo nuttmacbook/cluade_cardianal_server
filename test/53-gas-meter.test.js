@@ -137,3 +137,33 @@ test("ชื่อ __gas / __call สงวนไว้ → deploy ไม่ผ�
     assert.match(res.error.message, /สงวนไว้/);
   }
 });
+
+test("เรียกเมธอดบนตัวเลข / ค่าในวงเล็บ: (255).toString(36) · 1..toString() · (1n).toString(16) แปลงแล้วยังเป็นโค้ดที่ถูกต้อง", () => {
+  const cases = [
+    "(255).toString(36)", "1..toString()", "1.5.toString()", "(1n).toString(16)", "((255)) . toString ( 2 )",
+    "(list).join('-')", "(list.join)('+')", "(((list.join)))('*')", "((list)[name])('/')", "list[(name)]('|')",
+    "(list.slice(1)).join(',')", "list /* .x( */ . join /* ) */ ('~')", "(\n255\n)\n.toString(\n36\n)",
+  ];
+  for (const expr of cases) {
+    const body = `const list = ["a", "b", "c"]; const name = "join"; return ${expr};`;
+    const expected = new Function(body)();
+    const code = instrument(body);
+    const calls = [];
+    const actual = new Function("__gas", "__call", code)(() => {}, (target, method, args) => { calls.push(method); return target[method](...args); });
+    assert.equal(actual, expected, `${expr} → ${code}`);
+    assert.ok(calls.length > 0, `${expr} ต้องผ่าน __call`);
+    assert.equal(code.split("\n").length, body.split("\n").length, `${expr}: บรรทัดต้องเท่าเดิม`);
+  }
+});
+
+test("โปรแกรมที่ใช้ (255).toString(36) / 1..toString() / (1n).toString(16) deploy และรันได้ (ผ่าน autoreview)", () => {
+  const code = `function program() {
+    function show() { return [(255).toString(36), 1..toString(), (1n).toString(16), (255n).toString(2), ("ab").toUpperCase()] }
+    return { show }
+  }`;
+  const { activate, call } = setup({ autoReview: true });
+  activate("lit", code);
+  const res = call("lit", "show");
+  assert.equal(res.status, "success", JSON.stringify(res.error));
+  assert.deepEqual(res.result, ["73", "1", "1", "11111111", "AB"]);
+});
