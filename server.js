@@ -10,6 +10,9 @@
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
  *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
  *   UPGRADE_DELAY_BLOCKS=0   timelock ของการอัปเกรดโปรแกรม: โค้ดใหม่เริ่มใช้ที่ block (ที่อนุมัติ + N) · 0 = ทันที
+ *   REJECTED_PER_BLOCK=1000  tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแต่ไม่ได้รัน) ที่บันทึกลง block ได้ต่อ block (ที่เกินยกไป block ถัดไป)
+ *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
+ *   REPLACED_LOG_DAYS=30     อายุสูงสุดของบันทึกใบที่ถูกแทนที่
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -19,13 +22,15 @@ import { reviewProgram } from "./src/core/autoreview.js";
 import { DB, MemoryDB } from "./src/storage/db.js";
 import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
+import { TxLog } from "./src/node/txlog.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
-  programCounts, pagePendingPrograms, pageApprovedPrograms } from "./src/node/explorer-api.js";
+  programCounts, pagePendingPrograms, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
+  storageGroups, pageRejected } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
@@ -50,7 +55,14 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA)
   admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
   upgradeDelayBlocks: Number(process.env.UPGRADE_DELAY_BLOCKS ?? 0),   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
 });
-export const mempool = new Mempool(vm);
+// ใบที่ถูกแทนที่ (replace-by-fee): จำแบบ off-chain มีเพดาน · มี DATA = ไฟล์ JSON lines ข้าง LMDB → /tx ตอบ "replaced" ได้แม้ restart
+export const replacedLog = new TxLog({
+  file: process.env.DATA ? path.join(process.env.DATA, "replaced-tx.jsonl") : null,
+  maxEntries: Number(process.env.REPLACED_LOG_MAX ?? 100_000),
+  maxAgeMs: Number(process.env.REPLACED_LOG_DAYS ?? 30) * 24 * 60 * 60_000,
+});
+// tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแล้ว) ถูกบันทึกลง block ถัดไป (block.recordRejected) — ดู src/node/mempool.js
+export const mempool = new Mempool(vm, { replacedLog, maxRejectedPerBlock: Number(process.env.REJECTED_PER_BLOCK ?? 1000) });
 // POST ทุกตัวอาจรันโปรแกรม → จำกัดต่อ IP (ส่วน /sendtx ยังมี rate limit ต่อ address ใน mempool อีกชั้น)
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 // ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
@@ -60,13 +72,14 @@ if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("g
 
 let mining = false;
 export const miner = setInterval(() => {
-  if (mining || mempool.size === 0) return;
+  if (mining || (mempool.size === 0 && mempool.rejectedPending === 0)) return;   // มีแค่ tx ที่ถูกปฏิเสธก็ปิด block เพื่อบันทึก
   mining = true;
   try {
     const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: MINER });
     const included = mempool.take(block);
     block.commit();
-    console.log(`block ${block.number} ปิดแล้ว (${included.length} tx)`);
+    const rejected = block.rejectedTransactions().length;
+    console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
   } catch (error) {
     console.error("ปิด block ล้มเหลว:", error.message);
   } finally { mining = false; }
@@ -88,7 +101,9 @@ const ROUTES = {
   // แบบแบ่งหน้า: ?page=<เลขหน้า>&limit=<ต่อหน้า> → { items, total, page, pages, limit, truncated }
   "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "No blocks yet" },
-  "/pending": () => ({ size: mempool.size, transactions: mempool.list() }),
+  "/pending": () => ({ size: mempool.size, transactions: mempool.list(), rejectedPending: mempool.rejectedPending }),
+  // tx ที่ถูกปฏิเสธ (บันทึกใน block) ใหม่ไปเก่า: ?address=<ผู้ส่ง>&limit=&cursor= → { items, next }
+  "/rejected": (query) => pageRejected(vm, { address: query.get("address") || undefined, ...cursorOf(query) }),
   // โปรแกรม: จำนวนที่อนุมัติแล้ว / รออนุมัติ + รายการแบบแบ่งหน้า
   "/programs": () => programCounts(vm),
   "/programs/pending": (query) => pagePendingPrograms(vm, pageOf(query)),
@@ -117,8 +132,13 @@ const DYNAMIC = [
     const found = vm.getTransaction(m[1]);
     if (found) return found;
     if (mempool.has(m[1])) return { status: "pending", hash: m[1] };
-    const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (จำไว้ ttlMs)
+    const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (off-chain · มี DATA = อยู่รอด restart)
     if (replacedBy) return { status: "replaced", hash: m[1], replacedBy };
+    // ถูกปฏิเสธ (ไม่ได้รัน): บันทึกอยู่ใน block แล้ว หรือยังรอ block ถัดไป (block: null)
+    const rejected = vm.getRejectedTransaction(m[1]);
+    if (rejected) return { status: "rejected", ...rejected, block: rejected.blockNumber };
+    const waiting = mempool.pendingRejection(m[1]);
+    if (waiting) return { status: "rejected", ...waiting, block: null, blockNumber: null };
     return { status: 404, body: { error: "Transaction not found" } };
   }],
   [/^\/address\/([^/]+)$/, (m, query) => ({
@@ -157,24 +177,20 @@ const DYNAMIC = [
   }],
   // โค้ดทุกเวอร์ชันของโปรแกรมที่เคยอัปเกรด [{ version, code, blockNumber, timestamp }]
   [/^\/program\/([^/]+)\/versions$/, (m) => vm.listCodeVersions(m[1])],
-  [/^\/program\/([^/]+)\/groups$/, (m, query) => {
-    const address = lower(m[1]);
-    const counts = new Map();
-    let total = 0;
-    for (const key of vm.listKeys(`${address}:storage:`, { limit: 5000 })) {
-      const [head] = key.slice(`${address}:storage:`.length).split(":");
-      counts.set(head, (counts.get(head) ?? 0) + 1);
-      total += 1;
-    }
-    return { total, groups: [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) };
-  }],
+  // นับ key ตามชื่อ key แรก ทีละช่วง ?scan=<key ต่อครั้ง ≤ 50,000>&cursor=<next> → { total, groups, scanned, next, complete }
+  [/^\/program\/([^/]+)\/groups$/, (m, query) => storageGroups(vm, m[1], { cursor: query.get("cursor") || undefined, scan: query.get("scan") })],
+  // แบบ cursor (ไม่นับทั้งรายการ): ?limit=&cursor=<next> → { items, next }
+  [/^\/program\/([^/]+)\/interactions$/, (m, query) => cursorTransactionsTo(vm, m[1], cursorOf(query))],
   // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
   // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
   [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
   [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "Not a standard token" } }],
   [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
-  [/^\/address\/([^/]+)\/incoming$/, (m, query) => pageTransactionsTo(vm, m[1], pageOf(query))],
-  [/^\/program\/([^/]+)\/events$/, (m, query) => pageEvents(vm, m[1], pageOf(query), query.get("name") ?? "")],
+  [/^\/address\/([^/]+)\/incoming$/, (m, query) => (query.has("cursor") ? cursorTransactionsTo(vm, m[1], cursorOf(query)) : pageTransactionsTo(vm, m[1], pageOf(query)))],
+  // ?page= → เลขหน้า (นับรวมไม่เกิน 50,000) · ?cursor= (ว่างได้ = หน้าแรก) → แบบ cursor ไม่มีเพดาน
+  [/^\/program\/([^/]+)\/events$/, (m, query) => (query.has("cursor") ? cursorEvents(vm, m[1], cursorOf(query), query.get("name") ?? "")
+    : pageEvents(vm, m[1], pageOf(query), query.get("name") ?? ""))],
+  [/^\/address\/([^/]+)\/rejected$/, (m, query) => pageRejected(vm, { address: m[1], ...cursorOf(query) })],
   [/^\/program\/([^/]+)\/entries$/, (m, query) => pageStorageMap(vm, m[1], query.get("name") ?? "", pageOf(query))],
   [/^\/token\/([^/]+)\/holders$/, (m, query) => pageHolders(vm, m[1], pageOf(query))],
   [/^\/program\/([^/]+)\/layout$/, (m) => storageLayout(vm, m[1])],
@@ -189,7 +205,10 @@ const DYNAMIC = [
   [/^\/sync$/, (m, query) => {
     const from = Math.max(1, Number(query.get("from")) || 1);
     const blocks = [];
-    for (let n = from; n <= Math.min(vm.latestBlockNumber() ?? 0, from + 49); n += 1) blocks.push({ header: vm.getBlock(n), body: vm.getBlockBody(n) });
+    // rejected = tx ที่ถูกปฏิเสธที่บันทึกใน block (อยู่ใน hash ของ block ผู้ซิงก์ต้องใส่ครบตามลำดับ)
+    for (let n = from; n <= Math.min(vm.latestBlockNumber() ?? 0, from + 49); n += 1) {
+      blocks.push({ header: vm.getBlock(n), body: vm.getBlockBody(n), rejected: vm.getBlockRejected(n) });
+    }
     return blocks;
   }],
 ];
