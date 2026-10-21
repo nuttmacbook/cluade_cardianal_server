@@ -875,3 +875,36 @@ test("EIP-1559 + ABI: block บอก base fee / fee split · tx จากหน
   assert.match(await view(), /function note\(address to, uint count\)[\s\S]*event Noted\(indexed address to, uint count\)/);
   assert.deepEqual(pageErrors, []);
 });
+
+test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / drawer ☰ (มือถือ) · การ์ดมีป้ายชื่อด้านบน + หัวตารางสีม่วง", async () => {
+  const original = page.viewportSize();
+  try {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await open("");
+    assert.equal(await page.locator("#side").isVisible(), true);
+    assert.equal(await page.locator("#menu-btn").isVisible(), false);
+    assert.equal(await page.locator("#side [data-nav=home].on").count(), 1);
+    assert.equal(await page.locator("header .pill[data-nav=explore].on").count(), 1);
+    assert.notEqual(await page.locator("#view th").first().evaluate((th) => getComputedStyle(th).backgroundColor), "rgba(0, 0, 0, 0)");
+    await page.waitForSelector("#side-programs a[data-nav^='a:']");                 // โปรแกรมล่าสุดในแถบข้าง
+    await page.click("#side a[data-nav=programs-approved]");
+    await page.waitForFunction(() => location.hash === "#programs");
+    await settle();
+    assert.equal(await page.locator("button.tab.on[data-tab=approved]").count(), 1);
+    assert.equal(await page.locator("#side [data-nav=programs-approved].on").count(), 1);
+    assert.equal(await page.locator("#side [data-nav=home].on").count(), 0);
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await open("");
+    assert.equal(await page.locator("#side").isVisible(), false);                     // พับเป็น drawer
+    await page.click("#menu-btn");
+    await page.waitForFunction(() => getComputedStyle(document.getElementById("side")).visibility === "visible");
+    await page.click("#side a[data-nav=deploy]");
+    await page.waitForFunction(() => location.hash === "#deploy");
+    assert.equal(await page.evaluate(() => document.body.classList.contains("side-open")), false);   // เลือกแล้ว drawer ปิด
+    assert.equal(await page.locator("#dbtn.on").count(), 1);
+  } finally {
+    await page.setViewportSize(original ?? { width: 1280, height: 720 });
+  }
+  assert.deepEqual(pageErrors, []);
+});
