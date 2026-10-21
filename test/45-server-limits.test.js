@@ -98,7 +98,7 @@ test("mempool: simulate ผ่าน → เข้าคิวและคืน
 let server, vm, url;
 
 before(async () => {
-  process.env.TIMEOUT_MS = "300";
+  process.env.TIMEOUT_MS = "1000";   // ลูป 3M แก๊สใน QuickJS ใช้ ~100ms (ช้ากว่านั้นเมื่อเครื่องโหลดหนัก) ต้องหมดแก๊สก่อนหมดเวลา
   process.env.RATE_LIMIT = "4";
   ({ server, vm } = await import("../server.js"));
   const plain = new VM.VirtualMachine(vm.db);

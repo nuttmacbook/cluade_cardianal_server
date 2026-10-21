@@ -28,7 +28,8 @@
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.0.0",
     "acorn": "^8.0.0",
-    "lmdb": "^3.0.0"
+    "lmdb": "^3.0.0",
+    "quickjs-emscripten": "0.32.0"
   },
   "devDependencies": {
     "ethers": "^6.0.0",

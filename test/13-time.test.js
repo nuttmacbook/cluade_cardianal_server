@@ -22,7 +22,8 @@ test("เวลาในโปรแกรม: Date.now / new Date / Date() / pa
     dateNow: n(T),
     newDate: n(T),
     iso: "2024-06-01T12:00:00.000Z",
-    asString: new Date(T).toString(),
+    // QuickJS ไม่ต่อท้ายชื่อเขตเวลา "(Coordinated Universal Time)" แบบ V8
+    asString: new Date(T).toString().replace(/ \(.*\)$/, ""),
     isDate: true,
     epoch: "0n",
     fromString: n(Date.UTC(2020, 0, 1)),
