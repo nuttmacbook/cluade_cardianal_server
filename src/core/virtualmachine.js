@@ -1,4 +1,7 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { ripemd160 } from "@noble/hashes/legacy.js";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
 import { instrument, GAS_FN, CALL_FN } from "./gasmeter.js";
@@ -65,6 +68,8 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *
  *  API ในโปรแกรม: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
  *                 keccak256 / ecrecover / ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
+ *                 sha256 / ripemd160 / blake2b / modexp / BlockHash / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft
+ *                 CodeHashOf / CodeSizeOf · runProgram(..., { readonly: true }) = เรียกแบบอ่านอย่างเดียว (STATICCALL)
  *  ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น เช่น 10n (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
  *    ยอด native (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() เป็น BigInt
  *    Date.now() / Math ยังคืน number → ห่อ BigInt() ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งเป็น string)
@@ -141,6 +146,14 @@ export const addressFromHash = (hash) => `0x${hash.slice(-40)}`;
 /** hash เริ่มต้น: keccak256 แบบเดียวกับ EVM (เปลี่ยนได้ด้วย option hashFunction) */
 export const keccak256Hex = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 const hexToBytesStrict = (hex) => hexToBytes(String(hex).replace(/^0x/, ""));
+/** precompile hash ที่โปรแกรมเรียกได้ (ชื่อ = ชื่อ API = ชื่อในตารางแก๊ส) */
+const DIGESTS = { sha256, ripemd160, blake2b };
+/** จำนวน bit ของ BigInt ที่ไม่ติดลบ (0n → 0) */
+const bitLength = (value) => {
+  if (value === 0n) return 0;
+  const hex = value.toString(16);
+  return (hex.length - 1) * 4 + Number.parseInt(hex[0], 16).toString(2).length;
+};
 
 /** ตารางค่าแก๊ส */
 export const DEFAULT_GAS = {
@@ -151,6 +164,11 @@ export const DEFAULT_GAS = {
   event: 200,  // ต่อ event 1 รายการ (บวกค่า byte ของข้อมูลใน event)
   hash: 100,   // ต่อการเรียก keccak256 (บวกค่า byte ของข้อมูล)
   recover: 3000, // ต่อการเรียก ecrecover (คำนวณหนัก)
+  sha256: 100,    // ต่อการเรียก sha256 (บวกค่า byte ของข้อมูล)
+  ripemd160: 300, // ต่อการเรียก ripemd160 (บวกค่า byte ของข้อมูล — ช้ากว่า sha256 ราว 3 เท่า)
+  blake2b: 100,   // ต่อการเรียก blake2b (บวกค่า byte ของข้อมูล)
+  modexp: 200,    // ต่อการเรียก modexp ขั้นต่ำ บวก ⌊word² × bit ของ exponent / 3⌋ (word = 8 byte ของตัวที่ยาวสุดใน base / mod แบบ EIP-2565)
+  env: 10,        // ต่อการเรียก ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft
   code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
   node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
   builtin: 1,  // ต่อหน่วยข้อมูล (ตัวอักษร / สมาชิก) ที่เมธอดในตัวอย่าง join, split, JSON.stringify รับเข้าและส่งออก
@@ -239,6 +257,11 @@ export const ERRORS = {
   invalidSandboxLimit: [INVALID_REQUEST, (name, [min, max]) => `${name} ต้องเป็นจำนวนเต็มระหว่าง ${min} ถึง ${max}`],
   templateNotActive: [NOT_FOUND, (id) => `โปรแกรมต้นแบบ '${id}' ไม่มีอยู่หรือยังไม่ได้รับอนุมัติ`],
   invalidSalt: [INVALID_REQUEST, "salt ต้องเป็น string ที่ไม่ว่าง หรือ BigInt"],
+  invalidReadonly: [INVALID_REQUEST, "readonly ต้องเป็น true / false"],
+  readonlyCall: [FORBIDDEN, (name) => `${name}() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว (runProgram แบบ { readonly: true } ห้ามแก้ state ทุกชั้น)`],
+  readonlyValue: [INVALID_REQUEST, "การเรียกแบบอ่านอย่างเดียว (readonly) แนบ value ไม่ได้"],
+  invalidBlockNumber: [INVALID_REQUEST, "เลข block ต้องเป็น BigInt ที่ไม่ติดลบ"],
+  invalidModexp: [INVALID_REQUEST, (max) => `modexp: base / exponent / modulus ต้องเป็น BigInt ที่ไม่ติดลบ และยาวไม่เกิน ${max} ไบต์`],
 };
 
 // ============================================================================
@@ -256,7 +279,14 @@ const PROGRAM_API_NAMES = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
   "keccak256", "ecrecover", "cloneProgram",
   "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber", "Date", "Math",
+  "sha256", "ripemd160", "blake2b", "modexp",
+  "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "GasLeft", "CodeHashOf", "CodeSizeOf",
 ];
+
+/** BlockHash ย้อนได้กี่ block (เหมือน BLOCKHASH ของ EVM) */
+export const BLOCK_HASH_WINDOW = 256;
+/** ขนาดสูงสุดของแต่ละค่าใน modexp (เหมือน EIP-7823) */
+export const MODEXP_MAX_BYTES = 1024;
 
 /**
  * โปรแกรมอยู่ใน scope เดียวทั้งไฟล์ และเป็น JavaScript ที่ถูกต้อง (editor / prettier ใช้ได้)
@@ -406,11 +436,15 @@ export function fromProgramAmount(amount, label = "amount") {
   return amount;
 }
 
-/** options ของ runProgram: { value } เป็น BigInt */
+/** options ของ runProgram: { value } เป็น BigInt · { readonly: true } = เรียกแบบอ่านอย่างเดียว (STATICCALL) */
 export function fromProgramOptions(options) {
   if (options === undefined || options === null) return undefined;
-  const { value } = options;
-  return value === undefined ? {} : { value: fromProgramAmount(value, "value") };
+  const { value, readonly } = options;
+  if (readonly !== undefined && readonly !== null && typeof readonly !== "boolean") fail(ERRORS.invalidReadonly);
+  return {
+    ...(value === undefined ? {} : { value: fromProgramAmount(value, "value") }),
+    ...(readonly ? { readonly: true } : {}),
+  };
 }
 
 /** ค่าเข้า / ออกจากโปรแกรม: "123n" ↔ BigInt แปลงไปกลับให้อัตโนมัติ */
@@ -2107,7 +2141,7 @@ export class VirtualMachine {
    *   code   โค้ดบรรทัดเดียว (ใช้ตอน init เพราะยังไม่อยู่ใน DB)
    *   isInit อนุญาตให้เรียก initialization
    */
-  runFunction(tx, { programUuid: rawProgramUuid, functionName, input = {}, context: rawContext, value = 0, depth = 0, code, isInit = false, callType }) {
+  runFunction(tx, { programUuid: rawProgramUuid, functionName, input = {}, context: rawContext, value = 0, depth = 0, code, isInit = false, callType, readonly = false }) {
     const programUuid = normalizeAddress(rawProgramUuid);
     const context = normalizeContext(rawContext);
     if (depth > tx.maxCallDepth) fail(ERRORS.callDepthExceeded, tx.maxCallDepth);
@@ -2120,7 +2154,7 @@ export class VirtualMachine {
     const record = tx.startCall({ depth, programUuid, functionName, context, input, value, gasStart, type: callType });
 
     try {
-      const api = this.createProgramApi(tx, { programUuid, context, depth });
+      const api = this.createProgramApi(tx, { programUuid, context, depth, readonly });
       const params = {
         input: toProgram(toInputValue(input, "input") ?? {}, "input"),
         context: pickContext(context),
@@ -2163,6 +2197,7 @@ export class VirtualMachine {
    * API ฝั่ง host ที่โปรแกรมเรียกผ่าน sandbox (ค่าที่ได้รับเป็นสำเนาจากโปรแกรมเสมอ)
    * __gas / __call / map / Date / Math / ThisAddress / BlockNumber อยู่ใน sandbox เอง (ดู sandbox.js)
    * ทุกฟังก์ชันหยุดทันทีถ้า DB พังไปแล้วใน request นี้
+   * caller.readonly (เรียกด้วย runProgram แบบ { readonly: true } ชั้นใดชั้นหนึ่งด้านบน) → API ที่แก้ state throw (catch ได้)
    */
   createProgramApi(tx, caller) {
     const { programUuid } = caller;
@@ -2170,25 +2205,48 @@ export class VirtualMachine {
       tx.assertAlive();
       return fn(...args);
     };
+    const mutating = (name, fn) => guard((...args) => {
+      if (caller.readonly) fail(ERRORS.readonlyCall, name);
+      return fn(...args);
+    });
+    const text = (value, label) => (typeof value === "string" ? value : fromProgram(value, label));
     return {
       ThisBalance: guard(() => this.programNativeBalance(tx, programUuid)),
       BalanceOf: guard((address) => this.programNativeBalance(tx, address)),
       IsProgram: guard((address) => this.programIsProgram(tx, address)),
       MetadataOf: guard((address, field) => toProgram(this.programMetadataOf(tx, address, field) ?? null, "metadata")),
       readDB: guard((key) => this.programReadDB(tx, programUuid, key)),
-      writeDB: guard((key, value) => this.programWriteDB(tx, programUuid, key, value)),
-      deleteDB: guard((key) => this.programDeleteDB(tx, programUuid, key)),
-      transferNative: guard((to, amount) => this.programTransferNative(tx, programUuid, to, fromProgramAmount(amount))),
-      setMetadata: guard((field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata"))),
-      emit: guard((name, data) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"))),
+      writeDB: mutating("writeDB", (key, value) => this.programWriteDB(tx, programUuid, key, value)),
+      deleteDB: mutating("deleteDB", (key) => this.programDeleteDB(tx, programUuid, key)),
+      transferNative: mutating("transferNative", (to, amount) => this.programTransferNative(tx, programUuid, to, fromProgramAmount(amount))),
+      setMetadata: mutating("setMetadata", (field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata"))),
+      emit: mutating("emit", (name, data) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"))),
       keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ keccak256"))),
       ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ ecrecover"), signature)),
       runProgram: guard((target, functionName, input, options) => toProgram(
         this.programRunProgram(tx, caller, target, functionName,
           fromProgram(input ?? {}, "input"), fromProgramOptions(options)) ?? null,
         "ผลลัพธ์")),
-      cloneProgram: guard((template, initInput, options) => this.programCloneProgram(tx, caller, template,
+      cloneProgram: mutating("cloneProgram", (template, initInput, options) => this.programCloneProgram(tx, caller, template,
         fromProgram(initInput ?? {}, "initInput"), options)),
+      // ---- precompile (ข้อมูลเข้าแบบเดียวกับ keccak256: string หรือข้อมูล JSON) ----
+      sha256: guard((value) => this.programDigest(tx, "sha256", text(value, "ค่าที่ sha256"))),
+      ripemd160: guard((value) => this.programDigest(tx, "ripemd160", text(value, "ค่าที่ ripemd160"))),
+      blake2b: guard((value) => this.programDigest(tx, "blake2b", text(value, "ค่าที่ blake2b"))),
+      modexp: guard((base, exponent, modulus) => this.programModexp(tx, base, exponent, modulus)),
+      // ---- ข้อมูลของ block / tx / โค้ด ----
+      BlockHash: guard((number) => this.programBlockHash(tx, number)),
+      ChainId: guard(() => this.programEnv(tx, BigInt(this.chainId))),
+      Coinbase: guard(() => this.programEnv(tx, tx.feeRecipient ?? null)),
+      BlockGasLimit: guard(() => this.programEnv(tx, this.maxBlockGas === null || this.maxBlockGas === undefined ? null : BigInt(this.maxBlockGas))),
+      GasPrice: guard(() => this.programEnv(tx, tx.gasPrice)),
+      GasLeft: guard(() => {
+        tx.useGas(tx.gas.env);   // หักค่าของตัวเองก่อน แล้วค่อยนับที่เหลือ
+        const left = tx.gasLimit - tx.gasUsed;
+        return Number.isFinite(left) ? BigInt(left) : null;
+      }),
+      CodeHashOf: guard((address) => this.programCodeOf(tx, address, true)),
+      CodeSizeOf: guard((address) => this.programCodeOf(tx, address, false)),
     };
   }
 
@@ -2284,6 +2342,70 @@ export class VirtualMachine {
     return keccak256Hex(text);
   }
 
+  /** sha256 / ripemd160 / blake2b (BLAKE2b-512) ของ string หรือข้อมูล JSON → hex 0x… · แก๊ส = ค่าของ hash นั้น + byte ของข้อมูล */
+  programDigest(tx, name, value) {
+    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, `ค่าที่ ${name}`));
+    const bytes = utf8ToBytes(text);
+    tx.useGas(tx.gas[name] + tx.gas.byte * bytes.length);
+    return `0x${bytesToHex(DIGESTS[name](bytes))}`;
+  }
+
+  /**
+   * (base ** exponent) % modulus แบบ BigInt (precompile MODEXP) · modulus = 0n → 0n
+   * แก๊ส = modexp + ⌊word² × max(bit ของ exponent, 1) / 3⌋ — คิดก่อนคำนวณ จึงหยุดได้ก่อนเครื่องทำงานหนัก
+   */
+  programModexp(tx, base, exponent, modulus) {
+    for (const [label, value] of [["base", base], ["exponent", exponent], ["modulus", modulus]]) {
+      if (typeof value === "number") fail(ERRORS.numberNotAllowed, `modexp ${label}`);
+      if (typeof value !== "bigint" || value < 0n || bitLength(value) > MODEXP_MAX_BYTES * 8) fail(ERRORS.invalidModexp, MODEXP_MAX_BYTES);
+    }
+    const words = Math.ceil(Math.max(bitLength(base), bitLength(modulus)) / 64);
+    tx.useGas(tx.gas.modexp + Math.floor((words * words * Math.max(bitLength(exponent), 1)) / 3));
+    if (modulus === 0n) return 0n;
+    let result = 1n % modulus;
+    let square = base % modulus;
+    for (let e = exponent; e > 0n; e >>= 1n) {
+      if (e & 1n) result = (result * square) % modulus;
+      square = (square * square) % modulus;
+    }
+    return result;
+  }
+
+  /**
+   * hash ของ block ก่อนหน้า (เหมือน BLOCKHASH): ย้อนได้ BLOCK_HASH_WINDOW block · block ปัจจุบัน / อนาคต / เก่ากว่านั้น → null
+   * รันนอก block (query) → นับ block ถัดจากล่าสุดเป็น block ปัจจุบัน
+   */
+  programBlockHash(tx, number) {
+    if (typeof number === "number") fail(ERRORS.numberNotAllowed, "BlockHash");
+    if (typeof number !== "bigint" || number < 0n) fail(ERRORS.invalidBlockNumber);
+    tx.useGas(tx.gas.read);
+    const current = BigInt(tx.blockNumber ?? (tx.current(LATEST_BLOCK_KEY) ?? 0) + 1);
+    if (number >= current || number < current - BigInt(BLOCK_HASH_WINDOW)) return null;
+    return tx.current(blockKey(Number(number)))?.hash ?? null;
+  }
+
+  /** ค่าของ chain / block / tx ที่รู้อยู่แล้ว (ไม่อ่าน DB) */
+  programEnv(tx, value) {
+    tx.useGas(tx.gas.env);
+    return value;
+  }
+
+  /**
+   * โค้ดที่ address นั้นใช้อยู่ (โปรแกรมที่ init แล้ว · อัปเกรดแล้ว = โค้ดใหม่)
+   *   hash = true  → keccak256 ของโค้ด (ค่าเดียวกับ codeHash ที่ cloneProgram ใช้คำนวณ address) · ไม่ใช่โปรแกรม → null
+   *   hash = false → ความยาวโค้ดเป็น byte (BigInt) · ไม่ใช่โปรแกรม → 0n
+   */
+  programCodeOf(tx, address, hash) {
+    if (!isNonEmptyString(address)) fail(ERRORS.invalidAddress);
+    tx.useGas(tx.gas.read);
+    const code = tx.current(codeKey(normalizeAddress(address)));
+    if (typeof code !== "string") return hash ? null : 0n;
+    const size = Buffer.byteLength(code, "utf8");
+    if (!hash) return BigInt(size);
+    tx.useGas(tx.gas.hash + tx.gas.byte * size);
+    return keccak256Hex(code);
+  }
+
   /** กู้ address ของผู้เซ็นจากข้อความ + ลายเซ็น (r + s + v เหมือน EIP-191/712) */
   programEcrecover(tx, value, signature) {
     if (!isNonEmptyString(signature) || !/^0x[0-9a-fA-F]{130}$/.test(signature)) fail(ERRORS.invalidSignature);
@@ -2328,15 +2450,21 @@ export class VirtualMachine {
     return true;
   }
 
-  /** sender = โปรแกรมที่เรียก, origin = คงเดิม; ปลายทาง error → ย้อนการเขียนของปลายทางแล้ว throw ให้ผู้เรียกจัดการ */
-  programRunProgram(tx, caller, programUuid, functionName, input, { value = 0n } = {}) {
+  /**
+   * sender = โปรแกรมที่เรียก, origin = คงเดิม; ปลายทาง error → ย้อนการเขียนของปลายทางแล้ว throw ให้ผู้เรียกจัดการ
+   * { readonly: true } = แบบ STATICCALL: ปลายทางและทุกชั้นที่มันเรียกต่อแก้ state ไม่ได้ (ชั้นที่ readonly อยู่แล้วส่งต่อเสมอ)
+   */
+  programRunProgram(tx, caller, programUuid, functionName, input, { value = 0n, readonly = false } = {}) {
     value = checkValue(value);
+    readonly = readonly || Boolean(caller.readonly);
+    if (readonly && value > 0n) fail(ERRORS.readonlyValue);
     const savepoint = tx.savepoint();
     try {
       const target = normalizeAddress(programUuid);
       if (value > 0n) this.moveNative(tx, caller.programUuid, target, value); // แนบเงินไปกับการเรียก
       const context = { sender: caller.programUuid, origin: caller.context.origin };
-      return this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1 });
+      return this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1,
+        readonly, callType: readonly ? "staticcall" : undefined });
     } catch (err) {
       tx.rollbackTo(savepoint);
       throw err;
