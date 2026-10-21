@@ -7,7 +7,7 @@
  *
  * แยกจาก server.js เพื่อให้เทสต์เรียกตรงกับ VM ได้โดยไม่ต้องเปิด server
  */
-import { storageKey, map } from "../core/virtualmachine.js";
+import { storageKey, map, toEvmAbi } from "../core/virtualmachine.js";
 import { checkTokenStandard } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
@@ -325,6 +325,46 @@ export function cursorEntries(vm, prefix, { limit = 20, cursor } = {}, map = (db
 
 /** tx ที่เข้ามาหา address / โปรแกรม (รวม call ซ้อน) แบบ cursor */
 export const cursorTransactionsTo = (vm, address, options) => cursorEntries(vm, `txto${SEP}${lower(address)}${SEP}`, options);
+
+/** query string ที่ไม่ใช่ตัวควบคุมหน้า (name / page / limit / cursor) = กรองด้วย field ที่ indexed → [[field, ค่า], ...] · ไม่มี → null */
+export function indexedFilterOf(query) {
+  const filters = [...(query?.entries?.() ?? [])].filter(([key]) => !["name", "page", "limit", "cursor"].includes(key));
+  return filters.length ? filters : null;
+}
+
+/**
+ * event ที่ field ที่ indexed มีค่าตามที่ขอ (GET /program/:a/events?name=Transfer&to=0x…) แบบ cursor → { items, next }
+ *   ใช้ดัชนีของ field แรก (ไม่ไล่ event ทั้งหมด) แล้วกรอง field ที่เหลือจากข้อมูลของ event
+ *   ต้องระบุ name · field ที่ไม่ได้ emit แบบ indexed → ไม่พบ (ไม่มีดัชนี)
+ */
+export function cursorIndexedEvents(vm, program, name, filters, { limit = 20, cursor } = {}) {
+  if (!name) return { status: 400, body: { error: "Filtering by field needs ?name=<event>" } };
+  const [[field, value], ...rest] = filters;
+  const matches = (event) => rest.every(([key, wanted]) => {
+    const actual = event?.data?.[key];
+    return String(actual ?? "").toLowerCase() === String(wanted).toLowerCase() || String(actual) === `${wanted}n`;
+  });
+  // อ่านทีละช่วงจนได้ครบ limit (field อื่นอาจกรองทิ้งบางรายการ)
+  const items = [];
+  let next = cursor;
+  do {
+    const page = vm.listIndexedEvents({ program, name, field, value, limit: Math.max(limit, 20), cursor: next });
+    for (const event of page.items) {
+      if (items.length === limit) return { items, next: eventKeyOf(event), limit, field };
+      if (matches(event)) items.push(event);
+    }
+    next = page.next;
+  } while (next && items.length < limit);
+  return { items, next: next ?? null, limit, field };
+}
+const eventKeyOf = (event) => `event${SEP}${event.program}${SEP}${event.name}${SEP}${String(event.blockNumber).padStart(12, "0")}${SEP}${String(event.txIndex).padStart(4, "0")}${SEP}${String(event.index).padStart(4, "0")}`;
+
+/** ABI ของโปรแกรม (metadata.abi) → { address, abi, evmAbi } · ไม่ได้ประกาศ → abi: null */
+export function programAbi(vm, program) {
+  const address = lower(program);
+  const abi = vm.read(`${address}${SEP}metadata${SEP}abi`) ?? null;
+  return { address, abi, evmAbi: abi ? toEvmAbi(abi) : null };
+}
 
 /** event ของโปรแกรมแบบ cursor · name = เฉพาะชื่อนั้น */
 export const cursorEvents = (vm, program, options, name = "") =>

@@ -8,16 +8,21 @@
  *   - ส่ง tx ผ่าน MetaMask ไม่ได้ (eth_sendRawTransaction) เพราะเชนรับเฉพาะลายเซ็น EIP-712 ของตัวเอง → ตอบ error
  *   - native ของเชนเป็นหน่วยย่อย 18 ทศนิยมแบบ wei อยู่แล้ว → ส่งตรง ๆ (decimals = ทศนิยมที่ต้องเติมเพิ่ม ค่าเริ่มต้น 0)
  *   - token มาตรฐาน (src/standards/token.js) ตอบ eth_call แบบ ERC-20 ได้ (balanceOf / decimals / symbol / name / totalSupply / allowance)
- *   - event Transfer ของ token มาตรฐาน → log แบบ ERC-20 · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
- *   - NFT มาตรฐาน (src/standards/nft.js) → Transfer / Approval / ApprovalForAll แบบ ERC-721 (tokenId เป็น topic ที่ 4)
- *     multi-token มาตรฐาน (src/standards/multitoken.js) → TransferSingle / TransferBatch / ApprovalForAll / URI แบบ ERC-1155
+ *   - NFT / multi-token มาตรฐาน (src/standards/nft.js / multitoken.js) emit แบบ indexed → log แบบ ERC-721 (tokenId เป็น topic ที่ 4) / ERC-1155
+ *   - event → log ด้วย eventLog() ของ VM (ค่าเดียวกับที่ใช้ทำ logsBloom / receiptsRoot ใน header):
+ *       emit แบบ indexed → topic0 = keccak("ชื่อ(ชนิด,…)") + topic ของ field ที่ indexed (Transfer ของ token มาตรฐาน = log แบบ ERC-20)
+ *       ไม่มี indexed → topic0 = keccak(ชื่อ), data = JSON เป็น hex
+ *   - EIP-1559: baseFeePerGas ใน block · eth_feeHistory · eth_maxPriorityFeePerGas · eth_gasPrice = base fee ถัดไป + tip ที่แนะนำ
+ *     tx แบบ 1559 → type 0x2 + maxFeePerGas / maxPriorityFeePerGas · receipt มี effectiveGasPrice
+ *   - eth_getLogs: ข้าม block ด้วย logsBloom ของ header · มี topic0 + topic อื่น → ใช้ดัชนี eventidx: replay เฉพาะ block ที่ตรง
+ *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (null = ไม่ได้ประกาศ)
  *     eth_call ของทั้งสองแบบ: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
  *   - debug_trace* (callTracer) แปลงจาก trace + nativeChanges ของการ replay block · ผล replay เก็บ cache ไว้ต่อ block
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress } from "../core/virtualmachine.js";
+import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataKey, eventLog, logsBloom, bloomContains, toEvmAbi, decodeDbKey } from "../core/virtualmachine.js";
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
@@ -36,14 +41,6 @@ const TRANSFER_GAS = 21_000;   // gas ที่ MetaMask ตั้งให้�
 const SELECTOR = {   // ERC-20 ที่ token มาตรฐานตอบได้
   "0x70a08231": "balanceOf", "0x313ce567": "decimals", "0x95d89b41": "symbol",
   "0x06fdde03": "name", "0x18160ddd": "totalSupply", "0xdd62ed3e": "allowance",
-};
-const TRANSFER_TOPIC = keccakHex("Transfer(address,address,uint256)");
-const TOPIC = {   // ERC-721 / ERC-1155 (Transfer ของ ERC-721 ใช้ topic เดียวกับ ERC-20 แต่มี 4 topic)
-  APPROVAL: keccakHex("Approval(address,address,uint256)"),
-  APPROVAL_FOR_ALL: keccakHex("ApprovalForAll(address,address,bool)"),
-  TRANSFER_SINGLE: keccakHex("TransferSingle(address,address,address,uint256,uint256)"),
-  TRANSFER_BATCH: keccakHex("TransferBatch(address,address,address,uint256[],uint256[])"),
-  URI: keccakHex("URI(string,uint256)"),
 };
 const selectors = (map) => Object.fromEntries(Object.entries(map).map(([signature, fn]) => [keccakHex(signature).slice(0, 10), fn]));
 const NFT_SELECTOR = selectors({   // ERC-721 ที่ NFT มาตรฐานตอบได้
@@ -64,20 +61,9 @@ const fail = (code, message, data) => { throw new RpcError(code, message, data);
 function keccakHex(text) { return `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`; }
 const hexBytes = (hex) => Buffer.from(String(hex).replace(/^0x/, ""), "hex");
 
-/** logsBloom แบบ EVM: address + ทุก topic ของทุก log (2048 bit) */
-function bloomOf(logs) {
-  const bits = new Uint8Array(256);
-  for (const log of logs) {
-    for (const item of [log.address, ...log.topics]) {
-      const hash = keccak_256(hexBytes(item));
-      for (let i = 0; i < 6; i += 2) {
-        const bit = ((hash[i] << 8) | hash[i + 1]) & 2047;
-        bits[255 - (bit >> 3)] |= 1 << (bit & 7);
-      }
-    }
-  }
-  return `0x${bytesToHex(bits)}`;
-}
+const bloomOf = logsBloom;   // แบบเดียวกับ header ของ block (ดู virtualmachine.js)
+const FEE_HISTORY_BLOCKS = 1024;   // eth_feeHistory ขอได้สูงสุดกี่ block
+const TIP_SAMPLE_BLOCKS = 20;      // tip ที่แนะนำ = มัธยฐานของ tip ใน block ล่าสุดเท่านี้
 
 /** ค่าตัวเลขของเชน (number / "123n" / "123") → bigint */
 export function toBig(value) {
@@ -97,8 +83,6 @@ const abiString = (text) => {
   const hex = bytesToHex(utf8ToBytes(String(text ?? "")));
   return `0x${word(32)}${word(hex.length / 2)}${hex.padEnd(Math.ceil(hex.length / 64) * 64, "0")}`;
 };
-/** ABI: (uint256[], uint256[]) — data ของ TransferBatch */
-const abiUintArrays = (a, b) => `0x${word(64)}${word(64 + 32 * (1 + a.length))}${word(a.length)}${a.map(word).join("")}${word(b.length)}${b.map(word).join("")}`;
 const hexOfJson = (value) => `0x${bytesToHex(utf8ToBytes(JSON.stringify(value ?? null, (k, v) => (typeof v === "bigint" ? `${v}n` : v))))}`;
 
 const isAddress = (value) => typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
@@ -219,15 +203,17 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   function formatBlock(header, full) {
     const number = header.number;
     const hashes = evmHashes(header);
-    let bloom = EMPTY_BLOOM;
-    if (hashes.length) {
+    // logsBloom / receiptsRoot มาจาก header (อยู่ใน hash ของ block) · header เก่าที่ไม่มี → คำนวณจาก receipt
+    let bloom = header.logsBloom ?? EMPTY_BLOOM;
+    if (!header.logsBloom && hashes.length) {
       try { bloom = bloomOf(blockReceipts(number).flatMap((r) => r.logs)); } catch { /* ไม่มี history → bloom ว่าง */ }
     }
     return {
       number: quantity(number), hash: header.hash,
       parentHash: header.parentHash ?? (number === 1 ? vm.genesisHash() : ZERO_HASH),
       nonce: "0x0000000000000000", sha3Uncles: EMPTY_UNCLES, logsBloom: bloom,
-      transactionsRoot: header.txRoot ?? ZERO_HASH, stateRoot: header.stateRoot ?? ZERO_HASH, receiptsRoot: ZERO_HASH,
+      transactionsRoot: header.txRoot ?? ZERO_HASH, stateRoot: header.stateRoot ?? ZERO_HASH, receiptsRoot: header.receiptsRoot ?? ZERO_HASH,
+      baseFeePerGas: quantity(native(header.baseFeePerGas ?? vm.minBaseFee ?? vm.gas.price)),
       miner: header.feeRecipient ?? ZERO_ADDRESS, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x",
       size: quantity(1000 + hashes.length * 32), gasLimit: quantity(vm.maxBlockGas ?? BLOCK_GAS_LIMIT), gasUsed: quantity(header.gasUsed ?? 0),
       timestamp: quantity(Math.floor((header.timestamp ?? 0) / 1000)), mixHash: ZERO_HASH,
@@ -283,17 +269,27 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       blockHash: block?.hash ?? null, blockNumber: quantity(found.blockNumber), transactionIndex: quantity(found.index),
       from: found.from ?? ZERO_ADDRESS, to: targetOf({ ...receipt, action: found.action }),
       value: quantity(native(receipt.value ?? 0)),
-      gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.gasPrice ?? vm.gas.price)),
+      gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.effectiveGasPrice ?? receipt.gasPrice ?? vm.gas.price)),
       input: inputOf({ ...receipt, action: found.action }),
-      type: "0x0", chainId: quantity(vm.chainId),
+      ...feeFieldsOf(receipt), chainId: quantity(vm.chainId),
       ...signatureParts(found.record?.signature),
     };
+  }
+  /** type ของ tx แบบ EVM: 0x2 (EIP-1559) มี maxFeePerGas / maxPriorityFeePerGas · แบบเดิม 0x0 */
+  function feeFieldsOf(receipt) {
+    if (receipt.type !== 2) return { type: "0x0" };
+    return { type: "0x2", maxFeePerGas: quantity(native(receipt.maxFeePerGas ?? receipt.effectiveGasPrice ?? 0)),
+      maxPriorityFeePerGas: quantity(native(receipt.maxPriorityFeePerGas ?? 0)), accessList: [] };
   }
   /** tx ที่ยังรอใน mempool (มีแค่ข้อมูลที่ mempool.list() ให้) */
   const pendingTransaction = (item) => ({
     hash: item.hash, nonce: quantity(item.nonce ?? 0), blockHash: null, blockNumber: null, transactionIndex: null,
-    from: item.sender ?? null, to: item.to ?? null, value: "0x0", gas: "0x0", gasPrice: quantity(native(item.gasPrice ?? vm.gas.price)),
-    input: "0x", type: "0x0", chainId: quantity(vm.chainId), v: "0x0", r: "0x0", s: "0x0",
+    from: item.sender ?? null, to: item.to ?? null, value: "0x0", gas: "0x0",
+    gasPrice: quantity(native(item.maxFeePerGas ?? item.gasPrice ?? vm.gas.price)),
+    input: "0x", ...(item.maxFeePerGas !== undefined
+      ? { type: "0x2", maxFeePerGas: quantity(native(item.maxFeePerGas)), maxPriorityFeePerGas: quantity(native(item.maxPriorityFeePerGas ?? 0)), accessList: [] }
+      : { type: "0x0" }),
+    chainId: quantity(vm.chainId), v: "0x0", r: "0x0", s: "0x0",
   });
   const transactionByHash = (hash) => {
     const tx = located(hash);
@@ -310,51 +306,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   };
 
   /**
-   * event ของโปรแกรมมาตรฐาน → { topics, data } แบบ ERC-20 / ERC-721 / ERC-1155 · ไม่ใช่ → null
-   * (Blockscout แยก ERC-20 กับ ERC-721 จากจำนวน topic ของ Transfer: 3 = ERC-20, 4 = ERC-721)
+   * event ของเชน → log แบบ EVM (logIndex นับต่อเนื่องทั้ง block)
+   * topics / data มาจาก eventLog ของ VM = ค่าเดียวกับที่ใช้ทำ logsBloom / receiptsRoot ของ header
+   * โปรแกรมมาตรฐาน (token / NFT / multi-token) emit แบบ indexed → log แบบ ERC-20 / ERC-721 / ERC-1155 ตรงตัว
    */
-  function standardLog(event) {
-    const data = event.data ?? {};
-    const topic = (address) => `0x${addressWord(address)}`;
-    const kind = () => collectionAt(event.program);
-    if (event.name === "Transfer" && isAddress(data.from) && isAddress(data.to)) {
-      if (data.amount !== undefined && tokenAt(event.program) !== null) {
-        return { topics: [TRANSFER_TOPIC, topic(data.from), topic(data.to)], data: `0x${word(data.amount)}` };
-      }
-      if (data.tokenId !== undefined && kind() === "erc721") {
-        return { topics: [TRANSFER_TOPIC, topic(data.from), topic(data.to), `0x${word(data.tokenId)}`], data: "0x" };
-      }
-      return null;
-    }
-    if (event.name === "Approval" && isAddress(data.owner) && isAddress(data.approved) && data.tokenId !== undefined && kind() === "erc721") {
-      return { topics: [TOPIC.APPROVAL, topic(data.owner), topic(data.approved), `0x${word(data.tokenId)}`], data: "0x" };
-    }
-    if (event.name === "ApprovalForAll" && isAddress(data.owner ?? data.account) && isAddress(data.operator) && kind() !== null) {
-      return { topics: [TOPIC.APPROVAL_FOR_ALL, topic(data.owner ?? data.account), topic(data.operator)], data: `0x${word(data.approved === true ? 1 : 0)}` };
-    }
-    const single = event.name === "TransferSingle" && data.id !== undefined;
-    const batch = event.name === "TransferBatch" && Array.isArray(data.ids) && Array.isArray(data.amounts);
-    if ((single || batch) && isAddress(data.operator) && isAddress(data.from) && isAddress(data.to) && kind() === "erc1155") {
-      return {
-        topics: [single ? TOPIC.TRANSFER_SINGLE : TOPIC.TRANSFER_BATCH, topic(data.operator), topic(data.from), topic(data.to)],
-        data: single ? `0x${word(data.id)}${word(data.amount)}` : abiUintArrays(data.ids, data.amounts),
-      };
-    }
-    if (event.name === "URI" && data.id !== undefined && typeof data.value === "string" && kind() === "erc1155") {
-      return { topics: [TOPIC.URI, `0x${word(data.id)}`], data: abiString(data.value) };
-    }
-    return null;
-  }
-
-  /** event ของเชน → log แบบ EVM (logIndex นับต่อเนื่องทั้ง block) */
   function formatLog(event, logIndex, base) {
-    const standard = standardLog(event);
-    return {
-      address: event.program ?? ZERO_ADDRESS,
-      topics: standard?.topics ?? [keccakHex(String(event.name))],
-      data: standard?.data ?? hexOfJson(event.data ?? {}),
-      logIndex: quantity(logIndex), removed: false, ...base,
-    };
+    const { address, topics, data } = eventLog(event);
+    return { address: address ?? ZERO_ADDRESS, topics, data, logIndex: quantity(logIndex), removed: false, ...base };
   }
   function formatReceipt({ found, receipt, block, logStart, cumulativeGas }) {
     const base = { blockHash: block?.hash ?? null, blockNumber: quantity(found.blockNumber), transactionHash: found.hash, transactionIndex: quantity(found.index) };
@@ -362,9 +320,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return {
       ...base, from: found.from ?? ZERO_ADDRESS, to: targetOf({ ...receipt, action: found.action }),
       cumulativeGasUsed: quantity(cumulativeGas), gasUsed: quantity(receipt.gasUsed ?? 0),
-      effectiveGasPrice: quantity(native(receipt.gasPrice ?? vm.gas.price)),
+      effectiveGasPrice: quantity(native(receipt.effectiveGasPrice ?? receipt.gasPrice ?? vm.gas.price)),
       contractAddress: found.action === "deploy" ? receipt.result?.programUuid ?? null : null,
-      logs, logsBloom: bloomOf(logs), type: "0x0",
+      logs, logsBloom: bloomOf(logs), type: feeFieldsOf(receipt).type,
       status: receipt.status === "success" ? "0x1" : "0x0",
     };
   }
@@ -499,6 +457,33 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   // ---------- log ----------
   const topicMatch = (filter, topic) => filter === null || filter === undefined
     || (Array.isArray(filter) ? filter.some((t) => String(t).toLowerCase() === topic) : String(filter).toLowerCase() === topic);
+  /** header ของ block นี้อาจมี log ที่ตรง filter ไหม (ดูจาก logsBloom · ไม่มี bloom = ต้องดู) */
+  const bloomAllows = (header, addresses, topics) => {
+    if (!header?.logsBloom) return true;
+    if (addresses && !addresses.some((address) => bloomContains(header.logsBloom, address))) return false;
+    return topics.every((t) => t === null || [t].flat().some((topic) => bloomContains(header.logsBloom, topic)));
+  };
+  /**
+   * เลข block ที่มี log ตรงเงื่อนไขจากดัชนี eventidx: (ใช้ได้เมื่อมี topic0 และ topic ตำแหน่งอื่นอย่างน้อย 1 ตัว) · ใช้ไม่ได้ → null
+   * topic0 → (โปรแกรม, ชื่อ event, field ที่ indexed) จาก eventsig: แล้วค้นค่าของ topic ตำแหน่ง i ใน field ที่ i
+   */
+  function indexedBlocks(topics, addresses, from, to) {
+    const topic0s = topics[0] === null || topics[0] === undefined ? null : [topics[0]].flat();
+    const position = topics.findIndex((t, i) => i > 0 && t !== null && t !== undefined);
+    if (!topic0s || position < 1) return null;
+    const blocks = new Set();
+    for (const topic0 of topic0s) {
+      for (const { program, name, indexed } of vm.listEventSignatures(topic0)) {
+        if (addresses && !addresses.includes(program)) continue;
+        const field = indexed?.[position - 1];
+        if (!field) continue;
+        for (const topic of [topics[position]].flat()) {
+          for (const ref of vm.indexedEventRefs({ program, name, field, topic, fromBlock: from, toBlock: to })) blocks.add(decodeDbKey(ref).number);
+        }
+      }
+    }
+    return [...blocks].sort((a, b) => a - b);
+  }
   function getLogs(filter = {}) {
     let from;
     let to;
@@ -513,10 +498,15 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (to - from + 1 > logRange) fail(EVM_ERROR.LIMIT, `query exceeds max block range ${logRange}`);
     const addresses = filter.address === undefined || filter.address === null ? null
       : [filter.address].flat().map((address) => needAddress(address));
-    const topics = Array.isArray(filter.topics) ? filter.topics : [];
+    const topics = (Array.isArray(filter.topics) ? filter.topics : []).map((t) => (t === null || t === undefined ? null
+      : Array.isArray(t) ? t.map((x) => String(x).toLowerCase()) : String(t).toLowerCase()));
+    const first = Math.max(from, 1);
+    // มีดัชนีให้ใช้ → replay เฉพาะ block ที่มี event ตรง · ไม่งั้นไล่ทุก block แต่ข้ามด้วย logsBloom ของ header
+    const numbers = indexedBlocks(topics, addresses, first, to) ?? Array.from({ length: Math.max(0, to - first + 1) }, (_, i) => first + i);
     const logs = [];
-    for (let number = Math.max(from, 1); number <= to; number += 1) {
-      if (!headerAt(number)?.txHashes?.length) continue;
+    for (const number of numbers) {
+      const header = headerAt(number);
+      if (!header?.txHashes?.length || !bloomAllows(header, addresses, topics)) continue;
       for (const receipt of blockReceipts(number)) {
         for (const log of receipt.logs) {
           if (addresses && !addresses.includes(log.address)) continue;
@@ -526,6 +516,56 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       }
     }
     return logs;
+  }
+
+  // ---------- ค่าแก๊ส (EIP-1559) ----------
+  const gasLimitOf = () => vm.maxBlockGas ?? BLOCK_GAS_LIMIT;
+  /** tip ต่อแก๊สของทุก tx ใน block (จากดัชนี tx: ไม่ต้อง replay) → [{ tip, gasUsed }] เรียงจากน้อยไปมาก */
+  const tipsOf = (header) => (header?.txHashes ?? []).map((hash) => vm.getTransaction(hash))
+    .filter(Boolean).map((tx) => ({ tip: toBig(tx.tip ?? 0), gasUsed: Number(tx.gasUsed ?? 0) }))
+    .sort((a, b) => (a.tip === b.tip ? 0 : a.tip < b.tip ? -1 : 1));
+  /** tip ที่แนะนำ = มัธยฐานของ tip ใน TIP_SAMPLE_BLOCKS block ล่าสุด (ไม่มี tx = 0) */
+  function suggestedTip() {
+    const tips = [];
+    for (let n = latest(); n > 0 && n > latest() - TIP_SAMPLE_BLOCKS; n -= 1) tips.push(...tipsOf(vm.getBlock(n)).map((item) => item.tip));
+    if (!tips.length) return 0n;
+    tips.sort((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+    return tips[Math.floor(tips.length / 2)];
+  }
+  /** eth_feeHistory(blockCount, newestBlock, rewardPercentiles) แบบ geth (reward ถ่วงด้วยแก๊สที่ใช้) */
+  function feeHistory(blockCount, newest, percentiles) {
+    // blockCount เป็น quantity ("0x5") หรือตัวเลข
+    const asked = typeof blockCount === "string" && /^0x[0-9a-fA-F]+$/.test(blockCount) ? Number.parseInt(blockCount, 16) : Number(toBig(blockCount));
+    const count = Math.min(Math.max(asked || 0, 0), FEE_HISTORY_BLOCKS);
+    const end = blockNumberOf(newest ?? "latest");
+    if (end > latest()) fail(EVM_ERROR.SERVER, "header not found");
+    const start = Math.max(end - count + 1, 0);
+    const wanted = Array.isArray(percentiles) ? percentiles.map(Number) : null;
+    if (wanted && wanted.some((p, i) => !(p >= 0 && p <= 100) || (i > 0 && p < wanted[i - 1]))) fail(EVM_ERROR.PARAMS, "invalid reward percentiles");
+    const baseFees = [];
+    const ratios = [];
+    const rewards = [];
+    for (let n = start; n <= end && count > 0; n += 1) {
+      const header = headerAt(n);
+      baseFees.push(quantity(native(header?.baseFeePerGas ?? vm.minBaseFee)));
+      ratios.push(Number(header?.gasUsed ?? 0) / gasLimitOf());
+      if (!wanted) continue;
+      const tips = tipsOf(header);
+      const total = tips.reduce((sum, item) => sum + item.gasUsed, 0);
+      rewards.push(wanted.map((p) => {
+        if (!tips.length) return "0x0";
+        const threshold = (total * p) / 100;
+        let sum = 0;
+        for (const item of tips) {
+          sum += item.gasUsed;
+          if (sum >= threshold) return quantity(native(item.tip));
+        }
+        return quantity(native(tips.at(-1).tip));
+      }));
+    }
+    // ช่องสุดท้าย = base fee ของ block ถัดจาก newest
+    if (count > 0) baseFees.push(quantity(native(end >= latest() ? vm.currentBaseFee() : headerAt(end + 1)?.baseFeePerGas ?? vm.minBaseFee)));
+    return { oldestBlock: quantity(count > 0 ? start : end), baseFeePerGas: baseFees, gasUsedRatio: ratios, ...(wanted ? { reward: rewards } : {}) };
   }
 
   // ---------- account ----------
@@ -606,7 +646,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   const txpoolInspect = () => {
     const pending = {};
     for (const item of pendingItems()) {
-      (pending[item.sender] ??= {})[String(item.nonce ?? 0)] = `${item.action ?? "tx"}: 0 wei + 0 gas × ${native(item.gasPrice ?? vm.gas.price)} wei`;
+      (pending[item.sender] ??= {})[String(item.nonce ?? 0)] = `${item.action ?? "tx"}: 0 wei + 0 gas × ${native(item.maxFeePerGas ?? item.gasPrice ?? vm.gas.price)} wei`;
     }
     return { pending, queued: {} };
   };
@@ -624,8 +664,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     eth_accounts: () => [],
     eth_coinbase: () => ZERO_ADDRESS,
     eth_blockNumber: () => quantity(latest()),
-    eth_gasPrice: () => quantity(native(vm.gas.price)),
-    eth_maxPriorityFeePerGas: () => "0x0",
+    eth_gasPrice: () => quantity(native(vm.currentBaseFee() + suggestedTip())),   // base fee ของ block ถัดไป + tip ที่แนะนำ
+    eth_maxPriorityFeePerGas: () => quantity(native(suggestedTip())),
+    eth_feeHistory: ([blockCount, newest, percentiles]) => feeHistory(blockCount, newest, percentiles),
+    cardianal_getAbi: ([address]) => {
+      const abi = vm.read(metadataKey(needAddress(address), "abi"));
+      return abi ? toEvmAbi(abi) : null;
+    },
     eth_getBalance: ([address, tag]) => balance(address, tag),
     eth_getTransactionCount: ([address, tag]) => nonce(address, tag),
     eth_getCode: ([address, tag]) => code(address, tag),
