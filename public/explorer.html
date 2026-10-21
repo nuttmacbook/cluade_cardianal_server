@@ -613,7 +613,9 @@ async function home(draw = el) {
         blockNo(b.number),
         `<span title="${when(b.timestamp)}">${age(b.timestamp)}</span>`,
         num(b.txCount),
-        b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : '<span class="dim">Empty</span>',
+        (b.txCount ? `<span class="tag ${b.failedCount ? "bad" : "ok"}">${b.successCount}/${b.txCount}</span>` : "")
+          + (b.rejectedCount ? ` <span class="tag bad" title="Rejected: recorded only, never ran">Rejected ${num(b.rejectedCount)}</span>` : "")
+          || '<span class="dim">Empty</span>',
         gas(b.gasUsed), addr(b.feeRecipient),
       ]))) + pager(blocks, "setPage('blocks',$)"))
     + (pending.size ? panel("Pending", table(["Hash", "Sender", "Type", "Nonce"], pending.transactions.slice(0, 50).map((t) =>
