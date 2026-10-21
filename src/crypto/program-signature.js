@@ -17,7 +17,7 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
-import { canonicalJson, keccak256Hex, normalizeHexDeep } from "../core/virtualmachine.js";
+import { canonicalJson, keccak256Hex, normalizeHex, normalizeHexDeep } from "../core/virtualmachine.js";
 import { PERMIT_TYPE, PERMIT_VERSION } from "../standards/token.js";
 
 const fail = (message) => { throw new Error(message); };
@@ -75,13 +75,13 @@ export function recoverProgramMessage(value, signature) {
 export function permitTypedData({ name, version = PERMIT_VERSION, chainId, verifyingContract, owner, spender, value, nonce, deadline }) {
   if (typeof name !== "string") fail("name (ชื่อ token) ต้องเป็น string");
   for (const [label, address] of [["verifyingContract", verifyingContract], ["owner", owner], ["spender", spender]]) {
-    if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) fail(`${label} ต้องเป็น address`);
+    if (typeof address !== "string" || address === "") fail(`${label} ต้องเป็น address`);
   }
   return {
-    domain: { name, version, chainId: big(chainId, "chainId"), verifyingContract: verifyingContract.toLowerCase() },
+    domain: { name, version, chainId: big(chainId, "chainId"), verifyingContract: normalizeHex(verifyingContract) },
     primaryType: "Permit",
     types: PERMIT_TYPE,
-    message: { owner: owner.toLowerCase(), spender: spender.toLowerCase(), value: big(value, "value"), nonce: big(nonce, "nonce"), deadline: big(deadline, "deadline") },
+    message: { owner: normalizeHex(owner), spender: normalizeHex(spender), value: big(value, "value"), nonce: big(nonce, "nonce"), deadline: big(deadline, "deadline") },
   };
 }
 

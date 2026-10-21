@@ -89,7 +89,8 @@
 | `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) · ยังรอในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` |
 | `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
 | `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
-| `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage |
+| `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage, `token` / `collection` (NFT ERC-721 / multi-token ERC-1155 มาตรฐาน · ไม่ใช่ = null) |
+| `GET /address/:address/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` |
 | `GET /events?program=&name=&limit=` | event ที่โปรแกรม emit ใหม่ไปเก่า |
 | `GET /name/:namespace` | ชื่อ → address |
 | `GET /state/:address?block=42` | storage ของโปรแกรม ณ block นั้น |
