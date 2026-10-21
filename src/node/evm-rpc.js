@@ -9,6 +9,9 @@
  *   - native ของเชนเป็นหน่วยย่อย 18 ทศนิยมแบบ wei อยู่แล้ว → ส่งตรง ๆ (decimals = ทศนิยมที่ต้องเติมเพิ่ม ค่าเริ่มต้น 0)
  *   - token มาตรฐาน (src/standards/token.js) ตอบ eth_call แบบ ERC-20 ได้ (balanceOf / decimals / symbol / name / totalSupply / allowance)
  *   - event Transfer ของ token มาตรฐาน → log แบบ ERC-20 · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
+ *   - NFT มาตรฐาน (src/standards/nft.js) → Transfer / Approval / ApprovalForAll แบบ ERC-721 (tokenId เป็น topic ที่ 4)
+ *     multi-token มาตรฐาน (src/standards/multitoken.js) → TransferSingle / TransferBatch / ApprovalForAll / URI แบบ ERC-1155
+ *     eth_call ของทั้งสองแบบ: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
  *   - debug_trace* (callTracer) แปลงจาก trace + nativeChanges ของการ replay block · ผล replay เก็บ cache ไว้ต่อ block
  */
@@ -16,6 +19,8 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress } from "../core/virtualmachine.js";
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
+import { checkNftStandard } from "../standards/nft.js";
+import { checkMultiTokenStandard } from "../standards/multitoken.js";
 
 export const EVM_ERROR = { PARSE: -32700, REQUEST: -32600, METHOD: -32601, PARAMS: -32602, INTERNAL: -32603, SERVER: -32000, LIMIT: -32005 };
 
@@ -33,6 +38,23 @@ const SELECTOR = {   // ERC-20 ที่ token มาตรฐานตอบไ
   "0x06fdde03": "name", "0x18160ddd": "totalSupply", "0xdd62ed3e": "allowance",
 };
 const TRANSFER_TOPIC = keccakHex("Transfer(address,address,uint256)");
+const TOPIC = {   // ERC-721 / ERC-1155 (Transfer ของ ERC-721 ใช้ topic เดียวกับ ERC-20 แต่มี 4 topic)
+  APPROVAL: keccakHex("Approval(address,address,uint256)"),
+  APPROVAL_FOR_ALL: keccakHex("ApprovalForAll(address,address,bool)"),
+  TRANSFER_SINGLE: keccakHex("TransferSingle(address,address,address,uint256,uint256)"),
+  TRANSFER_BATCH: keccakHex("TransferBatch(address,address,address,uint256[],uint256[])"),
+  URI: keccakHex("URI(string,uint256)"),
+};
+const selectors = (map) => Object.fromEntries(Object.entries(map).map(([signature, fn]) => [keccakHex(signature).slice(0, 10), fn]));
+const NFT_SELECTOR = selectors({   // ERC-721 ที่ NFT มาตรฐานตอบได้
+  "name()": "name", "symbol()": "symbol", "totalSupply()": "totalSupply", "balanceOf(address)": "balanceOf",
+  "ownerOf(uint256)": "ownerOf", "tokenURI(uint256)": "tokenURI", "getApproved(uint256)": "getApproved",
+  "isApprovedForAll(address,address)": "isApprovedForAll", "supportsInterface(bytes4)": "supportsInterface",
+});
+const MULTITOKEN_SELECTOR = selectors({   // ERC-1155 ที่ multi-token มาตรฐานตอบได้
+  "name()": "name", "symbol()": "symbol", "balanceOf(address,uint256)": "balanceOf", "uri(uint256)": "uri",
+  "totalSupply(uint256)": "totalSupply", "isApprovedForAll(address,address)": "isApprovedForAll", "supportsInterface(bytes4)": "supportsInterface",
+});
 
 class RpcError extends Error {
   constructor(code, message, data) { super(message); this.code = code; this.data = data; }
@@ -75,6 +97,8 @@ const abiString = (text) => {
   const hex = bytesToHex(utf8ToBytes(String(text ?? "")));
   return `0x${word(32)}${word(hex.length / 2)}${hex.padEnd(Math.ceil(hex.length / 64) * 64, "0")}`;
 };
+/** ABI: (uint256[], uint256[]) — data ของ TransferBatch */
+const abiUintArrays = (a, b) => `0x${word(64)}${word(64 + 32 * (1 + a.length))}${word(a.length)}${a.map(word).join("")}${word(b.length)}${b.map(word).join("")}`;
 const hexOfJson = (value) => `0x${bytesToHex(utf8ToBytes(JSON.stringify(value ?? null, (k, v) => (typeof v === "bigint" ? `${v}n` : v))))}`;
 
 const isAddress = (value) => typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
@@ -111,6 +135,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (source === undefined || !checkTokenStandard(source).ok) return null;
     const read = (fn) => { const r = queryAt(at, address, fn); return r.status === "success" ? r.result : null; };
     return { address, name: read("name"), ticker: read("ticker"), decimals: read("decimals"), totalSupply: read("totalSupply") };
+  };
+  /** NFT / multi-token มาตรฐาน ณ block → "erc721" | "erc1155" | null (ดูจากโค้ดอย่างเดียว ไม่รันโปรแกรม) */
+  const collectionAt = (address, at = null) => {
+    const source = address ? readAt(at, codeKey(address)) : undefined;
+    if (source === undefined) return null;
+    if (checkNftStandard(source).ok) return "erc721";
+    return checkMultiTokenStandard(source).ok ? "erc1155" : null;
   };
 
   // ---------- block ----------
@@ -246,15 +277,50 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return hash ? transactionByHash(hash) : null;
   };
 
+  /**
+   * event ของโปรแกรมมาตรฐาน → { topics, data } แบบ ERC-20 / ERC-721 / ERC-1155 · ไม่ใช่ → null
+   * (Blockscout แยก ERC-20 กับ ERC-721 จากจำนวน topic ของ Transfer: 3 = ERC-20, 4 = ERC-721)
+   */
+  function standardLog(event) {
+    const data = event.data ?? {};
+    const topic = (address) => `0x${addressWord(address)}`;
+    const kind = () => collectionAt(event.program);
+    if (event.name === "Transfer" && isAddress(data.from) && isAddress(data.to)) {
+      if (data.amount !== undefined && tokenAt(event.program) !== null) {
+        return { topics: [TRANSFER_TOPIC, topic(data.from), topic(data.to)], data: `0x${word(data.amount)}` };
+      }
+      if (data.tokenId !== undefined && kind() === "erc721") {
+        return { topics: [TRANSFER_TOPIC, topic(data.from), topic(data.to), `0x${word(data.tokenId)}`], data: "0x" };
+      }
+      return null;
+    }
+    if (event.name === "Approval" && isAddress(data.owner) && isAddress(data.approved) && data.tokenId !== undefined && kind() === "erc721") {
+      return { topics: [TOPIC.APPROVAL, topic(data.owner), topic(data.approved), `0x${word(data.tokenId)}`], data: "0x" };
+    }
+    if (event.name === "ApprovalForAll" && isAddress(data.owner ?? data.account) && isAddress(data.operator) && kind() !== null) {
+      return { topics: [TOPIC.APPROVAL_FOR_ALL, topic(data.owner ?? data.account), topic(data.operator)], data: `0x${word(data.approved === true ? 1 : 0)}` };
+    }
+    const single = event.name === "TransferSingle" && data.id !== undefined;
+    const batch = event.name === "TransferBatch" && Array.isArray(data.ids) && Array.isArray(data.amounts);
+    if ((single || batch) && isAddress(data.operator) && isAddress(data.from) && isAddress(data.to) && kind() === "erc1155") {
+      return {
+        topics: [single ? TOPIC.TRANSFER_SINGLE : TOPIC.TRANSFER_BATCH, topic(data.operator), topic(data.from), topic(data.to)],
+        data: single ? `0x${word(data.id)}${word(data.amount)}` : abiUintArrays(data.ids, data.amounts),
+      };
+    }
+    if (event.name === "URI" && data.id !== undefined && typeof data.value === "string" && kind() === "erc1155") {
+      return { topics: [TOPIC.URI, `0x${word(data.id)}`], data: abiString(data.value) };
+    }
+    return null;
+  }
+
   /** event ของเชน → log แบบ EVM (logIndex นับต่อเนื่องทั้ง block) */
   function formatLog(event, logIndex, base) {
-    const data = event.data ?? {};
-    const standardTransfer = event.name === "Transfer" && isAddress(data.from) && isAddress(data.to) && data.amount !== undefined
-      && tokenAt(event.program) !== null;
+    const standard = standardLog(event);
     return {
       address: event.program ?? ZERO_ADDRESS,
-      topics: standardTransfer ? [TRANSFER_TOPIC, `0x${addressWord(data.from)}`, `0x${addressWord(data.to)}`] : [keccakHex(String(event.name))],
-      data: standardTransfer ? `0x${word(data.amount)}` : hexOfJson(data),
+      topics: standard?.topics ?? [keccakHex(String(event.name))],
+      data: standard?.data ?? hexOfJson(event.data ?? {}),
       logIndex: quantity(logIndex), removed: false, ...base,
     };
   }
@@ -451,26 +517,50 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return source === undefined ? "0x" : codeHex(source);
   };
 
-  /** eth_call: เฉพาะฟังก์ชันอ่านของ ERC-20 บน token มาตรฐาน · รันบน state ณ block ที่ขอ */
+  /** eth_call: เฉพาะฟังก์ชันอ่านของ ERC-20 / ERC-721 / ERC-1155 บนโปรแกรมมาตรฐาน · รันบน state ณ block ที่ขอ */
   function call(request = {}, tag) {
     const to = needAddress(request.to);
     const at = stateBlock(tag);
     const data = String(request.data ?? request.input ?? "0x").toLowerCase();
-    const fn = SELECTOR[data.slice(0, 10)];
-    const info = fn ? tokenAt(to, at) : null;
-    if (!info) fail(EVM_ERROR.SERVER, "execution reverted: only ERC-20 reads on standard tokens are supported");
     const arg = (i) => `0x${data.slice(10 + i * 64 + 24, 10 + (i + 1) * 64)}`;
     const query = (functionName, input = {}) => {
       const result = queryAt(at, to, functionName, input);
       if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? functionName}`);
       return result.result;
     };
+    const fn = SELECTOR[data.slice(0, 10)];
+    const info = fn ? tokenAt(to, at) : null;
+    if (!info) return collectionCall(to, at, data, arg, query);
     if (fn === "symbol") return abiString(info.ticker);
     if (fn === "name") return abiString(info.name);
     if (fn === "decimals") return `0x${word(info.decimals)}`;
     if (fn === "totalSupply") return `0x${word(info.totalSupply)}`;
     if (fn === "balanceOf") return `0x${word(query("balanceOf", { who: arg(0) }))}`;
     return `0x${word(query("allowance", { owner: arg(0), spender: arg(1) }))}`;
+  }
+
+  /** eth_call ของ NFT (ERC-721) / multi-token (ERC-1155) มาตรฐาน */
+  function collectionCall(to, at, data, arg, query) {
+    const kind = collectionAt(to, at);
+    const fn = kind === "erc721" ? NFT_SELECTOR[data.slice(0, 10)] : kind === "erc1155" ? MULTITOKEN_SELECTOR[data.slice(0, 10)] : undefined;
+    if (!fn) fail(EVM_ERROR.SERVER, "execution reverted: only ERC-20 / ERC-721 / ERC-1155 reads on standard programs are supported");
+    const uint = (i) => {
+      const hex = data.slice(10 + i * 64, 10 + (i + 1) * 64);
+      return `${/^[0-9a-f]+$/.test(hex) ? BigInt(`0x${hex}`) : 0n}n`;
+    };
+    const bool = (value) => `0x${word(value === true ? 1 : 0)}`;
+    if (fn === "name" || fn === "symbol") return abiString(query(fn));
+    if (fn === "supportsInterface") return bool(query(fn, { interfaceId: `0x${data.slice(10, 18)}` }));
+    if (fn === "isApprovedForAll") return bool(query(fn, kind === "erc721" ? { owner: arg(0), operator: arg(1) } : { account: arg(0), operator: arg(1) }));
+    if (kind === "erc721") {
+      if (fn === "totalSupply") return `0x${word(query(fn))}`;
+      if (fn === "balanceOf") return `0x${word(query(fn, { owner: arg(0) }))}`;
+      if (fn === "tokenURI") return abiString(query(fn, { tokenId: uint(0) }));
+      return `0x${addressWord(query(fn, { tokenId: uint(0) }) ?? ZERO_ADDRESS)}`;   // ownerOf / getApproved
+    }
+    if (fn === "balanceOf") return `0x${word(query(fn, { account: arg(0), id: uint(1) }))}`;
+    if (fn === "totalSupply") return `0x${word(query(fn, { id: uint(0) }))}`;
+    return abiString(query(fn, { id: uint(0) }));   // uri
   }
 
   // ---------- txpool ----------
