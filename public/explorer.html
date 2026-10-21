@@ -1,72 +1,131 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070814">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07050f">
 <title>Program VM Explorer</title>
 <style>
 :root{
-  /* dark theme: black · blue · purple (same theme for light and dark OS mode) */
+  /* purple data-canvas theme: near-black chrome · deep purple/magenta canvas with a faint grid · translucent violet cards
+     (one dark theme for light and dark OS mode) */
   color-scheme:dark;
-  --bg:#070814;--panel:#0e1026;--line:#22264a;--text:#e8e9ff;--dim:#8e93c2;--soft:#161a3a;
-  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#7aa2ff;--accent-2:#a78bfa;--prog:#c084fc;
-  --grad:linear-gradient(135deg,#3b5bdb 0%,#7c3aed 100%);--radius:12px;
+  --bg:#0a0616;--chrome:#07050f;--panel:#1a0b33;--card:rgba(50,20,92,.66);--line:#3a1f66;--line-2:rgba(167,139,250,.22);
+  --text:#f1ecff;--dim:#b3a6d9;--soft:rgba(139,92,246,.14);--head:rgba(150,108,236,.40);
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#c4b5fd;--accent-2:#a78bfa;--prog:#e879f9;
+  --violet:#6d28d9;--grad:linear-gradient(135deg,#7c3aed 0%,#6d28d9 55%,#a21caf 100%);--radius:10px;
+  --glow:0 0 0 1px rgba(167,139,250,.06),0 12px 32px rgba(8,0,24,.5),0 0 28px rgba(139,92,246,.14);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --top:58px;
 }
 *{box-sizing:border-box}
 html{background:var(--bg)}
-body{margin:0;min-width:0;background:radial-gradient(1200px 520px at 15% -10%,rgba(76,91,219,.20),transparent 60%),
-  radial-gradient(900px 480px at 100% 0%,rgba(124,58,237,.18),transparent 60%) no-repeat,var(--bg);color:var(--text);font:14px/1.65 ui-sans-serif,system-ui,"Noto Sans Thai",sans-serif;-webkit-font-smoothing:antialiased}
-header{position:sticky;top:0;z-index:5;background:rgba(7,8,20,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
-.bar{max-width:1120px;margin:0 auto;padding:14px 24px;display:flex;gap:18px;align-items:center}
-.brand{font-weight:700;letter-spacing:-.01em;cursor:pointer;white-space:nowrap;background:linear-gradient(90deg,#9db4ff,#c4a5ff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.brand span{-webkit-text-fill-color:var(--dim)}
-.brand span{color:var(--dim);font-weight:400;font-size:12px;margin-left:8px}
-input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);color:var(--text);
-  padding:9px 14px;border-radius:var(--radius);font:inherit;outline:none}
-input:focus,select:focus,textarea:focus{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(167,139,250,.18)}
-main{max-width:1120px;margin:0 auto;padding:24px;display:grid;gap:18px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;min-width:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.25)}
-.panel>h2{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--dim);margin:0;padding:14px 18px;border-bottom:1px solid var(--line);text-transform:uppercase}
-.panel>.body{padding:4px 0}.pad{padding:18px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:1px;background:var(--line)}
-.stat{background:var(--panel);padding:18px}
-.stat b{display:block;font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.2;overflow-wrap:anywhere}
-.stat span{color:var(--dim);font-size:12px}
-a.stat{color:inherit;text-decoration:none;cursor:pointer}a.stat:hover{background:var(--soft)}a.stat:hover span{color:var(--accent)}
-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-th{text-align:left;padding:9px 18px;color:var(--dim);font-weight:500;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--line)}
-td{padding:11px 18px;border-bottom:1px solid var(--line)}
+body{margin:0;min-width:0;color:var(--text);font:14px/1.6 ui-sans-serif,system-ui,"Noto Sans Thai",sans-serif;-webkit-font-smoothing:antialiased;
+  background:radial-gradient(120% 90% at 58% 42%,#6b1a9a 0%,#4c1380 30%,#2a0a4a 66%,#160628 100%) fixed,var(--bg)}
+/* canvas decoration: faint flat grid + perspective floor grid + vignette (fixed, clipped, never scrolls) */
+.canvas{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.canvas::before{content:"";position:absolute;inset:0;
+  background:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px) 0 0/72px 72px,linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px) 0 0/72px 72px;
+  -webkit-mask:radial-gradient(90% 80% at 55% 40%,#000 30%,transparent 85%);mask:radial-gradient(90% 80% at 55% 40%,#000 30%,transparent 85%)}
+.canvas::after{content:"";position:absolute;left:-50%;right:-50%;bottom:-30%;height:75%;transform:perspective(520px) rotateX(64deg);transform-origin:50% 100%;
+  background:linear-gradient(rgba(216,180,254,.10) 1px,transparent 1px) 0 0/90px 90px,linear-gradient(90deg,rgba(216,180,254,.10) 1px,transparent 1px) 0 0/90px 90px;
+  -webkit-mask:linear-gradient(to top,#000 10%,transparent 90%);mask:linear-gradient(to top,#000 10%,transparent 90%)}
+.canvas i{position:absolute;inset:0;background:radial-gradient(130% 100% at 50% 40%,transparent 55%,rgba(6,2,16,.55) 100%)}
+/* top bar: near-black, logo left, pill buttons, account right */
+header{position:sticky;top:0;z-index:6;background:rgba(7,5,15,.94);backdrop-filter:blur(12px);border-bottom:1px solid rgba(167,139,250,.14);box-shadow:0 1px 0 rgba(0,0,0,.6)}
+.bar{padding:10px 18px;min-height:var(--top);display:flex;gap:10px;align-items:center}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em;cursor:pointer;white-space:nowrap;color:#fff;min-width:0;margin-right:6px}
+.brand .logo{flex:none;width:26px;height:26px;filter:drop-shadow(0 0 8px rgba(232,121,249,.45))}
+.brand span{color:var(--dim);font:400 11px/1.3 var(--mono);margin-left:2px;letter-spacing:.02em}
+.menu{display:none;flex:none;width:34px;height:34px;border-radius:8px;border:1px solid var(--line-2);background:rgba(139,92,246,.10);color:var(--text);font-size:16px;line-height:1;cursor:pointer;padding:0}
+.menu:hover{border-color:var(--accent-2)}
+.pills{display:flex;gap:6px;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:7px;border:1px solid rgba(167,139,250,.10);
+  background:rgba(139,92,246,.12);color:#e4dcff;font-size:12.5px;font-weight:500;white-space:nowrap;cursor:pointer;text-decoration:none}
+.pill:hover{background:rgba(139,92,246,.22);color:#fff;text-decoration:none}
+.pill.on{background:var(--violet);border-color:transparent;color:#fff;box-shadow:0 0 18px rgba(109,40,217,.55)}
+.pill svg{width:14px;height:14px;flex:none;opacity:.9}
+.pill .chev{width:10px;height:10px;opacity:.6}
+input{flex:1;min-width:0;background:rgba(10,6,22,.85);border:1px solid var(--line-2);color:var(--text);
+  padding:7px 13px;border-radius:8px;font:inherit;font-size:13px;outline:none}
+input::placeholder,textarea::placeholder{color:#7d6fa8}
+input:focus,select:focus,textarea:focus{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(167,139,250,.20)}
+#q{max-width:440px;margin-left:auto}
+/* app shell: sidebar + canvas */
+.shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-width:0;min-height:calc(100vh - var(--top));
+  background:linear-gradient(90deg,rgba(9,6,20,.90) 248px,rgba(167,139,250,.14) 248px,rgba(167,139,250,.14) 249px,transparent 249px)}
+.side{position:sticky;top:var(--top);height:calc(100vh - var(--top));overflow-y:auto;
+  padding:14px 10px 24px;font-size:12.5px;scrollbar-width:thin;scrollbar-color:#3a1f66 transparent}
+.side h3{display:flex;align-items:center;gap:8px;margin:0;font:600 10.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:#8f80bd}
+.side details{margin:0 0 6px}
+.side summary{list-style:none;cursor:pointer;padding:8px 8px;border-radius:6px;display:flex;align-items:center;gap:8px}
+.side summary::-webkit-details-marker{display:none}
+.side summary::before{content:"";width:6px;height:6px;border-right:1.5px solid #8f80bd;border-bottom:1.5px solid #8f80bd;transform:rotate(-45deg);transition:transform .15s;margin:0 2px}
+.side details[open]>summary::before{transform:rotate(45deg)}
+.side summary:hover{background:rgba(139,92,246,.10)}
+.side a{display:flex;align-items:center;gap:9px;padding:6px 8px 6px 24px;border-radius:6px;color:#e4dcff;text-decoration:none;min-width:0;position:relative}
+.side a::before{content:"";position:absolute;left:13px;top:0;bottom:0;border-left:1px solid rgba(167,139,250,.16)}
+.side a:hover{background:rgba(139,92,246,.14);color:#fff;text-decoration:none}
+.side a.on{background:rgba(109,40,217,.32);color:#fff;box-shadow:inset 2px 0 0 #a78bfa}
+.side a>span:not(.dot):not(.n){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side .dot{flex:none;display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;font:700 9px/1 var(--mono);color:#fff;background:var(--c,#7c3aed);box-shadow:0 0 8px var(--c,#7c3aed)}
+.side .n{flex:none;font:500 10px/1 var(--mono);color:#cbbcff;background:rgba(139,92,246,.18);border:1px solid rgba(167,139,250,.18);border-radius:4px;padding:3px 5px}
+.side .hint{padding:4px 8px 4px 24px;color:#7d6fa8;font-size:11.5px}
+.scrim{display:none}
+main{width:100%;max-width:1240px;margin:0 auto;padding:26px 28px 40px;display:grid;gap:22px;min-width:0;align-content:start}
+/* card: dark label tab above · translucent violet body · lighter violet header row · dense rows */
+.panel{min-width:0;position:relative}
+.panel>h2{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 8px;max-width:100%;margin:0 0 7px;padding:5px 10px;background:rgba(7,5,15,.92);
+  border:1px solid rgba(167,139,250,.16);border-radius:6px;font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#f4f0ff;overflow-wrap:anywhere}
+.panel>h2 .ico{margin-right:0}
+.cnt{font:500 10px/1 var(--mono);letter-spacing:.02em;color:#d9ceff;background:rgba(139,92,246,.22);border:1px solid rgba(167,139,250,.25);border-radius:4px;padding:3px 6px}
+.panel>.body,.panel>.pad,.panel>.empty,.panel>.tabs{background:var(--card);border:1px solid var(--line-2);border-radius:var(--radius);box-shadow:var(--glow);overflow:hidden;backdrop-filter:blur(6px)}
+.panel>.tabs+*{border-top:0;border-radius:0 0 var(--radius) var(--radius)}
+.panel>.body{padding:0}.pad{padding:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:1px;background:rgba(167,139,250,.16)}
+.stat{background:rgba(40,16,76,.92);padding:16px 18px;position:relative}
+.stat b{display:block;font-size:24px;font-weight:650;letter-spacing:-.02em;line-height:1.25;overflow-wrap:anywhere;color:#fff;text-shadow:0 0 18px rgba(196,181,253,.35)}
+.stat span{color:var(--dim);font:500 10.5px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+a.stat{color:inherit;text-decoration:none;cursor:pointer}a.stat:hover{background:rgba(66,28,120,.95)}a.stat:hover span{color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:13px}
+th{text-align:left;padding:8px 16px;background:var(--head);color:#f4f0ff;font-weight:600;font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid rgba(167,139,250,.22);white-space:nowrap}
+td{padding:8px 16px;border-bottom:1px solid rgba(167,139,250,.10)}
 tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--soft)}
-.kv td:first-child{color:var(--dim);width:190px;font-size:13px}
+.kv td:first-child{color:#e9e2ff;width:200px;font:600 10.5px/1.9 var(--mono);letter-spacing:.07em;text-transform:uppercase}
+.kv td:first-child::before{content:"";display:inline-block;width:5px;height:5px;margin-right:9px;border:1.5px solid #a78bfa;border-radius:1px;transform:rotate(45deg);vertical-align:1px;opacity:.75}
 .kv td{overflow-wrap:anywhere}
 /* tables wider than the screen scroll inside their frame */
 .twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-a{color:var(--accent);text-decoration:none;cursor:pointer}a:hover{text-decoration:underline}
-.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+a{color:var(--accent);text-decoration:none;cursor:pointer}a:hover{text-decoration:underline;color:#e9d5ff}
+.mono{font-family:var(--mono);font-size:12.5px}
 .dim{color:var(--dim)}
-.tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:500;border:1px solid var(--line);background:var(--soft)}
-.tag{border-color:var(--line);background:var(--soft)}
-.tag.ok{color:var(--ok);background:var(--ok-bg);border-color:transparent}
-.tag.bad{color:var(--bad);background:var(--bad-bg);border-color:transparent}
+.tag{display:inline-block;padding:1px 8px;border-radius:5px;font:500 11px/1.6 var(--mono);letter-spacing:.02em;border:1px solid rgba(167,139,250,.22);background:rgba(139,92,246,.14);color:#e4dcff}
+.tag.ok{color:var(--ok);background:rgba(16,60,40,.55);border-color:rgba(74,222,128,.25)}
+.tag.bad{color:var(--bad);background:rgba(80,16,40,.55);border-color:rgba(251,113,133,.25)}
 .copy{border:0;background:none;color:var(--dim);cursor:pointer;padding:0 4px;font-size:12px;opacity:.55}
 .copy:hover{opacity:1;color:var(--accent)}
-pre{background:#04050d;border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto;font-size:12.5px;margin:0;
-  font-family:ui-monospace,Menlo,monospace;line-height:1.6}
-.trace{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;line-height:1.9;overflow-x:auto}
+pre{background:#04050d;border:1px solid var(--line-2);border-radius:8px;padding:14px;overflow:auto;font-size:12.5px;margin:0;
+  font-family:var(--mono);line-height:1.6}
+.trace{font-family:var(--mono);font-size:12.5px;white-space:pre;line-height:1.9;overflow-x:auto}
 .empty{padding:28px 18px;text-align:center;color:var(--dim);font-size:13px}
 .nav{display:flex;gap:14px;justify-content:space-between;color:var(--dim);font-size:13px}
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--grad);color:#fff;
-  padding:9px 18px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--grad);color:#fff;box-shadow:0 0 24px rgba(139,92,246,.6);
+  padding:9px 18px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
 .toast.show{opacity:1}
-.tabs{display:flex;gap:4px;padding:10px 14px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+/* tabs = the card's dark label strip with pill buttons (selected = solid violet) */
+.panel>.tabs{background:rgba(7,5,15,.92);border-radius:var(--radius) var(--radius) 0 0;box-shadow:none;overflow-x:auto;overflow-y:hidden}
+.tabs{display:flex;gap:5px;padding:8px 10px;border-bottom:1px solid rgba(167,139,250,.16);overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
-.tab{border:0;background:none;color:var(--dim);font:inherit;font-size:13px;padding:7px 14px;border-radius:999px;cursor:pointer;white-space:nowrap}
-.tab:hover{background:var(--soft);color:var(--text)}
-.tab.on{background:var(--grad);color:#fff;font-weight:500;box-shadow:0 4px 14px rgba(124,58,237,.35)}
-.tab b{font-weight:500;opacity:.6;margin-left:5px}
-.btn{border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:13px;
-  padding:8px 16px;border-radius:999px;cursor:pointer;white-space:nowrap}
-.btn:hover{border-color:var(--accent-2);color:var(--accent-2)}
-.btn.solid{background:var(--grad);color:#fff;border-color:transparent;font-weight:500}
-.btn.solid:hover{color:#fff;filter:brightness(1.12)}
+.tab{border:1px solid transparent;background:rgba(139,92,246,.10);color:#cfc3f5;font:inherit;font-size:12.5px;font-weight:500;padding:5px 12px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.tab:hover{background:rgba(139,92,246,.22);color:#fff}
+.tab.on{background:var(--violet);color:#fff;box-shadow:0 0 16px rgba(109,40,217,.55)}
+.tab b{font:500 10px/1 var(--mono);margin-left:7px;padding:2px 5px;border-radius:4px;background:rgba(0,0,0,.28);opacity:.9}
+.btn{border:1px solid rgba(167,139,250,.22);background:rgba(139,92,246,.12);color:#ece6ff;font:inherit;font-size:12.5px;font-weight:500;
+  padding:7px 15px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--accent-2);background:rgba(139,92,246,.22);color:#fff}
+.btn.solid{background:var(--violet);color:#fff;border-color:transparent;box-shadow:0 0 16px rgba(109,40,217,.5)}
+.btn.solid:hover{color:#fff;filter:brightness(1.15)}
 .btn:disabled{opacity:.45;cursor:default}
+/* account chip (top right) */
+#wbtn{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 4px;border-radius:999px;font-size:12.5px}
+#wbtn::before{content:"";flex:none;width:24px;height:24px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#d9f99d,#4ade80 45%,#166534);box-shadow:0 0 10px rgba(74,222,128,.45)}
+#dbtn.on{background:var(--violet);border-color:transparent;color:#fff;box-shadow:0 0 18px rgba(109,40,217,.55)}
 .form{display:grid;gap:12px}
 .form label{display:grid;gap:6px;font-size:12.5px;color:var(--dim)}
 .form input,.form textarea,.form select{background:var(--bg);border:1px solid var(--line);color:var(--text);
@@ -145,6 +204,10 @@ td .json{min-width:220px}
 th select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px;padding:3px 6px;text-transform:none;letter-spacing:0}
 /* pagination: page numbers + prev / next + jump to page */
 .pager{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim)}
+/* footer chip of a card: "● Showing 1–25 of 63" */
+.pager>span:first-child{display:inline-flex;align-items:center;gap:7px;padding:3px 9px;border-radius:5px;background:rgba(7,5,15,.75);border:1px solid rgba(167,139,250,.18);
+  font:500 11px/1.5 var(--mono);color:#e4dcff}
+.pager>span:first-child::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80}
 .pages{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 .pg{min-width:32px;height:30px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px;font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
 .pg:hover:not(:disabled){border-color:var(--accent-2);color:var(--accent-2)}
@@ -193,9 +256,27 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 .warn{color:var(--warn);font-size:12px;white-space:nowrap}
 .full{overflow-wrap:anywhere;word-break:break-all}
 .share{display:inline-block;height:6px;border-radius:3px;background:var(--grad);vertical-align:middle;margin-right:6px;min-width:2px}
+/* wide screens: thin violet connector rail from card to card */
+@media(min-width:961px){
+  main{position:relative}
+  main::before{content:"";position:absolute;left:13px;top:38px;bottom:56px;border-left:1px solid rgba(167,139,250,.26);pointer-events:none}
+  #view>.panel::before{content:"";position:absolute;left:-15px;top:13px;width:15px;border-top:1px solid rgba(167,139,250,.34)}
+  #view>.panel::after{content:"";position:absolute;left:-18px;top:10px;width:5px;height:5px;border:1px solid #c4b5fd;border-radius:50%;background:#2a0a4a}
+}
+/* narrower than a laptop: the sidebar becomes a drawer (☰), top-bar pills move into it */
+@media(max-width:960px){
+  .menu{display:inline-grid;place-items:center}
+  .pills{display:none}
+  .shell{grid-template-columns:minmax(0,1fr);background:none}
+  .side{position:fixed;z-index:8;top:0;left:0;bottom:0;height:auto;width:min(280px,86vw);transform:translateX(-105%);visibility:hidden;
+    transition:transform .2s,visibility .2s;box-shadow:0 0 40px rgba(0,0,0,.6);background:#0b0718}
+  body.side-open .side{transform:none;visibility:visible}
+  body.side-open .scrim{display:block;position:fixed;inset:0;z-index:7;background:rgba(4,2,10,.55)}
+}
 @media(max-width:720px){
   .bar{flex-wrap:wrap;padding:12px 14px;gap:10px}
-  .brand{width:100%;white-space:normal}
+  .brand{flex:1 1 calc(100% - 50px);white-space:normal;flex-wrap:wrap;row-gap:2px}
+  #q{max-width:none;margin-left:0}
   .brand span{display:inline-block}   /* "block 123 · 0 pending" drops to its own line on very narrow screens */
   .bar input{flex:1 1 150px}
   main{padding:14px;gap:14px}
@@ -208,7 +289,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
 /* phones: each table row becomes a card, every cell labelled from its column header (data-label) */
 @media(max-width:640px){
   header{position:static}
-  .tabs{flex-wrap:wrap;overflow:visible}
+  .tabs,.panel>.tabs{flex-wrap:wrap;overflow:visible}
   .btn{white-space:normal;text-align:center}
   table.grid,table.grid>tbody{display:block}
   table.grid>thead{display:block;border-bottom:1px solid var(--line)}
@@ -238,7 +319,7 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .bar{padding:10px 8px;gap:8px}
   .bar input,.bar .btn{flex:1 1 100%}
   main{padding:8px;gap:10px}
-  .panel>h2{padding:12px}
+  .panel>h2{padding:5px 8px}
   .pad,#storage-panel .pad{padding:12px}
   .sub,.tabs{padding:8px}
   .tab{padding:6px 10px}
@@ -252,13 +333,39 @@ th select{background:var(--bg);color:var(--text);border:1px solid var(--line);bo
   .mono{font-size:11.5px}
 }
 </style></head><body>
+<div class="canvas" aria-hidden="true"><i></i></div>
 <header><div class="bar">
-  <div class="brand" onclick="go('')">Program VM<span id="tick"></span></div>
+  <button class="menu" id="menu-btn" title="Menu" aria-label="Menu" onclick="sideMenu()">☰</button>
+  <div class="brand" onclick="go('')"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f0abfc"/><stop offset=".5" stop-color="#c026d3"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
+    <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z" fill="none" stroke="url(#lg)" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M16 9.5 21.6 12.75v6.5L16 22.5l-5.6-3.25v-6.5zM16 2.5v7M27.7 22.75 21.6 19.25M4.3 22.75l6.1-3.5" fill="none" stroke="url(#lg)" stroke-width="2" stroke-linejoin="round"/></svg>Program VM<span id="tick"></span></div>
+  <nav class="pills" aria-label="Sections">
+    <a class="pill" data-nav="explore" onclick="go('')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>Explorer</a>
+    <a class="pill" data-nav="programs" onclick="go('#programs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg>Programs<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg></a>
+  </nav>
   <input id="q" placeholder="Search block / tx / address / name" onkeydown="if(event.key==='Enter')search()">
   <button class="btn" id="dbtn" onclick="go('#deploy')">Deploy</button>
   <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>
 </div></header>
+<div class="shell">
+<aside class="side" id="side" aria-label="Navigation">
+  <details open><summary><h3>Explorer</h3></summary>
+    <a data-nav="home" onclick="sideGo('')"><span class="dot" style="--c:#7c3aed">◆</span><span>Overview</span></a>
+    <a data-nav="block" onclick="sideClose();api('/genesis').then((i) => go('#block/' + (i.latest || 1)))"><span class="dot" style="--c:#2563eb">B</span><span>Latest block</span><span class="n" id="side-latest">—</span></a>
+  </details>
+  <details open><summary><h3>Programs</h3></summary>
+    <a data-nav="programs-approved" onclick="sideClose();openPrograms('approved')"><span class="dot" style="--c:#16a34a">✓</span><span>Approved</span><span class="n" id="side-approved">—</span></a>
+    <a data-nav="programs-pending" onclick="sideClose();openPrograms('pending')"><span class="dot" style="--c:#db2777">?</span><span>In review</span><span class="n" id="side-review">—</span></a>
+    <a data-nav="deploy" onclick="sideGo('#deploy')"><span class="dot" style="--c:#9333ea">+</span><span>New program</span></a>
+  </details>
+  <details open><summary><h3>Wallet</h3></summary>
+    <a data-nav="me" onclick="sideClose();(wallet ? Promise.resolve() : connect(false)).then(() => go('#address/' + wallet)).catch((e) => alert(e.message))"><span class="dot" style="--c:#0d9488">◎</span><span>My address</span></a>
+  </details>
+  <details open><summary><h3>Recent programs</h3></summary><div id="side-programs"><div class="hint">Loading…</div></div></details>
+</aside>
+<div class="scrim" onclick="sideClose()"></div>
 <main id="view"></main>
+</div>
 <div class="toast" id="toast">Copied</div>
 <script>
 const api = (p, o) => fetch(location.origin + p, o).then((r) => r.json());
@@ -368,7 +475,9 @@ function copyText(value) {
   toast.classList.add("show"); setTimeout(() => toast.classList.remove("show"), 1200);
 }
 
-const panel = (title, inner, pad) => `<section class="panel"><h2>${title}</h2><div class="${pad ? "pad" : "body"}">${inner}</div></section>`;
+/** "Transactions (12)" → the count becomes a small chip on the card's label tab (text stays the same) */
+const panelTitle = (title) => String(title).replace(/ \(([\d,]+)\)$/, ' <span class="cnt">($1)</span>');
+const panel = (title, inner, pad) => `<section class="panel"><h2>${panelTitle(title)}</h2><div class="${pad ? "pad" : "body"}">${inner}</div></section>`;
 const table = (head, rows) => (rows.length
   ? `<div class="twrap"><table class="grid"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
   : '<div class="empty">No data</div>');
@@ -589,7 +698,7 @@ function feeRows(r) {
 /** rejected txs recorded in a block: signature checked, then turned away (they never ran) */
 function rejectedPanel(list, page) {
   const rows = slicePage(list, page);
-  return `<section class="panel" id="rejected-panel"><h2>Rejected (${num(list.length)})</h2><div class="body">${table(["#", "Hash", "Type", "From", "Nonce", "Stage", "Reason"],
+  return `<section class="panel" id="rejected-panel"><h2>${panelTitle(`Rejected (${num(list.length)})`)}</h2><div class="body">${table(["#", "Hash", "Type", "From", "Nonce", "Stage", "Reason"],
     rows.items.map((r, i) => txRow(r, [(rows.page - 1) * rows.limit + i, txLink(r.hash), actionTag(r.action), addr(r.sender), r.nonce ?? "—",
       stageTag(r.stage), `<span class="bad">${esc(r.reason)}</span>`])))}${pager(rows, "setPage('rej',$)")}</div></section>`;
 }
@@ -1749,6 +1858,7 @@ async function render(soft) {
   const [kind, value] = location.hash.slice(1).split("/");
   const y = scrollY;
   const seq = ++renderSeq;
+  markNav();
   // only the newest render may draw: a slower earlier one (another page / tab / page number) is dropped
   const draw = (html) => { if (seq === renderSeq) el(html); };
   if (!soft) document.getElementById("view").innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
@@ -1761,12 +1871,46 @@ async function render(soft) {
   if (soft && seq === renderSeq) scrollTo(0, y);
 }
 
+// ---------- sidebar (drawer on narrow screens) + highlighted section ----------
+const sideInfo = { polls: 0 };
+const sideOpen = (open) => document.body.classList.toggle("side-open", open);
+const sideMenu = () => sideOpen(!document.body.classList.contains("side-open"));
+const sideClose = () => sideOpen(false);
+const sideGo = (hash) => { sideClose(); go(hash); };
+const SIDE_COLORS = ["#7c3aed", "#db2777", "#2563eb", "#0d9488", "#d97706", "#9333ea", "#16a34a", "#e11d48"];
+function markNav() {
+  const [kind, value] = location.hash.slice(1).split("/");
+  const on = new Set(!kind ? ["explore", "home"] : kind === "programs" ? ["programs", `programs-${tabState["#programs"] ?? "pending"}`]
+    : kind === "deploy" ? ["deploy"] : ["explore"]);
+  if (kind === "block") on.add("block");
+  if (kind === "address" && value) { on.add(`a:${value.toLowerCase()}`); if (wallet && value.toLowerCase() === wallet) on.add("me"); }
+  for (const node of document.querySelectorAll("[data-nav]")) node.classList.toggle("on", on.has(node.dataset.nav));
+  document.getElementById("dbtn").classList.toggle("on", kind === "deploy");
+}
+async function sidePrograms() {
+  const [counts, list, info] = await Promise.all([api("/programs"), api("/programs/approved?limit=8"), api("/genesis")]).catch(() => []);
+  if (!counts || !list) return;
+  document.getElementById("side-latest").textContent = `#${info?.latest ?? 0}`;
+  document.getElementById("side-approved").textContent = num(counts.approved ?? 0);
+  document.getElementById("side-review").textContent = num(counts.pending ?? 0);
+  document.getElementById("side-programs").innerHTML = (list.items ?? []).map((p, i) => {
+    const label = p.name || cut(p.address);
+    const kind = p.token ? "TOKEN" : p.collection === "ERC-721" ? "NFT" : p.collection ? "MULTI" : "";
+    return `<a data-nav="a:${attr(String(p.address).toLowerCase())}" onclick="sideGo('#address/${attr(p.address)}')" title="${attr(p.address)}"><span class="dot" style="--c:${SIDE_COLORS[i % SIDE_COLORS.length]}">${esc(String(label).replace(/^0x/, "").slice(0, 1).toUpperCase())}</span><span>${esc(label)}</span>${kind ? `<span class="n">${kind}</span>` : ""}</a>`;
+  }).join("") || '<div class="hint">No approved programs yet</div>';
+  markNav();
+}
+addEventListener("keydown", (e) => { if (e.key === "Escape") sideClose(); });
+sidePrograms();
+
 addEventListener("hashchange", () => render());
 render();
 setInterval(async () => {
   const info = await api("/genesis").catch(() => null);
   if (!info) return;
   document.getElementById("tick").textContent = `block ${info.latest ?? 0} · ${info.pending} pending`;
+  document.getElementById("side-latest").textContent = `#${info.latest ?? 0}`;
+  if (++sideInfo.polls % 10 === 0) sidePrograms();
   document.getElementById("wbtn").textContent = wallet ? cut(wallet) : "Connect wallet";
   // refresh the home page only while it shows the newest blocks and nothing is being typed
   if (!location.hash && pageOf("blocks") === 1 && !document.activeElement?.matches("#view input")) { const seq = renderSeq; home((html) => { if (seq === renderSeq && !location.hash) el(html); }); }
