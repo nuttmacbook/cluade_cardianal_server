@@ -14,6 +14,16 @@
  *   transferFrom({ from, to, amount })       → true   (ใช้วงเงินที่ from approve ไว้ให้ผู้เรียก)
  * ฟังก์ชันเสริม (ไม่บังคับในมาตรฐาน)
  *   multiTransfer({ transfers: [{ to, amount }, …] }) → จำนวนรายการ   โอนหลายกระเป๋าใน tx เดียว (Transfer ต่อรายการ)
+ *   permit({ owner, spender, value, deadline, signature }) → true    ตั้งวงเงินด้วยลายเซ็นของ owner (คล้าย ERC-2612)
+ *   nonces({ owner }) → bigint · permitDomain() → { name, version, chainId, verifyingContract } · DOMAIN_SEPARATOR() → hash ของ domain
+ *
+ * permit: ข้อความที่ owner เซ็น (ดู permitTypedData ใน src/crypto/program-signature.js)
+ *   { domain: { name, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
+ *     primaryType: "Permit", types: PERMIT_TYPE, message: { owner, spender, value, nonce, deadline } }
+ *   digest = keccak256(canonical JSON ของข้อความนี้) — ตรงกับที่ ecrecover(ข้อความ, signature) คำนวณ (bigint เป็น "123n")
+ *   deadline = มิลลิวินาทีแบบเดียวกับ params.block.timestamp · block.timestamp > deadline → "permit expired"
+ *   nonce ของ owner เพิ่มทีละ 1 ทุกครั้งที่ permit สำเร็จ (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น → ลายเซ็นใช้ไม่ได้
+ *   owner เป็นโปรแกรม → ถาม owner.isValidSignature({ hash: digest, signature }) แบบ readonly (ERC-1271, src/standards/wallet.js)
  * event ที่ต้อง emit
  *   Transfer { from, to, amount }      ทุกครั้งที่ยอดย้าย · ตอนสร้างเหรียญใช้ from = ZERO_ADDRESS
  *   Approval { owner, spender, amount } ทุกครั้งที่ตั้งวงเงิน
@@ -21,7 +31,12 @@
  * จำนวนเงินทั้งหมดเป็น bigint หน่วยเล็กสุด (เหมือน wei) · หน้าเว็บหารด้วย 10^decimals ตอนแสดง
  */
 
+import { SIGNATURE_CHECKER } from "./wallet.js";
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+/** ชนิดของข้อความ permit (ฟิลด์ types ในข้อความที่เซ็น — เหมือน type string ของ EIP-712) */
+export const PERMIT_TYPE = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)";
+export const PERMIT_VERSION = "1";
 export const TOKEN_FUNCTIONS = ["name", "ticker", "decimals", "totalSupply", "balanceOf", "allowance", "transfer", "approve", "transferFrom"];
 export const TOKEN_EVENTS = ["Transfer", "Approval"];
 
@@ -78,9 +93,39 @@ export const TOKEN_PROGRAM = `function program() {
     return count
   }
 
+  function setAllowance(owner, spender, amount) {
+    writeDB(map("allowance", owner, spender), amount)
+    emit("Approval", { owner: owner, spender: spender, amount: amount })
+  }
+
   function approve(params) {
-    writeDB(map("allowance", params.context.sender, params.input.spender), params.input.amount)
-    emit("Approval", { owner: params.context.sender, spender: params.input.spender, amount: params.input.amount })
+    setAllowance(params.context.sender, params.input.spender, params.input.amount)
+    return true
+  }
+
+  ${SIGNATURE_CHECKER}
+
+  function permitDomain() {
+    return { name: readDB("name"), version: "${PERMIT_VERSION}", chainId: ChainId(), verifyingContract: ThisAddress() }
+  }
+  function DOMAIN_SEPARATOR() { return keccak256(permitDomain()) }
+  function nonces(params) { return readDB(map("nonces", params.input.owner)) || 0n }
+
+  function permit(params) {
+    const owner = params.input.owner
+    const spender = params.input.spender
+    const value = params.input.value
+    const deadline = params.input.deadline
+    if (typeof owner !== "string" || typeof spender !== "string") throw new Error("owner and spender must be addresses")
+    if (typeof value !== "bigint" || value < 0n) throw new Error("value must be a non-negative bigint")
+    if (typeof deadline !== "bigint") throw new Error("deadline must be a bigint (milliseconds, like params.block.timestamp)")
+    if (params.block.timestamp > deadline) throw new Error("permit expired")
+    const nonce = readDB(map("nonces", owner)) || 0n
+    const typed = { domain: permitDomain(), primaryType: "Permit", types: "${PERMIT_TYPE}",
+      message: { owner: owner, spender: spender, value: value, nonce: nonce, deadline: deadline } }
+    if (!isValidSignatureNow(owner, typed, params.input.signature)) throw new Error("invalid permit signature")
+    writeDB(map("nonces", owner), nonce + 1n)
+    setAllowance(owner, spender, value)
     return true
   }
 
@@ -93,7 +138,8 @@ export const TOKEN_PROGRAM = `function program() {
     return true
   }
 
-  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom }
+  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom,
+    permit, nonces, permitDomain, DOMAIN_SEPARATOR }
 }`;
 
 /** โค้ดที่ VM เก็บไว้มี \\n เป็นตัวอักษร (escape แบบ JSON) → คืนเป็นโค้ดปกติ */
@@ -102,13 +148,22 @@ export function unescapeCode(code) {
   try { return JSON.parse(`"${raw}"`); } catch { return raw; }
 }
 
-/** โค้ดนี้ทำตามมาตรฐาน token ไหม (ดูจากฟังก์ชันที่ export และ event ที่ emit) → { ok, missing: [] } */
-export function checkTokenStandard(code) {
+/** ชื่อฟังก์ชันใน return { … } ตัวสุดท้ายของโปรแกรม */
+export function exportedFunctions(code) {
   const source = unescapeCode(code);
-  const exported = /return\s*\{([^}]*)\}\s*;?\s*\}\s*$/.exec(source)?.[1].split(",").map((name) => name.trim()) ?? [];
+  return /return\s*\{([^}]*)\}\s*;?\s*\}\s*$/.exec(source)?.[1].split(",").map((name) => name.trim()).filter(Boolean) ?? [];
+}
+
+/** โค้ดนี้ export ฟังก์ชันครบ และ emit event ครบตามรายชื่อไหม → { ok, missing: [] } (ใช้ร่วมกันทุกมาตรฐาน) */
+export function checkStandard(code, functions, events) {
+  const source = unescapeCode(code);
+  const exported = exportedFunctions(source);
   const missing = [
-    ...TOKEN_FUNCTIONS.filter((name) => !exported.includes(name)),
-    ...TOKEN_EVENTS.filter((name) => !new RegExp(`emit\\(\\s*["'\`]${name}["'\`]`).test(source)).map((name) => `event ${name}`),
+    ...functions.filter((name) => !exported.includes(name)),
+    ...events.filter((name) => !new RegExp(`emit\\(\\s*["'\`]${name}["'\`]`).test(source)).map((name) => `event ${name}`),
   ];
   return { ok: missing.length === 0, missing };
 }
+
+/** โค้ดนี้ทำตามมาตรฐาน token ไหม (ดูจากฟังก์ชันที่ export และ event ที่ emit) → { ok, missing: [] } */
+export const checkTokenStandard = (code) => checkStandard(code, TOKEN_FUNCTIONS, TOKEN_EVENTS);

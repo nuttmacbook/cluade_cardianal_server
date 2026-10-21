@@ -190,6 +190,56 @@ chain.balanceOf("alice");    // { received, sended, consumed, balance } เป�
 chain.setTime(Date.parse("2025-01-01"));
 ```
 
+## โปรแกรมมาตรฐาน (ERC) ที่ใช้ได้ทันที
+
+`import { … } from "programvm/standards/<ไฟล์>.js"` แล้ว deploy string ของโค้ดได้เลย (ผ่าน autoreview ทุกตัว)
+
+| ไฟล์ | ใช้ทำ | input ตอน deploy |
+|---|---|---|
+| `token.js` → `TOKEN_PROGRAM` | เหรียญแบบ ERC-20 + `permit` (ERC-2612) | `{ name, ticker, decimals, supply }` |
+| `nft.js` → `NFT_PROGRAM` | NFT แบบ ERC-721 (`mint` / `transferFrom` / `safeTransferFrom` / `approve` / `setApprovalForAll` / `tokenURI`) | `{ name, symbol, baseURI? }` |
+| `multitoken.js` → `MULTITOKEN_PROGRAM` | หลาย id ในโปรแกรมเดียวแบบ ERC-1155 (`balanceOfBatch` / `safeBatchTransferFrom` / `mintBatch` / `uri`) | `{ name?, symbol?, uri }` |
+| `wallet.js` → `WALLET_PROGRAM` | กระเป๋าโปรแกรมแบบ ERC-1271 (`isValidSignature` / `execute`) | `{ owner? }` |
+| `multicall.js` → `MULTICALL_PROGRAM` | `aggregate` / `tryAggregate` หลาย call ใน tx / query เดียว (`readonly: true` = staticcall) | — |
+
+ตัวเลขทุกตัว (tokenId, id, amount, deadline) เป็น BigInt · ข้อความ error เป็นภาษาอังกฤษ
+
+### permit — ให้คนอื่นส่ง tx ตั้งวงเงินแทน owner
+
+```js
+import { TOKEN_PROGRAM } from "programvm/standards/token.js";
+import { signPermit, permitDigest, signWalletHash } from "programvm/program-signature.js";
+import { addressOf } from "programvm/signature.js";
+
+const owner = addressOf(ownerKey);
+const token = chain.deploy(TOKEN_PROGRAM, { as: owner, initInput: { name: "Thai Baht Coin", ticker: "THBC", decimals: "6n", supply: "1000000n" } });
+const fields = { name: "Thai Baht Coin", chainId: 1 /* ChainId() ของเชน */, verifyingContract: token.address, owner, spender: "bob",
+  value: 500n, nonce: 0n /* token.call("nonces", { owner }) */, deadline: BigInt(Date.now() + 600_000) /* มิลลิวินาที */ };
+const signature = signPermit(fields, ownerKey);                       // owner เป็นกระเป๋าคน
+// const signature = signWalletHash(permitDigest(fields), walletOwnerKey);   // owner เป็น WALLET_PROGRAM (ERC-1271)
+token.call("permit", { owner, spender: "bob", value: "500n", deadline: `${fields.deadline}n`, signature }, { as: "relayer" });
+```
+
+ข้อความที่ถูกเซ็น (token สร้างซ้ำแล้วส่งให้ `ecrecover`):
+`{ domain: { name, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }, primaryType: "Permit", types: "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)", message: { owner, spender, value, nonce, deadline } }`
+→ digest = `keccak256(canonical JSON)` (เรียง key, BigInt เป็น `"123n"`) · หมดเวลาเมื่อ `params.block.timestamp > deadline` · ใช้แล้ว nonce + 1
+
+### รับลายเซ็นจากกระเป๋าโปรแกรม (ERC-1271) ในโปรแกรมของคุณ
+
+```js
+import { SIGNATURE_CHECKER } from "programvm/standards/wallet.js";
+const code = `function program() {
+  ${SIGNATURE_CHECKER}
+  function claim(params) {
+    if (!isValidSignatureNow(params.input.signer, { action: "claim", nonce: 1n }, params.input.signature)) throw new Error("bad signature")
+    …
+  }
+  return { claim }
+}`;
+```
+`isValidSignatureNow(signer, ข้อความ, signature)`: กระเป๋าคน → `ecrecover(ข้อความ, signature) === signer` · โปรแกรม → `runProgram(signer, "isValidSignature", { hash: keccak256(ข้อความ), signature }, { readonly: true }) === "0x1626ba7e"`
+ฝั่งผู้เซ็น: `signProgramMessage(ข้อความ, key)` ได้ลายเซ็นที่ `ecrecover` ในโปรแกรมกู้ได้ตรง
+
 ## ส่งขึ้น chain
 
 ```js

@@ -513,7 +513,8 @@ async function home(draw = el) {
 
 // ---------- programs: approved / awaiting approval ----------
 const openPrograms = (id) => { tabState["#programs"] = id; go("#programs"); };
-const kindTag = (token) => `<span class="tag">${token ? "Token" : "Program"}</span>`;
+// type of program: standard token / NFT collection (ERC-721) / multi-token (ERC-1155) / anything else
+const kindTag = (token, collection) => `<span class="tag">${token ? "Token" : collection === "ERC-721" ? "NFT" : collection ? "Multi-token" : "Program"}</span>`;
 const bytes = (n) => `${num(n ?? 0)} B`;
 async function programs(draw = el) {
   const [counts, pending, approved] = await Promise.all([
@@ -524,14 +525,14 @@ async function programs(draw = el) {
     { id: "pending", label: "Awaiting approval", count: counts.pending, body: pending.total
       ? `<div class="pad">${walletRow("Approving or rejecting needs an admin wallet (any wallet when the chain has no admin list)")}</div>`
         + table(["Program", "Name", "Type", "Deployer", "Value", "Code size", "Review"], pending.items.map((p) => txRow(p, [
-          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.deployer), coin(p.value), bytes(p.codeSize),
+          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token, p.collection), addr(p.deployer), coin(p.value), bytes(p.codeSize),
           `<span class="row"><button class="btn sm solid" data-review="init" onclick="reviewProgram('${p.address}','init')">Approve</button>
            <button class="btn sm" data-review="reject" onclick="reviewProgram('${p.address}','reject')">Reject</button></span>`,
         ]))) + pager(pending, "setPage('pending',$)") + '<div class="pad"><div class="out" id="review-out">Nothing sent yet</div></div>'
       : empty("No programs are waiting for approval") },
     { id: "approved", label: "Approved", count: counts.approved, body: approved.total
       ? table(["Program", "Name", "Type", "Creator", "Approved", "Code size"], approved.items.map((p) => txRow(p, [
-          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token), addr(p.creator), age(p.createdAt), bytes(p.codeSize),
+          addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token, p.collection), addr(p.creator), age(p.createdAt), bytes(p.codeSize),
         ]))) + pager(approved, "setPage('approved',$)")
       : empty("No approved programs yet") },
   ]));
@@ -1309,8 +1310,16 @@ function pickTab(id) {
 }
 
 // ---------- address / program ----------
+/** token URI of an NFT: http(s) → link · ipfs:// and others → text (never a script link) */
+function nftUri(uri) {
+  if (!uri) return '<span class="dim">—</span>';
+  const href = /^https?:\/\//i.test(uri) ? safeHref(uri) : null;
+  return href ? `<a class="mono" href="${attr(href)}" target="_blank" rel="noopener noreferrer nofollow">${esc(cut(uri))} ↗</a>`
+    : `<span class="mono" title="${attr(uri)}">${esc(cut(uri))}</span>`;
+}
 async function address(value, draw = el) {
-  const [data, tokens] = await Promise.all([api(`/address/${value}?limit=1`), api(`/address/${value}/tokens`).catch(() => [])]);
+  const [data, tokens, nfts] = await Promise.all([api(`/address/${value}?limit=1`), api(`/address/${value}/tokens`).catch(() => []),
+    api(`/address/${value}/nfts`).catch(() => [])]);
   const program = data.isProgram ? await api(`/program/${value}?limit=1`) : null;
   // programs: calls and events page by cursor (no counting cap) · the tab counts come from one cheap counted request
   const [incoming, outgoing, events, holders, , rejected, callCount, eventCount] = await Promise.all([
@@ -1346,9 +1355,15 @@ async function address(value, draw = el) {
   const tokenRows = held.items.map((t) => `<tr><td><span class="ico coin"></span><b>${esc(t.ticker)}</b></td>
     <td>${addr(t.address, t.name)}</td><td class="mono" style="text-align:right">${units(t.balance, t.decimals)}</td>
     <td class="dim">${num(t.decimals)}</td></tr>`);
+  // NFTs held (ERC-721 pieces / ERC-1155 balances): collections found from transfer events · zero balances hidden
+  const nftPage = slicePage(nfts, pageOf("nfts"));
+  const nftRows = nftPage.items.map((n) => `<tr><td>${addr(n.program, n.name || n.symbol)}</td><td><span class="tag">${esc(n.standard)}</span></td>
+    <td class="mono">#${num(n.tokenId)}</td><td class="mono" style="text-align:right">${num(n.amount)}</td><td>${nftUri(n.uri)}</td></tr>`);
   const groups = [
     ...(tokens.length ? [{ id: "tokens", label: "Tokens", count: tokens.length,
       body: table(["Token", "Program", "Balance", "Decimals"], tokenRows) + pager(held, "setPage('tokens',$)") }] : []),
+    ...(nfts.length ? [{ id: "nfts", label: "NFTs", count: nfts.length,
+      body: table(["Collection", "Standard", "Token ID", "Amount", "URI"], nftRows) + pager(nftPage, "setPage('nfts',$)") }] : []),
   ];
   if (holders) {
     const supply = toBig(program.token.totalSupply);
@@ -1398,6 +1413,8 @@ async function address(value, draw = el) {
       ["Nonce", data.nonce],
       program?.token && ["Token", `<span class="ico coin"></span><b>${esc(program.token.name)}</b> <span class="tag">${esc(program.token.ticker)}</span>
         <span class="dim">· ${num(program.token.decimals)} decimals · supply ${units(program.token.totalSupply, program.token.decimals)}</span>`],
+      program?.collection && ["Collection", `<b>${esc(program.collection.name || "—")}</b>${program.collection.symbol ? ` <span class="tag">${esc(program.collection.symbol)}</span>` : ""}
+        <span class="dim">· ${esc(program.collection.standard)}${program.collection.totalSupply ? ` · ${num(program.collection.totalSupply)} minted` : ""}</span>`],
       program && ["Creator", addr(data.metadata.creator)],
       program && ["Created", when(data.metadata.createdAt)],
       // upgrade / clone: version (no metadata = 1), who may upgrade (none = immutable), template it was cloned from

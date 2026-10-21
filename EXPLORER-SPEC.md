@@ -95,7 +95,8 @@
 | `GET /program/:a/groups?scan=&cursor=` | นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (`scan` ≤ 50,000 ต่อ request) → `{ total, groups, scanned, next, complete }` · ยังไม่ครบ → ส่ง `cursor=next` แล้วบวกผลเอง |
 | `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
 | `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
-| `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage |
+| `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage, `token` / `collection` (NFT ERC-721 / multi-token ERC-1155 มาตรฐาน · ไม่ใช่ = null) |
+| `GET /address/:address/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` |
 | `GET /events?program=&name=&limit=` | event ที่โปรแกรม emit ใหม่ไปเก่า |
 | `GET /name/:namespace` | ชื่อ → address |
 | `GET /state/:address?block=42` | storage ของโปรแกรม ณ block นั้น |

@@ -597,6 +597,41 @@ test("โปรแกรม: หน้าแรกบอกจำนวนที
   assert.deepEqual(pageErrors, []);
 });
 
+test("NFT: หน้าโปรแกรมบอก Collection (ERC-721) · หน้ากระเป๋ามีแท็บ NFTs พร้อม tokenId และ tokenURI", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const { NFT_PROGRAM } = await import("../../src/standards/nft.js");
+  const send = async (fields) => {
+    const { nonce } = await get(`/nonce/${ME}`);
+    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, gasPrice: "1000000000", nonce, ...fields };
+    const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+    assert.ok(sent.queued, JSON.stringify(sent));
+    for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`))?.blockNumber; i += 1) await wait(200);
+    return get(`/tx/${sent.hash}/receipt`);
+  };
+  const deployed = await send({ action: "deploy", code: NFT_PROGRAM, input: { name: "Siam Art", symbol: "SART", baseURI: "https://art.example/" } });
+  const nft = deployed.result?.programUuid ?? deployed.result;
+  assert.equal((await send({ action: "init", to: nft })).status, "success");
+  assert.equal((await send({ action: "call", to: nft, method: "mint", input: { to: ME } })).status, "success");
+  assert.equal((await send({ action: "call", to: nft, method: "mint", input: { to: BOB, uri: "ipfs://second" } })).status, "success");
+
+  await open(`#address/${nft}`);
+  const text = await view();
+  assert.match(text, /Collection/);
+  assert.match(text, /Siam Art/);
+  assert.match(text, /ERC-721 · 2 minted/);
+
+  await open(`#address/${ME}`);
+  await tab("NFTs");
+  assert.match(await view(), /#1/);
+  assert.equal(await page.locator("#view a[href='https://art.example/1']").count(), 1);
+  await open(`#address/${BOB}`);
+  await tab("NFTs");
+  assert.match(await view(), /ipfs:\/\/second/);
+  assert.equal(await page.locator("#view a[href^='ipfs:']").count(), 0);   // ไม่ใช่ http(s) → ไม่ทำเป็นลิงก์
+  assert.deepEqual(pageErrors, []);
+});
+
 // ---------------------------------------------------------------------------
 //  ฟอร์ม deploy (มี upgrader) → อนุมัติ → upgrade → อนุมัติการอัปเกรด → โอนสิทธิ์ · ทุกใบเซ็นจากหน้าเว็บ
 // ---------------------------------------------------------------------------

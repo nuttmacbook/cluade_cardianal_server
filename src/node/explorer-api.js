@@ -9,6 +9,8 @@
  */
 import { storageKey, map } from "../core/virtualmachine.js";
 import { checkTokenStandard } from "../standards/token.js";
+import { checkNftStandard } from "../standards/nft.js";
+import { checkMultiTokenStandard } from "../standards/multitoken.js";
 
 const SEP = ":";
 export const SCAN_LIMIT = 20_000;   // ไล่ key ไม่เกินเท่านี้ต่อครั้ง (เกินแล้วตอบ truncated: true)
@@ -123,6 +125,54 @@ export function tokenHoldings(vm, address) {
   return tokens;
 }
 
+// ---------- NFT / multi-token ----------
+
+/** มาตรฐานของโค้ด: "ERC-721" (src/standards/nft.js) | "ERC-1155" (src/standards/multitoken.js) | null */
+export function collectionStandard(code) {
+  if (code === undefined || code === null) return null;
+  if (checkNftStandard(code).ok) return "ERC-721";
+  return checkMultiTokenStandard(code).ok ? "ERC-1155" : null;
+}
+
+/** ข้อมูล NFT / multi-token ตามมาตรฐาน → { address, standard, name, symbol, totalSupply? } · ไม่ใช่ → null */
+export function collectionInfo(vm, program) {
+  const address = lower(program);
+  const standard = collectionStandard(vm.read(`${address}${SEP}code`));
+  if (!standard) return null;
+  const read = (functionName) => {
+    const result = vm.query({ programUuid: address, functionName, input: {} });
+    return result.status === "success" ? result.result : null;
+  };
+  return { address, standard, name: read("name"), symbol: read("symbol"), ...(standard === "ERC-721" ? { totalSupply: read("totalSupply") } : {}) };
+}
+
+/**
+ * NFT / multi-token ที่ address นี้ถืออยู่: โปรแกรมมาจากดัชนี holding: (event Transfer / TransferSingle / TransferBatch)
+ * ชิ้นที่ถือมาจาก storage ของโปรแกรม — ERC-721: owned:<address>:<tokenId> · ERC-1155: balances:<address>:<id> (ยอด 0 ไม่แสดง)
+ * → [{ program, standard, name, symbol, tokenId, amount, uri }]
+ */
+export function nftHoldings(vm, address, { limit = 200 } = {}) {
+  const who = lower(address);
+  const items = [];
+  for (const { program } of vm.listHoldings(who)) {
+    const info = collectionInfo(vm, program);
+    if (!info) continue;
+    const nft = info.standard === "ERC-721";
+    const prefix = `${baseOf(program)}${nft ? "owned" : "balances"}${SEP}${encodeURIComponent(who)}${SEP}`;
+    for (const dbKey of vm.listKeys(prefix, { limit: limit - items.length })) {
+      const id = decodeURIComponent(dbKey.slice(prefix.length));
+      if (id.includes(SEP)) continue;
+      const amount = nft ? "1n" : vm.read(dbKey);
+      if (bigOf(amount) <= 0n) continue;
+      const uri = vm.query({ programUuid: info.address, functionName: nft ? "tokenURI" : "uri", input: nft ? { tokenId: `${id}n` } : { id: `${id}n` } });
+      items.push({ program: info.address, standard: info.standard, name: info.name, symbol: info.symbol, tokenId: `${id}n`, amount,
+        uri: uri.status === "success" ? uri.result : null });
+    }
+    if (items.length >= limit) break;
+  }
+  return items;
+}
+
 // ---------- แบ่งหน้า (explorer กดเลขหน้า / ข้ามหน้าได้) ----------
 
 export const PAGE_SCAN = 50_000;   // นับ key ไม่เกินเท่านี้ต่อรายการ (เกินแล้วตอบ truncated: true)
@@ -230,6 +280,8 @@ export function programCounts(vm) {
 }
 
 const codeSize = (code) => Buffer.byteLength(String(code ?? ""), "utf8");
+/** { collection: "ERC-721" | "ERC-1155" } เฉพาะโปรแกรม NFT / multi-token (อย่างอื่นไม่มีฟิลด์นี้) */
+const collectionField = (code) => { const standard = collectionStandard(code); return standard ? { collection: standard } : {}; };
 
 /** โปรแกรมที่ deploy แล้วรอทีมงานอนุมัติ (init) หรือปฏิเสธ (reject) · เรียงตาม address */
 export function pagePendingPrograms(vm, paging) {
@@ -239,7 +291,8 @@ export function pagePendingPrograms(vm, paging) {
   return { ...result, items: result.items.map((dbKey) => {
     const pending = vm.read(dbKey) ?? {};
     return { address: dbKey.slice(prefix.length), deployer: pending.context?.sender ?? null, name: pending.metadata?.namespace ?? pending.initInput?.namespace ?? null,
-      value: pending.value ?? 0, codeSize: codeSize(pending.code), token: checkTokenStandard(pending.code ?? "").ok };
+      value: pending.value ?? 0, codeSize: codeSize(pending.code), token: checkTokenStandard(pending.code ?? "").ok,
+      ...collectionField(pending.code) };
   }) };
 }
 
@@ -251,7 +304,7 @@ export function pageApprovedPrograms(vm, paging) {
   return { ...result, items: result.items.map(({ address, metadata }) => {
     const code = vm.read(`${address}${SEP}code`);
     return { address, name: metadata.namespace ?? null, creator: metadata.creator ?? null, createdAt: metadata.createdAt ?? null,
-      codeSize: codeSize(code), token: checkTokenStandard(code ?? "").ok };
+      codeSize: codeSize(code), token: checkTokenStandard(code ?? "").ok, ...collectionField(code) };
   }) };
 }
 

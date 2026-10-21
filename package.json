@@ -7,6 +7,8 @@
     "./core": "./src/core/virtualmachine.js",
     "./db.js": "./src/storage/db.js",
     "./signature.js": "./src/crypto/signature.js",
+    "./program-signature.js": "./src/crypto/program-signature.js",
+    "./standards/*": "./src/standards/*",
     "./mempool.js": "./src/node/mempool.js",
     "./sync.js": "./src/node/sync.js",
     "./autoreview.js": "./src/core/autoreview.js",

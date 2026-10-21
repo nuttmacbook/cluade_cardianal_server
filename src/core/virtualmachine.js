@@ -542,6 +542,8 @@ export const eventKey = (program, name, number, txIndex, eventIndex) =>
     String(eventIndex).padStart(4, "0"));
 /** ดัชนี "address นี้เคยได้รับเหรียญจากโปรแกรมนี้" (จาก event Transfer) — ยอดจริงอ่านจาก balanceOf ของโปรแกรม */
 export const holdingKey = (address, program) => joinKey(KEY.HOLDING, address, program);
+/** event ที่ทำดัชนี holding: (มี data.from / data.to) — Transfer ของ token / NFT, TransferSingle / TransferBatch ของ multi-token */
+export const HOLDING_EVENTS = new Set(["Transfer", "TransferSingle", "TransferBatch"]);
 export const blockUndoKey = (number) => joinKey(KEY.BLOCK_UNDO, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 
 /**
@@ -2998,8 +3000,9 @@ export class Block {
           dbKey: eventKey(event.program, event.name, this.#number, index, event.index),
           value: { ...event, blockNumber: this.#number, txIndex: index, txHash: hash, timestamp: this.#timestamp },
         });
-        // event Transfer ของ token → จำว่า address ปลายทางถือเหรียญของโปรแกรมนี้ (ยอดจริงอ่านจาก balanceOf ตอนแสดง)
-        if (event.name === "Transfer" && result.status === STATUS.SUCCESS) {
+        // event Transfer ของ token / NFT และ TransferSingle / TransferBatch ของ multi-token → จำว่า address นี้ถือของของโปรแกรมนี้
+        // (ยอดจริงอ่านจากโปรแกรมตอนแสดง)
+        if (HOLDING_EVENTS.has(event.name) && result.status === STATUS.SUCCESS) {
           for (const holder of [event.data?.to, event.data?.from]) {
             if (!isWalletAddress(holder) || /^0x0{40}$/i.test(holder)) continue;
             writes.push({ type: WRITE.PUT, dbKey: holdingKey(normalizeAddress(holder), event.program),

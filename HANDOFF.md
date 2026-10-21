@@ -49,6 +49,9 @@ src/core/sandbox.js            935        sandbox ของโปรแกรม
 src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
+src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจด้วย ecrecover: signPermit / signWalletHash / signProgramMessage
+src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
+                                          · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
 src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice, แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
@@ -520,9 +523,10 @@ vm[method](request);
 | `GET /rejected?address&limit&cursor` · `GET /address/:a/rejected` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` · ไม่ระบุ address = ทั้งเชน (ไล่ ≤ 1,000 block ต่อ request) |
 | `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
-| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน), `pendingUpgrade` / `scheduledUpgrade` (null ถ้าไม่มี) |
+| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน), `collection` (`{ address, standard: "ERC-721" \| "ERC-1155", name, symbol, totalSupply? }` · null ถ้าไม่ใช่ NFT / multi-token), `pendingUpgrade` / `scheduledUpgrade` (null ถ้าไม่มี) |
 | `GET /program/:a/versions` | โค้ดทุกเวอร์ชัน `[{ version, code, blockNumber, timestamp }]` (ว่าง = ไม่เคยอัปเกรด) |
 | `GET /address/:a/tokens` | เหรียญที่ถือ `[{ address, name, ticker, decimals, totalSupply, balance }]` · ยอด 0 ไม่แสดง |
+| `GET /address/:a/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` (สูงสุด 200) · โปรแกรมจากดัชนี `holding:` · ชิ้นจาก `owned:<a>:<id>` (ERC-721) / `balances:<a>:<id>` (ERC-1155) · ยอด 0 ไม่แสดง |
 | `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 ถ้าไม่ใช่ token |
 | `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
 | `GET /program/:a/groups?scan&cursor` | นับ key ตามชื่อ key แรก **ทีละช่วง**: `scan` key ต่อ request (ค่าเริ่ม 20,000 · สูงสุด 50,000) → `{ total, groups, scanned, next, complete }` · `next` ไม่ใช่ null → ส่ง `cursor=next` ต่อแล้วบวกผลเอง (นับครบทุก key) |
@@ -533,7 +537,7 @@ vm[method](request);
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
-| `GET /programs/pending` · `/programs/approved` | แบ่งหน้า `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token }], total, pages }` · หน้า explorer `#programs` (กดจากกล่องในหน้าแรก) |
+| `GET /programs/pending` · `/programs/approved` | แบ่งหน้า `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token, collection? }], total, pages }` (`collection` = `"ERC-721"` / `"ERC-1155"` มีเฉพาะ NFT / multi-token → แสดงเป็น NFT / Multi-token) · หน้า explorer `#programs` (กดจากกล่องในหน้าแรก) |
 | `GET /sync?from` | `[{ header, body, rejected }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
 
 **แบบแบ่งหน้า** (explorer ใช้ทุกรายการยาว) · `?page=<เริ่ม 1>&limit=<≤100, ค่าเริ่ม 20>` → `{ items, total, page, pages, limit, truncated }`
@@ -579,7 +583,7 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 ```
 - รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
-  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 อ่านอย่างเดียว) `eth_estimateGas`
+  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 อ่านอย่างเดียว) `eth_estimateGas`
   `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
 - **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
   (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
@@ -588,12 +592,16 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 - timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, เวลา = เวลาของ block 1) · `gasLimit` = `vm.maxBlockGas` (ไม่ได้ตั้ง → 30M)
 - status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` คำนวณจริงจาก log (receipt + block)
 - event `Transfer` ของ token มาตรฐาน → log ERC-20 (topic keccak("Transfer(address,address,uint256)")) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
+- NFT มาตรฐาน (`checkNftStandard`) → `Transfer` 4 topic (from, to, **tokenId indexed**, data `0x`) + `Approval(address,address,uint256)` + `ApprovalForAll(address,address,bool)` แบบ ERC-721
+  multi-token มาตรฐาน (`checkMultiTokenStandard`) → `TransferSingle` (data = id, value) / `TransferBatch` (data = ABI `uint256[]` × 2) / `ApprovalForAll` / `URI` แบบ ERC-1155
+  Blockscout แยก ERC-20 / ERC-721 จากจำนวน topic ของ Transfer และรู้จัก ERC-1155 จาก TransferSingle / Batch · ตรวจด้วย ethers `Interface.parseLog` ในเทสต์ `66-evm-nft-logs`
+- `eth_call` ของ NFT: `name symbol totalSupply balanceOf ownerOf tokenURI getApproved isApprovedForAll supportsInterface` · ของ multi-token: `name symbol balanceOf(address,uint256) uri totalSupply(uint256) isApprovedForAll supportsInterface`
 - tx `input` = JSON `{action, method, input}` เป็น hex (ไม่ใช่ ABI) · `eth_getCode` = ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (กระเป๋า → `0x`)
 - callTracer: root = tx (`CREATE` สำหรับ deploy), `calls[]` = trace ซ้อนตาม depth · native ที่โปรแกรมโอนด้วย `transferNative` (ไม่อยู่ใน trace)
   หาได้จาก `nativeChanges` หลังตัด value ของทุกชั้นและค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) → เป็น `CALL` จากโปรแกรมนั้นไปผู้รับ · ค่าแก๊สไม่เป็น internal tx
 - txpool: จาก `mempool.list()` (ไม่มี to / value เพราะ mempool ไม่ได้เปิดให้อ่าน)
 - **ส่ง tx ไม่ได้**: `eth_sendRawTransaction` ตอบ error (เชนรับเฉพาะ EIP-712 ของตัวเอง) → ส่งผ่าน explorer เหมือนเดิม
-- ไม่รองรับ: `eth_feeHistory`, `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token มาตรฐาน
+- ไม่รองรับ: `eth_feeHistory`, `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token / NFT / multi-token มาตรฐาน, `balanceOfBatch` ผ่าน eth_call
 - chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
@@ -634,6 +642,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 | แท็บ (`data-tab`) | เนื้อหา |
 |---|---|
 | Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
+| NFTs (`nfts`) | (เฉพาะ address ที่ถือ NFT / multi-token) collection, ERC-721 / ERC-1155, token ID, จำนวน, URI (http(s) เป็นลิงก์ · ipfs:// ฯลฯ เป็นข้อความ) · `/address/:a/nfts` |
 | Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
 | Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีข้อความเตือนสีส้ม "⚠ caught" ต่อท้าย · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
 | Outgoing (`out`) | `/address/:a/txs` |
@@ -691,6 +700,35 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 `TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals) · input ตอน deploy: `{ name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }`
 เหรียญที่ถือ = ดัชนี `holding:` (บอกว่าโปรแกรมไหน) + `balanceOf` ตอนเปิดหน้า (ยอดจริง) → ยอด 0 ไม่แสดง
 ไม่เก็บยอดสะสมจาก event เพราะ rebuild block แล้วจะนับซ้ำ · โปรแกรมที่ emit Transfer แต่ไม่ผ่านมาตรฐานไม่ถูกแสดง
+
+### มาตรฐาน NFT / multi-token / permit / ERC-1271 / multicall (`src/standards/*` · เทสต์ `62`–`67`)
+ทุกมาตรฐานตรวจด้วย `checkStandard(code, functions, events)` (ใน `token.js`) — ดูจาก `return { … }` ตัวสุดท้าย + `emit("ชื่อ"` ในโค้ด · ข้อความ error ในโปรแกรมเป็นภาษาอังกฤษ
+โปรแกรม import กันไม่ได้ จึงแจกเป็น string ของซอร์ส (แทรกค่าคงที่ด้วย template string ตอน import โมดูล) · ทุกตัวผ่าน `reviewProgram`
+
+| ไฟล์ | โปรแกรม | สรุป |
+|---|---|---|
+| `nft.js` | `NFT_PROGRAM` · `checkNftStandard` | ERC-721: `mint({ to, tokenId?, uri? })` (owner / minter · ไม่ส่ง id = ถัดไปเริ่ม 1n) `transferFrom` `safeTransferFrom` (ปลายทางเป็นโปรแกรมต้องตอบ `onERC721Received` = `0x150b7a02`) `approve({ to, tokenId })` `setApprovalForAll` `ownerOf` `balanceOf({ owner })` `getApproved` `isApprovedForAll` `tokenURI` (uri ของชิ้น หรือ baseURI + id) `burn` `setMinter` `supportsInterface` · event `Transfer {from,to,tokenId}` `Approval {owner,approved,tokenId}` `ApprovalForAll {owner,operator,approved}` · storage `owners:<id>` `owned:<owner>:<id>` `balances:<owner>` |
+| `multitoken.js` | `MULTITOKEN_PROGRAM` · `checkMultiTokenStandard` | ERC-1155: `balanceOf({ account, id })` `balanceOfBatch({ accounts, ids })` `safeTransferFrom({ from, to, id, amount, data? })` `safeBatchTransferFrom({ …, ids, amounts })` (hook `onERC1155Received` / `onERC1155BatchReceived`) `mint` `mintBatch` `burn` `setApprovalForAll` `uri` (template `{id}` หรือ `setURI`) `totalSupply({ id })` · event `TransferSingle {operator,from,to,id,amount}` `TransferBatch {…,ids,amounts}` `ApprovalForAll {account,operator,approved}` `URI {value,id}` · storage `balances:<account>:<id>` |
+| `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · ดูหัวข้อ "ข้อความ permit" ด้านล่าง |
+| `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` เมื่อเจ้าของ (key เดียว) เซ็น hash นั้น · `execute({ target, fn, input, value? })` (เจ้าของสั่งเรียกโปรแกรมอื่น) · `transferOwnership` · รับ NFT / 1155 แบบ safe ได้ |
+| `multicall.js` | `MULTICALL_PROGRAM` | `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
+
+**ข้อความ permit** (คล้าย ERC-2612 + EIP-712 แต่ hash แบบ JSON เพราะ `keccak256` / `ecrecover` ในโปรแกรมรับข้อความ ไม่ใช่ byte)
+```js
+{ domain: { name: <name() ของ token>, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
+  primaryType: "Permit",
+  types: "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)",
+  message: { owner, spender, value, nonce, deadline } }        // ตัวเลขเป็น bigint → "123n" ใน canonical JSON · address ตัวพิมพ์เล็ก
+digest = keccak256(canonicalJson(ข้อความ))   // ค่าเดียวกับที่ ecrecover(ข้อความ, signature) ในโปรแกรม hash · signature = r||s||v 65 byte
+```
+- `deadline` เป็น**มิลลิวินาที**เหมือน `params.block.timestamp` · `block.timestamp > deadline` → `permit expired` (เท่ากันยังใช้ได้)
+- `nonce` = `nonces({ owner })` ตอนส่ง · สำเร็จแล้วเพิ่ม 1 (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น / ชื่ออื่น → `invalid permit signature`
+- owner เป็นโปรแกรม → token เรียก `isValidSignature({ hash: digest, signature })` แบบ `{ readonly: true }` ผ่าน `isValidSignatureNow` (`SIGNATURE_CHECKER`)
+  — เจ้าของ `WALLET_PROGRAM` เซ็น **string ของ hash** เป็นข้อความ (`signWalletHash`) · โปรแกรมอื่นที่อยากรับลายเซ็นของกระเป๋าโปรแกรม แทรก `${SIGNATURE_CHECKER}` ในโค้ดแล้วเรียก `isValidSignatureNow(signer, ข้อความ, signature)`
+- ตัวช่วยฝั่ง wallet / เทสต์: `src/crypto/program-signature.js` (`programvm/program-signature.js`)
+  `permitTypedData(fields)` `permitDigest(fields)` `signPermit(fields, key)` `signWalletHash(hash, key)` `signProgramMessage(ข้อความ, key)` `recoverProgramMessage(ข้อความ, sig)` `programMessageHash(ข้อความ)`
+- MetaMask `eth_signTypedData_v4` ใช้กับข้อความนี้ไม่ได้ (คนละวิธี hash) · ต้องเซ็น digest ตรง ๆ แบบไม่มี prefix
+- ดัชนี `holding:` นับ event `Transfer` / `TransferSingle` / `TransferBatch` (`HOLDING_EVENTS` ใน VM) → explorer หา NFT / 1155 ที่ address ถือได้
 
 ### metadata ในหน้า address / โปรแกรม
 | แถว | มาจาก | แสดง |
@@ -795,6 +833,10 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 | `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
+| `62-permit-1271` | permit: ลายเซ็นกู้ได้ทั้ง JS / โปรแกรม · relayer ส่งแทน · replay · หมดเวลา · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |
+| `63-nft-standard` `64-multitoken-standard` | NFT / multi-token: mint, สิทธิ์ (approve / operator / minter), safe transfer + hook, ย้อนทั้งชุด, uri, burn, ดัชนีของที่ถือ |
+| `65-multicall` | aggregate (ลำดับ + all-or-nothing) · tryAggregate (ย้อนเฉพาะตัวที่ล้ม · requireSuccess) · readonly (staticcall ทุก call) |
+| `66-evm-nft-logs` `67-explorer-nft` | /evm: log ERC-721 / ERC-1155 + eth_call (ถอดด้วย ethers) · explorer: collectionInfo / nftHoldings / ชนิดโปรแกรม |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
