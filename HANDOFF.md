@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 550 เคส ใช้เวลา ~20 วินาที |
+| เทสต์ | `npm test` → 774 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 550 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 774 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -52,7 +52,7 @@ src/crypto/signature.js        214        EIP-712 + secp256k1
 src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจด้วย ecrecover: signPermit / signWalletHash / signProgramMessage
 src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
                                           · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
-src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม gasPrice, แทนที่ใบ nonce เดิม
+src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
@@ -181,7 +181,7 @@ const address = cloneProgram(template, initInput, { salt, value })   // ใน�
 - ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
   (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
-### API ในโปรแกรม (31 ตัว)
+### API ในโปรแกรม (32 ตัว)
 
 ```
 readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
@@ -189,14 +189,14 @@ runProgram(target, functionName, input, { value })      เรียกโปร
 runProgram(target, functionName, input, { readonly: true })   แบบ STATICCALL: ปลายทาง + ทุกชั้นที่เรียกต่อแก้ state ไม่ได้
 cloneProgram(template, initInput, { salt, value })      สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address (ดูหัวข้อ cloneProgram)
 transferNative(to, amount)                              โอนเหรียญหลักจากโปรแกรม
-setMetadata(field, value) / emit(name, data)
+setMetadata(field, value) / emit(name, data, { indexed: ["from", "to"] }?)   indexed = field ที่ค้นด้วยค่าได้ (ไม่เกิน 3 · ดูหัวข้อ event แบบ indexed)
 keccak256(value) / ecrecover(value, signature)
 ThisAddress() / ThisBalance() / BalanceOf(addr) / IsProgram(addr) / MetadataOf(addr, field) / BlockNumber()
 Date        เวลาของ block (Date.now() ได้ค่าเดียวกันทุก tx ใน block)
 Math        random() ผูกกับ tx hash → รันซ้ำได้ผลเดิม
 sha256(value) / ripemd160(value) / blake2b(value)        precompile hash (รับแบบเดียวกับ keccak256 · blake2b = BLAKE2b-512)
 modexp(base, exponent, modulus)                          BigInt · modulus 0n → 0n · แต่ละค่า ≤ 1024 byte (MODEXP_MAX_BYTES)
-BlockHash(n) / ChainId() / Coinbase() / BlockGasLimit() / GasPrice() / GasLeft()
+BlockHash(n) / ChainId() / Coinbase() / BlockGasLimit() / GasPrice() / BaseFee() / GasLeft()
 CodeHashOf(addr) / CodeSizeOf(addr)                      keccak256 / byte ของโค้ดที่เก็บ · ไม่ใช่โปรแกรม → null / 0n
 ```
 
@@ -208,7 +208,8 @@ API ที่เทียบกับ EVM (ทุกตัว deterministic · �
 | `ChainId()` | CHAINID | `vm.chainId` | `env` 10 |
 | `Coinbase()` | COINBASE | `feeRecipient` ของ block (null ถ้าไม่มี) | `env` |
 | `BlockGasLimit()` | GASLIMIT | `vm.maxBlockGas` (null = ไม่จำกัด · ใช้ค่าของ VM ไม่ใช่ของ Block จึง replay ได้ผลเดิม) | `env` |
-| `GasPrice()` | GASPRICE | `tx.gasPrice` — ไม่มี base fee จึงไม่มี `BaseFee()` | `env` |
+| `GasPrice()` | GASPRICE | `tx.gasPrice` = ราคาจริงต่อแก๊ส `min(maxFee, baseFee + priority)` | `env` |
+| `BaseFee()` | BASEFEE | base fee ของ block ที่ tx อยู่ (`tx.baseFee` · query นอก block = base fee ของ block ถัดไป) | `env` |
 | `GasLeft()` | GAS | `gasLimit - gasUsed` หลังหัก `env` ของตัวเอง (null ถ้าไม่มีเพดาน) | `env` |
 | `CodeHashOf(a)` | EXTCODEHASH | `keccak256(<a>:code)` = codeHash เดียวกับที่ `cloneProgram` ใช้คำนวณ address | `read` + `hash` + `byte` × ขนาดโค้ด |
 | `CodeSizeOf(a)` | EXTCODESIZE | byte ของ `<a>:code` | `read` |
@@ -309,7 +310,7 @@ POST /sendtx
   → vm.createBlock() → mempool.take(block) → block.commit()
 ```
 
-`take()` เรียง tx ด้วย `sortPendingTransactions` (gasPrice มาก่อน) แล้วเช็ค `block.checkTransaction()` ทีละใบ
+`take()` เรียง tx ด้วย `sortPendingTransactions(items, { baseFee: block.baseFee })` (tip จริงมากก่อน) ข้ามใบที่ maxFee < base fee (ยังรอในคิว) แล้วเช็ค `block.checkTransaction()` ทีละใบ
 
 **tx ที่ถูกปฏิเสธ (rejected) ถูกบันทึกใน block** — ใบที่ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน:
 - `stage: "sendtx"` ปฏิเสธตอน `/sendtx` (nonce ผิด / คิวเต็ม / ส่งถี่ / simulate หรือรีวิวโค้ดไม่ผ่าน / แทนที่ด้วยราคาต่ำไป)
@@ -328,8 +329,9 @@ POST /sendtx
 
 **แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
 - nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
-- nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ gasPrice ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น)
-  ไม่ถึง → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · ไม่ระบุ gasPrice = `vm.gas.price`
+- nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ**ทั้ง** maxFee และ priority ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น · gasPrice แบบเดิม = ทั้งสองค่า)
+  ไม่ถึง (แบบเดิมทั้งสองใบ) → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · มีแบบ 1559 → `(ต้อง maxFeePerGas ≥ X และ maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
+  · ไม่ระบุ gasPrice = `vm.gas.price`
 - ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 0 ให้ตัวเอง** (`{ action: "transfer", to: <ตัวเอง>, value: 0 }`)
   เชนรับโอน native 0 แบบ EVM: ยังคิดค่าแก๊สและกิน nonce · ติดลบ / ไม่ใช่จำนวนเต็ม → `amount ต้องเป็นจำนวนเต็มไม่ติดลบ`
   (`transferNative` ในโปรแกรมยังไม่รับ 0 เหมือนเดิม)
@@ -397,13 +399,60 @@ block.commit()                            // เขียนทีเดีย�
 ### ค่าแก๊ส
 
 ```
-call 100 · read 100 · write 500 · byte 1 · event 200 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
+call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
 ```
+`emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
 (n = จำนวน node ของ AST ในช่วงนั้น × `node`) · เมธอดในตัว (join, split, slice, JSON.stringify …) และ `obj[x](…)` ถูกเปลี่ยนเป็น `__call` คิด `builtin` ต่อตัวอักษร / สมาชิกที่เข้า-ออก
 โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` / `__call` สงวนไว้ · ตำแหน่ง `.` `[` `]` `(` ของการเรียกหาจาก token จริง (acorn tokenizer) ไม่ใช่จากช่วงของ node — ช่วงของค่าในวงเล็บไม่รวมวงเล็บ เช่น `(255).toString(36)` (เคยแปลงเป็น `__call((255,…` ที่ syntax ผิด) · เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
-ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` ส่งมาเองได้
-เผาทิ้ง `burnPercent` (server ใช้ 50) → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient`
+ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
+ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
+
+### ค่าแก๊สแบบ EIP-1559 (เทสต์ `68-base-fee` `69-fee-mempool` `73-evm-fees`)
+
+| ค่า (option ของ VM · env ของ server) | ค่าเริ่มต้น | ความหมาย |
+|---|---|---|
+| `minBaseFee` · `GAS_PRICE` | `gas.price` (server 1 gwei) | base fee ต่ำสุด (และ base fee ของ block แรก) |
+| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 1,500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
+| `baseFeeChangeDenominator` · `BASE_FEE_DENOMINATOR` | 8 | เปลี่ยนได้ไม่เกิน 1/8 = 12.5% ต่อ block |
+| `burnPercent` · `BURN_PERCENT` | 100 | % ของ**ส่วน base fee** ที่เผา (เดิม server ใช้ 50 ของค่าแก๊สทั้งหมด) |
+
+- base fee ของ block n = `nextBaseFee(header n−1)` ตามสูตร EIP-1559: `parent ± parent × |gasUsed − target| ÷ target ÷ denominator` (ขึ้นอย่างน้อย 1 · ไม่ต่ำกว่า `minBaseFee`)
+  คำนวณจาก header ก่อนหน้าเสมอ (ผู้ผลิตกำหนดเองไม่ได้) → replay / sync ได้ค่าเดิม · `vm.currentBaseFee()` = ของ block ถัดไป
+- tx แบบ 1559 ส่ง `maxFeePerGas` + `maxPriorityFeePerGas` · แบบเดิมส่ง `gasPrice` = ทั้งสองค่า · ไม่ส่งเลย = จ่าย base fee (tip 0)
+  · 1559 ไม่ส่ง maxFee = `baseFee + priority` · priority > maxFee → `INVALID_REQUEST` · maxFee / gasPrice < base fee → ปฏิเสธ (ไม่เข้า block)
+- **ราคาจริง** `effectiveGasPrice = min(maxFee, baseFee + priority)` = `tx.gasPrice` · ค่าแก๊ส = gasUsed × ราคาจริง
+- **แบ่งค่าแก๊ส**: `base = gasUsed × baseFee` (ส่วน base fee) → เผา `base × burnPercent / 100` · tip `fee − base` + base ส่วนที่ไม่เผา → `feeRecipient`
+  (ไม่มี feeRecipient = เผาทั้งหมด) · ผลของ tx / receipt มี `baseFee` `burnedFee` `producerFee` (+ `feeType: 2` `maxFeePerGas` `maxPriorityFeePerGas` ของแบบ 1559)
+  · ราคาเท่า base fee (tip 0) และ burnPercent 100 = เผาทั้งหมดเหมือนเดิม
+- mempool เรียงตาม tip จริงของ block `min(priority, maxFee − baseFee)` · ใบที่ maxFee < baseFee **ยังรอในคิว** ไม่ถูกหยิบจน base fee ลง
+  · แทนที่ใบเดิม (nonce เดียวกัน) ต้องเพิ่มทั้ง maxFee และ priority ≥ 10% แบบ geth (แบบเดิม ↔ แบบเดิม ข้อความเดิม)
+- header มี `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` (`baseFeePerGas` อยู่ใน hash)
+
+### receiptsRoot / logsBloom ใน header (เทสต์ `70-header-roots`)
+- `receiptsRoot` = hash ของ receipt ย่อทุกใบตามลำดับ `{ hash, status, gasUsed, cumulativeGasUsed, effectiveGasPrice, fee, error (code), logs }`
+- `logsBloom` = bloom 2048 bit แบบ EVM ของ log ทุกใบ (address + ทุก topic · log จาก `eventLog(event)` ซึ่งไม่ขึ้นกับ state)
+- ทั้งคู่ + `baseFeePerGas` + `gasUsed` อยู่ใน `hashBlock` → replay / `rebuildFrom` / sync (`applyBlock`) รันเองแล้วเทียบ hash → ผู้ผลิตปลอม receipt / bloom ไม่ได้
+- /evm ใช้ค่าจาก header ตรง ๆ · `eth_getLogs` ข้าม block ที่ bloom ไม่มี address / topic ที่ขอ
+
+### event แบบ indexed (เทสต์ `71-indexed-events`)
+- `emit(name, data, { indexed: ["from", "to"] })` · ไม่เกิน 3 field (`MAX_INDEXED` เท่า LOG4) · ต้องมีใน data · ห้ามซ้ำ · event เก็บ `indexed` ไว้ด้วย
+- ดัชนี `eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>` → ค่า = dbKey ของ event · `topic = topicOf(value)` (address = เติม 0 เป็น 32 byte · ตัวเลข = uint256 · bool · string = keccak)
+  `eventsig:<topic0>:<program>:<name>` → `{ program, name, indexed }` (ให้ eth_getLogs หาโปรแกรมจาก topic0)
+- log แบบ EVM: มี indexed → topic0 = `keccak("Name(type,…)")` ของทุก field ตามลำดับใน data · topics ถัดไป = field ที่ indexed · data = ABI ของ field ที่เหลือ
+  · ไม่มี indexed → topic0 = keccak(ชื่อ) + data เป็น JSON (เหมือนเดิม) · token / NFT / multi-token มาตรฐาน index ตาม ERC (Transfer from / to (+ tokenId) · Approval · ApprovalForAll · TransferSingle/Batch · URI · OwnershipTransferred)
+- `vm.listIndexedEvents({ program, name, field, value, limit, cursor, fromBlock, toBlock })` · `GET /program/:a/events?name=Transfer&to=0x…` (หลาย field = AND) · `eth_getLogs` ใช้ดัชนีเมื่อมี topic0 + topic อื่น
+- ดัชนีอยู่ใน `blockundo` → rebuild ลบ / สร้างใหม่ตาม block
+
+### metadata.abi (เทสต์ `72-abi`)
+```js
+{ functions: [{ name, inputs: [{ name, type, description? }], outputs: [{ name?, type }], readonly?, payable?, description? }],
+  events:    [{ name, fields: [{ name, type, indexed?, description? }], description? }] }
+// type ∈ address uint int bool string bytes object array any
+```
+- ส่งตอน deploy (`metadata: { abi }` · ฟังก์ชันที่ประกาศต้อง export จริง) หรือ `setMetadata("abi", …)` ในโปรแกรม · ตรวจด้วย `checkAbi` (ชื่อ / ชนิด / ห้ามซ้ำ / indexed ≤ 3 / ≤ 64 ฟังก์ชัน · 32 event · 16 field · 16 KB)
+- explorer สร้างฟอร์ม Interact จาก inputs (แทนการเดาจากโค้ด) · แท็บ Events บอกชนิด / indexed · แท็บ ABI
+- `GET /program/:a/abi` → `{ address, abi, evmAbi }` · `/evm` `cardianal_getAbi(address)` → JSON ABI แบบ Ethereum (`toEvmAbi`: uint → uint256 · object / array / any → string)
 
 ### พฤติกรรมที่ล็อกไว้แล้ว (เทสต์คุมอยู่ — อย่าทำให้พัง)
 
@@ -457,6 +506,8 @@ tx:<vmhash>            { hash, digest, blockNumber, index, action, status, from,
 sigtx:<digest>         EIP-712 digest → vm hash (ทำให้ค้นด้วย hash ที่ user เซ็นได้)
 txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้"
 event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
+eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   ดัชนีของ field ที่ emit แบบ indexed → dbKey ของ event
+eventsig:<topic0>:<program>:<name>     topic0 แบบ EVM → { program, name, indexed } (eth_getLogs)
 holding:<addr>:<program>   ดัชนี "address นี้เคยได้/ส่งเหรียญของโปรแกรมนี้" จาก event Transfer (from/to) ของ tx ที่สำเร็จ · ต้อง recordBlocks
 history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before }
 0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
@@ -489,6 +540,8 @@ vm[method](request);
 
 - domain `{ name: "ProgramVM", version: "1", chainId }`
 - field ที่เซ็น **ลำดับห้ามสลับ**: `action, from, to, method, input, value, nonce, gasLimit, gasPrice`
+  · tx แบบ EIP-1559 (มี `maxFeePerGas` หรือ `maxPriorityFeePerGas`) ใช้ `TRANSACTION_TYPE_1559` = ชุดเดิมที่ตัด `gasPrice` แล้วต่อท้าย `maxFeePerGas, maxPriorityFeePerGas`
+    → tx แบบเดิมได้ digest เดิมทุกไบต์ · ส่ง gasPrice (≠ 0) คู่กับสอง field ใหม่ = ปฏิเสธ · `maxFeePerGas: 0` = ไม่ระบุ
 - `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
 - `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade`
   → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata` · ที่เหลือชื่อเดียวกัน)
@@ -515,7 +568,7 @@ vm[method](request);
 ### อ่าน
 | endpoint | คืน |
 |---|---|
-| `GET /genesis` | `{ hash, chainId, latest, pending, burned }` — explorer poll ทุก 3 วิ |
+| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, baseFee, gasTarget, maxBlockGas, burnPercent, burned }` — explorer poll ทุก 3 วิ · `baseFee` = ของ block ถัดไป |
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
@@ -549,7 +602,8 @@ page เกินหน้าสุดท้าย → ได้หน้าส�
 | `GET /blocks/page` | header ใหม่ไปเก่า (คำนวณจากเลข block ไม่ไล่ key) |
 | `GET /address/:a/txs` | tx ที่ address ส่ง · **เรียงด้วยเลข nonce** (key `txn` ไม่ได้เติม 0 ข้างหน้า เรียงตามตัวอักษรจะผิดตั้งแต่ nonce 10) |
 | `GET /address/:a/incoming` | tx ที่เข้ามาหา (ดัชนี `txto:` รวมการเรียกซ้อนชั้น · แถวซ้อนชั้นมี `status` = ผลของ call ชั้นนั้น และ `txStatus` = ผลของทั้ง tx) |
-| `GET /program/:a/events?name` | event ใหม่ไปเก่า |
+| `GET /program/:a/events?name` | event ใหม่ไปเก่า · `&<field>=<value>` (ต้องมี name) = ค้นด้วยดัชนี indexed แบบ cursor |
+| `GET /program/:a/abi` | `{ address, abi, evmAbi }` (ไม่ได้ประกาศ = null) |
 | `GET /program/:a/entries?name` | key 2 ชั้นของกลุ่ม `name` (ข้าม key 3 ชั้น) |
 | `GET /token/:a/holders` | ผู้ถือจาก `balances:<address>` ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย · 404 ถ้าไม่ใช่ token |
 
@@ -582,16 +636,20 @@ GET  /evm                      ค่าสำหรับ wallet_addEthereumCha
 GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก์ "ดูใน explorer" ของกระเป๋า)
 ```
 - รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
+  `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi`
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
   `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 อ่านอย่างเดียว) `eth_estimateGas`
   `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
 - **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
   (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
 - ผล `vm.replayBlock` เก็บ cache 64 block (key = เลข + hash) → receipt ทุกใบ / `logIndex` (นับต่อเนื่องทั้ง block) / `cumulativeGasUsed` ได้จาก replay ครั้งเดียว
-- เชนเก็บ native เป็น wei อยู่แล้ว → `EVM_DECIMALS` ค่าเริ่มต้น 0 (ไม่คูณ) · `nativeCurrency.decimals` = 18 เสมอ · `eth_gasPrice` = `vm.gas.price` (1 gwei)
+- เชนเก็บ native เป็น wei อยู่แล้ว → `EVM_DECIMALS` ค่าเริ่มต้น 0 (ไม่คูณ) · `nativeCurrency.decimals` = 18 เสมอ · `eth_gasPrice` = base fee ของ block ถัดไป + tip ที่แนะนำ (`eth_maxPriorityFeePerGas` = มัธยฐานของ tip ใน 20 block ล่าสุด)
+  · `eth_feeHistory` แบบ geth (≤ 1024 block · baseFeePerGas มีช่องของ block ถัดไป · reward ตาม percentile ถ่วงด้วยแก๊ส) · block มี `baseFeePerGas`
+  · tx / receipt แบบ 1559 = `type 0x2` + `maxFeePerGas` `maxPriorityFeePerGas` `accessList: []` · `gasPrice` / `effectiveGasPrice` = ราคาจริง
 - timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, เวลา = เวลาของ block 1) · `gasLimit` = `vm.maxBlockGas` (ไม่ได้ตั้ง → 30M)
-- status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` คำนวณจริงจาก log (receipt + block)
-- event `Transfer` ของ token มาตรฐาน → log ERC-20 (topic keccak("Transfer(address,address,uint256)")) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
+- status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` / `receiptsRoot` ของ block มาจาก header · ของ receipt คำนวณจาก log
+- log มาจาก `eventLog(event)` ของ VM (ไม่อ่าน state): event ที่ emit แบบ indexed → topic0 = keccak ของลายเซ็น + topic ของ field ที่ indexed + data แบบ ABI
+  (token มาตรฐาน → log ERC-20 ตรงตัว) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
 - NFT มาตรฐาน (`checkNftStandard`) → `Transfer` 4 topic (from, to, **tokenId indexed**, data `0x`) + `Approval(address,address,uint256)` + `ApprovalForAll(address,address,bool)` แบบ ERC-721
   multi-token มาตรฐาน (`checkMultiTokenStandard`) → `TransferSingle` (data = id, value) / `TransferBatch` (data = ABI `uint256[]` × 2) / `ApprovalForAll` / `URI` แบบ ERC-1155
   Blockscout แยก ERC-20 / ERC-721 จากจำนวน topic ของ Transfer และรู้จัก ERC-1155 จาก TransferSingle / Batch · ตรวจด้วย ethers `Interface.parseLog` ในเทสต์ `66-evm-nft-logs`
@@ -601,7 +659,7 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
   หาได้จาก `nativeChanges` หลังตัด value ของทุกชั้นและค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) → เป็น `CALL` จากโปรแกรมนั้นไปผู้รับ · ค่าแก๊สไม่เป็น internal tx
 - txpool: จาก `mempool.list()` (ไม่มี to / value เพราะ mempool ไม่ได้เปิดให้อ่าน)
 - **ส่ง tx ไม่ได้**: `eth_sendRawTransaction` ตอบ error (เชนรับเฉพาะ EIP-712 ของตัวเอง) → ส่งผ่าน explorer เหมือนเดิม
-- ไม่รองรับ: `eth_feeHistory`, `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token / NFT / multi-token มาตรฐาน, `balanceOfBatch` ผ่าน eth_call
+- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token / NFT / multi-token มาตรฐาน, `balanceOfBatch` ผ่าน eth_call
 - chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
@@ -641,6 +699,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 
 | แท็บ (`data-tab`) | เนื้อหา |
 |---|---|
+| Events (`event`) / ABI (`abi`) | event ถอดตาม `metadata.abi` (ชื่อ + ชนิด + tag indexed · `eventData()`) · แท็บ ABI มีเฉพาะโปรแกรมที่ประกาศ (`abiView()`) |
 | Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
 | NFTs (`nfts`) | (เฉพาะ address ที่ถือ NFT / multi-token) collection, ERC-721 / ERC-1155, token ID, จำนวน, URI (http(s) เป็นลิงก์ · ipfs:// ฯลฯ เป็นข้อความ) · `/address/:a/nfts` |
 | Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
@@ -657,6 +716,10 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 กล่องข้อมูลของโปรแกรมมีแถว **Version** (`metadata.version` ไม่มี = 1 · มี tag "Upgrade pending review" / "Upgrade active from block N" จาก `pendingUpgrade` / `scheduledUpgrade`)
 **Upgrader** (ไม่มี = "None (immutable)") และ **Template** (เฉพาะโปรแกรมที่สร้างด้วย `cloneProgram`)
 ชื่อ action ในทุกตาราง / หน้า tx ผ่าน `ACTION_LABELS`: `upgrade` → "Upgrade", `setUpgrader` → "Set upgrader", `initUpgrade` → "Approve upgrade", `rejectUpgrade` → "Reject upgrade", `create` → "Create" (ที่เหลือแสดงชื่อเดิม)
+
+### หน้า block / tx — ค่าแก๊สแบบ EIP-1559
+- block: `Base fee` (+ block ถัดไปขึ้น / ลง เทียบ gasUsed กับ target · `baseFeeTrend()`) · `Fee split` เผา / ผู้ปิด block
+- tx: `Gas price` = base fee + tip · `Fee limits` (tag EIP-1559 · max fee / max tip) · `Fee split` (`feeRows()`)
 
 ### หน้า tx — Return value / Balance changes
 แถว "Return value" = ค่าที่โปรแกรม return เต็ม ๆ แสดงแบบเดียวกับผล Read ใน Interact (`returnValue()` ใช้ร่วมกัน) · tx ที่ล้มโชว "— (failed)"
@@ -750,10 +813,12 @@ digest = keccak256(canonicalJson(ข้อความ))   // ค่าเดี
 
 ### wallet connect
 `eth_requestAccounts` → `eth_signTypedData_v4` → `POST /sendtx`
+เซ็นแบบ EIP-1559 (`TX_TYPE_1559` · `maxFeePerGas` = 2 × `baseFee` จาก `/genesis` · `maxPriorityFeePerGas` 0) · `sendTx({ gasPrice })` = แบบเดิม
 `callableOf(code)` อ่านชื่อฟังก์ชันจาก `return { … }` ท้ายโค้ดด้วย regex
 `runQuery()` ไม่ต้องต่อ wallet · `runWrite()` ต้องเซ็น แล้วเด้งไปหน้า tx หลัง 2.5 วิ
 
 **Input ของ Interact มี 2 แบบ** (ปุ่ม Fields / JSON · จำแบบที่เลือกไว้ใน localStorage `ix-mode`)
+- โปรแกรมที่มี `metadata.abi` และประกาศฟังก์ชันที่เลือก → ช่องมาจาก `inputs` ของ ABI (ชนิด + description · tag ABI) แทนการเดาจากโค้ดด้านล่าง
 - Fields: `inferInputs(code, fn)` อ่านโค้ดของฟังก์ชันที่เลือก (`functionSource()` ตัด body ด้วยการนับวงเล็บ) หา `params.input.<ชื่อ>`
   รวม alias (`const i = params.input`), destructuring (`const { to, amount } = params.input` / `({ input })`) และตามเข้า helper ในโปรแกรม 1 ชั้น (`move(from, to, amount)`)
 - เดาชนิดจากการใช้งาน (`guessShape`): list (for…of / .length / .map) → object (.ย่อย) → address (ชื่อ to/from/who/owner/token… หรือเป็นเป้าของ transferNative / runProgram)
@@ -814,7 +879,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 44 ไฟล์ · 550 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 73 ไฟล์ · 774 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -837,6 +902,12 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `63-nft-standard` `64-multitoken-standard` | NFT / multi-token: mint, สิทธิ์ (approve / operator / minter), safe transfer + hook, ย้อนทั้งชุด, uri, burn, ดัชนีของที่ถือ |
 | `65-multicall` | aggregate (ลำดับ + all-or-nothing) · tryAggregate (ย้อนเฉพาะตัวที่ล้ม · requireSuccess) · readonly (staticcall ทุก call) |
 | `66-evm-nft-logs` `67-explorer-nft` | /evm: log ERC-721 / ERC-1155 + eth_call (ถอดด้วย ethers) · explorer: collectionInfo / nftHoldings / ชนิดโปรแกรม |
+| `68-base-fee` | base fee ขึ้น / ลง / ขั้นต่ำ / ตั้งค่า · ราคาจริง = min(maxFee, baseFee + priority) · เผา / tip / ยอดรวมไม่หาย · แบบเดิม · BaseFee() · replay |
+| `69-fee-mempool` | ลายเซ็นแบบ 1559 · mempool เรียงตาม tip จริง · maxFee < baseFee รอในคิว · แทนที่ต้องเพิ่มทั้งสองค่า 10% |
+| `70-header-roots` | receiptsRoot / logsBloom ใน header + hash · replay / rebuild / sync ตรวจ · /evm ใช้ค่าจาก header |
+| `71-indexed-events` | emit indexed (ตรวจ options · แก๊ส topic) · ดัชนี + cursor + หลาย field · eth_getLogs ตาม topic · token มาตรฐาน |
+| `72-abi` | checkAbi (schema ทุกข้อ) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
+| `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง

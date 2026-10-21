@@ -92,6 +92,8 @@
 | `GET /rejected?address=&limit=&cursor=` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` (ส่ง `next` กลับมาเป็น `cursor`) · ไม่ระบุ address = ทั้งเชน · `GET /address/:a/rejected` = ของผู้ส่งคนนั้น |
 | `GET /program/:a/interactions?limit=&cursor=` | tx / call ที่เข้ามาหาโปรแกรม แบบ cursor `{ items, next }` (ไม่นับทั้งรายการ ไม่มีเพดาน) |
 | `GET /program/:a/events?limit=&cursor=&name=` | event แบบ cursor `{ items, next }` (ส่ง `cursor` ว่างได้ = หน้าแรก) · ไม่ส่ง `cursor` = แบบเลขหน้า `?page=` เดิม · `/address/:a/incoming?cursor=` ก็เช่นกัน |
+| `GET /program/:a/events?name=Transfer&to=0x…&from=0x…` | ค้นด้วยดัชนีของ field ที่ emit แบบ indexed (หลาย field = AND · ต้องมี `name` ไม่งั้น 400) → `{ items, next, limit }` ใหม่ไปเก่า · `cursor` / `limit` ใช้ได้ · field ที่ไม่ได้ indexed = ว่าง |
+| `GET /program/:a/abi` | `{ address, abi, evmAbi }` — `abi` = `metadata.abi` ที่โปรแกรมประกาศ (null = ไม่มี) · `evmAbi` = JSON ABI แบบ Ethereum |
 | `GET /program/:a/groups?scan=&cursor=` | นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (`scan` ≤ 50,000 ต่อ request) → `{ total, groups, scanned, next, complete }` · ยังไม่ครบ → ส่ง `cursor=next` แล้วบวกผลเอง |
 | `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
 | `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
@@ -129,10 +131,12 @@ POST /query
   "number": 42,
   "hash": "0x…", "parentHash": "0x…",
   "timestamp": 1735689605000,
-  "feeRecipient": "0x…", "burnPercent": 50,
+  "feeRecipient": "0x…", "burnPercent": 100,
   "txCount": 3, "successCount": 2, "failedCount": 1,
-  "gasUsed": 4210, "fee": 4210,
+  "gasUsed": 4210, "fee": "4210000000000n",
+  "baseFeePerGas": "1000000000n", "gasTarget": 1500000, "burnedFee": "4210000000000n", "producerFee": "0n",
   "parentStateRoot": "0x…", "txRoot": "0x…", "stateRoot": "0x…",
+  "receiptsRoot": "0x…", "logsBloom": "0x…(512 hex)",
   "txHashes": ["0x…", "0x…", "0x…"],
   "rejectedCount": 1, "rejectedRoot": "0x…"
 }
@@ -141,6 +145,10 @@ POST /query
 `rejectedCount` / `rejectedRoot` มีเฉพาะ block ที่มี tx ถูกปฏิเสธ (อยู่ใน hash ของ block) · รายการอยู่ใน `?full=1` → `rejected: [{ hash, sender, nonce, action, to, gasPrice, reason, code, stage }]`
 
 `stateRoot` เป็นแบบสะสม ถ้ามีใครแก้ข้อมูลเก่า ค่าของ block หลังจากนั้นจะไม่ตรงทั้งหมด
+
+`baseFeePerGas` (EIP-1559 · คำนวณจาก block ก่อนหน้า) · `receiptsRoot` (hash ของ receipt ย่อทุกใบ) · `logsBloom` (bloom ของ log แบบ EVM) **อยู่ใน hash ของ block**
+`burnedFee` / `producerFee` = ค่าแก๊สส่วนที่เผา / ส่วนที่ `feeRecipient` ได้ (tip + base fee ส่วนที่ไม่เผา) · explorer แสดงเป็น Base fee + Fee split
+`?full=1` มี `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` `receiptsRoot` `logsBloom` เหมือนกัน
 
 ### receipt เต็ม — `GET /block/:number?full=1`
 
@@ -165,7 +173,9 @@ POST /query
   "input": { "to": "0x…", "amount": "30n" },
   "result": true,
   "error": null,
-  "nonce": 5, "gasUsed": 813, "gasPrice": 1, "fee": 813,
+  "nonce": 5, "gasUsed": 813, "gasPrice": "1000000000n", "fee": "813000000000n",
+  "type": 2, "effectiveGasPrice": "1000000000n", "baseFeePerGas": "1000000000n",
+  "maxFeePerGas": "2000000000n", "maxPriorityFeePerGas": "0n", "burnedFee": "813000000000n", "producerFee": "0n",
   "events": [{ "index": 0, "depth": 0, "program": "0x…", "name": "Transfer", "data": { "amount": "30n" } }],
   "trace": [{ "depth": 0, "program": "0x…", "method": "transfer", "from": "0x…", "origin": "0x…", "status": "success" }],
   "stateChanges": [{ "program": "0x…", "key": ["balances", "0x…"], "after": "970n" }],
