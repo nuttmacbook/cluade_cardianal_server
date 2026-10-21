@@ -5,7 +5,17 @@
  *   mempool.add({ tx, signature });      // → { ok, hash, reason }
  *   mempool.take(block);                 // หยิบใบที่พร้อม ใส่เข้า block
  *   mempool.remove(hashes);              // ลบใบที่เข้า block แล้ว
- *   mempool.replacedBy(hash);            // ใบที่ถูกแทนที่ → hash ของใบใหม่ (จำไว้ ttlMs)
+ *   mempool.replacedBy(hash);            // ใบที่ถูกแทนที่ → hash ของใบใหม่ (จำไว้ ttlMs · ส่ง replacedLog = จำถาวรแบบมีเพดาน)
+ *
+ * tx ที่ถูกปฏิเสธ (ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน) ถูกจำไว้ตามลำดับที่เกิด แล้ว take() ใส่ลง block ถัดไป
+ * (block.recordRejected · ไม่เกิน maxRejectedPerBlock ต่อ block ที่เกินยกไป block ถัดไป) → explorer / GET /tx ตอบ "rejected" จากข้อมูลเชน
+ *   stage: "sendtx" (ปฏิเสธตอนรับเข้าคิว: nonce ผิด / โควตาเต็ม / ส่งถี่ / simulate ไม่ผ่าน)
+ *          "block"  (VM ไม่รับตอนปิด block เช่น TIMEOUT / แก๊สของ block เต็ม)
+ *          "expired" (ค้างในคิวเกิน ttlMs)
+ *   tx ที่ลายเซ็นผิด / ส่งซ้ำ ไม่ถูกบันทึก (hash / sender เชื่อไม่ได้ หรือมีสถานะจริงอยู่แล้ว)
+ *
+ * replacedLog (ไม่บังคับ · ดู src/node/txlog.js): ใบที่ถูกแทนที่ → { hash, replacedBy, sender, nonce, at } บันทึกแบบ off-chain
+ * (การแทนที่เป็นเรื่องปกติ ไม่ใช่การปฏิเสธ จึงไม่เข้า block) · มีไฟล์ = อยู่รอด restart
  *
  * การแทนที่ (replace-by-fee): ส่ง nonce เดิมของใบที่ยังรออยู่ + gasPrice สูงกว่าเดิมอย่างน้อย replaceBumpPercent %
  * ใบใหม่จะเป็น action อะไรก็ได้ → ยกเลิกใบเดิมได้ด้วยการโอน 0 ให้ตัวเอง
@@ -20,7 +30,14 @@ export const DEFAULT_MEMPOOL = {
   rateWindowMs: 60_000,    // ช่วงเวลาที่นับ rate limit
   rateLimit: 60,           // จำนวน tx ที่ address เดียวส่งได้ต่อช่วงเวลา
   replaceBumpPercent: 10,  // แทนที่ใบที่รออยู่ (nonce เดิม) ได้เมื่อ gasPrice ใหม่ ≥ เดิม × (100 + ค่านี้) / 100
+  maxRejectedPerBlock: 1000,   // tx ที่ถูกปฏิเสธที่ใส่ลง block ได้ต่อ block (ที่เกินรอ block ถัดไป)
+  maxRejectedQueue: 100_000,   // จำได้สูงสุดเท่านี้ระหว่างรอเข้า block (เกิน = ทิ้งอันเก่าสุด)
+  recordRejected: true,        // false = ไม่จำ tx ที่ถูกปฏิเสธ
+  replacedLog: null,       // TxLog ของใบที่ถูกแทนที่ (ไม่ส่ง = จำในหน่วยความจำ ttlMs อย่างเดียว)
 };
+
+const DUPLICATE = "tx นี้ถูกส่งมาแล้ว";
+export const EXPIRED_REASON = "ค้างในคิวเกินเวลาที่กำหนด (ไม่ได้เข้า block)";
 
 export class Mempool {
   #vm;
@@ -30,6 +47,7 @@ export class Mempool {
   #seen = new Map();               // hash → เวลาที่เคยเห็น (กันส่งซ้ำแม้เข้า block ไปแล้ว)
   #byNonce = new Map();            // "sender:nonce" → hash ของใบที่รออยู่ (หาใบที่จะถูกแทนที่)
   #replaced = new Map();           // hash เดิม → { replacedBy, at } จำไว้ ttlMs ให้ GET /tx/:hash ตอบได้
+  #rejections = new Map();         // hash → entry ของ tx ที่ถูกปฏิเสธ รอใส่ลง block ถัดไป (ตามลำดับที่เกิด)
 
   constructor(vm, options = {}) {
     this.#vm = vm;
@@ -78,6 +96,15 @@ export class Mempool {
    * @returns {{ ok: boolean, hash?: string, sender?: string, reason?: string, expectedNonce?: number, replaced?: string, simulation?: object }}
    */
   add({ tx, signature }, { now = Date.now(), simulate } = {}) {
+    const result = this.#add({ tx, signature }, { now, simulate });
+    // ลายเซ็นผิด = ไม่มี hash / sender ที่เชื่อได้ · ส่งซ้ำ = hash นี้มีสถานะจริงอยู่แล้ว (รอ / เข้า block / ถูกแทนที่)
+    if (!result.ok && result.hash && result.sender && result.reason !== DUPLICATE) {
+      this.#reject(tx, { hash: result.hash, sender: result.sender, reason: result.reason, code: result.simulation?.errorCode, stage: "sendtx" });
+    }
+    return result;
+  }
+
+  #add({ tx, signature }, { now, simulate }) {
     let verified;
     try {
       verified = verifyTransaction({ tx, signature });
@@ -87,7 +114,7 @@ export class Mempool {
     const { sender, hash, method, request } = verified;
 
     this.prune({ now });
-    if (this.#seen.has(hash)) return { ok: false, hash, sender, reason: "tx นี้ถูกส่งมาแล้ว" };
+    if (this.#seen.has(hash)) return { ok: false, hash, sender, reason: DUPLICATE };
     const inQueue = this.countOf(sender);
     const chainNonce = this.#vm.checkTransaction(request).expectedNonce ?? 0;
     const target = this.#vm.requireNonce && Number.isInteger(tx.nonce) && tx.nonce >= chainNonce && tx.nonce < chainNonce + inQueue
@@ -118,8 +145,42 @@ export class Mempool {
   /** ใบที่ถูกแทนที่ → hash ของใบใหม่ (null ถ้าไม่รู้จัก หรือพ้น ttlMs แล้ว) */
   replacedBy(hash, { now = Date.now() } = {}) {
     const entry = this.#replaced.get(hash);
-    if (!entry || now - entry.at > this.#options.ttlMs) return null;
-    return entry.replacedBy;
+    if (entry && now - entry.at <= this.#options.ttlMs) return entry.replacedBy;
+    return this.#options.replacedLog?.get(hash, { now })?.replacedBy ?? null;
+  }
+
+  /** จำนวน tx ที่ถูกปฏิเสธที่รอใส่ลง block */
+  get rejectedPending() {
+    return this.#rejections.size;
+  }
+
+  /** tx ที่ถูกปฏิเสธที่ยังรอเข้า block (ข้อมูลเดียวกับที่จะอยู่ใน block) */
+  pendingRejections() {
+    return [...this.#rejections.values()].map((entry) => ({ ...entry }));
+  }
+
+  /** tx ที่ถูกปฏิเสธแล้วแต่ยังไม่ได้ใส่ลง block (ไม่มี → null) */
+  pendingRejection(hash) {
+    const entry = this.#rejections.get(String(hash ?? "").toLowerCase());
+    return entry ? { ...entry } : null;
+  }
+
+  /** จำ tx ที่ถูกปฏิเสธ (hash เดิมถูกปฏิเสธซ้ำ = ย้ายไปท้าย เหลืออันล่าสุด) */
+  #reject(tx, { hash, sender, reason, code, stage }) {
+    if (!this.#options.recordRejected) return;
+    const text = String(reason ?? "");
+    this.#rejections.delete(hash);
+    this.#rejections.set(hash, {
+      hash, sender,
+      nonce: Number.isSafeInteger(tx?.nonce) ? tx.nonce : null,
+      action: typeof tx?.action === "string" ? tx.action : "call",
+      to: typeof tx?.to === "string" && tx.to ? tx.to.toLowerCase() : null,
+      gasPrice: String(this.#priceOf(tx?.gasPrice)),
+      reason: text.length > 500 ? text.slice(0, 500) : text,
+      code: code ?? null,
+      stage,
+    });
+    while (this.#rejections.size > this.#options.maxRejectedQueue) this.#rejections.delete(this.#rejections.keys().next().value);
   }
 
   /** gasPrice ขั้นต่ำที่ใบแทนที่ต้องเสนอ (BigInt) */
@@ -152,6 +213,9 @@ export class Mempool {
 
     this.#delete(target.hash);
     this.#replaced.set(target.hash, { replacedBy: hash, at: now });
+    try {
+      this.#options.replacedLog?.record({ hash: target.hash, replacedBy: hash, sender, nonce: tx.nonce, action: target.tx.action ?? "call" }, { now });
+    } catch (error) { console.error("บันทึกใบที่ถูกแทนที่ไม่สำเร็จ:", error.message); }
     this.#insert({ tx, signature, hash, sender, method, request, receivedAt: now });
     const result = { ok: true, hash, sender, replaced: target.hash };
     return simulation ? { ...result, simulation } : result;
@@ -163,6 +227,7 @@ export class Mempool {
   }
 
   #insert(item) {
+    this.#rejections.delete(item.hash);   // เคยถูกปฏิเสธแล้วส่งใหม่ผ่าน → ไม่ต้องบันทึกว่าถูกปฏิเสธ
     this.#items.set(item.hash, item);
     this.#byNonce.set(`${item.sender}:${item.tx.nonce}`, item.hash);
     this.#seen.set(item.hash, item.receivedAt);
@@ -177,17 +242,36 @@ export class Mempool {
   }
 
   /** ใส่ tx ที่พร้อมลงใน block ตามลำดับราคา → คืน hash ที่ใส่ไปแล้ว */
-  take(block, { limit = Infinity } = {}) {
+  take(block, { limit = Infinity, now = block.timestamp ?? Date.now() } = {}) {
+    this.prune({ now });   // ใบที่หมดอายุ → ถูกปฏิเสธ (expired) และบันทึกใน block นี้
     const included = [];
     // ใบของ address เดียวกันถูกหยิบตามลำดับ nonce เสมอ (ใบแทนที่ใช้ nonce เดิม → ลำดับไม่เสีย)
     for (const item of sortPendingTransactions([...this.#items.values()], { defaultGasPrice: this.#vm.gas.price })) {
       if (included.length >= limit) break;
       if (!block.checkTransaction(item.request).ok) continue;   // nonce ยังไม่ถึงคิว หรือโควตา block เต็ม
-      block[item.method](item.request);
+      const result = block[item.method](item.request);
+      // VM ไม่รับเข้า block (TIMEOUT / แก๊สของ block เต็ม ฯลฯ) → หลุดจากคิวไปเลย จึงบันทึกไว้ให้ /tx ตอบได้
       included.push(item.hash);
+      if (result?.accepted === false) {
+        this.remove([item.hash]);
+        this.#reject(item.tx, { hash: item.hash, sender: item.sender, reason: result.error?.message ?? "ไม่ถูกรับเข้า block",
+          code: result.error?.code, stage: "block" });
+      }
     }
     this.remove(included);
+    this.#drainRejections(block);
     return included;
+  }
+
+  /** ใส่ tx ที่ถูกปฏิเสธลง block ตามลำดับที่เกิด ไม่เกิน maxRejectedPerBlock (ที่เหลือรอ block ถัดไป) */
+  #drainRejections(block) {
+    if (typeof block.recordRejected !== "function") return;
+    let count = 0;
+    for (const [hash, entry] of this.#rejections) {
+      if (count >= this.#options.maxRejectedPerBlock) break;
+      this.#rejections.delete(hash);
+      try { block.recordRejected(entry); count += 1; } catch (error) { console.error("บันทึก tx ที่ถูกปฏิเสธไม่สำเร็จ:", error.message); }
+    }
   }
 
   remove(hashes) {
@@ -201,6 +285,7 @@ export class Mempool {
       if (now - item.receivedAt > this.#options.ttlMs) {
         this.#delete(hash);
         dropped.push(hash);
+        this.#reject(item.tx, { hash, sender: item.sender, reason: EXPIRED_REASON, stage: "expired" });
       }
     }
     for (const [sender, times] of this.#recent) {
@@ -223,6 +308,7 @@ export class Mempool {
     this.#seen.clear();
     this.#byNonce.clear();
     this.#replaced.clear();
+    this.#rejections.clear();
   }
 
   #allowRate(sender, now) {
