@@ -812,3 +812,66 @@ test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejecte
   assert.doesNotMatch(text, /[฀-๿]/);
   assert.deepEqual(pageErrors, []);
 });
+
+test("EIP-1559 + ABI: block บอก base fee / fee split · tx จากหน้าเว็บเป็นแบบ 1559 · โปรแกรมที่ประกาศ ABI ได้ฟอร์มจาก ABI + event ระบุชนิด / indexed", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const code = `function program() {
+    function initialization() {
+      setMetadata("abi", {
+        functions: [{ name: "note", inputs: [{ name: "to", type: "address" }, { name: "count", type: "uint", description: "How many" }], description: "Write a note" }],
+        events: [{ name: "Noted", fields: [{ name: "to", type: "address", indexed: true }, { name: "count", type: "uint" }] }],
+      })
+    }
+    function note(params) { emit("Noted", { to: params.input.to, count: params.input.count }, { indexed: ["to"] }); return true }
+    return { initialization, note }
+  }`;
+  const send = async (fields) => {
+    const { nonce } = await get(`/nonce/${ME}`);
+    const { baseFee } = await get("/genesis");
+    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, nonce,
+      maxFeePerGas: String(BigInt(String(baseFee).replace(/n$/, "")) * 2n), maxPriorityFeePerGas: "0", ...fields };
+    const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+    assert.ok(sent.queued, JSON.stringify(sent));
+    for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`))?.blockNumber; i += 1) await wait(200);
+    return get(`/tx/${sent.hash}/receipt`);
+  };
+  const deployed = await send({ action: "deploy", code });
+  const program = deployed.result?.programUuid ?? deployed.result;
+  assert.equal(deployed.type, 2);
+  assert.equal((await send({ action: "init", to: program })).status, "success");
+  assert.equal((await get(`/program/${program}/abi`)).evmAbi[0].name, "note");
+
+  // block: base fee + fee split
+  await open(`#block/${deployed.blockNumber}`);
+  assert.match(await page.locator("#view tr", { hasText: /^Base fee/ }).textContent(), /gwei per gas · next block/);
+  assert.match(await page.locator("#view tr", { hasText: /^Fee split/ }).textContent(), /burned[\s\S]*to the block producer/);
+
+  // Interact: fields from the ABI (count = whole number with its description) · sent from the page = EIP-1559 tx
+  await open(`#address/${program}`);
+  await tab("Interact");
+  await page.click(".ix-head .seg button[data-mode=fields]");
+  await page.selectOption("#fn", "note");
+  assert.match(await page.locator("#ix-input").textContent(), /ABI[\s\S]*Write a note/);
+  assert.match(await page.locator("label[for=ix-count]").textContent(), /whole number[\s\S]*How many/);
+  await page.fill("#ix-to", BOB);
+  await page.fill("#ix-count", "3");
+  await page.click("text=Send transaction");
+  await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
+  await page.click("#out .ix-link");
+  await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
+  await page.waitForFunction(() => document.getElementById("view").innerText.includes("Success"));
+  assert.match(await page.locator("#view tr", { hasText: /^Fee limits/ }).textContent(), /EIP-1559[\s\S]*max fee/);
+  assert.match(await page.locator("#view tr", { hasText: /^Gas price/ }).textContent(), /= base fee [\d.]+ \+ tip 0/);
+  assert.match(await page.locator("#view").textContent(), /count uint[\s\S]*3/);
+
+  // Events tab: fields typed from the ABI · the indexed one is marked · indexed query finds it
+  await open(`#address/${program}`);
+  await tab("Events");
+  assert.match(await page.locator("#view table.grid tbody tr").first().textContent(), /Noted[\s\S]*to address indexed[\s\S]*count uint/);
+  const found = await get(`/program/${program}/events?name=Noted&to=${BOB}`);
+  assert.equal(found.items.length, 1);
+  await tab("ABI");
+  assert.match(await view(), /function note\(address to, uint count\)[\s\S]*event Noted\(indexed address to, uint count\)/);
+  assert.deepEqual(pageErrors, []);
+});
