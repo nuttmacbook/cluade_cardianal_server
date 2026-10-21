@@ -72,7 +72,8 @@ const SEEDER_EXTRA = 150_000;     // เผื่อค่า deploy ให้�
 // native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอดในสคริปต์นับเป็น gwei ตัวเลขจึงเท่ากับจำนวนแก๊สที่ซื้อได้
 const GWEI = 10n ** 9n;
 const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // ยอดที่ส่งใน tx (string เพราะเกิน 2^53 ได้)
-const GAS = { gasLimit: 1_000_000, gasPrice: gwei(1) };   // VM ลด gasLimit ให้ไม่เกินยอดเงินเอง
+// EIP-1559: จ่ายไม่เกิน 10 gwei ต่อแก๊ส · ไม่ให้ tip (จ่ายแค่ base fee) · VM ลด gasLimit ให้ไม่เกินยอดเงินเอง
+const GAS = { gasLimit: 1_000_000, maxFeePerGas: gwei(10), maxPriorityFeePerGas: "0" };
 const TREASURY = "0x9999999999999999999999999999999999999999";
 
 /** โปรแกรมที่จะถูก deploy ในเฟส 2: [ชนิด, block ที่ deploy (นับจากต้นเฟส 2)] */
