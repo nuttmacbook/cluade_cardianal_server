@@ -31,7 +31,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 before(async () => {
   const port = await freePort();
   url = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(port), BLOCK_MS: "300" }, stdio: "pipe" });
+  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(port), BLOCK_MS: "300", RATE_LIMIT: "0" }, stdio: "pipe" });
   for (let i = 0; i < 50; i += 1) {
     if (await fetch(`${url}/genesis`).then(() => true, () => false)) break;
     await wait(100);
@@ -629,5 +629,186 @@ test("NFT: หน้าโปรแกรมบอก Collection (ERC-721) · �
   await tab("NFTs");
   assert.match(await view(), /ipfs:\/\/second/);
   assert.equal(await page.locator("#view a[href^='ipfs:']").count(), 0);   // ไม่ใช่ http(s) → ไม่ทำเป็นลิงก์
+  assert.deepEqual(pageErrors, []);
+});
+
+// ---------------------------------------------------------------------------
+//  ฟอร์ม deploy (มี upgrader) → อนุมัติ → upgrade → อนุมัติการอัปเกรด → โอนสิทธิ์ · ทุกใบเซ็นจากหน้าเว็บ
+// ---------------------------------------------------------------------------
+
+const V1 = "function program() {\n  function initialization(params) { writeDB(\"count\", 1n) }\n  function ping(params) { return readDB(\"count\") }\n  return { ping };\n}";
+const V2 = "function program() {\n  function migrate(params) { writeDB(\"count\", params.input.start) }\n  function ping(params) { return readDB(\"count\") }\n  function pong(params) { return 2n }\n  return { ping, pong };\n}";
+const query = (programUuid, functionName) => fetch(`${url}/query`, { method: "POST", body: JSON.stringify({ programUuid, functionName, input: {} }) }).then((r) => r.json());
+const outSays = (selector, pattern, timeout = 20_000) =>
+  page.waitForFunction(([sel, source]) => new RegExp(source).test(document.querySelector(sel)?.textContent ?? ""), [selector, pattern.source], { timeout });
+
+let upgradable;
+test("ฟอร์ม deploy: ใส่ upgrader เป็น wallet ตัวเอง (อยู่ในข้อมูลที่เซ็น) → รออนุมัติ → กด Approve ในหน้ารายการโปรแกรม", async () => {
+  await open("#deploy");
+  assert.match(await view(), /Deploy a program/);
+  await page.fill("#dp-code", V1);
+  await page.click("button:has-text('Use my wallet as upgrader')");
+  assert.equal(await page.inputValue("#dp-upgrader"), ME);
+  await page.fill("#dp-upgrader", "0x123");
+  await page.click("#dp-send");
+  assert.match(await page.locator("#dp-out").textContent(), /Upgrader must be an address/);   // ตรวจก่อนเซ็น
+  await page.fill("#dp-upgrader", wallet.address);                                         // ตัวพิมพ์ผสม → ส่งเป็นตัวเล็ก
+  await page.click("#dp-send");
+  await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
+  upgradable = (await page.locator("#dp-out a[title^='0x']").first().getAttribute("title")).toLowerCase();
+  const pendingRow = (await get("/programs/pending?limit=100")).items.find((p) => p.address === upgradable);
+  assert.equal(pendingRow.deployer, ME);
+
+  await open("#programs");
+  await tab("Awaiting approval");
+  const row = page.locator("#view tbody tr", { has: page.locator(`a[title='${upgradable}']`) });
+  await row.locator("[data-review=init]").click();
+  await outSays("#review-out", /Success[\s\S]*Approved/);
+  assert.equal((await get(`/program/${upgradable}`)).metadata.upgrader, ME);
+  assert.equal((await query(upgradable, "ping")).result, "1n");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → รอรีวิว → Approve upgrade → version 2 · โอนสิทธิ์ให้ BOB · โปรแกรมที่ไม่มี upgrader แก้ไม่ได้", async () => {
+  await open(`#address/${upgradable}`);
+  await tab("Upgrade");
+  assert.equal(await page.locator("#up-version").textContent(), "1");
+  assert.match(await page.locator("#upgrade-panel").textContent(), /You are the upgrader/);
+  assert.match(await page.inputValue("#up-code"), /function ping/);               // เริ่มจากโค้ดปัจจุบัน
+  await page.fill("#up-code", V2);
+  await page.fill("#up-input", '{ "start": 41 }');
+  await page.click("#up-send");
+  await page.waitForSelector("#up-pending-code", { timeout: 20_000 });
+  assert.match(await page.locator("#up-out").textContent(), /Success[\s\S]*Upgrade submitted for review/);
+  assert.match(await page.locator("#up-pending-code").textContent(), /function pong/);
+  assert.match(await page.locator("#view").textContent(), /Upgrade pending review/);
+
+  await page.click("#up-approve");
+  await page.waitForFunction(() => document.getElementById("up-version")?.textContent === "2", null, { timeout: 20_000 });
+  assert.equal(await page.locator("#up-pending-code").count(), 0);
+  assert.equal((await query(upgradable, "pong")).result, "2n");
+  assert.equal((await query(upgradable, "ping")).result, "41n");                // migrate ได้ input ที่กรอก (ตัวเลข → bigint)
+  assert.equal((await get(`/program/${upgradable}/versions`)).length, 2);
+
+  await page.fill("#up-next", "nope");
+  await page.click("#up-transfer");
+  assert.match(await page.locator("#up-out").textContent(), /must be an address/);
+  await page.fill("#up-next", BOB);
+  await page.click("#up-transfer");
+  await outSays("#up-out", /Success[\s\S]*Upgrade rights transferred/);
+  assert.equal((await get(`/program/${upgradable}`)).metadata.upgrader, BOB.toLowerCase());
+  assert.match(await page.locator("#upgrade-panel").textContent(), /This wallet is not the upgrader/);
+
+  const { address: token } = await get("/name/mytoken");                          // seed deploy ไม่มี upgrader
+  await open(`#address/${token}`);
+  await tab("Upgrade");
+  assert.match(await page.locator("#upgrade-panel").textContent(), /no upgrader, so its code can never change/);
+  assert.equal(await page.locator("#up-send").count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("แถบ Upgrade: สละสิทธิ์ต้องกดสองครั้ง · Reject upgrade ลบโค้ดที่รอ (ใบที่เซ็นจาก Node ก็แสดงในแถบเดียวกัน)", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const send = async (fields) => {
+    const { nonce } = await get(`/nonce/${ME}`);
+    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce, ...fields };
+    const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+    assert.ok(sent.queued, JSON.stringify(sent));
+    for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`)).blockNumber; i += 1) await wait(200);
+    return sent;
+  };
+  const deployed = await send({ action: "deploy", code: V1, upgrader: ME });
+  const program = (await get(`/tx/${deployed.hash}/receipt`)).result.programUuid;
+  await send({ action: "init", to: program });
+  await send({ action: "upgrade", to: program, code: V2, input: { start: "5n" } });
+
+  await open(`#address/${program}`);
+  await tab("Upgrade");
+  await page.click("#up-reject");
+  await page.waitForFunction(() => !document.getElementById("up-pending-code") && /Upgrade rejected/.test(document.getElementById("up-out")?.textContent ?? ""), null, { timeout: 20_000 });
+  assert.equal((await get(`/program/${program}`)).pendingUpgrade, null);
+  assert.equal(await page.locator("#up-version").textContent(), "1");
+
+  await page.click("#up-renounce");
+  assert.equal(await page.locator("#up-renounce").textContent(), "Click again to renounce for good");
+  assert.equal((await get(`/program/${program}`)).metadata.upgrader, ME);            // คลิกแรกยังไม่ส่ง
+  await page.click("#up-renounce");
+  await page.waitForFunction(() => /no upgrader/.test(document.getElementById("upgrade-panel")?.textContent ?? ""), null, { timeout: 20_000 });
+  assert.equal((await get(`/program/${program}`)).metadata.upgrader ?? null, null);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("แบ่งหน้า Calls / Events ของโปรแกรม: Older / Newer (cursor) · หน้า 2 ต่อจากหน้า 1 ไม่ซ้ำ", async () => {
+  const { address: token } = await get("/name/mytoken");
+  // seed มี call ไม่ถึง 1 หน้า → โอน token เพิ่ม 22 ใบ (ทีละไม่เกิน 16 ใบต่อ block ต่อผู้ส่ง)
+  const sign = await import("../../src/crypto/signature.js");
+  for (const batch of [16, 6]) {
+    const { nonce } = await get(`/nonce/${ME}`);
+    let last;
+    for (let i = 0; i < batch; i += 1) {
+      const tx = { chainId: 1, action: "call", from: ME, to: token, method: "transfer", input: { to: BOB.toLowerCase(), amount: "1n" }, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce: nonce + i };
+      last = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+      assert.ok(last.queued, JSON.stringify(last));
+    }
+    for (let i = 0; i < 100 && !(await get(`/tx/${last.hash}`)).blockNumber; i += 1) await wait(200);
+  }
+  const calls = (await get(`/address/${token}/incoming?limit=100`)).items;
+  assert.ok(calls.length > 20, `seed มี call มากกว่า 1 หน้า (${calls.length})`);
+  await open(`#address/${token}`);
+  await tab("Calls");
+  const pager = page.locator("#view .pager[data-cursor=in]");
+  assert.match(await pager.textContent(), /Page 1 · 20 items/);
+  assert.equal(await pager.locator("button[title=Newer]").isDisabled(), true);
+  const firstPage = await page.locator("#view table.grid tbody a[title^='0x'][onclick*='#tx/']").evaluateAll((links) => links.map((a) => a.title));
+  assert.equal(firstPage[0], calls[0].hash);
+  await pager.locator("button[title=Older]").click();
+  await page.waitForFunction(() => /Page 2/.test(document.querySelector("#view .pager[data-cursor=in]")?.textContent ?? ""));
+  const secondPage = await page.locator("#view table.grid tbody a[title^='0x'][onclick*='#tx/']").evaluateAll((links) => links.map((a) => a.title));
+  assert.equal(secondPage[0], calls[20].hash);
+  await page.locator("#view .pager[data-cursor=in] button[title=Newer]").click();
+  await page.waitForFunction(() => /Page 1/.test(document.querySelector("#view .pager[data-cursor=in]")?.textContent ?? ""));
+
+  const events = (await get(`/program/${token}/events?limit=100`)).items;
+  assert.ok(events.length > 20);
+  await tab("Events");
+  const eventPager = page.locator("#view .pager[data-cursor=events]");
+  assert.match(await eventPager.textContent(), /Page 1 · 20 items/);
+  assert.match(await page.locator("button.tab.on").textContent(), new RegExp(`Events${events.length}`));
+  await eventPager.locator("button[title=Older]").click();
+  await page.waitForFunction(() => /Page 2/.test(document.querySelector("#view .pager[data-cursor=events]")?.textContent ?? ""));
+  assert.equal(await page.locator("#view table.grid tbody tr").first().locator("a[onclick*='#tx/']").getAttribute("title"), events[20].txHash);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejected + เหตุผล · block มีรายการ Rejected · กระเป๋ามีแถบ Rejected · ทั้งหมดเป็นภาษาอังกฤษยกเว้นเหตุผลจาก server", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const { nonce } = await get(`/nonce/${ME}`);
+  const tx = { chainId: 1, action: "transfer", from: ME, to: BOB.toLowerCase(), method: "", input: {}, value: 1, gasLimit: 0, gasPrice: "1000000000", nonce: nonce + 5 };
+  const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
+  assert.equal(sent.queued, false);
+  let found;
+  for (let i = 0; i < 50; i += 1) { found = await get(`/tx/${sent.hash}`); if (found.block) break; await wait(200); }
+  assert.equal(found.status, "rejected");
+
+  await open(`#tx/${sent.hash}`);
+  const status = await page.locator("#view tr", { hasText: /^Status/ }).textContent();
+  assert.match(status, /Rejected/);
+  assert.ok(status.includes(found.reason));
+  assert.match(await view(), /At submission[\s\S]*never ran/);
+  await page.locator("#view tr", { hasText: /^Recorded in block/ }).locator("a").click();
+  await page.waitForFunction(() => location.hash.startsWith("#block/"));
+  await settle();
+  assert.match(await page.locator("#rejected-panel").textContent(), /Rejected \(1\)/);
+  assert.equal(await page.locator("#rejected-panel a[title]").first().getAttribute("title"), sent.hash);
+  assert.match(await view(), /Rejected1 \(recorded only/);
+
+  await open(`#address/${ME}`);
+  await tab("Rejected");
+  assert.equal(await page.locator("#view table.grid tbody tr").first().locator("a[onclick*='#tx/']").getAttribute("title"), sent.hash);
+  const text = (await page.locator("body").textContent()).split(found.reason).join("").replace(/ผู้ใช้คนแรก|เหรียญตัวอย่าง/g, "");
+  assert.doesNotMatch(text, /[฀-๿]/);
   assert.deepEqual(pageErrors, []);
 });

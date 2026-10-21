@@ -218,6 +218,8 @@ export const ERRORS = {
   invalidTimestamp: [INVALID_REQUEST, "timestamp ต้องเป็นจำนวนเต็มมิลลิวินาทีที่ไม่ติดลบ"],
   invalidNonce: [INVALID_REQUEST, (expected, got) => `nonce ไม่ถูกต้อง: ต้องเป็น ${expected} แต่ได้ ${got}`],
   invalidAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มบวก"],
+  invalidTransferAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ"],   // โอน native (tx) โอน 0 ได้แบบ EVM
+  invalidRejected: [INVALID_REQUEST, (field) => `tx ที่ถูกปฏิเสธ: ${field} ไม่ถูกต้อง`],
   invalidAddress: [INVALID_REQUEST, "address ต้องเป็น string ที่ไม่ว่าง"],
   invalidValue: [INVALID_REQUEST, "value ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
   invalidGasLimit: [INVALID_REQUEST, "gasLimit ต้องเป็นจำนวนเต็มบวก"],
@@ -543,6 +545,20 @@ export const holdingKey = (address, program) => joinKey(KEY.HOLDING, address, pr
 /** event ที่ทำดัชนี holding: (มี data.from / data.to) — Transfer ของ token / NFT, TransferSingle / TransferBatch ของ multi-token */
 export const HOLDING_EVENTS = new Set(["Transfer", "TransferSingle", "TransferBatch"]);
 export const blockUndoKey = (number) => joinKey(KEY.BLOCK_UNDO, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
+
+/**
+ * tx ที่ถูกปฏิเสธ (ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน) ที่ผู้ผลิตบันทึกไว้ใน block — ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส
+ *   blockrejected:<block>             รายการทั้ง block (ตามลำดับที่ถูกปฏิเสธ) · header มี rejectedCount + rejectedRoot (อยู่ใน hash ของ block)
+ *   rejtx:<hash>                      ดัชนีค้นจาก hash (ถูกปฏิเสธซ้ำใน block หลัง = ชี้ไปอันล่าสุด)
+ *   rejfrom:<sender>:<block>:<index>  ดัชนีตามผู้ส่ง (explorer แบ่งหน้า)
+ */
+export const REJECTED_KEY = { BLOCK: "blockrejected", TX: "rejtx", FROM: "rejfrom" };
+export const REJECTED_STAGES = ["sendtx", "block", "expired"];
+export const MAX_REJECTED_REASON = 500;
+export const blockRejectedKey = (number) => joinKey(REJECTED_KEY.BLOCK, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
+export const rejectedTxKey = (hash) => joinKey(REJECTED_KEY.TX, hash);
+export const rejectedFromKey = (sender, number, index) =>
+  joinKey(REJECTED_KEY.FROM, sender, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"), String(index).padStart(6, "0"));
 
 /** ค่าก่อนเปลี่ยนของ key หนึ่ง ณ block หนึ่ง — เรียงตาม key จึงค้นย้อนหลังได้ด้วยการ seek ครั้งเดียว */
 export const historyKey = (dbKey, number) => joinKey(KEY.HISTORY, dbKey, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
@@ -1402,7 +1418,8 @@ export class VirtualMachine {
     return this.runAction((tx) => {
       if (!isNonEmptyString(from) || !isNonEmptyString(to)) fail(ERRORS.invalidAddress);
       const value = parseNative(amount);
-      if (value === null || value <= 0n) fail(ERRORS.invalidAmount);
+      // โอน 0 ได้แบบ EVM (ยังคิดแก๊สและกิน nonce) → ยกเลิกใบที่ค้างในคิวด้วยการโอน 0 ให้ตัวเองได้
+      if (value === null || value < 0n) fail(ERRORS.invalidTransferAmount);
 
       const sender = normalizeAddress(from);
       const recipient = normalizeAddress(to);
@@ -1482,8 +1499,10 @@ export class VirtualMachine {
    *   txRoot    = hash ของรายการ tx hash ทั้งหมด (เรียงตาม index)
    *   stateRoot = hash ของ stateRoot ก่อนหน้า + writes ทั้งหมดของ block นี้ (เรียงตาม dbKey)
    */
-  hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes }) {
+  hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [] }) {
     const txRoot = this.hashData(txHashes);
+    // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี (block ที่ไม่มี hash เหมือนเดิมทุกไบต์)
+    const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
     // สะสมจาก block ก่อนหน้า: แก้ข้อมูลย้อนหลังแล้ว root ของทุก block ถัดไปจะไม่ตรงทันที
     const stateRoot = this.hashData({
       parentStateRoot,
@@ -1492,8 +1511,9 @@ export class VirtualMachine {
     const hash = this.hashData({
       chainId: this.chainId, number, parentHash: parentHash ?? null, timestamp,
       feeRecipient: feeRecipient ?? null, burnPercent, txCount: txHashes.length, txRoot, stateRoot,
+      ...(rejectedRoot ? { rejectedCount: rejected.length, rejectedRoot } : {}),
     });
-    return { hash, txRoot, stateRoot };
+    return { hash, txRoot, stateRoot, rejectedRoot };
   }
 
   /**
@@ -1769,6 +1789,22 @@ export class VirtualMachine {
     return this.read(blockUndoKey(number)) ?? null;
   }
 
+  /** tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ (ไม่มี = []) */
+  getBlockRejected(number) {
+    return this.read(blockRejectedKey(number)) ?? [];
+  }
+
+  /** tx ที่ถูกปฏิเสธจาก hash → { hash, blockNumber, index, sender, nonce, action, to, gasPrice, reason, code, stage, timestamp } | null */
+  getRejectedTransaction(hash) {
+    return this.read(rejectedTxKey(String(hash ?? "").toLowerCase())) ?? null;
+  }
+
+  /** tx ที่ถูกปฏิเสธของผู้ส่งคนนี้ (ใหม่ไปเก่า) · start = dbKey ต่อจากหน้าก่อน */
+  listRejectedOf(address, { limit = 20, reverse = true, start } = {}) {
+    const prefix = `${joinKey(REJECTED_KEY.FROM, normalizeAddress(address))}${KEY.SEPARATOR}`;
+    return this.listEntries(prefix, { limit, reverse, start });
+  }
+
   /**
    * ค่าของ key หนึ่ง ณ ตอนที่ block <number> ปิดพอดี
    * อ่านรายการแรกใน history ที่เลข block มากกว่า number (seek ครั้งเดียว ไม่ขึ้นกับความยาวของเชน)
@@ -1839,6 +1875,7 @@ export class VirtualMachine {
       maxBlockGas: null,
     });
     for (const { method, request } of body) block[method](request);
+    for (const entry of this.getBlockRejected(number)) block.recordRejected(entry);
 
     const receipt = block.receipt({ number });
     if (verify && receipt.hash !== header.hash) fail(ERRORS.replayMismatch, number);
@@ -1862,7 +1899,7 @@ export class VirtualMachine {
       const undo = this.getBlockUndo(number);
       if (!header || !undo) fail(ERRORS.historyMissing, number);
       for (const dbKey of undo) touched.add(dbKey);
-      if (number <= target) kept.push({ header, body: this.getBlockBody(number) ?? [] });
+      if (number <= target) kept.push({ header, body: this.getBlockBody(number) ?? [], rejected: this.getBlockRejected(number) });
     }
 
     // 1) คืนทุก key ที่เคยถูกแตะ กลับไปเป็นสถานะก่อน block 1
@@ -1884,7 +1921,7 @@ export class VirtualMachine {
     this.commit(writes);
 
     // 3) รัน block 1..target ใหม่
-    for (const { header, body } of kept) {
+    for (const { header, body, rejected } of kept) {
       const block = this.createBlock({
         number: header.number,
         parentHash: header.parentHash,
@@ -1898,6 +1935,7 @@ export class VirtualMachine {
         maxBlockGas: null,
       });
       for (const { method, request } of body) block[method](request);
+      for (const entry of rejected) block.recordRejected(entry);
       if (verify && block.header().hash !== header.hash) fail(ERRORS.replayMismatch, header.number);
       block.commit();
     }
@@ -2604,6 +2642,7 @@ export class Block {
   #parentStateRoot;
   #recordBlocks;
   #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
+  #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -2825,7 +2864,7 @@ export class Block {
   hashes() {
     const writes = this.stateWrites();
     const txHashes = this.txHashes();
-    const { hash, txRoot, stateRoot } = this.#vm.hashBlock({
+    const { hash, txRoot, stateRoot, rejectedRoot } = this.#vm.hashBlock({
       number: this.#number,
       parentHash: this.#parentHash,
       parentStateRoot: this.#parentStateRoot,
@@ -2834,8 +2873,40 @@ export class Block {
       burnPercent: this.#burnPercent,
       txHashes,
       writes,
+      rejected: this.#rejectedTxs,
     });
-    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot };
+    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot };
+  }
+
+  /**
+   * บันทึก tx ที่ถูกปฏิเสธลง block (ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส) → entry ที่เก็บ
+   *   { hash, sender, nonce, action, to, gasPrice, reason, code, stage }   stage: "sendtx" | "block" | "expired"
+   * อยู่ใน hash ของ block (rejectedRoot) → replay / sync ต้องใส่รายการเดิมตามลำดับเดิมจึงได้ hash ตรง
+   */
+  recordRejected({ hash, sender, nonce = null, action = "call", to = null, gasPrice = null, reason = "", code = null, stage } = {}) {
+    if (this.#committed) fail(ERRORS.blockCommitted);
+    if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash)) fail(ERRORS.invalidRejected, "hash");
+    if (!isNonEmptyString(sender)) fail(ERRORS.invalidRejected, "sender");
+    if (!REJECTED_STAGES.includes(stage)) fail(ERRORS.invalidRejected, "stage");
+    const text = String(reason ?? "");
+    const entry = {
+      hash: hash.toLowerCase(),
+      sender: normalizeAddress(sender),
+      nonce: Number.isSafeInteger(nonce) ? nonce : null,
+      action: String(action ?? "call"),
+      to: isNonEmptyString(to) ? normalizeAddress(to) : null,
+      gasPrice: gasPrice === null || gasPrice === undefined ? null : String(gasPrice),
+      reason: text.length > MAX_REJECTED_REASON ? text.slice(0, MAX_REJECTED_REASON) : text,
+      code: code === null || code === undefined ? null : String(code),
+      stage,
+    };
+    this.#rejectedTxs.push(entry);
+    return { ...entry };
+  }
+
+  /** tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ (copy) */
+  rejectedTransactions() {
+    return this.#rejectedTxs.map((entry) => ({ ...entry }));
   }
 
   /** hash ของทุก tx ใน block เรียงตามลำดับ */
@@ -2857,6 +2928,16 @@ export class Block {
       { type: WRITE.PUT, dbKey: blockHashKey(header.hash), value: this.#number },
       { type: WRITE.PUT, dbKey: LATEST_BLOCK_KEY, value: this.#number },
     ];
+
+    // tx ที่ถูกปฏิเสธ: รายการของ block + ดัชนีจาก hash / ผู้ส่ง
+    if (this.#rejectedTxs.length) {
+      writes.push({ type: WRITE.PUT, dbKey: blockRejectedKey(this.#number), value: this.rejectedTransactions() });
+      this.#rejectedTxs.forEach((entry, index) => {
+        const value = { ...entry, blockNumber: this.#number, index, timestamp: this.#timestamp };
+        writes.push({ type: WRITE.PUT, dbKey: rejectedTxKey(entry.hash), value });
+        writes.push({ type: WRITE.PUT, dbKey: rejectedFromKey(entry.sender, this.#number, index), value });
+      });
+    }
 
     header.txHashes.forEach((hash, index) => {
       const { request, action } = this.#requests[index];
@@ -2959,6 +3040,7 @@ export class Block {
       txRoot,
       stateRoot,
       txHashes,
+      ...(this.#rejectedTxs.length ? { rejectedCount: this.#rejectedTxs.length, rejectedRoot: this.hashes().rejectedRoot } : {}),
       ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
     };
   }
@@ -2997,6 +3079,7 @@ export class Block {
       gasUsed: transactions.reduce((sum, tx) => sum + tx.gasUsed, 0),
       fee: encodeNative(transactions.reduce((sum, tx) => sum + readNative(tx.fee), 0n)),
       transactions,
+      rejected: this.rejectedTransactions(),   // tx ที่ถูกปฏิเสธ (ไม่ได้รัน) ที่บันทึกไว้ใน block นี้
       // event ของทั้ง block เรียงตามลำดับ tx (ใช้ทำฟีดของ explorer)
       events: transactions.flatMap((tx) => tx.events.map((event) => ({ ...event, txIndex: tx.index, txHash: tx.hash }))),
       stateChanges: this.afterValues()

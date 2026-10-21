@@ -311,13 +311,32 @@ POST /sendtx
 
 `take()` เรียง tx ด้วย `sortPendingTransactions` (gasPrice มาก่อน) แล้วเช็ค `block.checkTransaction()` ทีละใบ
 
+**tx ที่ถูกปฏิเสธ (rejected) ถูกบันทึกใน block** — ใบที่ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน:
+- `stage: "sendtx"` ปฏิเสธตอน `/sendtx` (nonce ผิด / คิวเต็ม / ส่งถี่ / simulate หรือรีวิวโค้ดไม่ผ่าน / แทนที่ด้วยราคาต่ำไป)
+- `stage: "block"` VM ไม่รับตอนปิด block (TIMEOUT / แก๊สของ block เต็ม) · `stage: "expired"` ค้างในคิวเกิน `ttlMs`
+- ลายเซ็นผิด (hash / sender เชื่อไม่ได้) และส่งซ้ำ (hash มีสถานะจริงอยู่แล้ว) **ไม่**ถูกบันทึก
+- mempool จำตามลำดับที่เกิด (`#rejections`, ≤ `maxRejectedQueue` 100,000) → `take()` ใส่ลง block ด้วย `block.recordRejected(entry)`
+  ไม่เกิน `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, ค่าเริ่ม 1,000) ที่เหลือยกไป block ถัดไป · มีแค่ใบที่ถูกปฏิเสธก็ปิด block ได้
+  ส่งใบเดิมใหม่แล้วผ่าน → ถูกลบออกจากรายการที่รอ (ไม่ถูกบันทึกว่าปฏิเสธ)
+- entry: `{ hash, sender, nonce, action, to, gasPrice, reason (≤ 500 ตัว), code, stage }` · **ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส** (กติกาเชนเดิม)
+- header มี `rejectedCount` + `rejectedRoot` (= hash ของรายการตามลำดับ) **อยู่ใน hash ของ block** · block ที่ไม่มีรายการ hash เหมือนเดิมทุกไบต์
+- เก็บเป็นข้อมูล block: `blockrejected:<n>` (รายการ) · `rejtx:<hash>` · `rejfrom:<sender>:<n>:<i>` (ดัชนี อยู่ใน history/undo → `rebuildFrom` ล้างให้)
+- `replayBlock` / `rebuildFrom` / `sync` (`applyBlock(vm, { header, body, rejected })`, `/sync` ส่ง `rejected` มาด้วย) ใส่รายการเดิมแล้วเทียบ hash
+- `/evm`: ต่อท้าย tx จริงของ block เป็น tx ที่ล้ม (`status 0x0`, `gasUsed 0`, `effectiveGasPrice` จาก tx, ไม่มี log, `cumulativeGasUsed` = ของ tx จริงใบสุดท้าย)
+  index = จำนวน tx จริง + ลำดับ · hash ที่ภายหลังเข้า block จริง / ถูกปฏิเสธซ้ำใน block หลัง ไม่ถูกแสดงซ้ำ · `eth_getTransactionCount` ไม่เปลี่ยน
+- เทสต์ `60-rejected-in-block` · `61-rejected-server`
+
 **แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
 - nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
 - nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ gasPrice ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น)
   ไม่ถึง → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · ไม่ระบุ gasPrice = `vm.gas.price`
-- ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 1 wei ให้ตัวเอง** (เชนไม่รับโอน 0: `amount ต้องเป็นจำนวนเต็มบวก`)
+- ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 0 ให้ตัวเอง** (`{ action: "transfer", to: <ตัวเอง>, value: 0 }`)
+  เชนรับโอน native 0 แบบ EVM: ยังคิดค่าแก๊สและกิน nonce · ติดลบ / ไม่ใช่จำนวนเต็ม → `amount ต้องเป็นจำนวนเต็มไม่ติดลบ`
+  (`transferNative` ในโปรแกรมยังไม่รับ 0 เหมือนเดิม)
 - ไม่กิน `maxPerSender` / `maxSize` เพิ่ม แต่นับ rate limit ต่อ address · ต้องผ่าน simulate ก่อน — ไม่ผ่าน → ใบเดิมยังอยู่
-- ใบเดิมออกจากคิวแต่ยังอยู่ใน "เคยเห็น" (ส่งใบเดิมกลับมาไม่ได้) · `mempool.replacedBy(hash)` จำไว้ `ttlMs`
+- ใบเดิมออกจากคิวแต่ยังอยู่ใน "เคยเห็น" (ส่งใบเดิมกลับมาไม่ได้) · `mempool.replacedBy(hash)` จำในหน่วยความจำ `ttlMs`
+  แล้วถามต่อที่ `replacedLog` (`src/node/txlog.js`, off-chain ไม่เข้า block): server มี `DATA` → ไฟล์ `<DATA>/replaced-tx.jsonl`
+  (JSON lines ต่อท้าย · เก็บ ≤ `REPLACED_LOG_MAX` 100,000 รายการ / ≤ `REPLACED_LOG_DAYS` 30 วัน · เขียนไฟล์ใหม่เมื่อบรรทัดเกิน 2 เท่า) → **อยู่รอด restart** · ไม่มี DATA = ในหน่วยความจำมีเพดานเดียวกัน
   → `GET /tx/:hash` ตอบ `{ status: "replaced", hash, replacedBy }` · explorer แสดง "Replaced by …"
 - ใบแทนที่ใช้ nonce เดิม → `take()` ยังหยิบของแต่ละ address ตามลำดับ nonce · `/nonce/:address` ไม่ขยับ
 - `/evm`: txpool เห็นแค่ใบใหม่ · `eth_getTransactionByHash` ของใบเดิมตอบ `null` (แบบ geth)
@@ -500,7 +519,8 @@ vm[method](request);
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
-| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (ใช้ hash เท่านั้น ไม่รับ digest) |
+| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (ใช้ hash เท่านั้น ไม่รับ digest) · ถูกปฏิเสธ → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` (`block: null` = รอ block ถัดไป) |
+| `GET /rejected?address&limit&cursor` · `GET /address/:a/rejected` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` · ไม่ระบุ address = ทั้งเชน (ไล่ ≤ 1,000 block ต่อ request) |
 | `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
 | `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน), `collection` (`{ address, standard: "ERC-721" \| "ERC-1155", name, symbol, totalSupply? }` · null ถ้าไม่ใช่ NFT / multi-token), `pendingUpgrade` / `scheduledUpgrade` (null ถ้าไม่มี) |
@@ -509,15 +529,16 @@ vm[method](request);
 | `GET /address/:a/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` (สูงสุด 200) · โปรแกรมจากดัชนี `holding:` · ชิ้นจาก `owned:<a>:<id>` (ERC-721) / `balances:<a>:<id>` (ERC-1155) · ยอด 0 ไม่แสดง |
 | `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 ถ้าไม่ใช่ token |
 | `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
-| `GET /program/:a/groups` | `{ total, groups: [{ name, count }] }` — ⚠️ นับได้สูงสุด 5,000 key |
+| `GET /program/:a/groups?scan&cursor` | นับ key ตามชื่อ key แรก **ทีละช่วง**: `scan` key ต่อ request (ค่าเริ่ม 20,000 · สูงสุด 50,000) → `{ total, groups, scanned, next, complete }` · `next` ไม่ใช่ null → ส่ง `cursor=next` ต่อแล้วบวกผลเอง (นับครบทุก key) |
+| `GET /program/:a/interactions?limit&cursor` · `/program/:a/events?cursor=` · `/address/:a/incoming?cursor=` | แบบ cursor (เหมือนแถบ storage) `{ items, next }` อ่านแค่ limit + 1 key ไม่นับทั้งรายการ ไม่มีเพดาน 50,000 · ไม่ส่ง `cursor` = แบบเลขหน้าเดิม |
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
 | `GET /name/:ns` | namespace → address |
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) |
 | `GET /events?program&name&limit` | event |
-| `GET /pending` | `{ size, transactions }` |
+| `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
 | `GET /programs/pending` · `/programs/approved` | แบ่งหน้า `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token, collection? }], total, pages }` (`collection` = `"ERC-721"` / `"ERC-1155"` มีเฉพาะ NFT / multi-token → แสดงเป็น NFT / Multi-token) · หน้า explorer `#programs` (กดจากกล่องในหน้าแรก) |
-| `GET /sync?from` | `[{ header, body }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
+| `GET /sync?from` | `[{ header, body, rejected }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
 
 **แบบแบ่งหน้า** (explorer ใช้ทุกรายการยาว) · `?page=<เริ่ม 1>&limit=<≤100, ค่าเริ่ม 20>` → `{ items, total, page, pages, limit, truncated }`
 page เกินหน้าสุดท้าย → ได้หน้าสุดท้าย · นับ key ไม่เกิน 50,000 ตัวต่อรายการ (`PAGE_SCAN`) เกินแล้ว `truncated: true`
@@ -878,16 +899,18 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
    เหลือแค่กรณี timeout (ด่านสุดท้าย) ที่ tx ไม่เข้า block
 
 ### ค้างคาที่รู้อยู่
-5. **tx ที่ถูกปฏิเสธไม่เข้า block เลย** (nonce ผิด / โควตาเต็ม / timeout) → explorer แสดงไม่ได้ว่าเคยมีใบนี้
-   เป็นการตัดสินใจเชิงออกแบบ ต้องเลือกว่าจะเก็บเป็น "tx ที่ล้ม" ใน chain หรือเก็บ log นอก chain
+5. ~~tx ที่ถูกปฏิเสธไม่เข้า block เลย~~ เสร็จแล้ว: บันทึกใน block (`rejectedRoot` อยู่ใน hash) ไม่รัน ไม่แตะ state — หัวข้อ mempool
+   `GET /tx/:hash` → `rejected` · `/rejected` · explorer หน้า tx / block / แถบ Rejected ของ address · `/evm` เห็นเป็น tx ที่ล้ม (ต้องล้างเชนเดิม)
 6. ~~native / gas ยังเป็น `number`~~ เสร็จแล้ว: native เป็น BigInt wei 18 ทศนิยม · แก๊สนับทีละขั้น (1 gas/node)
-7. `/program/:a/groups` นับได้สูงสุด 5,000 key (hard-coded ใน `server.js`)
-8. แท็บ interactions / event ยังไม่มี pagination (ต่างจากแท็บ storage ที่มีแล้ว)
+7. ~~`/program/:a/groups` นับได้สูงสุด 5,000 key~~ เสร็จแล้ว: นับครบทีละช่วง (`scan` ≤ 50,000 key ต่อ request + `cursor`)
+8. ~~แท็บ interactions / event ยังไม่มี pagination~~ เสร็จแล้ว: แบบ cursor (Newer / Older) ฝั่ง server `/program/:a/interactions` · `/program/:a/events?cursor=`
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
 10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
-11. สถานะ `replaced` อยู่ในหน่วยความจำของ mempool (จำแค่ `ttlMs` 5 นาที, restart แล้วหาย) และค้นด้วย VM hash เท่านั้น ไม่รับ digest
-    พ้นเวลาแล้ว `GET /tx/:hash` ของใบที่ถูกแทนที่กลับเป็น 404
+11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
+    ยังค้นด้วย VM hash เท่านั้น ไม่รับ digest
+12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
+13. ~~explorer ไม่มีฟอร์ม deploy / upgrade~~ เสร็จแล้ว: หน้า `#deploy` (upgrader ไม่บังคับ) · แถบ Upgrade (โค้ดใหม่ + migrate input, โอน / สละสิทธิ์, admin อนุมัติ / ปฏิเสธ) · ปุ่ม Approve / Reject ในรายการรออนุมัติ
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
 **ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**

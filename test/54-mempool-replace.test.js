@@ -5,7 +5,7 @@ import { Mempool } from "../src/node/mempool.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN } from "./programs.js";
 
-/* แทนที่ tx ที่ยังรอในคิว (nonce เดิม + gasPrice สูงกว่าเดิม ≥ 10%) · ยกเลิกด้วยการโอน 1 wei ให้ตัวเอง (เชนไม่รับโอน 0) */
+/* แทนที่ tx ที่ยังรอในคิว (nonce เดิม + gasPrice สูงกว่าเดิม ≥ 10%) · ยกเลิกด้วยการโอน 0 ให้ตัวเอง (แบบ EVM) */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const ALICE_KEY = sign.randomPrivateKey();
@@ -27,7 +27,7 @@ function setup(options = {}) {
 const callTx = (from, nonce, gasPrice, amount = 1) =>
   ({ chainId: 1, action: "call", from, to: "token", method: "transfer", input: { to: "0xcarol", amount }, value: 0, nonce, gasLimit: 0, gasPrice });
 const cancelTx = (from, nonce, gasPrice) =>
-  ({ chainId: 1, action: "transfer", from, to: from, value: 1, nonce, gasLimit: 0, gasPrice });   // เชนไม่รับโอน 0 → โอน 1 wei ให้ตัวเอง
+  ({ chainId: 1, action: "transfer", from, to: from, value: 0, nonce, gasLimit: 0, gasPrice });   // ยกเลิก = โอน 0 ให้ตัวเอง
 const signed = (tx, key = ALICE_KEY) => ({ tx, signature: sign.signTransaction(tx, key) });
 
 // ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ test("แทนที่: ขอบพอดี (wei ใหญ่ เป็น s
   assert.equal(small.add(signed(callTx(alice, 0, 2)), { now: T }).ok, true);
 });
 
-test("ยกเลิก: แทนที่ call ด้วยการโอน 1 wei ให้ตัวเอง → block มีแค่ใบยกเลิก", () => {
+test("ยกเลิก: แทนที่ call ด้วยการโอน 0 ให้ตัวเอง → block มีแค่ใบยกเลิก (กิน nonce + จ่ายแค่ค่าแก๊ส)", () => {
   const vm = setup();
   const pool = new Mempool(vm);
   const call = pool.add(signed(callTx(alice, 0, 10)), { now: T });
@@ -85,6 +85,7 @@ test("ยกเลิก: แทนที่ call ด้วยการโอน
   assert.deepEqual(pool.take(block), [cancel.hash]);
   block.commit();
   assert.ok(vm.getTransaction(cancel.hash));
+  assert.equal(vm.getTransaction(cancel.hash).status, "success");
   assert.ok(!vm.getTransaction(call.hash));
   assert.equal(vm.checkTransaction({ from: alice, nonce: -1 }).expectedNonce, 1);
   assert.equal(pool.add(signed(callTx(alice, 0, 10)), { now: T }).reason, "tx นี้ถูกส่งมาแล้ว");   // ส่งใบเดิมกลับเข้ามาไม่ได้
@@ -184,7 +185,7 @@ const get = (path) => fetch(url + path).then(async (r) => ({ status: r.status, b
 
 test("server: แทนที่ผ่าน /sendtx → /tx เดิมตอบ replaced, /nonce ไม่ขยับ, txpool เห็นแค่ใบใหม่", async () => {
   const chainId = vm.chainId;
-  const old = await post("/sendtx", signed({ ...cancelTx(alice, 0, 1_000_000_000), chainId, value: 1 }));
+  const old = await post("/sendtx", signed({ ...cancelTx(alice, 0, 1_000_000_000), chainId }));
   assert.equal(old.queued, true, JSON.stringify(old));
   assert.deepEqual((await get(`/tx/${old.hash}`)).body, { status: "pending", hash: old.hash });
 

@@ -180,7 +180,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     let logs = 0;
     let gas = 0;
     const offsets = transactions.map((t) => {
-      const at = { logStart: logs, cumulativeGas: (gas += Number(t.gasUsed ?? 0)) };
+      const at = { logStart: logs, logCount: t.events?.length ?? 0, cumulativeGas: (gas += Number(t.gasUsed ?? 0)) };
       logs += t.events?.length ?? 0;
       return at;
     });
@@ -190,9 +190,35 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return value;
   }
 
+  /**
+   * tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ → แสดงต่อท้าย tx จริงเป็น tx ที่ล้ม (status 0x0, gasUsed 0) ให้ Blockscout เห็น
+   * ข้าม hash ที่ภายหลังเข้า block จริงแล้ว หรือถูกปฏิเสธซ้ำใน block หลัง (1 hash = 1 tx ในมุมของ EVM)
+   * index ของ EVM = จำนวน tx จริง + ลำดับในรายการนี้
+   */
+  function rejectedIn(header) {
+    if (!header?.rejectedCount) return [];
+    const base = header.txHashes?.length ?? 0;
+    return vm.getBlockRejected(header.number)
+      .filter((entry) => !vm.getTransaction(entry.hash) && vm.getRejectedTransaction(entry.hash)?.blockNumber === header.number)
+      .map((entry, i) => ({ ...entry, evmIndex: base + i }));
+  }
+  /** hash ทุกใบของ block ในมุมของ EVM: tx จริงตามลำดับ แล้วตามด้วย tx ที่ถูกปฏิเสธ */
+  const evmHashes = (header) => [...(header?.txHashes ?? []), ...rejectedIn(header).map((entry) => entry.hash)];
+  /** tx ที่ถูกปฏิเสธ → { found, receipt, block, logStart, cumulativeGas } แบบเดียวกับ tx จริง (ไม่มี log · gas ไม่เพิ่ม) */
+  function rejectedTx(entry, header, offsets) {
+    const last = offsets.at(-1);
+    const logStart = last ? last.logStart + (last.logCount ?? 0) : 0;
+    return {
+      found: { hash: entry.hash, blockNumber: header.number, index: entry.evmIndex, action: entry.action, from: entry.sender, nonce: entry.nonce, rejected: entry },
+      receipt: { action: entry.action, status: "rejected", gasUsed: 0, gasPrice: entry.gasPrice ?? vm.gas.price, value: 0, to: entry.to,
+        method: null, input: null, events: [], trace: [], nativeChanges: [], error: { code: entry.code ?? "REJECTED", message: entry.reason } },
+      block: header, logStart, cumulativeGas: last?.cumulativeGas ?? 0,
+    };
+  }
+
   function formatBlock(header, full) {
     const number = header.number;
-    const hashes = header.txHashes ?? [];
+    const hashes = evmHashes(header);
     let bloom = EMPTY_BLOOM;
     if (hashes.length) {
       try { bloom = bloomOf(blockReceipts(number).flatMap((r) => r.logs)); } catch { /* ไม่มี history → bloom ว่าง */ }
@@ -231,7 +257,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   function located(hash) {
     if (!isHash(hash)) fail(EVM_ERROR.PARAMS, `invalid transaction hash: ${hash}`);
     const found = vm.getTransaction(hash.toLowerCase());
-    if (!found) return null;
+    if (!found) {
+      // ถูกปฏิเสธ (บันทึกใน block) → tx ที่ล้มแบบ EVM
+      const entry = vm.getRejectedTransaction(hash.toLowerCase());
+      const header = entry ? headerAt(entry.blockNumber) : null;
+      const listed = header ? rejectedIn(header).find((item) => item.hash === entry.hash) : null;
+      return listed ? rejectedTx(listed, header, replayed(header.number).offsets) : null;
+    }
     const { header, transactions, offsets } = replayed(found.blockNumber);
     return { found, receipt: transactions[found.index], block: header, ...offsets[found.index] };
   }
@@ -273,7 +305,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return null;
   };
   const transactionAt = (number, index) => {
-    const hash = number === null ? undefined : headerAt(number)?.txHashes?.[Number.parseInt(index, 16)];
+    const hash = number === null ? undefined : evmHashes(headerAt(number))[Number.parseInt(index, 16)];
     return hash ? transactionByHash(hash) : null;
   };
 
@@ -344,11 +376,12 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   function blockTransactions(number) {
     const data = number === null ? null : replayed(number);
     if (!data) return null;
-    return (data.header.txHashes ?? []).map((hash, index) => {
+    const real = (data.header.txHashes ?? []).map((hash, index) => {
       const receipt = data.transactions[index];
       const found = { hash, blockNumber: number, index, action: receipt.action, from: receipt.from };
       return { found, receipt, block: data.header, ...data.offsets[index] };
     });
+    return [...real, ...rejectedIn(data.header).map((entry) => rejectedTx(entry, data.header, data.offsets))];
   }
   const blockReceipts = (number) => blockTransactions(number)?.map(formatReceipt) ?? null;
 
@@ -598,8 +631,8 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     eth_getCode: ([address, tag]) => code(address, tag),
     eth_getBlockByNumber: ([tag, full]) => blockByNumber(tag, full),
     eth_getBlockByHash: ([hash, full]) => blockByHash(hash, full),
-    eth_getBlockTransactionCountByNumber: ([tag]) => { const b = headerAt(blockNumberOf(tag)); return b ? quantity(b.txHashes?.length ?? 0) : null; },
-    eth_getBlockTransactionCountByHash: ([hash]) => { const b = headerByHash(hash); return b ? quantity(b.txHashes?.length ?? 0) : null; },
+    eth_getBlockTransactionCountByNumber: ([tag]) => { const b = headerAt(blockNumberOf(tag)); return b ? quantity(evmHashes(b).length) : null; },
+    eth_getBlockTransactionCountByHash: ([hash]) => { const b = headerByHash(hash); return b ? quantity(evmHashes(b).length) : null; },
     eth_getBlockReceipts: ([ref]) => blockReceipts(blockRef(ref)),
     eth_getUncleCountByBlockNumber: () => "0x0",
     eth_getUncleCountByBlockHash: () => "0x0",

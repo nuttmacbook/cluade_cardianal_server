@@ -54,9 +54,11 @@
 | แบบ | `accepted` | อยู่ใน block ไหม | เสียค่าแก๊สไหม |
 |---|---|---|---|
 | โปรแกรม throw / เงินไม่พอ | `true` | ✅ มี status `throw` | ✅ เสีย |
-| nonce ผิด / เกินโควตา / หมดเวลา | `false` | ❌ ไม่ปรากฏเลย | ❌ ไม่เสีย |
+| nonce ผิด / เกินโควตา / ส่งถี่ / simulate ไม่ผ่าน / หมดเวลา / หมดอายุในคิว | `false` | ✅ อยู่ในรายการ **rejected** ของ block (ไม่ได้รัน) | ❌ ไม่เสีย ไม่กิน nonce |
 
-แบบที่สองจะไม่มีร่องรอยใน chain เลย explorer จึงไม่ต้องรองรับ
+แบบที่สอง (ผ่านการตรวจลายเซ็นแล้ว) ถูกผู้ผลิตบันทึกไว้ใน block ถัดไป: `GET /tx/:hash` → `{ status: "rejected", block, reason, stage, … }`
+(`block: null` = ยังรอ block ถัดไป) · `stage`: `sendtx` (ตอนส่ง) · `block` (ตอนปิด block) · `expired` (ค้างในคิวเกินเวลา)
+ลายเซ็นผิดไม่ถูกบันทึก (hash / ผู้ส่งเชื่อไม่ได้) · แสดงเป็น "Rejected" + เหตุผล ไม่ใช่ "Failed"
 
 ### 2.4 เหรียญหลักเก็บเป็น 3 ช่องสะสม
 
@@ -86,7 +88,11 @@
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:number` | header ของ block นั้น |
 | `GET /block/:number?full=1` | **receipt เต็ม** — tx ทุกใบพร้อม input, result, trace, stateChanges, events |
-| `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) · ยังรอในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` |
+| `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) · ยังรอในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (จำถาวรแบบมีเพดาน อยู่รอด restart) · ถูกปฏิเสธ → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` |
+| `GET /rejected?address=&limit=&cursor=` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` (ส่ง `next` กลับมาเป็น `cursor`) · ไม่ระบุ address = ทั้งเชน · `GET /address/:a/rejected` = ของผู้ส่งคนนั้น |
+| `GET /program/:a/interactions?limit=&cursor=` | tx / call ที่เข้ามาหาโปรแกรม แบบ cursor `{ items, next }` (ไม่นับทั้งรายการ ไม่มีเพดาน) |
+| `GET /program/:a/events?limit=&cursor=&name=` | event แบบ cursor `{ items, next }` (ส่ง `cursor` ว่างได้ = หน้าแรก) · ไม่ส่ง `cursor` = แบบเลขหน้า `?page=` เดิม · `/address/:a/incoming?cursor=` ก็เช่นกัน |
+| `GET /program/:a/groups?scan=&cursor=` | นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (`scan` ≤ 50,000 ต่อ request) → `{ total, groups, scanned, next, complete }` · ยังไม่ครบ → ส่ง `cursor=next` แล้วบวกผลเอง |
 | `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
 | `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
 | `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage, `token` / `collection` (NFT ERC-721 / multi-token ERC-1155 มาตรฐาน · ไม่ใช่ = null) |
@@ -95,14 +101,14 @@
 | `GET /name/:namespace` | ชื่อ → address |
 | `GET /state/:address?block=42` | storage ของโปรแกรม ณ block นั้น |
 | `GET /nonce/:address` | nonce ถัดไปที่ควรใช้ (นับ tx ที่รออยู่ในคิวด้วย) |
-| `GET /pending` | tx ที่รออยู่ในคิว ยังไม่เข้า block |
+| `GET /pending` | tx ที่รออยู่ในคิว ยังไม่เข้า block · `rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block |
 | `POST /query` | เรียกฟังก์ชันของโปรแกรมแบบอ่านอย่างเดียว ไม่เสียค่าแก๊ส |
 
 ### เขียน
 
 | endpoint | หมายเหตุ |
 |---|---|
-| `POST /sendtx` | `{ tx, signature }` — ตอบ 400 พร้อม `simulation` ถ้าจะล้ม |
+| `POST /sendtx` | `{ tx, signature }` — ตอบ 400 พร้อม `simulation` ถ้าจะล้ม · action: `call` `transfer` (value 0 ได้ = ยกเลิกใบที่ค้างด้วยการโอน 0 ให้ตัวเอง) `deploy` (`upgrader` ไม่บังคับ อยู่ในข้อมูลที่เซ็น) `init` `reject` `metadata` `upgrade` (`code` + `input` = migrate input) `setUpgrader` (`input: { upgrader: "0x…" \| null }`) `initUpgrade` `rejectUpgrade` |
 
 **`POST /query`** สำคัญมากสำหรับ explorer เพราะใช้อ่านค่าจากโปรแกรมได้โดยไม่ต้องส่ง tx
 
@@ -127,9 +133,12 @@ POST /query
   "txCount": 3, "successCount": 2, "failedCount": 1,
   "gasUsed": 4210, "fee": 4210,
   "parentStateRoot": "0x…", "txRoot": "0x…", "stateRoot": "0x…",
-  "txHashes": ["0x…", "0x…", "0x…"]
+  "txHashes": ["0x…", "0x…", "0x…"],
+  "rejectedCount": 1, "rejectedRoot": "0x…"
 }
 ```
+
+`rejectedCount` / `rejectedRoot` มีเฉพาะ block ที่มี tx ถูกปฏิเสธ (อยู่ใน hash ของ block) · รายการอยู่ใน `?full=1` → `rejected: [{ hash, sender, nonce, action, to, gasPrice, reason, code, stage }]`
 
 `stateRoot` เป็นแบบสะสม ถ้ามีใครแก้ข้อมูลเก่า ค่าของ block หลังจากนั้นจะไม่ตรงทั้งหมด
 

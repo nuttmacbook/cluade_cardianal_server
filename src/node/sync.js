@@ -7,7 +7,7 @@
  */
 
 /** รัน block ที่ดึงมา 1 อัน แล้วเทียบ hash */
-export function applyBlock(vm, { header, body }) {
+export function applyBlock(vm, { header, body, rejected = [] }) {
   const block = vm.createBlock({
     number: header.number,
     parentHash: header.parentHash,
@@ -21,6 +21,7 @@ export function applyBlock(vm, { header, body }) {
     maxBlockGas: null,
   });
   for (const { method, request } of body) block[method](request);
+  for (const entry of rejected ?? []) block.recordRejected(entry);   // tx ที่ถูกปฏิเสธ: อยู่ใน hash ของ block (rejectedRoot)
 
   const local = block.header();
   if (local.hash !== header.hash) {
@@ -80,7 +81,7 @@ export function syncRoute(app) {
     for (let number = from; number <= Math.min(latest, from + limit - 1); number += 1) {
       const header = app.vm.getBlock(number);
       const body = app.vm.getBlockBody(number);
-      if (header && body) blocks.push({ header, body });
+      if (header && body) blocks.push({ header, body, rejected: app.vm.getBlockRejected(number) });
     }
     return blocks;
   });
