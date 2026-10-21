@@ -953,6 +953,39 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 - รันจริง 9 ต.ค. (BLOCK_MS 3000): 64 block × 10 tx ทุก block, 640/640 สำเร็จ, ผู้ถือ TEST 1,006 · รายงานที่ `scenario-report.json`
 - ⚠️ แท็บ Incoming ของกระเป๋านับเฉพาะ tx ที่ส่ง**ถึง**กระเป๋านั้นตรง ๆ — token ที่ได้จาก transfer / router และ native จาก transferNative ไม่อยู่ในรายการนี้ (ดูได้จากแท็บ Tokens / ยอด)
 
+### scenario ครบทุกฟังก์ชัน (`npm run scenario:full`) — เทสต์ `74-scenario-full`
+
+`scripts/scenario-full.js` + โปรแกรมตัวอย่างใน `scripts/scenario-full-programs.js` (ทุกตัวมี `metadata.abi` + namespace → แสดงสวยทั้ง explorer และ Blockscout)
+ส่ง tx จริงทีละชุดแล้ว**ตรวจผลบนเชนทุกข้อ** (~300 ข้อ พิมพ์ ✅ / ❌ ทีละหัวข้อ · ล้มข้อเดียว = exit 1 · รายงาน `scenario-full-report.json`)
+
+```
+RATE_LIMIT=0 npm start                         # terminal 1 (ใช้ chain เดิมที่มีข้อมูลอยู่แล้วก็ได้ · รันซ้ำได้ เพราะ --tag สุ่มให้ทุกรอบ)
+npm run scenario:full                          # terminal 2 · http://localhost:3000 (~2 นาทีที่ BLOCK_MS 3000)
+npm run scenario:full -- --spawn               # เปิด server เอง: MemoryDB · BLOCK_MS 1000 · UPGRADE_DELAY_BLOCKS 2 (ทดสอบ timelock) · ตรวจ sync ด้วย
+npm run scenario:full -- --spawn --quick       # BLOCK_MS 300 (~15 วินาที) — ตัวที่เทสต์ 74 ใช้
+npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout http://localhost   # server ที่ตั้ง ADMINS / พิมพ์ลิงก์ Blockscout
+```
+
+- หัวข้อ: เตรียมกระเป๋า · deploy → init / reject (คืนเงิน) · namespace · ABI · โอน 0 / legacy / 1559 / burnedFee / producerFee / base fee ขึ้น-ลง
+  · replace-by-fee (+10%) / replaced / ราคาไม่พอ / tx ที่ถูกปฏิเสธลง block · token (transfer / approve / transferFrom / multiTransfer / permit คน + ERC-1271)
+  · NFT (mint / safeTransferFrom ไปคนและ WALLET_PROGRAM / approve / operator / tokenURI) · ERC-1155 (mint / batch / operator / uri) · กระเป๋า ERC-1271 (execute)
+  · multicall · runProgram ซ้อน / STATICCALL FORBIDDEN / catch · API ทุกตัวเทียบค่าจริง (รวม replay ได้ Math.random เดิม) · upgrade (reject / approve / timelock / migrate / versions / setUpgrader / สละสิทธิ์)
+  · cloneProgram (address ทำนายด้วย `vm.cloneAddressFor`) · OUT_OF_GAS / OUT_OF_MEMORY ทั้งตอน query, /sendtx และ**ใน block** · event indexed (REST + eth_getLogs)
+  · /evm ที่ Blockscout ใช้ (block / tx type 0x0-0x2 / receipt + log ERC-20 · ERC-721 4 topic · ERC-1155 / eth_call / feeHistory / tx ที่ล้ม 0x0 / callTracer) · REST ของ explorer · sync
+- tx ที่ล้ม "ใน block" ทำด้วยกับดักของ `GAS_LAB_PROGRAM`: `arm()` + `loopIfArmed()` + `memoryIfArmed()` ส่งใน block เดียวกัน (simulate ที่ /sendtx รันบน state ก่อน arm จึงผ่าน)
+- sync: import `server.js` ตัวที่สองในโปรเซสของสคริปต์ (env เดียวกับ server ที่ spawn · MemoryDB · ปิด miner) แล้ว `syncOnce` จาก `/sync` จนครบ → เทียบ head hash / stateRoot
+  ใช้กับ server ที่เปิดเองได้ด้วย `--sync` (env ที่มีผลกับผลของ tx ต้องตรงกัน เช่น `UPGRADE_DELAY_BLOCKS` `GAS_*` `MEMORY_LIMIT_MB`)
+- ท้ายรายงานพิมพ์ address ของโปรแกรมตัวอย่าง + tx ที่น่าดู เป็นลิงก์ `/#address/…` `/#tx/…` ของเรา และ `<blockscout>/token|address|tx/…`
+  (hash ที่พิมพ์คือ VM hash = hash ที่ Blockscout เห็น · `/sendtx` คืน digest ที่ผู้ใช้เซ็น — explorer ของเราค้นได้ทั้งสอง)
+- **ดูใน Blockscout**: ชี้ Blockscout ไปที่ `/evm` ของ server ตัวเดียวกัน — `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL=ETHEREUM_JSONRPC_TRACE_URL=http://<host>:3000/evm`
+  · `ETHEREUM_JSONRPC_WS_URL=ws://<host>:3000/evm` · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · ฝั่งเชน `EVM_RATE_LIMIT=0` (ขั้นตอนเต็มใน `docs/blockscout.md`)
+  `--spawn` ใช้ port สุ่มและ MemoryDB → ถ้าจะดูใน Blockscout ให้เปิด server เอง (`RATE_LIMIT=0 EVM_RATE_LIMIT=0 npm start`) แล้วรันแบบไม่มี `--spawn`
+- ข้าม: `TIMEOUT_MS` (แก๊ส 3M หมดก่อนเสมอ ~60 ms · เทสต์ 08 / 58 คุม timeout อยู่แล้ว)
+- พบระหว่างทำ (แก้แล้ว · เทสต์ `75-simulate-block-number`): `simulate` ใช้ `number: null` → `BlockNumber()` เป็น null ตอน /sendtx
+  โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธทั้งที่ใน block รันได้ → ตอนนี้จำลองเป็น block ถัดไปเสมอ (ไม่ commit / ไม่จองเลข)
+- พบระหว่างทำ (ยังไม่แก้): spread `[...a, ...a]` ไม่ถูกคิดแก๊สตามจำนวนสมาชิก (gasmeter ไม่ห่อ SpreadElement / การแปลง array เป็น string โดยนัยก็เช่นกัน)
+  → จองหน่วยความจำ 32 MB ได้ด้วย ~230 แก๊ส (`memoryIfArmed` ใช้วิธีนี้) · ถูกจำกัดด้วย `MEMORY_LIMIT_MB` / `TIMEOUT_MS` แต่ CPU ต่อแก๊สสูงกว่าโค้ดปกติมาก
+
 ---
 
 ## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ

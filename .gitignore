@@ -5,3 +5,4 @@ data/
 .DS_Store
 simulate-report*.json
 scenario-report*.json
+scenario-full-report*.json
