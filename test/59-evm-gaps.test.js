@@ -237,7 +237,9 @@ test("modexp: (base ** exp) % mod แบบ BigInt · mod 0 → 0n · ค่า�
   assert.equal(pow(b, e, m).result, `${expect}n`);
 
   assert.equal(pow(-1n, 2n, 5n).status, "throw");
-  assert.match(pow(1n << 8200n, 2n, 5n).error.message, /1024 ไบต์/);
+  // ค่าเกิน 1024 ไบต์ (8192 bit) เป็น BigInt ในโปรแกรมไม่ได้แล้ว (เพดาน BigInt ของ sandbox = ขนาดสูงสุดของ modexp · เทสต์ 81)
+  assert.equal(pow(1n << 8200n, 2n, 5n).error.message, "โปรแกรมทำงานผิดพลาด (RangeError)");
+  assert.equal(pow((1n << 8192n) - 1n, 2n, 5n).result, `${((1n << 8192n) - 1n) ** 2n % 5n}n`);   // 1024 ไบต์พอดี ยังใช้ได้
   const res = call("env", "powNumber");
   assert.equal(res.status, "throw");
   assert.match(res.error.message, /BigInt/);

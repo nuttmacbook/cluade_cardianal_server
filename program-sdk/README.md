@@ -158,7 +158,6 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 | แปลง array เป็น string โดยนัย (`a + ""` · `` `${a}` `` · `String(a)`) | เท่า `a.join()` (+ ส่วนที่ต่อ string) |
 | `new ArrayBuffer(n)` | 1 ต่อ 32 byte (คิดก่อนจอง) |
 | `new Uint8Array(n)` และ typed array อื่น | 1 ต่อสมาชิก (คิดก่อนจอง) |
-| `new RegExp(p)` | 1 ต่อ 32 ตัวอักษรของ pattern |
 | `Array(n)` / `new Array(n)` | ไม่คิด (ยังไม่จองที่ให้สมาชิก) — `fill` / `map` / spread … คิดตาม `length` ตอนใช้ |
 
 เรียกทางไหนก็คิดเท่ากัน: `a.join()` · `Array.prototype.join.call(a)` · `Reflect.apply(…)` · เก็บเมธอดใส่ตัวแปรก่อน
@@ -169,7 +168,34 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 - `...rest` ใน pattern ใช้ได้เฉพาะ `const { a, ...rest } = ค่า` / `const [a, ...rest] = ค่า` (และ `({ a, ...rest } = ค่า)` / `([a, ...rest] = ค่า)`)
   ใส่ในพารามิเตอร์ (`function f({ a, ...rest })`) · `for (const [a, ...rest] of …)` · catch · ซ้อนใน pattern อื่น → deploy ไม่ผ่าน (ไม่มีนิพจน์ให้คิดแก๊ส) · `function f(...args)` ใช้ได้ตามปกติ
 - iterator ในตัวของ array / string / Set / Map แก้ไม่ได้ (`Array.prototype[Symbol.iterator] = …` → TypeError)
-- ชื่อ `__gas` `__str` `__props` `__spread` `__call` สงวนไว้
+- ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้
+
+### regex ใช้ไม่ได้ · BigInt คิดแก๊สตามขนาด
+
+เวลาที่ CPU ใช้ต้องคิดเป็นแก๊สได้แน่นอนทุกเครื่อง จึงมีกติกาเพิ่ม 2 ข้อ
+
+**regex ปิดทั้งหมด** — regex แบบ backtrack ใช้เวลาโตแบบทวีคูณ (`/(a+)+$/` กับ `"a".repeat(30) + "b"`) และนับขั้นข้างใน engine ไม่ได้
+- regex literal (`/…/`) → deploy ไม่ผ่าน
+- `RegExp(…)` / `new RegExp(…)` · `str.match(…)` / `str.matchAll(…)` / `str.search(…)` · เมธอดของ `RegExp.prototype` → TypeError
+- ใช้แทนได้: `split(",")` · `replace("a", "b")` / `replaceAll("a", "b")` (pattern เป็น string) · `indexOf` · `includes` · `startsWith` · `endsWith`
+
+**BigInt คิดตามขนาด** — ค่าที่ ≤ 512 bit (รวม uint256 ทุกค่า) **ไม่คิดเพิ่ม** แก๊สเท่าเดิมทุกหน่วย · ค่าที่ใหญ่กว่านั้นคิดตามงานจริง
+(W = จำนวน word 64 bit ของตัวเลข · 1 หน่วย = 1 gas · ขั้นต่ำ 16 หน่วยต่อครั้ง)
+
+| ทำอะไร | คิดเท่าไร |
+|---|---|
+| `a + b` · `a - b` | 16 (≤ 1024 bit) · 64 (ใหญ่กว่า) |
+| `a * b` | ⌈Wa × Wb ÷ 4⌉ |
+| `a / b` · `a % b` | ⌈max(1, Wa − Wb + 1) × Wb ÷ 4⌉ |
+| `a ** b` | ⌈W² ÷ 4⌉ ของผลลัพธ์ — คิด**ก่อน**คำนวณ: `2n ** 1000000000n` หมดแก๊สทันที |
+| `a << b` · `a >> b` | ⌈W ÷ 2⌉ ของผลลัพธ์ (คิดก่อนคำนวณ) |
+| BigInt → string (`String(x)` · `x.toString()` · `` `${x}` `` · `"" + x` · ใช้เป็น key `o[x]` · `join` · `Error(x)` …) | W² (คิดก่อนแปลง) |
+| string → BigInt (`BigInt("…")` · `"…" == x` · `"…" < x` · input `"123n"`) | W² โดย W = ⌈จำนวนตัวอักษร ÷ 19⌉ (≤ 171 ตัวอักษรไม่คิด) |
+| เทียบ BigInt กับ BigInt (`<` `==` …) | ไม่คิดเพิ่ม |
+
+- **BigInt ใหญ่สุด 8192 bit** (1024 ไบต์ เท่ากับ `modexp`) — ผลลัพธ์เกิน → `RangeError: BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` (catch ได้) · literal ที่ใหญ่เกิน → deploy ไม่ผ่าน
+- ตัวอย่าง: `x * x` ของ x 4096 bit = 1,024 gas · `x.toString()` ของ x 8192 bit = 16,384 gas
+- `BigInt64Array` / `BigUint64Array` ไม่มีให้ใช้
 
 ### event แบบ indexed
 
