@@ -379,9 +379,19 @@ async function main() {
     check("nonce ข้ามเลข → ไม่เข้าคิว", !bad.queued && /nonce/.test(bad.reason ?? ""), JSON.stringify(bad).slice(0, 200));
     const waiting = await get(`/tx/${bad.hash}`);
     check("GET /tx → rejected (รอ block)", waiting.status === "rejected", JSON.stringify(waiting).slice(0, 200));
-    let recorded = waiting;
-    for (let i = 0; i < 300 && !Number.isInteger(recorded.blockNumber); i += 1) { await wait(100); recorded = await get(`/tx/${bad.hash}`); }
+    // server พักใบที่ถูกปฏิเสธไว้ (REJECTED_HOLD_MS ค่าเริ่ม 60 วิ) → ไม่ปิด block เปล่า ๆ แต่ติดไปกับ block ที่มี tx จริงใบถัดไป
+    const { rejectedHoldMs } = await get("/pending");
+    if (rejectedHoldMs >= 5000) {
+      await wait(2500);
+      check("ใบที่ถูกปฏิเสธอย่างเดียวยังไม่ปิด block (รอ tx จริง)", (await get(`/tx/${bad.hash}`)).blockNumber == null);
+    } else skip("ใบที่ถูกปฏิเสธอย่างเดียวยังไม่ปิด block", `server ตั้ง REJECTED_HOLD_MS = ${rejectedHoldMs}`);
+    const ride = await send(alice, { action: "transfer", to: erin.address, value: "1" });
+    check("tx จริงใบถัดไปเข้าคิว", ride.queued, JSON.stringify(ride).slice(0, 200));
+    const rideBlock = (await mined(ride.hash))[ride.hash]?.blockNumber;
+    let recorded = await get(`/tx/${bad.hash}`);
+    for (let i = 0; i < 50 && !Number.isInteger(recorded.blockNumber); i += 1) { await wait(100); recorded = await get(`/tx/${bad.hash}`); }
     check("tx ที่ถูกปฏิเสธถูกบันทึกลง block (blockNumber)", Number.isInteger(recorded.blockNumber), JSON.stringify(recorded).slice(0, 200));
+    eq("ติดไปกับ block เดียวกับ tx จริง", recorded.blockNumber, rideBlock);
     const header = await get(`/block/${recorded.blockNumber}`);
     check("header.rejectedCount ≥ 1 + rejectedRoot", header.rejectedCount >= 1 && header.rejectedRoot, JSON.stringify(header).slice(0, 200));
     const full = await get(`/block/${recorded.blockNumber}?full=1`);

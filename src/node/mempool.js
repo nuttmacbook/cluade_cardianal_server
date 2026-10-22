@@ -160,6 +160,13 @@ export class Mempool {
     return this.#rejections.size;
   }
 
+  /** เวลา (ms) ที่ใบที่ถูกปฏิเสธซึ่งรอนานที่สุดถูกปฏิเสธ · ไม่มีใบรอ = null */
+  get oldestRejectionAt() {
+    let oldest = null;
+    for (const entry of this.#rejections.values()) if (oldest === null || entry.at < oldest) oldest = entry.at;
+    return oldest;
+  }
+
   /** tx ที่ถูกปฏิเสธที่ยังรอเข้า block (ข้อมูลเดียวกับที่จะอยู่ใน block) */
   pendingRejections() {
     return [...this.#rejections.values()].map((entry) => ({ ...entry }));
@@ -189,6 +196,7 @@ export class Mempool {
       reason: text.length > 500 ? text.slice(0, 500) : text,
       code: code ?? null,
       stage,
+      at: Date.now(),   // เวลาที่ถูกปฏิเสธ (off-chain) → server ใช้พักใบที่ถูกปฏิเสธไว้ก่อนปิด block
     });
     while (this.#rejections.size > this.#options.maxRejectedQueue) this.#rejections.delete(this.#rejections.keys().next().value);
   }

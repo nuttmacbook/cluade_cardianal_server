@@ -318,7 +318,8 @@ POST /sendtx
 - `stage: "block"` VM ไม่รับตอนปิด block (TIMEOUT / แก๊สของ block เต็ม) · `stage: "expired"` ค้างในคิวเกิน `ttlMs`
 - ลายเซ็นผิด (hash / sender เชื่อไม่ได้) และส่งซ้ำ (hash มีสถานะจริงอยู่แล้ว) **ไม่**ถูกบันทึก
 - mempool จำตามลำดับที่เกิด (`#rejections`, ≤ `maxRejectedQueue` 100,000) → `take()` ใส่ลง block ด้วย `block.recordRejected(entry)`
-  ไม่เกิน `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, ค่าเริ่ม 1,000) ที่เหลือยกไป block ถัดไป · มีแค่ใบที่ถูกปฏิเสธก็ปิด block ได้
+  ไม่เกิน `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, ค่าเริ่ม 1,000) ที่เหลือยกไป block ถัดไป
+  **มีแค่ใบที่ถูกปฏิเสธ → server พักไว้** ให้ติดไปกับ block ที่มี tx จริงใบถัดไป หรือปิด block เมื่อใบที่รอนานสุดครบ `REJECTED_HOLD_MS` (ค่าเริ่ม 60,000 · 0 = ปิดทันทีแบบเดิม) — `shouldMine()` ใน server.js ใช้ `mempool.oldestRejectionAt` (เวลาเก็บใน mempool เท่านั้น ไม่ลง block) · `/pending` บอก `rejectedHoldMs`
   ส่งใบเดิมใหม่แล้วผ่าน → ถูกลบออกจากรายการที่รอ (ไม่ถูกบันทึกว่าปฏิเสธ)
   **ใบเดิมเป๊ะ (hash เดิม) ที่บันทึกว่าถูกปฏิเสธใน block ก่อนแล้ว และยังไม่เคยเข้า block จริง → ไม่บันทึกซ้ำ** (ผู้ส่งยังได้ error เหมือนเดิม)
   1 hash อยู่ใน block เดียว → explorer กับ `/evm` / Blockscout เห็นตรงกัน และส่งซ้ำรัว ๆ ไม่สร้าง block ใหม่ (เดิม `/evm` ย้าย hash ไป block ล่าสุด แต่ Blockscout index ไปแล้ว → เห็นไม่ตรงกัน)
@@ -867,6 +868,7 @@ const r = reviewProgram(code);     // { ok, issues: [{ line, column, message }],
 ```
 
 **ทำงานที่ `/sendtx` ก่อนเข้า VM** ไม่ใช่ข้างใน VM (VM มี option `autoReview` แยกไว้ด้วยแต่ `server.js` ไม่เปิด)
+· เปิดปิดด้วย env `AUTO_REVIEW` (ค่าเริ่ม เปิด · `0` / `false` / `off` / `no` = ปิด → deploy / upgrade ไม่ถูกตรวจโค้ด เหลือ sandbox + แก๊สคุม) · กฎอยู่ใน `src/core/autoreview.js`
 
 หลักการคือ **บัญชีขาว** — อนุญาตเฉพาะที่ระบุ ที่เหลือปฏิเสธหมด จึงไม่ต้องไล่ห้าม `process` / `fetch` / `eval` ทีละตัว
 
@@ -878,7 +880,7 @@ const r = reviewProgram(code);     // { ok, issues: [{ line, column, message }],
 | `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | ไม่ deterministic หรือหนีขอบเขต |
 | `new` ที่ไม่ใช่ `Error` / `Date` | — |
 | getter / setter / method ใน object literal | — |
-| `.repeat` `.padStart` `.padEnd` `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | สร้างข้อมูลใหญ่ด้วยคำสั่งเดียว หรือผลต่างกันตาม locale/engine |
+| `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | ผลต่างกันตาม locale/engine หรือเปลี่ยน `this` (`.repeat` `.padStart` `.padEnd` ใช้ได้แล้ว: sandbox คิดแก๊สตามขนาดผลลัพธ์ก่อนทำ) |
 | ชื่อที่ขึ้นต้น `__` | — |
 | เมธอดของ global ที่ไม่อยู่ใน `ALLOWED_MEMBERS` | เช่น `Object.defineProperty`, `Math.sin` |
 
@@ -928,6 +930,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
 | `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
 | `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
+| `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
@@ -1005,7 +1008,7 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
   โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธทั้งที่ใน block รันได้ → ตอนนี้จำลองเป็น block ถัดไปเสมอ (ไม่ commit / ไม่จองเลข)
 - พบระหว่างทำ (แก้แล้ว · เทสต์ `76-gas-bulk-copy`): spread `[...a, ...a]` ไม่ถูกคิดแก๊สตามจำนวนสมาชิก (รวมการแปลง array เป็น string โดยนัย)
   → เดิมจองหน่วยความจำ 32 MB ได้ด้วย ~230 แก๊ส · ตอนนี้คิด 1 ต่อสมาชิก / 32 byte (หัวข้อ "ค่าแก๊ส") ลูปเดิมหมดแก๊สที่ 3M ก่อน
-  `memoryIfArmed` จึงเปลี่ยนเป็นสร้าง string 1 MB (`s + s`) แล้ว `keep.push([s].join(""))` วนไป (`repeat` ถูก autoreview ห้าม) + `gasLimit` 1,500,000 → ยัง OUT_OF_MEMORY ใน block (จ่าย ~1.05M gas · สคริปต์ตรวจว่า gasUsed อยู่ระหว่าง 500K–1.5M)
+  `memoryIfArmed` จึงเปลี่ยนเป็นสร้าง string 1 MB (`s + s`) แล้ว `keep.push([s].join(""))` วนไป (เขียนไว้ตอน `repeat` ยังถูก autoreview ห้าม · ตอนนี้ใช้ได้แล้ว) + `gasLimit` 1,500,000 → ยัง OUT_OF_MEMORY ใน block (จ่าย ~1.05M gas · สคริปต์ตรวจว่า gasUsed อยู่ระหว่าง 500K–1.5M)
 - ท้ายรายงานพิมพ์ gasUsed ของ tx ที่น่าดูแต่ละตัว + แก๊สรวมทุก block ของรอบนั้น (`gasByTx` / `gasUsed` ในไฟล์รายงาน) · `npm run scenario` ก็พิมพ์ gas/tx ต่อชนิดและแก๊สรวม
 
 ---
