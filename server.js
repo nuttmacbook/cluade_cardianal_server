@@ -46,6 +46,8 @@ const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB ?? 32);
 const STACK_LIMIT_KB = Number(process.env.STACK_LIMIT_KB ?? 256);
 const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต่อแก๊ส (1 gwei)
+// ตรวจโค้ดอัตโนมัติ (src/core/autoreview.js) ตอน /sendtx deploy / upgrade · AUTO_REVIEW=0 = ปิด (sandbox + แก๊สยังคุมอยู่)
+export const AUTO_REVIEW = !["0", "false", "off", "no"].includes(String(process.env.AUTO_REVIEW ?? "1").toLowerCase());
 
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
   chainId: Number(process.env.CHAIN_ID ?? 1),
@@ -76,9 +78,17 @@ export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_L
 export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
 if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("genesis.json", "utf8")));
 
+// มีแค่ tx ที่ถูกปฏิเสธ → พักไว้ให้ติดไปกับ block ที่มี tx จริง หรือปิด block เมื่อใบที่รอนานสุดครบ REJECTED_HOLD_MS (0 = ปิดทันที)
+export const REJECTED_HOLD_MS = Number(process.env.REJECTED_HOLD_MS ?? 60_000);
+export function shouldMine(now = Date.now()) {
+  if (mempool.size > 0) return true;
+  if (mempool.rejectedPending === 0) return false;
+  return now - (mempool.oldestRejectionAt ?? now) >= REJECTED_HOLD_MS;
+}
+
 let mining = false;
 export const miner = setInterval(() => {
-  if (mining || (mempool.size === 0 && mempool.rejectedPending === 0)) return;   // มีแค่ tx ที่ถูกปฏิเสธก็ปิด block เพื่อบันทึก
+  if (mining || !shouldMine()) return;
   mining = true;
   try {
     const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: MINER });
@@ -107,7 +117,7 @@ const ROUTES = {
   // แบบแบ่งหน้า: ?page=<เลขหน้า>&limit=<ต่อหน้า> → { items, total, page, pages, limit, truncated }
   "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "No blocks yet" },
-  "/pending": () => ({ size: mempool.size, transactions: mempool.list(), rejectedPending: mempool.rejectedPending }),
+  "/pending": () => ({ size: mempool.size, transactions: mempool.list(), rejectedPending: mempool.rejectedPending, rejectedHoldMs: REJECTED_HOLD_MS }),
   // tx ที่ถูกปฏิเสธ (บันทึกใน block) ใหม่ไปเก่า: ?address=<ผู้ส่ง>&limit=&cursor= → { items, next }
   "/rejected": (query) => pageRejected(vm, { address: query.get("address") || undefined, ...cursorOf(query) }),
   // โปรแกรม: จำนวนที่อนุมัติแล้ว / รออนุมัติ + รายการแบบแบ่งหน้า
@@ -236,7 +246,7 @@ function handlePost(url, body) {
 
     // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
     const check = (item) => {
-      if (tx.action === "deploy" || tx.action === "upgrade") {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
+      if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
         const reviewed = reviewProgram(tx.code);
         if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
       }

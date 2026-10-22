@@ -69,11 +69,10 @@ export const ALLOWED_GLOBALS = new Set([
 
 /**
  * เมธอดของค่า (string / array / object) ที่ห้าม
- *   - สร้างข้อมูลใหญ่ได้ด้วยคำสั่งเดียว → ต้องรอ gas แบบนับขั้น
  *   - ผลต่างกันตาม locale หรือ engine
+ * (repeat / padStart / padEnd ใช้ได้แล้ว: sandbox คิดแก๊สตามขนาดผลลัพธ์ก่อนทำ + จำกัดหน่วยความจำ)
  */
 const BANNED_METHODS = new Set([
-  "repeat", "padStart", "padEnd",                       // "x".repeat(1e9)
   "sort",                                                // ลำดับไม่แน่นอนถ้า comparator ขัดแย้งกันเอง
   "localeCompare", "toLocaleString", "toLocaleDateString", "toLocaleTimeString",
   "normalize", "toLocaleUpperCase", "toLocaleLowerCase",

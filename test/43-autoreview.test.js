@@ -87,9 +87,9 @@ test("ปิดสิ่งที่ผลต่างกันข้ามเ�
   assert.equal(check(wrap("  function f(n) { return Math.floor(n) }")).ok, true);
 });
 
-test("ปิดคำสั่งเดียวที่สร้างข้อมูลมหาศาล", () => {
-  for (const body of ['function f() { return "x".repeat(1e9) }', 'function f(s) { return s.padStart(1e9) }']) {
-    assert.match(check(wrap(`  ${body}`)).issues[0].message, /สร้างข้อมูลใหญ่|ไม่ได้/);
+test("repeat / padStart / padEnd ผ่านการตรวจ (sandbox คิดแก๊สตามขนาดผลลัพธ์แทน)", () => {
+  for (const body of ['function f() { return "x".repeat(3) }', 'function f(s) { return s.padStart(8, "0") }', 'function f(s) { return s.padEnd(8) }']) {
+    assert.equal(check(wrap(`  ${body}`)).ok, true, body);
   }
 });
 
