@@ -101,8 +101,8 @@ export class Mempool {
    *
    * @returns {{ ok: boolean, hash?: string, sender?: string, reason?: string, expectedNonce?: number, replaced?: string, simulation?: object }}
    */
-  add({ tx, signature }, { now = Date.now(), simulate } = {}) {
-    const result = this.#add({ tx, signature }, { now, simulate });
+  add({ tx, signature }, { now = Date.now(), simulate, verified } = {}) {
+    const result = this.#add({ tx, signature }, { now, simulate, verified });
     // ลายเซ็นผิด = ไม่มี hash / sender ที่เชื่อได้ · ส่งซ้ำ = hash นี้มีสถานะจริงอยู่แล้ว (รอ / เข้า block / ถูกแทนที่)
     if (!result.ok && result.hash && result.sender && result.reason !== DUPLICATE) {
       this.#reject(tx, { hash: result.hash, sender: result.sender, reason: result.reason, code: result.simulation?.errorCode, stage: "sendtx" });
@@ -110,17 +110,19 @@ export class Mempool {
     return result;
   }
 
-  #add({ tx, signature }, { now, simulate }) {
-    let verified;
-    try {
-      verified = verifyTransaction({ tx, signature });
-    } catch (error) {
-      return { ok: false, reason: error.message };
+  #add({ tx, signature }, { now, simulate, verified }) {
+    // verified = ผลของ verifyTransaction({ tx, signature }) ที่ผู้เรียกตรวจไว้แล้ว (server ตรวจก่อนแล้ว → ไม่ต้อง recover ลายเซ็นซ้ำ)
+    if (!verified) {
+      try {
+        verified = verifyTransaction({ tx, signature });
+      } catch (error) {
+        return { ok: false, reason: error.message };
+      }
     }
     const { sender, hash, method, request } = verified;
 
-    this.prune({ now });
-    if (this.#seen.has(hash)) return { ok: false, hash, sender, reason: DUPLICATE };
+    this.#pruneRecent(now);
+    if (this.#isSeen(hash, now)) return { ok: false, hash, sender, reason: DUPLICATE };
     const inQueue = this.countOf(sender);
     const chainNonce = this.#vm.checkTransaction(request).expectedNonce ?? 0;
     const target = this.#vm.requireNonce && Number.isInteger(tx.nonce) && tx.nonce >= chainNonce && tx.nonce < chainNonce + inQueue
@@ -137,7 +139,7 @@ export class Mempool {
       return { ok: false, hash, sender, reason: `nonce ต้องเป็น ${expectedNonce}`, expectedNonce };
     }
 
-    this.#recent.set(sender, [...(this.#recent.get(sender) ?? []), now]);
+    this.#touchRecent(sender, now);
     let simulation;
     if (simulate) {
       simulation = simulate(verified);
@@ -239,7 +241,7 @@ export class Mempool {
         minimumGasPrice: `${minimum.maxFee}`, minimumMaxFeePerGas: `${minimum.maxFee}`, minimumMaxPriorityFeePerGas: `${minimum.priority}` };
     }
 
-    this.#recent.set(sender, [...(this.#recent.get(sender) ?? []), now]);
+    this.#touchRecent(sender, now);
     let simulation;
     if (simulate) {
       simulation = simulate(verified);
@@ -346,6 +348,44 @@ export class Mempool {
     this.#byNonce.clear();
     this.#replaced.clear();
     this.#rejections.clear();
+  }
+
+  /** hash นี้เคยเห็นภายใน ttl × 2 (เวลาตรวจตอนอ่าน → ไม่ต้องรอ prune) */
+  #isSeen(hash, now) {
+    const time = this.#seen.get(hash);
+    return time !== undefined && now - time <= this.#options.ttlMs * 2;
+  }
+
+  /** จำเวลาส่งของ sender แล้วย้ายไปท้าย Map → #recent เรียงตามเวลาส่งล่าสุด (หน้าสุด = เงียบนานสุด) */
+  #touchRecent(sender, now) {
+    const times = [...(this.#recent.get(sender) ?? []), now];
+    this.#recent.delete(sender);
+    this.#recent.set(sender, times);
+  }
+
+  /**
+   * ล้างแบบเบาตอนรับ tx แต่ละใบ: ไล่จากรายการเก่าสุด หยุดทันทีที่เจอรายการที่ยังไม่หมดอายุ
+   * (Map เรียงตามลำดับที่ใส่ ≈ ลำดับเวลา) → ไม่วนทั้ง #seen (เป็นแสนรายการตอนโหลดเต็ม) ทุกใบ
+   * ล้างครบทุกรายการทำใน prune() ตอนปิด block
+   */
+  #pruneRecent(now) {
+    for (const [hash, item] of this.#items) {
+      if (now - item.receivedAt <= this.#options.ttlMs) break;
+      this.#delete(hash);
+      this.#reject(item.tx, { hash, sender: item.sender, reason: EXPIRED_REASON, stage: "expired" });
+    }
+    for (const [sender, times] of this.#recent) {
+      if (times.length && now - times[times.length - 1] < this.#options.rateWindowMs) break;
+      this.#recent.delete(sender);
+    }
+    for (const [hash, time] of this.#seen) {
+      if (now - time <= this.#options.ttlMs * 2) break;
+      this.#seen.delete(hash);
+    }
+    for (const [hash, { at }] of this.#replaced) {
+      if (now - at <= this.#options.ttlMs) break;
+      this.#replaced.delete(hash);
+    }
   }
 
   #allowRate(sender, now) {

@@ -987,6 +987,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
 | `80-load-test` | `scripts/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
+| `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
@@ -1120,13 +1121,22 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    ⚠️ เวลาปิดขึ้นกับจำนวนครั้งที่เรียกโปรแกรม: tx ที่ `runProgram` หลายทอดต่อใบ (multicall / router) ทำให้ 500 ใบเกิน 3 วิได้ → ถ้าจะเพิ่ม `maxTransactions` หรือเปิดให้คนนอกใช้ ควรวัดด้วย workload แบบนั้นก่อน
 2. **ที่เต็มก่อนคือการรับ tx ไม่ใช่การปิด block**: รับ 500 token tx ใช้ ~3.8 วิในโปรเซส (~7.5 วิผ่าน HTTP) > 3 วิ ทั้งหมดอยู่ใน thread เดียวกับ miner
    → รับได้จริง ~65 token / ~110 native tx/s ต่อ node (~200–330 tx ต่อ block 3 วิ) · ระหว่างปิด block `/sendtx` ค้าง (p95 ~1 วิ) — ไม่พัง แค่ tx ไหลไป block ถัดไป
-3. hotspot ที่คุ้มแก้ (**ยังไม่ได้แก้** — แตะ server / mempool / signature):
-   - `server.js` `handlePost` เรียก `verifyTransaction` เองแล้ว `mempool.add` เรียกซ้ำ → ตรวจลายเซ็น 2 รอบ (~3.5 ms × 2 ต่อใบ) · ส่งผลที่ตรวจแล้วเข้า mempool ได้ทันที (~ลดเวลารับ tx ~40%)
+3. hotspot (✅ = แก้แล้วใน PR "perf-intake" · เทสต์ `82-perf-intake`):
+   - ✅ `server.js` `handlePost` เรียก `verifyTransaction` เองแล้ว `mempool.add` เรียกซ้ำ → ตอนนี้ส่ง `mempool.add(item, { verified })` ตรวจลายเซ็นครั้งเดียว
    - `recoverPublicKey` ของ noble เป็น JS ล้วน (~3.5 ms) → ย้ายไป worker thread (ตรวจลายเซ็นขนานได้ ไม่แตะ state) หรือใช้ตัว native
-   - `Mempool.prune()` ถูกเรียกทุก `add` และวนทั้ง `#seen` (เก็บ ttl × 2 = 10 นาที) + `#recent` → ต้นทุนต่อใบโตตามจำนวน tx ที่เคยเห็น:
+   - ✅ `Mempool.prune()` ถูกเรียกทุก `add` และวนทั้ง `#seen` (เก็บ ttl × 2 = 10 นาที) + `#recent` → ต้นทุนต่อใบโตตามจำนวน tx ที่เคยเห็น:
      วัด native 500 × 40 block (memory): ส่วนที่ไม่ใช่ simulate 3.8 → 5.9 ms/ใบ เมื่อ `#seen` ~20,000 · ที่ 500 tx / 3 วิ ต่อเนื่อง 10 นาที `#seen` ~100,000 → คาดว่า +10 ms/ใบ
-     → prune ตามเวลา (ครั้งเดียวต่อ block) หรือเลิกวนเมื่อเจอรายการที่ยังไม่หมดอายุ (Map เรียงตามเวลาที่ใส่อยู่แล้ว)
-   - `Block.commit()` คำนวณ root (`hashes()`) ซ้ำ ~150 ms ต่อ block 500 token tx → cache หลัง tx ชุดสุดท้าย
+     → ตอนนี้ `add` ล้างแบบเบา (`#pruneRecent`: ไล่จากเก่าสุด หยุดเมื่อเจอรายการที่ยังไม่หมดอายุ · `#recent` ย้ายผู้ส่งไปท้ายทุกครั้งที่ส่ง) · `#seen` ตรวจเวลาตอนอ่าน · ล้างครบทุกรายการใน `prune()` ตอน `take` (ครั้งเดียวต่อ block)
+   - ✅ `Block.hashes()` ถูกเรียกซ้ำใน `header()` / `receipt()` / `commit()` → จำผลไว้ (`#hashesCache`) ล้างเมื่อรัน tx / `recordRejected` / เปิดใช้อัปเกรด
+   ผลวัดก่อน / หลังแก้ (เครื่องเดียวกัน 4 vCPU · LMDB · BLOCK_MS 3000):
+   | วัด | ก่อน | หลัง |
+   |---|---|---|
+   | `/sendtx` ผ่าน HTTP: token 250 ใบ/รอบ | ~138 req/s · p50 99 ms | ~202 req/s · p50 68 ms (+46%) |
+   | `/sendtx` ผ่าน HTTP: native 500 ใบ/รอบ | ~199 req/s · 500 ใบล้นไป 2 block | ~347 req/s · 500 ใบเข้า block เดียว (+75%) |
+   | รับ native 500 × 40 block ต่อเนื่อง (ส่วนที่ไม่ใช่ simulate) | 2.22 → 3.05 ms/ใบ (โตขึ้นเรื่อย ๆ) | 2.10 → 2.07 ms/ใบ (คงที่) |
+   | commit p50 (ในโปรเซส) token / native / mix 500 tx | 219 / 132 / 202 ms | 140 / 77 / 112 ms (−36% ถึง −45%) |
+   | close p50 token / native / mix 500 tx | 1,242 / 204 / 1,049 ms | 1,168 / 138 / 944 ms |
+   (ตัวเลขชุดนี้วัดบนเครื่องที่เร็วกว่าตารางข้างบน ให้ดูเป็นการเทียบก่อน / หลังบนเครื่องเดียวกัน)
    - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
 4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
    ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
@@ -1157,7 +1167,8 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
     **แต่คอขวดจริงคือการรับ tx** (`/sendtx` ตรวจลายเซ็น ~3.5 ms × 2 รอบ + simulate) ใน thread เดียวกับ miner → รับได้จริง ~65 token tx/s · ~110 native tx/s ต่อ node
-    ที่ควรทำต่อ (ยังไม่ทำ): ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำตอน commit · แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
+    แก้แล้ว: ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำ (รับ tx ผ่าน HTTP เร็วขึ้น 46–75%)
+    ที่ควรทำต่อ (ยังไม่ทำ): ตรวจลายเซ็นใน worker thread · sandbox ไม่คอมไพล์ซ้ำทุก call · แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     ยังค้นด้วย VM hash เท่านั้น ไม่รับ digest
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)

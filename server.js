@@ -252,7 +252,7 @@ function handlePost(url, body) {
       }
       return simulate(vm, item);
     };
-    const queued = mempool.add({ tx, signature }, { simulate: check });
+    const queued = mempool.add({ tx, signature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้วข้างบน → ไม่ recover ซ้ำ
     if (queued.simulation?.issues) return { status: 400, body: { queued: false, error: queued.simulation.error, issues: queued.simulation.issues } };
     if (queued.simulation && !queued.ok) return { status: 400, body: { queued: false, hash: verified.hash, simulation: queued.simulation } };
     if (!queued.ok) return { status: 400, body: { queued: false, ...queued } };
