@@ -12,7 +12,7 @@
  *    1 deploy / init / reject  ทีมงานอนุมัติ / ปฏิเสธ (คืนเงิน) · namespace · metadata.abi · GET /program/:a/abi
  *    2 native + ค่าแก๊ส        โอน 0 · legacy / 1559 · burnedFee / producerFee · base fee ขึ้นเมื่อ block แน่น แล้วลง
  *    3 mempool                 replace-by-fee (+10%) · replaced · ราคาไม่พอ · tx ที่ถูกปฏิเสธถูกบันทึกใน block · /pending
- *    4 token (ERC-20)          transfer · approve / transferFrom · multiTransfer · permit (คนเซ็น + กระเป๋าโปรแกรมเซ็น)
+ *    4 token (ERC-20)          transfer · approve / transferFrom · multiTransfer · permit ERC-2612 / EIP-712 (คนเซ็น + กระเป๋าโปรแกรมเซ็น · หมดเวลา)
  *    5 NFT (ERC-721)           mint · safeTransferFrom ไปคน / ไปกระเป๋าโปรแกรม · approve / operator · tokenURI
  *    6 multi-token (ERC-1155)  mint / mintBatch · single / batch transfer · operator · uri
  *    7 กระเป๋า ERC-1271         isValidSignature · execute
@@ -50,7 +50,8 @@ import { ripemd160 } from "@noble/hashes/legacy.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import * as sign from "../src/crypto/signature.js";
-import { signPermit, permitDigest, signWalletHash, signProgramMessage } from "../src/crypto/program-signature.js";
+import { signPermit, permitDigest, permitDomainSeparator, signWalletHash, signProgramMessage, signTypedDataDigest } from "../src/crypto/program-signature.js";
+import { eip712Digest, eip712DomainSeparator } from "../src/crypto/eip712.js";
 import { VirtualMachine } from "../src/core/virtualmachine.js";
 import { MemoryDB } from "../src/storage/db.js";
 import { syncOnce } from "../src/node/sync.js";
@@ -412,17 +413,26 @@ async function main() {
     eq("metadata action: /name/ ของกระเป๋า → alice", (await get(`/name/${ns("alice")}`)).address, alice.address);
     T.tokenTransfer = first[0];
 
-    const deadline = `${BigInt(Date.now() + 3_600_000)}`;
+    // ERC-2612: deadline เป็นวินาที · ลายเซ็น = eth_signTypedData_v4 ของ { domain: name / "1" / chainId / token, Permit }
+    const deadline = `${BigInt(Math.floor(Date.now() / 1000) + 3600)}`;
     const name = await read(token, "name");
-    const permitFields = (owner, spender, value, nonce) => ({ name, chainId: CHAIN_ID, verifyingContract: token, owner, spender, value, nonce, deadline });
-    const alicePermit = permitFields(alice.address, dave.address, 300n * UNIT, big(await read(token, "nonces", { owner: alice.address })));
+    const permitFields = (owner, spender, value, nonce, end = deadline) => ({ name, chainId: CHAIN_ID, verifyingContract: token, owner, spender, value, nonce, deadline: end });
+    eq("DOMAIN_SEPARATOR() = EIP-712 domainSeparator ของ token", await read(token, "DOMAIN_SEPARATOR"), permitDomainSeparator({ name, chainId: CHAIN_ID, verifyingContract: token }));
+    const aliceNonce = big(await read(token, "nonces", { owner: alice.address }));
+    const alicePermit = permitFields(alice.address, dave.address, 300n * UNIT, aliceNonce);
     const walletPermit = permitFields(wallet, erin.address, 50n * UNIT, big(await read(token, "nonces", { owner: wallet })));
-    const permitInput = (f, signature) => ({ owner: f.owner, spender: f.spender, value: `${f.value}n`, deadline: `${deadline}n`, signature });
+    const permitInput = (f, signature) => ({ owner: f.owner, spender: f.spender, value: `${f.value}n`, deadline: `${f.deadline}n`, signature });
     const signedAlice = permitInput(alicePermit, signPermit(alicePermit, alice.key));
+    // เจ้าของกระเป๋าโปรแกรมเซ็น typed data ของ permit (owner = กระเป๋า) แบบเดียวกับ MetaMask = เซ็น digest ตรง ๆ
+    const walletSignature = signPermit(walletPermit, alice.key);
+    eq("ลายเซ็น permit ของกระเป๋าโปรแกรม = signWalletHash(permitDigest)", walletSignature, signWalletHash(permitDigest(walletPermit), alice.key));
+    const expiredPermit = permitFields(alice.address, dave.address, 1n, aliceNonce, `${BigInt(Math.floor(Date.now() / 1000) - 60)}`);
+    const expired = await send(dave, { action: "call", to: token, method: "permit", input: permitInput(expiredPermit, signPermit(expiredPermit, alice.key)) });
+    check("permit หมดเวลา (deadline วินาทีที่ผ่านไปแล้ว) → permit expired", !expired.queued && /permit expired/.test(JSON.stringify(expired)), JSON.stringify(expired).slice(0, 200));
     const second = await batch([
       [bob, { action: "call", to: token, method: "transferFrom", input: { from: alice.address, to: carol.address, amount: units(200) } }, "token.transferFrom (bob ใช้วงเงิน)"],
-      [dave, { action: "call", to: token, method: "permit", input: signedAlice }, "token.permit (alice เซ็น · dave ส่งแทน)"],
-      [dave, { action: "call", to: token, method: "permit", input: permitInput(walletPermit, signWalletHash(permitDigest(walletPermit), alice.key)) }, "token.permit (กระเป๋าโปรแกรม ERC-1271)"],
+      [dave, { action: "call", to: token, method: "permit", input: signedAlice }, "token.permit (alice เซ็น EIP-712 · dave ส่งแทน)"],
+      [dave, { action: "call", to: token, method: "permit", input: permitInput(walletPermit, walletSignature) }, "token.permit (กระเป๋าโปรแกรม ERC-1271)"],
     ]);
     second.forEach((item, i) => success(["transferFrom", "permit ลายเซ็นคน", "permit กระเป๋าโปรแกรม (isValidSignature แบบ readonly)"][i], item));
     eq("transferFrom ลดวงเงินเหลือ 300", big(await read(token, "allowance", { owner: alice.address, spender: bob.address })), 300n * UNIT);
@@ -567,7 +577,9 @@ async function main() {
   await section("10 API ในโปรแกรม (BlockHash … Math.random) เทียบกับค่าจริงของเชน", async () => {
     const lab = program("lab");
     const message = `scenario-full probe ${OPTIONS.tag}`;
-    const [probe] = await batch([[carol, { action: "call", to: lab, method: "probe", value: gwei(1_000_000), input: { message, signature: signProgramMessage(message, carol.key) } }, "lab.probe (ทุก API)"]]);
+    const probeDigest = keccakText(`digest ${message}`);
+    const [probe] = await batch([[carol, { action: "call", to: lab, method: "probe", value: gwei(1_000_000),
+      input: { message, signature: signProgramMessage(message, carol.key), digest: probeDigest, digestSignature: signTypedDataDigest(probeDigest, carol.key) } }, "lab.probe (ทุก API)"]]);
     success("probe สำเร็จ", probe);
     const s = probe.receipt.result ?? {};
     const header = await get(`/block/${probe.tx.blockNumber}`);
@@ -593,6 +605,12 @@ async function main() {
     eq("keccak256('abc')", s.keccak256, keccakText("abc"));
     eq("modexp(3, 200, 1000007)", s.modexp, `${expectedModexp}n`);
     eq("ecrecover(ข้อความ, ลายเซ็น) = ผู้เซ็น", s.signer, carol.address);
+    eq("keccak256Bytes('0x616263') = keccak256('abc')", s.keccakBytes, keccakText("abc"));
+    eq("ecrecoverDigest(digest 32 byte, ลายเซ็น) = ผู้เซ็น", s.digestSigner, carol.address);
+    const labDomain = { name: "Lab", version: "1", chainId: BigInt(CHAIN_ID), verifyingContract: lab };
+    eq("eip712DomainSeparator() = ค่าของตัวช่วยฝั่ง JS", s.domainSeparator, eip712DomainSeparator(labDomain));
+    eq("eip712Digest() = digest ของ eth_signTypedData_v4", s.typedDigest, eip712Digest(labDomain,
+      { Ping: [{ name: "from", type: "address" }, { name: "block", type: "uint256" }] }, "Ping", { from: carol.address, block: BigInt(probe.tx.blockNumber) }));
     check("BalanceOf(sender) > 0", big(s.senderBalance) > 0n, s.senderBalance);
     eq("ThisBalance() = value ที่แนบมา", s.thisBalance, `${1_000_000n * GWEI}n`);
     eq("IsProgram(this) = true", s.thisIsProgram, true);

@@ -171,6 +171,16 @@ export function createFakeApi({
       return result;
     },
 
+    // ---------- byte ดิบ / EIP-712 (ต้องใช้ keccak256 ซึ่ง node:crypto ไม่มี → ใช้ createChain() แทน) ----------
+    /** keccak256 ของ byte ดิบ "0x…" @param {string} hex */
+    keccak256Bytes: () => { throw new Error("โหมดทดสอบเร็วคำนวณ keccak256Bytes ไม่ได้ ใช้ createChain() แทน"); },
+    /** กู้ address จาก digest 32 byte + ลายเซ็น @param {string} digest @param {string} signature */
+    ecrecoverDigest: () => { throw new Error("โหมดทดสอบเร็วคำนวณ ecrecoverDigest ไม่ได้ ใช้ createChain() แทน"); },
+    /** digest แบบ eth_signTypedData_v4 @param {object} domain @param {object} types @param {string} primaryType @param {object} message */
+    eip712Digest: () => { throw new Error("โหมดทดสอบเร็วคำนวณ eip712Digest ไม่ได้ ใช้ createChain() แทน"); },
+    /** domainSeparator ของ EIP-712 @param {object} domain @param {object} [types] */
+    eip712DomainSeparator: () => { throw new Error("โหมดทดสอบเร็วคำนวณ eip712DomainSeparator ไม่ได้ ใช้ createChain() แทน"); },
+
     /** เรียกโปรแกรมอื่นไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */
     runProgram: () => { throw new Error("โหมดทดสอบเร็วเรียกโปรแกรมอื่นไม่ได้ ใช้ createChain() แทน"); },
     /** สร้างโปรแกรมใหม่ไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */

@@ -113,6 +113,7 @@ export const API_OPS = [
   ["sha256", "d"], ["ripemd160", "d"], ["blake2b", "d"], ["modexp", "ppp"],
   ["BlockHash", "p"], ["ChainId", ""], ["Coinbase", ""], ["BlockGasLimit", ""], ["GasPrice", ""], ["BaseFee", ""], ["GasLeft", ""],
   ["CodeHashOf", "p"], ["CodeSizeOf", "p"],
+  ["keccak256Bytes", "p"], ["ecrecoverDigest", "pp"], ["eip712Digest", "ddpd"], ["eip712DomainSeparator", "dd"],
 ];
 const OP = { sync: 0, random: 1, clock: 2, check: 3, api: 10 };
 

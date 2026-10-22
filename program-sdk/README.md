@@ -82,7 +82,32 @@ sha256(value)                // SHA-256 (32 byte)
 ripemd160(value)             // RIPEMD-160 (20 byte)
 blake2b(value)               // BLAKE2b-512 (64 byte)
 modexp(base, exponent, modulus)   // (base ** exponent) % modulus แบบ BigInt · modulus = 0n → 0n · แต่ละค่าไม่เกิน 1024 byte
+
+// ---- byte ดิบ + EIP-712 (ลายเซ็นแบบ MetaMask eth_signTypedData_v4) ----
+keccak256Bytes("0x…")        // keccak256 ของ byte ดิบ (hex) → "0x…" 32 byte (keccak256(value) ด้านบน hash ข้อความ UTF-8 เสมอ)
+ecrecoverDigest(digest, signature)   // ecrecover แบบ EVM จาก digest 32 byte ตรง ๆ → address หรือ null
+eip712Digest(domain, types, primaryType, message)   // digest ที่ eth_signTypedData_v4 / ethers signTypedData เซ็น
+eip712DomainSeparator(domain, types?)               // domainSeparator ของ EIP-712
 ```
+
+### EIP-712 ในโปรแกรม (ลายเซ็นจาก MetaMask)
+
+`eip712Digest` คำนวณแบบเดียวกับ ethers `TypedDataEncoder.hash` ทุกไบต์ — รับ `address` `bool` `uint8…uint256` `int8…int256` `bytes1…bytes32` `bytes` `string` struct ซ้อน และ array (`T[]` / `T[3]` ซ้อนกันได้)
+`types` ใส่หรือไม่ใส่ `EIP712Domain` ก็ได้ (ไม่ใส่ = ใช้ field ของ domain ที่มีค่า) · ตัวเลขต้องเป็น BigInt · `bytes` / `bytesN` เป็น `"0x…"` · ข้อมูลผิด → error code `INVALID_REQUEST` (catch ได้)
+
+```js
+function claim(params) {
+  const digest = eip712Digest(
+    { name: "Airdrop", version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
+    { Claim: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }, { name: "nonce", type: "uint256" }] },
+    "Claim",
+    { to: params.input.to, amount: params.input.amount, nonce: readDB(map("nonce", params.input.to)) || 0n })
+  if (ecrecoverDigest(digest, params.input.signature) !== readDB("signer")) throw new Error("bad signature")
+  …
+}
+```
+ฝั่งผู้เซ็น: MetaMask `eth_signTypedData_v4` (payload `{ types: { EIP712Domain, Claim }, domain, primaryType, message }`) หรือ ethers `wallet.signTypedData(domain, { Claim }, message)`
+หรือตัวช่วยใน `programvm/program-signature.js`: `typedDataDigest(domain, types, primaryType, message)` + `signTypedDataDigest(digest, key)`
 
 ### เรียกแบบอ่านอย่างเดียว (`readonly`)
 
@@ -108,6 +133,10 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 | `ripemd160` | 300 + 1 ต่อ byte ของข้อมูล |
 | `modexp` | 200 + ⌊word² × bit ของ exponent ÷ 3⌋ (word = 8 byte ของตัวที่ยาวสุดระหว่าง base / modulus) |
 | `runProgram` แบบ `readonly` | เท่าการเรียกปกติ |
+| `keccak256` / `keccak256Bytes` | 100 (`hash`) + 1 ต่อ byte ของข้อมูล (ข้อความ = byte ของ UTF-8 · hex = byte จริง) |
+| `ecrecover` | 3000 (`recover`) + 1 ต่อ byte ของข้อความ |
+| `ecrecoverDigest` | 3000 (`recover`) |
+| `eip712Digest` / `eip712DomainSeparator` | 100 (`hash`) ต่อการ keccak ภายใน 1 ครั้ง + 1 ต่อ byte ที่ถูก hash (typeHash ของแต่ละ struct · string / bytes · array · struct · digest) — digest ของ permit ≈ 1,300 |
 | `runProgram` / `cloneProgram` | 100 (`call`) + 1 ต่อ 32 byte (ปัดขึ้น) ของ input (JSON) และอีก 1 ต่อ 32 byte ของค่าที่ return |
 
 ### แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง
@@ -236,7 +265,7 @@ api.store / api.native / api.events / api.transfers   // ตรวจผลไ�
 ```
 
 รองรับ API ครบทุกตัวยกเว้น `runProgram` และ `cloneProgram` ซึ่งต้องใช้ `createChain()`
-(`keccak256` / `ecrecover` / `CodeHashOf` ของโปรแกรมที่มีโค้ดก็ต้องใช้ `createChain()` เพราะ `node:crypto` ไม่มี keccak · `GasLeft()` คืน `null` เพราะโหมดนี้ไม่นับแก๊ส)
+(`keccak256` / `ecrecover` / `keccak256Bytes` / `ecrecoverDigest` / `eip712Digest` / `eip712DomainSeparator` / `CodeHashOf` ของโปรแกรมที่มีโค้ดก็ต้องใช้ `createChain()` เพราะ `node:crypto` ไม่มี keccak · `GasLeft()` คืน `null` เพราะโหมดนี้ไม่นับแก๊ส)
 
 ค่าของ block / chain ตั้งได้: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, baseFee: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
 
@@ -265,25 +294,26 @@ chain.setTime(Date.parse("2025-01-01"));
 
 ตัวเลขทุกตัว (tokenId, id, amount, deadline) เป็น BigInt · ข้อความ error เป็นภาษาอังกฤษ
 
-### permit — ให้คนอื่นส่ง tx ตั้งวงเงินแทน owner
+### permit (ERC-2612) — ให้คนอื่นส่ง tx ตั้งวงเงินแทน owner
+
+permit เป็น EIP-712 มาตรฐาน: owner เซ็นด้วย MetaMask `eth_signTypedData_v4` ได้ตรง ๆ (explorer มีแถบ **Permit** ในหน้า token)
 
 ```js
-import { TOKEN_PROGRAM } from "programvm/standards/token.js";
-import { signPermit, permitDigest, signWalletHash } from "programvm/program-signature.js";
-import { addressOf } from "programvm/signature.js";
+import { TOKEN_PROGRAM, PERMIT_TYPES } from "programvm/standards/token.js";
+import { signPermit, permitTypedData } from "programvm/program-signature.js";
 
-const owner = addressOf(ownerKey);
-const token = chain.deploy(TOKEN_PROGRAM, { as: owner, initInput: { name: "Thai Baht Coin", ticker: "THBC", decimals: "6n", supply: "1000000n" } });
-const fields = { name: "Thai Baht Coin", chainId: 1 /* ChainId() ของเชน */, verifyingContract: token.address, owner, spender: "bob",
-  value: 500n, nonce: 0n /* token.call("nonces", { owner }) */, deadline: BigInt(Date.now() + 600_000) /* มิลลิวินาที */ };
-const signature = signPermit(fields, ownerKey);                       // owner เป็นกระเป๋าคน
-// const signature = signWalletHash(permitDigest(fields), walletOwnerKey);   // owner เป็น WALLET_PROGRAM (ERC-1271)
-token.call("permit", { owner, spender: "bob", value: "500n", deadline: `${fields.deadline}n`, signature }, { as: "relayer" });
+// token ต้องอยู่ที่ address จริง (0x + 40 hex) เพราะเป็น verifyingContract ของ domain
+const fields = { name: "Thai Baht Coin", chainId: 1 /* ChainId() ของเชน */, verifyingContract: tokenAddress, owner, spender,
+  value: 500n, nonce: 0n /* nonces({ owner }) */, deadline: BigInt(Math.floor(Date.now() / 1000) + 600) /* unix วินาที */ };
+const signature = signPermit(fields, ownerKey);   // = ethers wallet.signTypedData(domain, PERMIT_TYPES, message) = MetaMask
+// MetaMask: ethereum.request({ method: "eth_signTypedData_v4", params: [owner, JSON.stringify(permitTypedData(fields))] })
+// owner เป็น WALLET_PROGRAM (ERC-1271): เจ้าของกระเป๋าเซ็น typed data เดียวกันโดยใส่ owner = address ของกระเป๋า
+send({ action: "call", to: tokenAddress, method: "permit", input: { owner, spender, value: "500n", deadline: `${fields.deadline}n`, signature } });
 ```
 
-ข้อความที่ถูกเซ็น (token สร้างซ้ำแล้วส่งให้ `ecrecover`):
-`{ domain: { name, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }, primaryType: "Permit", types: "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)", message: { owner, spender, value, nonce, deadline } }`
-→ digest = `keccak256(canonical JSON)` (เรียง key, BigInt เป็น `"123n"`) · หมดเวลาเมื่อ `params.block.timestamp > deadline` · ใช้แล้ว nonce + 1
+domain = `{ name: name(), version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }` · types = `Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)`
+`DOMAIN_SEPARATOR()` = domainSeparator ของ EIP-712 · หมดเวลาเมื่อ `params.block.timestamp / 1000n > deadline` (deadline เป็น**วินาที**) · ใช้แล้ว nonce + 1
+token ที่ deploy ก่อนรุ่นนี้ยังใช้แบบเดิม (digest = keccak256 ของ canonical JSON · deadline มิลลิวินาที) จนกว่าจะ deploy ใหม่
 
 ### รับลายเซ็นจากกระเป๋าโปรแกรม (ERC-1271) ในโปรแกรมของคุณ
 
@@ -292,14 +322,16 @@ import { SIGNATURE_CHECKER } from "programvm/standards/wallet.js";
 const code = `function program() {
   ${SIGNATURE_CHECKER}
   function claim(params) {
-    if (!isValidSignatureNow(params.input.signer, { action: "claim", nonce: 1n }, params.input.signature)) throw new Error("bad signature")
+    const digest = eip712Digest({ name: "Claims", version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
+      { Claim: [{ name: "nonce", type: "uint256" }] }, "Claim", { nonce: 1n })
+    if (!isValidSignatureNow(params.input.signer, digest, params.input.signature)) throw new Error("bad signature")
     …
   }
   return { claim }
 }`;
 ```
-`isValidSignatureNow(signer, ข้อความ, signature)`: กระเป๋าคน → `ecrecover(ข้อความ, signature) === signer` · โปรแกรม → `runProgram(signer, "isValidSignature", { hash: keccak256(ข้อความ), signature }, { readonly: true }) === "0x1626ba7e"`
-ฝั่งผู้เซ็น: `signProgramMessage(ข้อความ, key)` ได้ลายเซ็นที่ `ecrecover` ในโปรแกรมกู้ได้ตรง
+`isValidSignatureNow(signer, hash, signature)` (hash = digest 32 byte เช่นจาก `eip712Digest`): กระเป๋าคน → `ecrecoverDigest(hash, signature) === signer` · โปรแกรม → `runProgram(signer, "isValidSignature", { hash, signature }, { readonly: true }) === "0x1626ba7e"`
+ฝั่งผู้เซ็น: MetaMask `eth_signTypedData_v4` ของ typed data เดียวกัน หรือ `signTypedDataDigest(digest, key)` · `WALLET_PROGRAM.isValidSignature` ตรวจว่าเจ้าของเซ็น digest นั้นตรง ๆ
 
 ## ส่งขึ้น chain
 

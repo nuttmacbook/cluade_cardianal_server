@@ -298,6 +298,46 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   assert.deepEqual(pageErrors, []);
 });
 
+test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 ด้วย eth_signTypedData_v4 (wallet ปลอม = ethers signTypedData) → ส่ง permit แล้วเชนรับ", async () => {
+  const { address } = await get("/name/mytoken");
+  const query = (functionName, input) => fetch(`${url}/query`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ programUuid: address, functionName, input }) }).then((r) => r.json());
+  const nonceBefore = BigInt((await query("nonces", { owner: ME })).result.replace(/n$/, ""));
+
+  await open(`#address/${address}`);
+  await tab("Permit");
+  assert.match(await view(), /Domain: name My Token · version 1/);
+  // ค่าผิด → ข้อความเตือน ไม่เรียก wallet
+  await page.fill("#permit-spender", "0x1234");
+  await page.click("#permit-sign");
+  await page.waitForFunction(() => /Spender must be an address/.test(document.getElementById("permit-sig").textContent));
+
+  await page.fill("#permit-spender", BOB);                                          // ตัวพิมพ์ผสม (checksum)
+  await page.fill("#permit-value", "2.5");                                          // 2.5 MTK = 2,500,000 หน่วย (6 decimals)
+  await page.click("#permit-sign");
+  await page.waitForSelector("#permit-signature");
+  const signature = (await page.locator("#permit-signature").textContent()).trim();
+  assert.match(signature, /^0x[0-9a-f]{130}$/);
+  const typed = JSON.parse(await page.locator("#permit-sig details.ix-full pre").nth(1).textContent());
+  assert.equal(typed.primaryType, "Permit");
+  assert.deepEqual(typed.domain, { name: "My Token", version: "1", chainId: (await get("/genesis")).chainId, verifyingContract: address });
+  assert.deepEqual(typed.message, { owner: ME, spender: BOB.toLowerCase(), value: "2500000", nonce: String(nonceBefore),
+    deadline: typed.message.deadline });
+  assert.ok(Number(typed.message.deadline) > Date.now() / 1000, "deadline เป็นวินาทีในอนาคต");
+  // ลายเซ็นจากหน้าเว็บ = ethers signTypedData ของ typed data เดียวกัน (MetaMask v4 ได้ค่าเดียวกัน)
+  const { EIP712Domain, ...types } = typed.types;
+  assert.equal(signature, await wallet.signTypedData(typed.domain, types, typed.message));
+  assert.equal(EIP712Domain.length, 4);
+
+  await page.click("#permit-send");
+  await page.waitForSelector("#permit-allowance", { timeout: 30_000 });
+  assert.match(await page.locator("#permit-out").textContent(), /Success[\s\S]*Permit · block/);
+  assert.match(await page.locator("#permit-allowance").textContent(), /Allowance now 2500000/);
+  assert.equal((await query("allowance", { owner: ME, spender: BOB.toLowerCase() })).result, "2500000n");
+  assert.equal((await query("nonces", { owner: ME })).result, `${nonceBefore + 1n}n`);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้นจอหรือถูกตัด · มือถือแสดงตารางเป็นการ์ดที่มีชื่อคอลัมน์", async () => {
   const { address: token } = await get("/name/mytoken");
   const [last] = (await get(`/address/${ME}/txs?limit=1`)).items;   // tx ล่าสุดของ seed: โปรแกรมเรียกโปรแกรม

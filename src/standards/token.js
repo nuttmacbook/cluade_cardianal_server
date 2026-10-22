@@ -14,16 +14,18 @@
  *   transferFrom({ from, to, amount })       → true   (ใช้วงเงินที่ from approve ไว้ให้ผู้เรียก)
  * ฟังก์ชันเสริม (ไม่บังคับในมาตรฐาน)
  *   multiTransfer({ transfers: [{ to, amount }, …] }) → จำนวนรายการ   โอนหลายกระเป๋าใน tx เดียว (Transfer ต่อรายการ)
- *   permit({ owner, spender, value, deadline, signature }) → true    ตั้งวงเงินด้วยลายเซ็นของ owner (คล้าย ERC-2612)
- *   nonces({ owner }) → bigint · permitDomain() → { name, version, chainId, verifyingContract } · DOMAIN_SEPARATOR() → hash ของ domain
+ *   permit({ owner, spender, value, deadline, signature }) → true    ตั้งวงเงินด้วยลายเซ็นของ owner (ERC-2612 + EIP-712 จริง)
+ *   nonces({ owner }) → bigint · permitDomain() → { name, version, chainId, verifyingContract } · DOMAIN_SEPARATOR() → domainSeparator ของ EIP-712
  *
- * permit: ข้อความที่ owner เซ็น (ดู permitTypedData ใน src/crypto/program-signature.js)
- *   { domain: { name, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
- *     primaryType: "Permit", types: PERMIT_TYPE, message: { owner, spender, value, nonce, deadline } }
- *   digest = keccak256(canonical JSON ของข้อความนี้) — ตรงกับที่ ecrecover(ข้อความ, signature) คำนวณ (bigint เป็น "123n")
- *   deadline = มิลลิวินาทีแบบเดียวกับ params.block.timestamp · block.timestamp > deadline → "permit expired"
+ * permit = ERC-2612: owner เซ็นด้วย eth_signTypedData_v4 (MetaMask) / ethers Wallet.signTypedData ได้ตรง ๆ
+ *   domain = { name: name(), version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }
+ *   types  = { Permit: PERMIT_TYPES.Permit } = Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)
+ *   digest = eip712Digest(domain, types, "Permit", { owner, spender, value, nonce, deadline })   (ดู permitTypedData ใน src/crypto/program-signature.js)
+ *   deadline = **วินาที** (unix seconds แบบ EIP-2612) · เทียบกับ params.block.timestamp / 1000n (เวลาของ block เป็นมิลลิวินาที ปัดลง)
+ *     → วินาทีของ block > deadline = "permit expired" (เท่ากันยังใช้ได้)
  *   nonce ของ owner เพิ่มทีละ 1 ทุกครั้งที่ permit สำเร็จ (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น → ลายเซ็นใช้ไม่ได้
  *   owner เป็นโปรแกรม → ถาม owner.isValidSignature({ hash: digest, signature }) แบบ readonly (ERC-1271, src/standards/wallet.js)
+ *   token ที่ deploy ก่อนเปลี่ยนเป็น EIP-712 ยังใช้โค้ดเดิม (digest = keccak256 ของ canonical JSON · deadline มิลลิวินาที) จนกว่าจะ deploy ใหม่
  * event ที่ต้อง emit
  *   Transfer { from, to, amount }      ทุกครั้งที่ยอดย้าย · ตอนสร้างเหรียญใช้ from = ZERO_ADDRESS
  *   Approval { owner, spender, amount } ทุกครั้งที่ตั้งวงเงิน
@@ -34,9 +36,20 @@
 import { SIGNATURE_CHECKER } from "./wallet.js";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-/** ชนิดของข้อความ permit (ฟิลด์ types ในข้อความที่เซ็น — เหมือน type string ของ EIP-712) */
+/** encodeType ของ permit (EIP-712 / ERC-2612) */
 export const PERMIT_TYPE = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)";
+/** types ของ permit แบบที่ eth_signTypedData_v4 / ethers ใช้ (ไม่รวม EIP712Domain) */
+export const PERMIT_TYPES = {
+  Permit: [
+    { name: "owner", type: "address" },
+    { name: "spender", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+};
 export const PERMIT_VERSION = "1";
+const PERMIT_TYPES_SOURCE = `{ Permit: [${PERMIT_TYPES.Permit.map(({ name, type }) => `{ name: "${name}", type: "${type}" }`).join(", ")}] }`;
 export const TOKEN_FUNCTIONS = ["name", "ticker", "decimals", "totalSupply", "balanceOf", "allowance", "transfer", "approve", "transferFrom"];
 export const TOKEN_EVENTS = ["Transfer", "Approval"];
 
@@ -108,22 +121,27 @@ export const TOKEN_PROGRAM = `function program() {
   function permitDomain() {
     return { name: readDB("name"), version: "${PERMIT_VERSION}", chainId: ChainId(), verifyingContract: ThisAddress() }
   }
-  function DOMAIN_SEPARATOR() { return keccak256(permitDomain()) }
+  function DOMAIN_SEPARATOR() { return eip712DomainSeparator(permitDomain()) }
   function nonces(params) { return readDB(map("nonces", params.input.owner)) || 0n }
+
+  // ERC-2612 · ${PERMIT_TYPE}
+  const PERMIT_TYPES = ${PERMIT_TYPES_SOURCE}
 
   function permit(params) {
     const owner = params.input.owner
     const spender = params.input.spender
     const value = params.input.value
     const deadline = params.input.deadline
-    if (typeof owner !== "string" || typeof spender !== "string") throw new Error("owner and spender must be addresses")
+    if (typeof owner !== "string" || typeof spender !== "string" || owner.length !== 42 || spender.length !== 42) {
+      throw new Error("owner and spender must be addresses")
+    }
     if (typeof value !== "bigint" || value < 0n) throw new Error("value must be a non-negative bigint")
-    if (typeof deadline !== "bigint") throw new Error("deadline must be a bigint (milliseconds, like params.block.timestamp)")
-    if (params.block.timestamp > deadline) throw new Error("permit expired")
+    if (typeof deadline !== "bigint") throw new Error("deadline must be a bigint (unix seconds, like EIP-2612)")
+    if (params.block.timestamp / 1000n > deadline) throw new Error("permit expired")
     const nonce = readDB(map("nonces", owner)) || 0n
-    const typed = { domain: permitDomain(), primaryType: "Permit", types: "${PERMIT_TYPE}",
-      message: { owner: owner, spender: spender, value: value, nonce: nonce, deadline: deadline } }
-    if (!isValidSignatureNow(owner, typed, params.input.signature)) throw new Error("invalid permit signature")
+    const digest = eip712Digest(permitDomain(), PERMIT_TYPES, "Permit",
+      { owner: owner, spender: spender, value: value, nonce: nonce, deadline: deadline })
+    if (!isValidSignatureNow(owner, digest, params.input.signature)) throw new Error("invalid permit signature")
     writeDB(map("nonces", owner), nonce + 1n)
     setAllowance(owner, spender, value)
     return true

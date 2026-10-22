@@ -19,6 +19,7 @@ export const PROGRAM_API = [
   "cloneProgram",   // สร้างโปรแกรมใหม่จากโปรแกรมต้นแบบที่อนุมัติแล้ว (แบบ CREATE2)
   "sha256", "ripemd160", "blake2b", "modexp",   // precompile แบบ EVM
   "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "BaseFee", "GasLeft", "CodeHashOf", "CodeSizeOf",
+  "keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator",   // byte ดิบ + EIP-712 (eth_signTypedData_v4)
   "params",
 ];
 

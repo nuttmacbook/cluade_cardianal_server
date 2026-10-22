@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 787 เคส |
+| เทสต์ | `npm test` → 799 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 787 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 799 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -49,7 +49,8 @@ src/core/sandbox.js            935        sandbox ของโปรแกรม
 src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
 src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
 src/crypto/signature.js        214        EIP-712 + secp256k1
-src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจด้วย ecrecover: signPermit / signWalletHash / signProgramMessage
+src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจ: signPermit (EIP-712 / ERC-2612) / signWalletHash / signTypedDataDigest / signProgramMessage
+src/crypto/eip712.js                      EIP-712 แบบ eth_signTypedData_v4 (= ethers TypedDataEncoder) ไม่พึ่ง VM: eip712Digest / eip712DomainSeparator / recoverAddress
 src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
                                           · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
 src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
@@ -181,7 +182,7 @@ const address = cloneProgram(template, initInput, { salt, value })   // ใน�
 - ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
   (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
-### API ในโปรแกรม (32 ตัว)
+### API ในโปรแกรม (36 ตัว)
 
 ```
 readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
@@ -198,7 +199,22 @@ sha256(value) / ripemd160(value) / blake2b(value)        precompile hash (รั
 modexp(base, exponent, modulus)                          BigInt · modulus 0n → 0n · แต่ละค่า ≤ 1024 byte (MODEXP_MAX_BYTES)
 BlockHash(n) / ChainId() / Coinbase() / BlockGasLimit() / GasPrice() / BaseFee() / GasLeft()
 CodeHashOf(addr) / CodeSizeOf(addr)                      keccak256 / byte ของโค้ดที่เก็บ · ไม่ใช่โปรแกรม → null / 0n
+keccak256Bytes("0x…")                                    keccak256 ของ byte ดิบ (hex) → "0x…" 32 byte (keccak256(value) เดิม hash UTF-8 ของข้อความเสมอ)
+ecrecoverDigest(digest, signature)                       ecrecover แบบ EVM จาก digest 32 byte ตรง ๆ → address | null
+eip712Digest(domain, types, primaryType, message)        digest ที่ MetaMask eth_signTypedData_v4 เซ็น (= ethers TypedDataEncoder.hash)
+eip712DomainSeparator(domain, types?)                    domainSeparator (= TypedDataEncoder.hashDomain)
 ```
+
+**byte ดิบ / EIP-712** (`src/crypto/eip712.js` · เทสต์ `78-eip712`) — เพิ่มแบบไม่แตะของเดิม: `keccak256` / `ecrecover` เดิมรับข้อความ / object (hash UTF-8 / canonical JSON) **พฤติกรรมและแก๊สเท่าเดิมทุกหน่วย** โปรแกรมเก่า replay ได้ผลเดิม
+
+| API | พฤติกรรม | แก๊ส |
+|---|---|---|
+| `keccak256Bytes(hex)` | `"0x"` + ไบต์เต็ม (ตัวพิมพ์ใหญ่ / เล็กได้ · `"0x"` = byte ว่าง) · ผิดรูปแบบ → `INVALID_REQUEST` (catch ได้) | `hash` + `byte` × จำนวน byte |
+| `ecrecoverDigest(digest, sig)` | digest `"0x"` + 64 hex · sig r‖s‖v 65 byte v = 27 / 28 (ตัวกู้ตัวเดียวกับ `ecrecover` เดิม — `recoverAddress()` · s สูงก็กู้ได้เหมือนเดิม) · ลายเซ็นใช้ไม่ได้ → `null` · รูปแบบผิด → throw | `recover` (3000) |
+| `eip712Digest(domain, types, primaryType, message)` | กติกา encodeData ของ EIP-712 ครบ: `address` `bool` `uintN` `intN` `bytesN` `bytes` `string` struct ซ้อน array `T[]` / `T[k]` ซ้อน · types มี / ไม่มี `EIP712Domain` ก็ได้ (ไม่มี = เอา field ของ domain ที่มีค่าตามลำดับ name, version, chainId, verifyingContract, salt แบบ ethers) · ตัวเลขต้องเป็น BigInt (number → error แบบ API อื่น) · field เกินถูกข้าม ขาด / ผิดชนิด / เกินช่วง / struct วน → `INVALID_REQUEST: EIP-712: …` (catch ได้) · struct ≤ 64 ชนิด · field ≤ 128 · ซ้อน ≤ 32 ชั้น (กัน stack ของ host ให้ทุกเครื่องล้มที่จุดเดียวกัน) · `primaryType = "EIP712Domain"` → digest ของ domain อย่างเดียวแบบ MetaMask | `hash` × จำนวนครั้งที่ keccak + `byte` × byte ทั้งหมดที่ถูก hash (typeHash ทุก struct, string / bytes, array, struct, digest) — คิดหลังคำนวณ (งานเป็นเส้นตรงกับข้อมูลที่โปรแกรมจ่ายแก๊สสร้างมาแล้ว) |
+| `eip712DomainSeparator(domain, types?)` | เหมือนข้างบนแต่คืน hashStruct ของ domain | แบบเดียวกัน |
+
+ตัวอย่างจาก EIP-712 (Mail): `eip712Digest({ name: "Ether Mail", version: "1", chainId: 1n, verifyingContract }, { Person: […], Mail: […] }, "Mail", message)` = `0xbe609aee…` ตามตัวอย่างใน EIP-712
 
 API ที่เทียบกับ EVM (ทุกตัว deterministic · คืน BigInt / string / null):
 
@@ -724,6 +740,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 | Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีข้อความเตือนสีส้ม "⚠ caught" ต่อท้าย · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
 | Outgoing (`out`) | `/address/:a/txs` |
 | Interact (`interact`) | (โปรแกรม) ฟอร์ม — เลือกฟังก์ชัน, input JSON, value |
+| Permit (`permit`) | (token ที่โค้ดมี `permit` + `nonces` + `eip712Digest(`) ฟอร์ม spender / value (หน่วย token ตาม decimals) / deadline (unix วินาที ค่าเริ่ม +1 ชม.) → `eth_signTypedData_v4` (domain `{ name, "1", chainId จาก /genesis, verifyingContract }`) · ปุ่ม Sign permit (โชว์ลายเซ็น `#permit-signature` + input ของ permit + typed data) · Sign & submit (เซ็นใหม่ด้วย nonce ปัจจุบัน แล้วส่ง `permit` เป็น tx → `#permit-out` + `#permit-allowance`) |
 | Edit metadata (`meta`) | (กระเป๋า) ฟอร์มแก้ metadata อยู่แถบเดียวกับ Interact (เดิมเป็นปุ่มในแถว information) |
 | Events (`event`) | `/program/:a/events` |
 | Storage (`storage`) | แยกตามจำนวนชั้นของ key: Variables / Maps / Lookup (ดูด้านล่าง) |
@@ -790,25 +807,29 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 |---|---|---|
 | `nft.js` | `NFT_PROGRAM` · `checkNftStandard` | ERC-721: `mint({ to, tokenId?, uri? })` (owner / minter · ไม่ส่ง id = ถัดไปเริ่ม 1n) `transferFrom` `safeTransferFrom` (ปลายทางเป็นโปรแกรมต้องตอบ `onERC721Received` = `0x150b7a02`) `approve({ to, tokenId })` `setApprovalForAll` `ownerOf` `balanceOf({ owner })` `getApproved` `isApprovedForAll` `tokenURI` (uri ของชิ้น หรือ baseURI + id) `burn` `setMinter` `supportsInterface` · event `Transfer {from,to,tokenId}` `Approval {owner,approved,tokenId}` `ApprovalForAll {owner,operator,approved}` · storage `owners:<id>` `owned:<owner>:<id>` `balances:<owner>` |
 | `multitoken.js` | `MULTITOKEN_PROGRAM` · `checkMultiTokenStandard` | ERC-1155: `balanceOf({ account, id })` `balanceOfBatch({ accounts, ids })` `safeTransferFrom({ from, to, id, amount, data? })` `safeBatchTransferFrom({ …, ids, amounts })` (hook `onERC1155Received` / `onERC1155BatchReceived`) `mint` `mintBatch` `burn` `setApprovalForAll` `uri` (template `{id}` หรือ `setURI`) `totalSupply({ id })` · event `TransferSingle {operator,from,to,id,amount}` `TransferBatch {…,ids,amounts}` `ApprovalForAll {account,operator,approved}` `URI {value,id}` · storage `balances:<account>:<id>` |
-| `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · ดูหัวข้อ "ข้อความ permit" ด้านล่าง |
-| `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` เมื่อเจ้าของ (key เดียว) เซ็น hash นั้น · `execute({ target, fn, input, value? })` (เจ้าของสั่งเรียกโปรแกรมอื่น) · `transferOwnership` · รับ NFT / 1155 แบบ safe ได้ |
+| `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · `PERMIT_TYPES` (types ของ ethers / MetaMask) · ดูหัวข้อ "permit (ERC-2612)" ด้านล่าง |
+| `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` เมื่อเจ้าของ (key เดียว) เซ็น **digest 32 byte** นั้นตรง ๆ (`ecrecoverDigest`) · `execute({ target, fn, input, value? })` (เจ้าของสั่งเรียกโปรแกรมอื่น) · `transferOwnership` · รับ NFT / 1155 แบบ safe ได้ |
 | `multicall.js` | `MULTICALL_PROGRAM` | `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
 
-**ข้อความ permit** (คล้าย ERC-2612 + EIP-712 แต่ hash แบบ JSON เพราะ `keccak256` / `ecrecover` ในโปรแกรมรับข้อความ ไม่ใช่ byte)
+**permit (ERC-2612 + EIP-712 จริง)** — MetaMask `eth_signTypedData_v4` / ethers `Wallet.signTypedData` เซ็นได้ตรง ๆ (เทสต์ `62-permit-1271` `78-eip712` + e2e)
 ```js
-{ domain: { name: <name() ของ token>, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() },
-  primaryType: "Permit",
-  types: "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)",
-  message: { owner, spender, value, nonce, deadline } }        // ตัวเลขเป็น bigint → "123n" ใน canonical JSON · address ตัวพิมพ์เล็ก
-digest = keccak256(canonicalJson(ข้อความ))   // ค่าเดียวกับที่ ecrecover(ข้อความ, signature) ในโปรแกรม hash · signature = r||s||v 65 byte
+domain  = { name: <name() ของ token>, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }
+types   = { Permit: [owner address, spender address, value uint256, nonce uint256, deadline uint256] }   // PERMIT_TYPES
+digest  = eip712Digest(domain, types, "Permit", { owner, spender, value, nonce, deadline })          // = TypedDataEncoder.hash
+DOMAIN_SEPARATOR() = eip712DomainSeparator(domain)                                                   // = TypedDataEncoder.hashDomain
 ```
-- `deadline` เป็น**มิลลิวินาที**เหมือน `params.block.timestamp` · `block.timestamp > deadline` → `permit expired` (เท่ากันยังใช้ได้)
-- `nonce` = `nonces({ owner })` ตอนส่ง · สำเร็จแล้วเพิ่ม 1 (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น / ชื่ออื่น → `invalid permit signature`
-- owner เป็นโปรแกรม → token เรียก `isValidSignature({ hash: digest, signature })` แบบ `{ readonly: true }` ผ่าน `isValidSignatureNow` (`SIGNATURE_CHECKER`)
-  — เจ้าของ `WALLET_PROGRAM` เซ็น **string ของ hash** เป็นข้อความ (`signWalletHash`) · โปรแกรมอื่นที่อยากรับลายเซ็นของกระเป๋าโปรแกรม แทรก `${SIGNATURE_CHECKER}` ในโค้ดแล้วเรียก `isValidSignatureNow(signer, ข้อความ, signature)`
+- `deadline` เป็น **วินาที (unix seconds) แบบ EIP-2612** · token เทียบกับ `params.block.timestamp / 1000n` (เวลาของ block เป็นมิลลิวินาที ปัดลง) · วินาทีของ block > deadline → `permit expired` (เท่ากันยังใช้ได้)
+  (token รุ่นก่อน EIP-712 ใช้ deadline มิลลิวินาที)
+- `nonce` = `nonces({ owner })` ตอนเซ็น · สำเร็จแล้วเพิ่ม 1 (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น (verifyingContract) / ชื่ออื่น → `invalid permit signature`
+- owner / spender ต้องเป็น address 42 ตัว (`owner and spender must be addresses`) · verifyingContract = address ของ token จึงต้องเป็น address จริง (`0x` + 40 hex — server สร้างให้แบบนี้อยู่แล้ว · programUuid แบบชื่อใน testkit ใช้ permit ไม่ได้)
+- owner เป็นกระเป๋าคน → `ecrecoverDigest(digest, signature) === owner` · owner เป็นโปรแกรม → `isValidSignature({ hash: digest, signature })` แบบ `{ readonly: true }` ผ่าน `isValidSignatureNow(signer, hash, signature)` (`SIGNATURE_CHECKER` — ตอนนี้รับ **digest 32 byte** แบบ OpenZeppelin ไม่ hash ข้อความให้แล้ว)
+  — เจ้าของ `WALLET_PROGRAM` เซ็น typed data ของ permit ที่ `owner` = address ของกระเป๋าด้วย MetaMask ได้เลย (= `signWalletHash(permitDigest(…))` เซ็น digest ตรง ๆ)
+  ⚠️ แบบ ERC-1271 ทั่วไป: เจ้าของคนเดียวกันหลายกระเป๋า ลายเซ็นของ digest เดียวกันใช้กับทุกกระเป๋า — permit ปลอดภัยเพราะ owner อยู่ใน message
 - ตัวช่วยฝั่ง wallet / เทสต์: `src/crypto/program-signature.js` (`programvm/program-signature.js`)
-  `permitTypedData(fields)` `permitDigest(fields)` `signPermit(fields, key)` `signWalletHash(hash, key)` `signProgramMessage(ข้อความ, key)` `recoverProgramMessage(ข้อความ, sig)` `programMessageHash(ข้อความ)`
-- MetaMask `eth_signTypedData_v4` ใช้กับข้อความนี้ไม่ได้ (คนละวิธี hash) · ต้องเซ็น digest ตรง ๆ แบบไม่มี prefix
+  `permitTypedData(fields)` (payload ทั้งก้อนสำหรับ `eth_signTypedData_v4` มี `EIP712Domain` · ตัวเลขเป็น string ทศนิยม) `permitDigest(fields)` `permitDomainSeparator(fields)` `signPermit(fields, key)` (ได้ลายเซ็นเดียวกับ ethers ทุกไบต์)
+  `signWalletHash(hash, key)` / `signTypedDataDigest(digest, key)` (เซ็น digest ตรง ๆ) `recoverTypedDataDigest(digest, sig)` `typedDataDigest(domain, types, primaryType, message)` · ของเดิมแบบข้อความ: `signProgramMessage` `recoverProgramMessage` `programMessageHash`
+- ส่งให้ ethers: ตัด `EIP712Domain` ออกจาก types ก่อน (ethers สร้างเอง และ throw ถ้ามี) · `eip712Digest` ของเรารับได้ทั้งสองแบบ
+- **ไม่ต้องล้างเชน**: API ใหม่เป็นของเพิ่ม · token / กระเป๋าที่ deploy ไปแล้วยังรันโค้ดเดิม (permit แบบ JSON digest + deadline ms · isValidSignature hash ข้อความ) จนกว่าจะ deploy ใหม่ (หรืออัปเกรดถ้ามี upgrader) · explorer แสดงแถบ Permit เฉพาะ token ที่โค้ดมี `eip712Digest(` · ถ้าอยากให้ token ตัวอย่าง (seed) เป็นแบบใหม่ ต้อง deploy ใหม่ / ล้างเชนแล้ว seed ใหม่
 - ดัชนี `holding:` นับ event `Transfer` / `TransferSingle` / `TransferBatch` (`HOLDING_EVENTS` ใน VM) → explorer หา NFT / 1155 ที่ address ถือได้
 
 ### metadata ในหน้า address / โปรแกรม
@@ -897,7 +918,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 76 ไฟล์ · 787 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 78 ไฟล์ · 799 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -916,7 +937,8 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 | `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
-| `62-permit-1271` | permit: ลายเซ็นกู้ได้ทั้ง JS / โปรแกรม · relayer ส่งแทน · replay · หมดเวลา · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |
+| `62-permit-1271` | permit (EIP-712): DOMAIN_SEPARATOR / digest = ethers · relayer ส่งแทน · replay · หมดเวลา (วินาที) · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |
+| `78-eip712` | eip712Digest / DomainSeparator / encodeType / hashStruct = ethers ทุกชุด type (atomic ทุกชนิด, struct ซ้อน, array ซ้อน, salt) ทั้งฝั่ง host และในโปรแกรม · keccak256Bytes / ecrecoverDigest · แก๊ส · permit ที่เซ็นด้วย ethers signTypedData (คน + ERC-1271) · หมดเวลา / replay / chain / verifyingContract อื่น |
 | `63-nft-standard` `64-multitoken-standard` | NFT / multi-token: mint, สิทธิ์ (approve / operator / minter), safe transfer + hook, ย้อนทั้งชุด, uri, burn, ดัชนีของที่ถือ |
 | `65-multicall` | aggregate (ลำดับ + all-or-nothing) · tryAggregate (ย้อนเฉพาะตัวที่ล้ม · requireSuccess) · readonly (staticcall ทุก call) |
 | `66-evm-nft-logs` `67-explorer-nft` | /evm: log ERC-721 / ERC-1155 + eth_call (ถอดด้วย ethers) · explorer: collectionInfo / nftHoldings / ชนิดโปรแกรม |
@@ -930,7 +952,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
-`test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง
+`test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
 `46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorer.html` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
 
@@ -987,9 +1009,9 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
 ```
 
 - หัวข้อ: เตรียมกระเป๋า · deploy → init / reject (คืนเงิน) · namespace · ABI · โอน 0 / legacy / 1559 / burnedFee / producerFee / base fee ขึ้น-ลง
-  · replace-by-fee (+10%) / replaced / ราคาไม่พอ / tx ที่ถูกปฏิเสธลง block · token (transfer / approve / transferFrom / multiTransfer / permit คน + ERC-1271)
+  · replace-by-fee (+10%) / replaced / ราคาไม่พอ / tx ที่ถูกปฏิเสธลง block · token (transfer / approve / transferFrom / multiTransfer / permit EIP-712 คน + ERC-1271 · DOMAIN_SEPARATOR · หมดเวลา)
   · NFT (mint / safeTransferFrom ไปคนและ WALLET_PROGRAM / approve / operator / tokenURI) · ERC-1155 (mint / batch / operator / uri) · กระเป๋า ERC-1271 (execute)
-  · multicall · runProgram ซ้อน / STATICCALL FORBIDDEN / catch · API ทุกตัวเทียบค่าจริง (รวม replay ได้ Math.random เดิม) · upgrade (reject / approve / timelock / migrate / versions / setUpgrader / สละสิทธิ์)
+  · multicall · runProgram ซ้อน / STATICCALL FORBIDDEN / catch · API ทุกตัวเทียบค่าจริง (รวม keccak256Bytes / ecrecoverDigest / eip712Digest · replay ได้ Math.random เดิม) · upgrade (reject / approve / timelock / migrate / versions / setUpgrader / สละสิทธิ์)
   · cloneProgram (address ทำนายด้วย `vm.cloneAddressFor`) · OUT_OF_GAS / OUT_OF_MEMORY ทั้งตอน query, /sendtx และ**ใน block** · event indexed (REST + eth_getLogs)
   · /evm ที่ Blockscout ใช้ (block / tx type 0x0-0x2 / receipt + log ERC-20 · ERC-721 4 topic · ERC-1155 / eth_call / feeHistory / tx ที่ล้ม 0x0 / callTracer) · REST ของ explorer · sync
 - tx ที่ล้ม "ใน block" ทำด้วยกับดักของ `GAS_LAB_PROGRAM`: `arm()` + `loopIfArmed()` + `memoryIfArmed()` ส่งใน block เดียวกัน (simulate ที่ /sendtx รันบน state ก่อน arm จึงผ่าน)
