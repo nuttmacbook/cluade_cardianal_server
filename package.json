@@ -25,7 +25,8 @@
     "demo:chain": "node scripts/demo-chain.js",
     "simulate": "node scripts/simulate-users.js",
     "scenario": "node scripts/scenario.js",
-    "scenario:full": "node scripts/scenario-full.js"
+    "scenario:full": "node scripts/scenario-full.js",
+    "load:test": "node scripts/load-test.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
