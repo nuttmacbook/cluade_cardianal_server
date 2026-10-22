@@ -183,7 +183,7 @@ test("string: ต่อด้วย + / += / template · repeat / padEnd / split
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "text", name, n), expected, name);
 });
 
-test("ArrayBuffer / typed array / RegExp คิดตามขนาดที่จอง · คิดก่อนจองจึงหยุดได้ก่อนสร้างข้อมูล", () => {
+test("ArrayBuffer / typed array คิดตามขนาดที่จอง · คิดก่อนจองจึงหยุดได้ก่อนสร้างข้อมูล · RegExp ปิด (เทสต์ 81)", () => {
   const { activate, call } = setup({ maxTxGas: 3_000_000 });
   activate("bytes", program("", {
     buffer: "new ArrayBuffer(n)",
@@ -199,7 +199,8 @@ test("ArrayBuffer / typed array / RegExp คิดตามขนาดที่
   assert.equal(perGrowth(call, "bytes", "bytes", n), n);                // typed array = 1 หน่วยต่อสมาชิก
   assert.equal(perGrowth(call, "bytes", "words", n), n);
   assert.equal(perGrowth(call, "bytes", "copy", n), 2 * n + n);          // fill (เข้า + ออก) + สมาชิกที่คัดลอก
-  assert.equal(perGrowth(call, "bytes", "regexp", n), units(n) + units(n));   // repeat (ผลลัพธ์คิดก่อนสร้าง) + pattern ที่คอมไพล์
+  // RegExp ถูกปิดทั้งหมด (backtrack คิดแก๊สล่วงหน้าไม่ได้ — ดูเทสต์ 81) เดิม: คิดตามความยาว pattern
+  assert.equal(call("bytes", "regexp", { n: "10n" }).error.message, "โปรแกรมทำงานผิดพลาด (TypeError)");
   const started = Date.now();
   assert.equal(call("bytes", "buffer", { n: "2000000000n" }).error.code, "OUT_OF_GAS");   // ไม่ได้จองจริง
   assert.equal(call("bytes", "bytes", { n: "100000000n" }).error.code, "OUT_OF_GAS");

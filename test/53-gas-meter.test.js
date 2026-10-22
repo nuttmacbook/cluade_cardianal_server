@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
-import { instrument, METER_FNS } from "../src/core/gasmeter.js";
+import { instrument, METER_FNS, PLAIN_HELPERS } from "../src/core/gasmeter.js";
 
 /* แก๊สแบบนับขั้น: ตัวนับที่ฉีดตอนคอมไพล์ (src/core/gasmeter.js) */
 
@@ -10,7 +10,7 @@ const T = 1_700_000_000_000;
 /** รันโค้ดที่ฉีดตัวนับแล้วใน V8 (ตัวช่วยตามขนาดข้อมูลเป็น identity) → { result, gas } */
 function runInstrumented(body) {
   let gas = 0;
-  const helpers = { __gas: (n) => { gas += n; }, __str: (v) => v, __props: (v) => v, __spread: (v) => v };
+  const helpers = { ...PLAIN_HELPERS, __gas: (n) => { gas += n; } };
   const result = new Function(...METER_FNS, instrument(body))(...METER_FNS.map((name) => helpers[name]));
   return { result, gas };
 }

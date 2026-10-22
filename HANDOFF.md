@@ -258,7 +258,7 @@ API ที่เทียบกับ EVM (ทุกตัว deterministic · �
 
 แล้วฉีดตัวนับแก๊ส (`gasmeter.js`) และประกอบเป็น **ซอร์ส** (string) ของ factory
 ```js
-(function (api) { "use strict"; const { readDB, writeDB, …, __gas, __str, __props, __spread } = api; ${body} ;return { … }; })
+(function (api) { "use strict"; const { readDB, writeDB, …, __gas, __str, __props, __spread, __add, …, __opm } = api; ${body} ;return { … }; })
 ```
 → API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) · ซอร์สนี้ถูกรันใน sandbox (QuickJS) ไม่ใช่ใน V8 ของ server
 syntax ถูกตรวจทั้งกับ V8 (ข้อความ error เดิม) และกับ QuickJS (`checkGuestSyntax` — ตัวที่รันจริง) ก่อนรับโค้ด
@@ -424,20 +424,52 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 10
 ```
 `emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
-(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง) · ชื่อ `__gas` `__str` `__props` `__spread` `__call` สงวนไว้
+(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง)
+· ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้
 
 **แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง** (เทสต์ `76-gas-bulk-copy`): `builtin` (1) ต่อ **หน่วย** · 1 หน่วย = 1 สมาชิก / property / argument หรือ 32 ตัวอักษร / byte (ปัดขึ้น) · ค่าเดี่ยว = 1
 - spread / rest: `[...a]` `f(...a)` `new F(...a)` `const [x, ...r] = a` → `__spread` คิด 1 ต่อสมาชิก · `{ ...o }` `const { x, ...r } = o` → `__props` คิด 1 ต่อ property
   (rest ใน pattern ที่ไม่มีนิพจน์ให้ห่อ — พารามิเตอร์ / for-of / catch / ซ้อน → deploy ไม่ผ่าน · `function f(...args)` ใช้ได้)
 - `a + b` / `a += b` → `__str` คิดตามความยาวผลลัพธ์ถ้าเป็น string (QuickJS ต่อแบบ rope แล้วค่อยคัดลอก ก้อนใหญ่จึงต้องคิดตอนต่อ) · template ใช้ `"".concat` ที่ถูกห่อแล้ว
-- เมธอดในตัว (Array / TypedArray / String / Object / JSON / Reflect / RegExp / Set / Map / Promise / URI …) ถูกห่อใน prelude ก่อนโค้ดของผู้ใช้รัน
+- เมธอดในตัว (Array / TypedArray / String / Object / JSON / Reflect / Set / Map / Promise / URI …) ถูกห่อใน prelude ก่อนโค้ดของผู้ใช้รัน (RegExp ปิด — ดู "แก๊สตาม CPU")
   ของจริงอยู่ใน closure เท่านั้น → `a.join()` / `.call` / `Reflect.apply` / เก็บใส่ตัวแปร คิดเท่ากัน · การแปลงเป็น string โดยนัย (`a + ""`, `${a}`) ผ่าน `join` ที่ห่อไว้
   คิด `this` + argument ก่อนทำ และผลลัพธ์หลังทำ · `repeat` `padStart` `padEnd` `Array.from({length})` คิดขนาดผลลัพธ์ก่อนสร้าง
-- `ArrayBuffer` / typed array / `RegExp` / `Set` / `Map` / `WeakSet` / `WeakMap` / `AggregateError` ถูกห่อด้วย Proxy (คิดก่อนจอง) · `Array(n)` ไม่คิด (ยังไม่จองจริง)
+- `ArrayBuffer` / typed array / `Set` / `Map` / `WeakSet` / `WeakMap` / `AggregateError` ถูกห่อด้วย Proxy (คิดก่อนจอง) · `Array(n)` ไม่คิด (ยังไม่จองจริง)
 - iterator ในตัวของ array / string / Set / Map ถูกล็อก (แก้ไม่ได้) → spread ใช้ทางคัดลอกเร็วของ engine และรู้จำนวนสมาชิกแน่นอน · Proxy ที่โปรแกรมสร้างถูกจดไว้ (spread แล้วคัดลอกเองทีละ property)
 - `runProgram` / `cloneProgram`: 1 ต่อ 32 byte ของ input (JSON) และของค่าที่ return
 - ผล: ลูป `a = [...a, ...a]` จาก ~230 gas ต่อ 32 MB → หมดแก๊สที่ 3M ก่อนถึงเพดานหน่วยความจำ · string / ArrayBuffer 32 MB ≈ 1,050,000 gas
-- ยังไม่ได้คิดตามขนาด: CPU ของ regex ที่ backtrack · BigInt ใหญ่ (`**`) · array-like ที่ getter ของ `length` โกหก (จองก่อนคิดหลังทำ — ถูกเพดานหน่วยความจำกันอยู่)
+- ยังไม่ได้คิดตามขนาด: array-like ที่ getter ของ `length` โกหก (จองก่อนคิดหลังทำ — ถูกเพดานหน่วยความจำกันอยู่)
+
+**แก๊สตาม CPU: regex / BigInt** (เทสต์ `81-cpu-gas`) — เดิมสองอย่างนี้เผา CPU เป็นวินาทีด้วยแก๊สหลักร้อย หยุดได้แค่ timeout (ไม่แน่นอนข้ามเครื่อง)
+- **regex ปิดทั้งหมด** (backtrack ทวีคูณ คิดแก๊สแบบแน่นอนไม่ได้ — engine ไม่มีจุดให้นับขั้น): regex literal → deploy ไม่ผ่าน (`regular expression ใช้ในโปรแกรมไม่ได้`)
+  · `RegExp` / `new RegExp` / `Reflect.construct(RegExp)` → TypeError · `RegExp.prototype` เหลือแค่ `toString` (exec / test / `[Symbol.match|matchAll|replace|search|split]` throw)
+  · `String.prototype.match` / `matchAll` / `search` → TypeError (เดิมรับ pattern เป็น string แล้วสร้าง regex เอง **ผ่าน autoreview ได้**)
+  · `split` / `replace` / `replaceAll` ด้วย string ใช้ได้ตามเดิม (ใช้ `indexOf` / `includes` / `split` แทน regex)
+- **BigInt คิดตามขนาด** — ฉีดตอนคอมไพล์: `a op b` (`+ - * / % ** << >> < > <= >= == != in`) → `__op(a, b)` · `x op= y` → `x = __op(x, y)` (member ซับซ้อน → `__opm`)
+  · key ที่คำนวณ `o[k]` → `__key` (เฉพาะเมื่อ k ไม่ใช่ string / number) · ค่าที่ return → `__big` (BigInt ใหญ่ที่ host / engine จะแปลงเป็น string)
+  · ตัวช่วยไม่คิดแก๊สเอง: number / string / BigInt ≤ 512 bit **ราคาเท่าเดิมทุกหน่วย** (token / uint256 ไม่เปลี่ยน) — ทางเร็ว `typeof` ทั้งคู่เป็น number
+  · ราคา (`builtin` ต่อหน่วย, ขั้นต่ำ 16 เมื่อตัวตั้ง / ผลลัพธ์ > 512 bit) · W = จำนวน word 64 bit
+
+  | op | หน่วย | คิดเมื่อ |
+  |---|---|---|
+  | `+` `-` | 16 (≤ 1024 bit) · 64 | หลังทำ (ตัวตั้งไม่เกินเพดาน → งานจำกัด) |
+  | `*` | ⌈Wa·Wb / 4⌉ | หลังทำ |
+  | `/` `%` | ⌈max(1, Wa − Wb + 1) · Wb / 4⌉ | หลังทำ |
+  | `**` | ⌈Wr² / 4⌉ (Wr จาก bit × exponent) | **ก่อนคำนวณ** · ผลเกินเพดานแน่นอน → RangeError ไม่คำนวณ |
+  | `<<` `>>` | max(16, ⌈Wr / 2⌉) | ก่อนคำนวณ |
+  | BigInt → string (`String` / `toString` / template / `+ ""` / key / `join` / `Error(x)` …) | W² | ก่อนแปลง |
+  | string → BigInt (`BigInt(s)` / `s == 1n` / `s < 1n` / input `"123n"`) | W² (W = ⌈ความยาว / 19⌉ · ≤ 171 ตัวไม่คิด) | ก่อนแปลง |
+  | เทียบ `<` `==` … ระหว่าง BigInt | 0 (งานเส้นตรงเร็วมาก) | — |
+
+  · **เพดาน 8192 bit** (= 1024 ไบต์ ขนาดเดียวกับ modexp) — ผลเกินเพดาน → RangeError `BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` (catch ได้) · literal เกิน → deploy ไม่ผ่าน
+    เพดานกันทางที่ engine แปลง BigInt เป็น string เองโดยไม่ผ่านตัวนับ: ครั้งละ ≤ ~0.4 ms (QuickJS เดิมรับได้ถึง ~1M bit = toString 0.7 วิ)
+  · เมธอดที่ engine แปลง BigInt ↔ string ข้างใน ถูกห่อ / เขียนใหม่ใน prelude ให้คิดตามตาราง: `join` `sort` (comparator เริ่มต้น) `toSorted` `Object.fromEntries`
+    `Error.prototype.toString` `String.raw` (เขียนใหม่ตามสเปก) · `Object.hasOwn` / `defineProperty` / `Reflect.*` / `Map.get` / `Array.pop` / `at` / `parseInt` / `Symbol` / `Error(x)` … (คิดค่า argument และผลลัพธ์)
+    · `BigInt64Array` / `BigUint64Array` ถูกลบ · `DataView.setBigInt64` คิดค่า parse · `BigInt.asUintN(n, ลบ)` คิด n ก่อนทำ (และ n > 8192 → RangeError)
+  · ขนาดวัดด้วย `Number(x)` (+ เลื่อนทีละ 1000 bit เมื่อ ≥ 2^1024) — ตรงขอบ 2^k ปัดได้ 1 bit แต่ได้ค่าเดียวกันทุกเครื่อง (wasm + IEEE 754) → แก๊สแน่นอน
+  · ผล: `2n ** 10n ** 9n` หมดแก๊สในครั้งเดียว (~2.4×10¹⁴) ภายใน ~10 ms · ลูป `x.toString()` / `H * H` / `B / H` ของค่า 8192 bit หมดแก๊ส 3M ใน ~0.1 วิ (เดิม timeout)
+  · ค่าใช้จ่าย: การเรียกตัวช่วยทำให้ลูปเลขล้วนช้าลง ~2–3 เท่า (ประมาณ 0.5 µs → 1 µs ต่อรอบ) · token transfer ~3.0 → ~3.5 ms (แก๊สเท่าเดิม)
+  · QuickJS: `BigInt.asUintN(n, -1n)` คืน `-1n` (บั๊กของ engine — ค่าจริงต้องเป็น 2^n − 1) อย่าพึ่งพาผลของ asUintN กับค่าติดลบ
 เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
 ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
@@ -898,7 +930,7 @@ const r = reviewProgram(code);     // { ok, issues: [{ line, column, message }],
 | identifier ที่ไม่รู้จัก (`process`, `require`, `globalThis`, `fetch`, `eval`, `Function`) | ไม่อยู่ในบัญชีขาว |
 | `.constructor` `.prototype` `.__proto__` `.caller` `.arguments` `.stack` | ประตูหนีออกจาก sandbox / ไม่ deterministic |
 | `obj[key]` (computed member) | หลบการตรวจชื่อ property ได้ |
-| `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | ไม่ deterministic หรือหนีขอบเขต |
+| `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | ไม่ deterministic หรือหนีขอบเขต (regex ถูก sandbox ปิดด้วยแม้ปิด autoreview — `.match("…")` ที่ผ่าน autoreview ก็ throw) |
 | `new` ที่ไม่ใช่ `Error` / `Date` | — |
 | getter / setter / method ใน object literal | — |
 | `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | ผลต่างกันตาม locale/engine หรือเปลี่ยน `this` (`.repeat` `.padStart` `.padEnd` ใช้ได้แล้ว: sandbox คิดแก๊สตามขนาดผลลัพธ์ก่อนทำ) |
@@ -950,10 +982,11 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `71-indexed-events` | emit indexed (ตรวจ options · แก๊ส topic) · ดัชนี + cursor + หลาย field · eth_getLogs ตาม topic · token มาตรฐาน |
 | `72-abi` | checkAbi (schema ทุกข้อ) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
 | `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
-| `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
+| `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp ปิดแล้ว / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
 | `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
 | `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
 | `80-load-test` | `scripts/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
+| `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)

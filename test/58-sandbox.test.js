@@ -114,7 +114,7 @@ test("โปรแกรมเข้าถึง host ไม่ได้: ไม
       return {
         process: typeof process, require: typeof require, module: typeof module, Buffer: typeof Buffer,
         setTimeout: typeof setTimeout, fetch: typeof fetch, WebAssembly: typeof WebAssembly, host: typeof host,
-        globalProcess: typeof globalThis.process, names: Object.getOwnPropertyNames(globalThis).filter((n) => /^(process|require|host|Buffer|global|module|exports)$/.test(n)),
+        globalProcess: typeof globalThis.process, names: Object.getOwnPropertyNames(globalThis).filter((n) => ["process", "require", "host", "Buffer", "global", "module", "exports"].includes(n)),
         thisValue: typeof this,
       }
     }

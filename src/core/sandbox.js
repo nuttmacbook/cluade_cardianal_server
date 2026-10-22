@@ -26,11 +26,18 @@
  *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError ถูกห่อด้วย Proxy (global + prototype.constructor)
  *   Proxy ที่โปรแกรมสร้างถูกจดไว้ (ownKeys / length ตอบไม่เหมือนกันได้ทุกครั้ง → คัดลอกเองทีละ property)
  *
+ * แก๊สตามงาน CPU ของ BigInt (prelude "BigInt" · เทสต์ 81): operator ที่ gasmeter.js แปลงเป็น __mul / __lt … คิดตามจำนวน word 64 bit
+ *   ค่า ≤ 512 bit ไม่คิดเพิ่ม · งานที่รู้ขนาดล่วงหน้า (** / << / * / แปลง string) คิดก่อนทำ · ผลเกิน BIGINT_MAX_BITS (8192 bit) = RangeError
+ *   (เพดานกันงานที่ engine ทำเองโดยไม่ผ่านตัวนับ: แปลง BigInt เป็น string ข้างในเมธอดในตัว ≈ W² — 8192 bit ≈ 0.4 ms ต่อครั้ง)
+ *   ทุกทางที่ engine แปลง BigInt ↔ string ถูกคิดก่อน: operator / ชื่อ property / ค่าที่ฟังก์ชันคืน / เมธอดในตัวที่รับหรือคืน BigInt
+ * regular expression ปิดทั้งหมด (RegExp / match / matchAll / search / exec / test …) — backtrack แบบ exponential คิดแก๊สล่วงหน้าไม่ได้
+ *
  * หน่วยความจำ: memory limit ในตัว QuickJS ใช้ไม่ได้บน emscripten (นับแค่ 8 ไบต์ต่อก้อน) จึงคุมที่ heap ของ WebAssembly แทน
  *   ต้น tx (หลังคืน snapshot): จองก้อน "ลูกโป่ง" ให้เหลือที่ว่างพอดี memoryLimitBytes + สำรองของ host แล้วล็อกไม่ให้ memory โต
  *   → malloc ล้มที่จุดเดียวกันทุกเครื่อง (ไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · ล็อกโดนแตะเมื่อไร = OUT_OF_MEMORY (catch ไม่ได้)
  */
 import { getQuickJS, newQuickJSWASMModuleFromVariant, newVariant, RELEASE_SYNC } from "quickjs-emscripten";
+import { BIGINT_MAX_BITS } from "./gasmeter.js";
 
 export const SANDBOX_DEFAULTS = {
   memoryLimitBytes: 32 * 1024 * 1024,   // หน่วยความจำต่อ tx (รวมทุกโปรแกรมในสายการเรียก)
@@ -184,6 +191,8 @@ function prelude(host, opText) {
   const G = globalThis;
   const { keys, getPrototypeOf, freeze, defineProperty, hasOwn, getOwnPropertyDescriptor } = Object;
   const ObjectProto = Object.prototype;
+  const ArrayProto = Array.prototype;
+  const SymbolIterator = Symbol.iterator;
   const isArray = Array.isArray;
   const { apply, construct, get: reflectGet, ownKeys } = Reflect;
   const jsonParse = JSON.parse;
@@ -201,7 +210,6 @@ function prelude(host, opText) {
   const sharedByteLength = SharedArrayBufferFn && getOwnPropertyDescriptor(SharedArrayBufferFn.prototype, "byteLength").get;
   const setSize = getOwnPropertyDescriptor(Set.prototype, "size").get;
   const mapSize = getOwnPropertyDescriptor(Map.prototype, "size").get;
-  const regexpSource = getOwnPropertyDescriptor(RegExp.prototype, "source").get;
   const fnToString = Function.prototype.toString;
   const ProxyFn = Proxy;
   const proxyRevocable = Proxy.revocable;
@@ -220,6 +228,11 @@ function prelude(host, opText) {
   const ErrorFn = Error;
   const EvalErrorFn = EvalError;
   const TypeErrorFn = TypeError;
+  const RangeErrorFn = RangeError;
+  const ObjectFn = Object;
+  const SymbolToPrimitive = Symbol.toPrimitive;
+  const BigIntProto = BigInt.prototype;
+  const bigintValueOf = BigInt.prototype.valueOf;
   const ERROR_TYPES = { __proto__: null, Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError };
 
   const OP = jsonParse(opText);
@@ -257,7 +270,9 @@ function prelude(host, opText) {
       case "string": return jsonStringify(value);
       case "number": return encodeNumber(value);
       case "boolean": return value ? "true" : "false";
-      case "bigint": return '{"\\u0000":"b","v":"' + value + '"}';
+      case "bigint":
+        chargeConv(value);
+        return '{"\\u0000":"b","v":"' + value + '"}';
       case "undefined": return UNDEFINED;
       case "symbol": return opaque("symbol");
       case "function": return opaque("function");
@@ -306,7 +321,7 @@ function prelude(host, opText) {
     }
     if (hasOwn(node, TAG)) {
       const tag = node[TAG];
-      if (tag === "b") return BigIntFn(node.v);
+      if (tag === "b") return reviveBigInt(node.v);
       if (tag === "u") return undefined;
       if (tag === "n") return NumberFn(node.v);
       if (tag === "o") {
@@ -323,6 +338,19 @@ function prelude(host, opText) {
     return node;
   }
   const decode = (text) => (apply(indexOf, text, [TAG_IN_JSON]) === -1 ? jsonParse(text) : revive(jsonParse(text)));
+  /** BigInt จาก host (input ของ tx / ค่าใน DB): ยาวเกินเพดาน = RangeError ก่อนแปลง · ค่าแปลงสะสมไว้คิดหลังรู้ยอดแก๊สล่าสุด */
+  let reviveUnits = 0;
+  function reviveBigInt(text) {
+    if (text.length > MAX_DIGITS) throw new RangeErrorFn(CAP_MESSAGE);
+    reviveUnits += parseUnits(text);
+    return checked(BigIntFn(text));
+  }
+  /** คิดค่าแปลง BigInt ที่ decode สะสมไว้ */
+  function chargeRevive() {
+    const units = reviveUnits;
+    reviveUnits = 0;
+    if (units > 0) chargeBig(units);
+  }
 
   function hostError(desc) {
     const Type = ERROR_TYPES[desc.name] ?? ErrorFn;
@@ -335,8 +363,10 @@ function prelude(host, opText) {
   /** คำตอบจาก host: "f" = tx ล้มทั้งใบ · [ชนิด, แก๊สที่เหลือ, ค่า] */
   function receive(act, reply) {
     if (reply === "f" || typeof reply !== "string") die();
+    reviveUnits = 0;
     const message = decode(reply);
     act.budget = message[1];
+    chargeRevive();
     if (message[0] === "e") throw hostError(message[2]);
     return message[2];
   }
@@ -398,6 +428,7 @@ function prelude(host, opText) {
     switch (typeof value) {
       case "string": return textUnits(value.length);
       case "object": break;
+      case "bigint": return isSmall(value) ? 1 : convUnits(value);   // เมธอดในตัวที่รับ BigInt อาจแปลงเป็น string (W²)
       default: return 1;
     }
     if (value === null) return 1;
@@ -413,6 +444,10 @@ function prelude(host, opText) {
       else if (proto === MapProto) size = brandSize(mapSize, value);
       else if (proto === BufferProto) size = textUnitsOf(bufferByteLength, value);
       else if (proto === SharedProto) size = textUnitsOf(sharedByteLength, value);
+      else if (proto === BigIntProto) {
+        const inner = brandSize(bigintValueOf, value);
+        if (typeof inner === "bigint") size = sizeOf(inner);
+      }
       if (size >= 0) return size;
       proto = getPrototypeOf(proto);
     }
@@ -443,6 +478,336 @@ function prelude(host, opText) {
   function chargeUnits(units) {
     if (dead) throw DEAD;
     if (ACT !== null && units > 0 && BUILTIN_GAS !== 0) chargeGas(ACT, units * BUILTIN_GAS);
+  }
+
+  // ---- BigInt: แก๊สตามงานของ CPU (เทสต์ 81) ----
+  // W = จำนวน word 64 bit ของค่าสัมบูรณ์ (อย่างน้อย 1) · ค่าที่ ≤ 512 bit ไม่คิดเพิ่ม → แก๊สของโปรแกรมทั่วไปเท่าเดิม
+  // ราคา (builtin ต่อหน่วย) เมื่อตัวตั้งหรือผลลัพธ์ > 512 bit (ขั้นต่ำ BIG_BASE = 16: ค่าวัดขนาด + จองหน่วยความจำ):
+  //   + −    16 (≤ 1024 bit) · 64 (ใหญ่กว่า)                        — คิดหลังทำ (ตัวตั้งไม่เกินเพดาน งานต่อครั้งจึงจำกัด)
+  //   ×      ⌈Wa·Wb / 4⌉                                            — คิดหลังทำ (≤ 128 × 128 word ≈ 0.1 ms)
+  //   ÷ %    ⌈max(1, Wa − Wb + 1) · Wb / 4⌉                         — คิดหลังทำ
+  //   **     ⌈Wr² / 4⌉ (Wr = word ของผลลัพธ์จาก bit × exponent)       — คิดก่อนคำนวณ: 2n ** 10n ** 9n หมดแก๊สทันที
+  //   << >>  ⌈Wr / 2⌉                                               — คิดก่อนคำนวณ
+  //   BigInt → string (ทุกฐาน) W² · string → BigInt W² (W = ⌈ความยาว / 19⌉) — คิดก่อนแปลง
+  // ผลเกิน BIG_BITS → RangeError: engine แปลง BigInt เป็น string เองได้หลายที่ที่ไม่ผ่านตัวนับ (เช่น ข้างในเมธอดในตัวที่ไม่ได้ห่อ)
+  //   เพดานทำให้งานที่หลุดตัวนับแบบใดก็ตามใช้เวลาไม่เกิน ~0.4 ms ต่อครั้ง (8192 bit) แทนที่จะเป็นวินาที (QuickJS รับได้ถึง ~1M bit)
+  // ขนาดวัดด้วย Number(x) (เร็วกว่าเทียบ BigInt) — ปัดเศษตรงขอบ 2^k ได้ แต่ได้ค่าเดียวกันทุกเครื่อง (wasm + IEEE 754)
+  const BIG_BITS = OP.bigBits;
+  const SMALL_WORDS = 8;
+  const BIG_BASE = 16;
+  const MAX_DIGITS = ceil(BIG_BITS * 0.30103) + 1;   // ตัวอักษรของเลขฐาน 10 ที่ยาวที่สุดที่ไม่เกินเพดาน (รวมเครื่องหมาย)
+  const MAX_UNITS = 4503599627370496;                // 2^52 — ค่าที่ใหญ่กว่านี้หมดแก๊สแน่นอนอยู่แล้ว
+  const CAP_MESSAGE = "BigInt ใหญ่เกิน " + BIG_BITS + " bit (1024 ไบต์)";
+  const SMALL_FLOAT = 2 ** 512;
+  const TWO_32 = 4294967296;
+  const SAFE = 9007199254740992;   // 2^53
+  const MAX_INDEX = 9007199254740991;
+  const LIMIT = BigIntFn(1) << BigIntFn(BIG_BITS);
+  const NLIMIT = -LIMIT;
+  const SHIFT_STEP = BigIntFn(1000);
+  const clz32 = MathObj.clz32;
+  const log2 = MathObj.log2;
+  const isInfinite = (n) => n === Infinity || n === -Infinity;
+
+  /** |x| < 2^512 (ตามค่า number ที่ปัดแล้ว) */
+  function isSmall(x) {
+    const n = NumberFn(x);
+    return n < SMALL_FLOAT && n > -SMALL_FLOAT;
+  }
+  /** จำนวน bit ของ |x|: ตรงทุกค่าที่ < 2^53 · ใหญ่กว่านั้นอาจเกินจริง 1 bit (number ปัดขึ้นเป็น 2^k) */
+  function bitsOf(x) {
+    let n = NumberFn(x);
+    let base = 0;
+    while (isInfinite(n)) {   // ≥ 2^1024: เลื่อนลงทีละ 1000 bit (ค่าไม่เกินเพดาน → ไม่เกิน 9 รอบ)
+      x = x >> SHIFT_STEP;
+      base += 1000;
+      n = NumberFn(x);
+    }
+    if (n < 0) n = -n;
+    if (n < TWO_32) return base + 32 - clz32(n);
+    if (n < SAFE) return base + 64 - clz32(floor(n / TWO_32));
+    return base + floor(log2(n)) + 1;
+  }
+  function wordsOf(x) {
+    const bits = bitsOf(x);
+    return bits > 64 ? ceil(bits / 64) : 1;
+  }
+  function chargeBig(units) {
+    if (units > 0) chargeUnits(units < MAX_UNITS ? ceil(units) : MAX_UNITS);
+  }
+  /** BigInt → string: W² (ค่า ≤ 512 bit = 0) */
+  function convUnits(x) {
+    if (isSmall(x)) return 0;
+    const words = wordsOf(x);
+    return words * words;
+  }
+  function chargeConv(x) {
+    const units = convUnits(x);
+    if (units > 0) chargeBig(units);
+  }
+  /** string → BigInt: W² จากความยาว (ฐาน 10 ≈ 19 ตัวอักษรต่อ word · ฐานอื่นคิดเท่ากัน)
+   *  ≤ 171 ตัวอักษร (9 word: ค่า 512 bit ยาว 155 หลัก) ไม่คิดเพิ่ม เหมือนค่า ≤ 512 bit ของ BigInt → string */
+  function parseUnits(text) {
+    const words = ceil(text.length / 19);
+    return words > SMALL_WORDS + 1 ? words * words : 0;
+  }
+  function overLimit() {
+    throw new RangeErrorFn(CAP_MESSAGE);
+  }
+  function capped(r) {
+    if (r < LIMIT && r > NLIMIT) return r;
+    return overLimit();
+  }
+  /** ผลที่ไม่รู้ว่าเล็ก: ตรวจเพดานเฉพาะค่าที่ใหญ่ (ทางเร็วของค่าเล็กไม่ต้องเทียบ BigInt) */
+  const checked = (r) => (isSmall(r) ? r : capped(r));
+  /** + − ของค่าใหญ่: 16 (≤ ~1024 bit) / 64 */
+  function linearCost(a, r) {
+    chargeBig(isInfinite(NumberFn(a)) || isInfinite(NumberFn(r)) ? 64 : BIG_BASE);
+    return capped(r);
+  }
+  function productCost(a, b, r) {
+    const units = (wordsOf(a) * wordsOf(b)) / 4;
+    chargeBig(units > BIG_BASE ? units : BIG_BASE);
+    return capped(r);
+  }
+  function quotientCost(a, b) {
+    const wb = wordsOf(b);
+    const quotient = wordsOf(a) - wb + 1;
+    const units = ((quotient > 1 ? quotient : 1) * wb) / 4;
+    chargeBig(units > BIG_BASE ? units : BIG_BASE);
+  }
+
+  // ToPrimitive ตามมาตรฐาน (เรียก valueOf / toString / @@toPrimitive ของโปรแกรมครั้งเดียวเหมือน engine) →
+  // operator ได้ค่าพื้นฐานก่อน engine จะแปลง string ↔ BigInt เอง
+  const isObject = (value) => (typeof value === "object" && value !== null) || typeof value === "function";
+  function toPrimitive(value, hint) {
+    const exotic = value[SymbolToPrimitive];
+    if (exotic !== undefined && exotic !== null) {
+      if (typeof exotic !== "function") throw new TypeErrorFn("Symbol.toPrimitive is not a function");
+      const result = apply(exotic, value, [hint]);
+      if (isObject(result)) throw new TypeErrorFn("cannot convert object to primitive value");
+      return result;
+    }
+    const first = hint === "string" ? "toString" : "valueOf";
+    const second = hint === "string" ? "valueOf" : "toString";
+    let method = value[first];
+    if (typeof method === "function") {
+      const result = apply(method, value, []);
+      if (!isObject(result)) return result;
+    }
+    method = value[second];
+    if (typeof method === "function") {
+      const result = apply(method, value, []);
+      if (!isObject(result)) return result;
+    }
+    throw new TypeErrorFn("cannot convert object to primitive value");
+  }
+  /** BigInt / object → ค่าที่ใช้เป็นชื่อ property (BigInt = แปลงเป็นเลขฐาน 10: W²) */
+  function toKey(key) {
+    if (typeof key === "bigint") {
+      chargeConv(key);
+      return key;
+    }
+    if (isObject(key)) {
+      const primitive = toPrimitive(key, "string");
+      if (typeof primitive === "bigint") chargeConv(primitive);
+      return primitive;
+    }
+    return key;
+  }
+  /** ToString ของ engine (symbol → TypeError) โดยคิดค่าแปลง BigInt ก่อน */
+  function toText(value) {
+    switch (typeof value) {
+      case "string": return value;
+      case "bigint":
+        chargeConv(value);
+        return StringFn(value);
+      case "symbol": throw new TypeErrorFn("cannot convert symbol to string");
+      default: return StringFn(value);
+    }
+  }
+  /** BigInt เทียบกับ string → engine แปลง string เป็น BigInt (W²) */
+  function parseCost(a, b) {
+    if (typeof a === "bigint") {
+      if (typeof b === "string") chargeBig(parseUnits(b));
+    } else if (typeof b === "bigint" && typeof a === "string") chargeBig(parseUnits(a));
+  }
+
+  // operator (gasmeter.js แปลง a OP b → __op(a, b)) · number ล้วนทำทันที · object → ToPrimitive ก่อนแบบ engine
+  function bigAdd(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a + b;
+    if (isObject(a)) a = toPrimitive(a, "default");
+    if (isObject(b)) b = toPrimitive(b, "default");
+    if (typeof a === "bigint") {
+      if (typeof b === "bigint") {
+        // ผลเล็กและ a เล็ก → b เล็กด้วย (|b| ≤ |a| + |a + b|)
+        const r = a + b;
+        return isSmall(r) && isSmall(a) ? r : linearCost(a, r);
+      }
+      if (typeof b === "string") chargeConv(a);
+    } else if (typeof b === "bigint" && typeof a === "string") chargeConv(b);
+    const r = a + b;
+    if (typeof r === "string") chargeUnits(textUnits(r.length));   // แบบ __str เดิม
+    return r;
+  }
+  function bigSub(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    if (isObject(a)) {
+      a = toPrimitive(a, "number");
+      if (typeof a === "symbol") return a - b;   // engine throw ก่อนแปลงตัวขวา
+    }
+    if (isObject(b)) b = toPrimitive(b, "number");
+    const r = a - b;   // BigInt − BigInt เท่านั้นที่ได้ BigInt (ผสมกับ number = TypeError)
+    return typeof r !== "bigint" || (isSmall(r) && isSmall(a)) ? r : linearCost(a, r);
+  }
+  function bigMul(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a * b;
+    if (isObject(a)) {
+      a = toPrimitive(a, "number");
+      if (typeof a === "symbol") return a * b;
+    }
+    if (isObject(b)) b = toPrimitive(b, "number");
+    // ตัวตั้งไม่เกินเพดาน → งานต่อครั้ง ≤ 128 × 128 word (~0.1 ms) จึงคำนวณก่อนแล้วคิดตามขนาดได้
+    const r = a * b;   // ผลเล็ก → ตัวตั้งเล็กทั้งคู่ (หรือมี 0)
+    return typeof r !== "bigint" || isSmall(r) ? r : productCost(a, b, r);
+  }
+  function bigDivide(a, b, modulo) {
+    if (isObject(a)) {
+      a = toPrimitive(a, "number");
+      if (typeof a === "symbol") return modulo ? a % b : a / b;
+    }
+    if (isObject(b)) b = toPrimitive(b, "number");
+    // งาน = ผลหาร × ตัวหาร → ไม่คิดเมื่อตัวตั้งเล็กทั้งคู่ (a / b: ผลหารเล็ก + ตัวหารเล็ก = ตัวตั้งเล็ก)
+    if (modulo) {
+      const r = a % b;
+      if (typeof r === "bigint" && !(isSmall(a) && isSmall(b))) quotientCost(a, b);
+      return r;
+    }
+    const r = a / b;
+    if (typeof r === "bigint" && !(isSmall(r) && isSmall(b))) quotientCost(a, b);
+    return r;
+  }
+  function bigDiv(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a / b;
+    return bigDivide(a, b, false);
+  }
+  function bigMod(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a % b;
+    return bigDivide(a, b, true);
+  }
+  function bigPow(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a ** b;
+    if (isObject(a)) {
+      a = toPrimitive(a, "number");
+      if (typeof a === "symbol") return a ** b;
+    }
+    if (isObject(b)) b = toPrimitive(b, "number");
+    if (typeof a !== "bigint" || typeof b !== "bigint") return a ** b;
+    const base = NumberFn(a);
+    const exponent = NumberFn(b);
+    // exponent < 2 (ติดลบ = RangeError) หรือฐาน 0 / ±1 → ผลไม่โต engine ทำเร็วเอง
+    if (exponent < 2 || (base < 2 && base > -2)) return a ** b;
+    const bits = bitsOf(a);
+    const words = ceil((bits * exponent) / 64);   // ผลลัพธ์ ≤ bits × exponent bit
+    if (words > SMALL_WORDS) {
+      const units = (words * words) / 4;
+      chargeBig(units > BIG_BASE ? units : BIG_BASE);
+    }
+    // ผลลัพธ์ ≥ (bits − 1) × exponent + 1 bit (bits ของค่า ≥ 2^53 อาจเกินจริง 1 → หักเผื่อ) → เกินแน่นอนไม่ต้องคำนวณ
+    if ((bits - (base < SAFE && base > -SAFE ? 1 : 2)) * exponent + 1 > BIG_BITS) return overLimit();
+    return checked(a ** b);   // ถึงตรงนี้ผลลัพธ์ ≤ ~2 เท่าของเพดาน → งานจำกัด
+  }
+  function bigShift(a, b, left) {
+    if (isObject(a)) {
+      a = toPrimitive(a, "number");
+      if (typeof a === "symbol") return left ? a << b : a >> b;
+    }
+    if (isObject(b)) b = toPrimitive(b, "number");
+    if (typeof a === "bigint" && typeof b === "bigint") {
+      const value = NumberFn(a);
+      const amount = left ? NumberFn(b) : -NumberFn(b);   // จำนวน bit ที่เลื่อนไปทางซ้าย (>> ด้วยค่าติดลบ = เลื่อนซ้าย)
+      if (value === 0) return left ? a << b : a >> b;
+      if (amount > 0) {
+        const bits = bitsOf(a);
+        const words = ceil((bits + amount) / 64);
+        if (words > SMALL_WORDS) chargeBig(words / 2 > BIG_BASE ? words / 2 : BIG_BASE);
+        if (bits - (value < SAFE && value > -SAFE ? 0 : 1) + amount > BIG_BITS) return overLimit();
+        return checked(left ? a << b : a >> b);
+      }
+      if (!isSmall(a)) chargeBig(isInfinite(value) ? 64 : BIG_BASE);   // เลื่อนขวา = งานเส้นตรงตามตัวตั้ง
+    }
+    return left ? a << b : a >> b;
+  }
+  function bigShl(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a << b;
+    return bigShift(a, b, true);
+  }
+  function bigShr(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a >> b;
+    return bigShift(a, b, false);
+  }
+  /** a < b ฯลฯ: ToPrimitive (number) ทั้งสองข้างก่อน แล้วคิดค่าแปลง string → BigInt */
+  function relational(a, b) {
+    if (typeof a === "object" || typeof a === "function") a = isObject(a) ? toPrimitive(a, "number") : a;
+    if (typeof b === "object" || typeof b === "function") b = isObject(b) ? toPrimitive(b, "number") : b;
+    parseCost(a, b);
+    RELATION[0] = a;
+    RELATION[1] = b;
+  }
+  const RELATION = [undefined, undefined];
+  function bigLt(a, b) {
+    if (typeof a !== "string" && typeof b !== "string" && typeof a !== "object" && typeof b !== "object"
+      && typeof a !== "function" && typeof b !== "function") return a < b;
+    relational(a, b);
+    return RELATION[0] < RELATION[1];
+  }
+  function bigGt(a, b) {
+    if (typeof a !== "string" && typeof b !== "string" && typeof a !== "object" && typeof b !== "object"
+      && typeof a !== "function" && typeof b !== "function") return a > b;
+    relational(a, b);
+    return RELATION[0] > RELATION[1];
+  }
+  function bigLe(a, b) {
+    if (typeof a !== "string" && typeof b !== "string" && typeof a !== "object" && typeof b !== "object"
+      && typeof a !== "function" && typeof b !== "function") return a <= b;
+    relational(a, b);
+    return RELATION[0] <= RELATION[1];
+  }
+  function bigGe(a, b) {
+    if (typeof a !== "string" && typeof b !== "string" && typeof a !== "object" && typeof b !== "object"
+      && typeof a !== "function" && typeof b !== "function") return a >= b;
+    relational(a, b);
+    return RELATION[0] >= RELATION[1];
+  }
+  /** a == b: ชนิดเดียวกัน = เทียบตรง ๆ · object กับค่าพื้นฐาน → ToPrimitive (default) ตามมาตรฐาน */
+  function bigEq(a, b) {
+    if (typeof a === typeof b) return a == b;
+    if (isObject(a)) {
+      if (b !== null && b !== undefined && !isObject(b)) a = toPrimitive(a, "default");
+    } else if (isObject(b) && a !== null && a !== undefined) b = toPrimitive(b, "default");
+    parseCost(a, b);
+    return a == b;
+  }
+  const bigNe = (a, b) => !bigEq(a, b);
+  /** k in o (o ไม่ใช่ object → TypeError ก่อนแปลง k แบบ engine) */
+  function bigIn(key, object) {
+    if (!isObject(object)) return key in object;
+    return toKey(key) in object;
+  }
+  /** ค่าที่ฟังก์ชันของโปรแกรมคืนเป็น BigInt ใหญ่ → คิดค่าแปลงเป็น string ไว้ก่อน (ผู้เรียกอาจเป็น engine เช่น valueOf / toString / getter) */
+  function bigReturn(value) {
+    chargeConv(value);
+    return value;
+  }
+  const COMPOUND_OPS = { "+": bigAdd, "-": bigSub, "*": bigMul, "/": bigDiv, "%": bigMod, "**": bigPow, "<<": bigShl, ">>": bigShr };
+  /** o[k] op= y เมื่อ o / k เป็นนิพจน์ซับซ้อน: อ่านค่าเดิมก่อนคำนวณ y ตามมาตรฐาน (y ส่งมาเป็นฟังก์ชัน) */
+  function bigCompound(object, key, symbol, rhs) {
+    let name = toKey(key);
+    if (typeof name === "bigint") name = StringFn(name);   // แปลงครั้งเดียว (คิดแล้วใน toKey)
+    const old = object[name];
+    const result = COMPOUND_OPS[symbol](old, rhs());
+    object[name] = result;
+    return result;
   }
 
   // ---- เมธอดในตัว: ห่อของจริงไว้ (ของเดิมอยู่ใน closure นี้เท่านั้น โค้ดของโปรแกรมเอื้อมไม่ถึง) ----
@@ -531,10 +896,106 @@ function prelude(host, opText) {
         return result;
       } }[name];
       defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
-      apply(wmSet, WRAPPED, [wrapper, original]);
+      const native = apply(wmGet, WRAPPED, [original]);   // ตัวที่เขียนใหม่ (join …) → แสดงของจริงของ engine
+      apply(wmSet, WRAPPED, [wrapper, native === undefined ? original : native]);
       apply(wmSet, WRAPPER_OF, [original, wrapper]);
     }
     defineProperty(target, key, { value: wrapper, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
+  }
+
+  // ---- เมธอดในตัวที่ engine แปลงค่าที่อ่านจาก property เป็น string เอง (BigInt ใน array / message ของ error …) ----
+  // เขียนใหม่ตามมาตรฐานทีละขั้น (อ่านแต่ละค่าครั้งเดียว) แล้วคิดค่าแปลง BigInt ก่อน · ตัวห่อ (meterMethod) คิดแก๊สตามขนาดเท่าเดิม
+  const nativeJoin = ArrayProto.join;
+  const toLength = (value) => {
+    const n = +value;   // BigInt → TypeError เหมือน ToLength
+    if (!(n > 0)) return 0;
+    return n < MAX_INDEX ? floor(n) : MAX_INDEX;
+  };
+  const requireObject = (value) => {
+    if (value === null || value === undefined) throw new TypeErrorFn("cannot convert undefined or null to object");
+    return ObjectFn(value);
+  };
+  const IMPLEMENTED = [
+    [ArrayProto, { join(separator) {
+      const object = requireObject(this);
+      const length = toLength(object.length);
+      const sep = separator === undefined ? "," : toText(separator);
+      const parts = [];
+      for (let k = 0; k < length; k++) {
+        const element = object[k];
+        parts[k] = element === undefined || element === null ? "" : toText(element);
+      }
+      return apply(nativeJoin, parts, [sep]);
+    } }.join],
+    [ArrayProto, { sort(comparefn) {
+      return apply(nativeSort, this, [comparefn === undefined ? compareText : comparefn]);
+    } }.sort],
+    [ArrayProto, { toSorted(comparefn) {
+      return apply(nativeToSorted, this, [comparefn === undefined ? compareText : comparefn]);
+    } }.toSorted],
+    [Object, { fromEntries(iterable) {
+      requireObject(iterable);
+      const out = {};
+      const iterator = iterable[SymbolIterator]();
+      const next = iterator.next;
+      for (;;) {
+        const step = apply(next, iterator, []);
+        if (!isObject(step)) throw new TypeErrorFn("iterator result is not an object");
+        if (step.done) return out;
+        const entry = step.value;
+        try {
+          if (!isObject(entry)) throw new TypeErrorFn("iterator value is not an entry object");
+          const key = entry[0];
+          const value = entry[1];
+          defineProperty(out, toKey(key), { value, writable: true, enumerable: true, configurable: true });
+        } catch (error) {
+          try {
+            const close = iterator.return;
+            if (close !== undefined && close !== null) apply(close, iterator, []);
+          } catch {
+            // error เดิมสำคัญกว่า (ตามมาตรฐาน)
+          }
+          throw error;
+        }
+      }
+    } }.fromEntries],
+    [Error.prototype, { toString() {
+      if (!isObject(this)) throw new TypeErrorFn("not an object");
+      let name = this.name;
+      name = name === undefined ? "Error" : toText(name);
+      let message = this.message;
+      message = message === undefined ? "" : toText(message);
+      if (name === "") return message;
+      if (message === "") return name;
+      return name + ": " + message;
+    } }.toString],
+    [String, { raw(template, ...substitutions) {
+      const literals = requireObject(requireObject(template).raw);
+      const length = toLength(literals.length);
+      let out = "";
+      for (let i = 0; i < length; i++) {
+        out += toText(literals[i]);
+        if (i + 1 < length && i < substitutions.length) out += toText(substitutions[i]);
+      }
+      return out;
+    } }.raw],
+  ];
+  const nativeSort = ArrayProto.sort;
+  const nativeToSorted = ArrayProto.toSorted;
+  /** ลำดับปริยายของ sort: เทียบแบบ string (คิดค่าแปลง BigInt ทุกครั้งที่ engine จะแปลง) */
+  function compareText(x, y) {
+    const a = toText(x);
+    const b = toText(y);
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  for (let i = 0; i < IMPLEMENTED.length; i++) {
+    const target = IMPLEMENTED[i][0];
+    const impl = IMPLEMENTED[i][1];
+    const name = impl.name;
+    const original = target[name];
+    defineProperty(impl, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+    apply(wmSet, WRAPPED, [impl, original]);   // Function.prototype.toString แสดงของจริง
+    define(target, name, impl);
   }
 
   const ARRAY_METHODS = ["copyWithin", "every", "fill", "filter", "find", "findIndex", "findLast", "findLastIndex", "forEach", "includes",
@@ -546,8 +1007,8 @@ function prelude(host, opText) {
     [TypedArray, ["from", "of"]],
     [TypedArray.prototype, ARRAY_METHODS.concat(["set"])],
     [String, ["fromCharCode", "fromCodePoint", "raw"]],
-    [String.prototype, ["concat", "endsWith", "includes", "indexOf", "isWellFormed", "lastIndexOf", "localeCompare", "match", "matchAll",
-      "normalize", "padEnd", "padStart", "repeat", "replace", "replaceAll", "search", "slice", "split", "startsWith", "substr", "substring",
+    [String.prototype, ["concat", "endsWith", "includes", "indexOf", "isWellFormed", "lastIndexOf", "localeCompare",
+      "normalize", "padEnd", "padStart", "repeat", "replace", "replaceAll", "slice", "split", "startsWith", "substr", "substring",
       "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toUpperCase", "toWellFormed", "trim", "trimEnd", "trimStart", "trimLeft", "trimRight",
       "anchor", "big", "blink", "bold", "fixed", "fontcolor", "fontsize", "italics", "link", "small", "strike", "sub", "sup"]],
     [Object, ["assign", "create", "defineProperties", "entries", "freeze", "fromEntries", "getOwnPropertyDescriptors", "getOwnPropertyNames",
@@ -560,7 +1021,7 @@ function prelude(host, opText) {
     [typeof Iterator === "function" ? Iterator.prototype : null, ["toArray"]],
     [Function.prototype, ["apply"]],
     [JSON, ["parse", "stringify"]],
-    [RegExp.prototype, [Symbol.match, Symbol.matchAll, Symbol.replace, Symbol.search, Symbol.split, "toString"]],
+    [RegExp.prototype, ["toString"]],
     [Number.prototype, ["toString"]],
     [BigInt.prototype, ["toString"]],
     [Error.prototype, ["toString"]],
@@ -587,8 +1048,6 @@ function prelude(host, opText) {
   // ล็อก iterator ในตัวของ array / string / Set / Map (แก้ไม่ได้) → รู้แน่ว่า engine จะคัดลอกกี่สมาชิก
   // array / string / Set / Map ธรรมดา = คิดตามขนาดแล้วให้ engine คัดลอกแบบเร็วเหมือนเดิม
   // อย่างอื่น (iterator ที่สร้างไว้ก่อน / generator / Proxy / ตัวที่มี [Symbol.iterator] ของตัวเอง) = วนเองทีละสมาชิก คิด 1 หน่วยต่อสมาชิก
-  const SymbolIterator = Symbol.iterator;
-  const ArrayProto = Array.prototype;
   const fixProperty = (target, key) => {
     const desc = getOwnPropertyDescriptor(target, key);
     defineProperty(target, key, { value: desc.value, writable: false, enumerable: desc.enumerable, configurable: false });
@@ -671,6 +1130,9 @@ function prelude(host, opText) {
   };
   meterConstructor("ArrayBuffer", bufferUnits);
   if (SharedArrayBufferFn) meterConstructor("SharedArrayBuffer", bufferUnits);
+  // BigInt64Array / BigUint64Array: ใส่ string ลงช่อง (ta[i] = "999…") = engine แปลง string เป็น BigInt เองโดยไม่ผ่านตัวนับ → ปิด
+  delete G.BigInt64Array;
+  delete G.BigUint64Array;
   const TYPED_NAMES = ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
     "Float16Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"];
   const isBuffer = (value) => textUnitsOf(bufferByteLength, value) >= 0 || (sharedByteLength !== undefined && sharedByteLength !== null && textUnitsOf(sharedByteLength, value) >= 0);
@@ -696,17 +1158,144 @@ function prelude(host, opText) {
   };
   const COLLECTIONS = ["Set", "Map", "WeakSet", "WeakMap"];
   for (let i = 0; i < COLLECTIONS.length; i++) meterConstructor(COLLECTIONS[i], spreadFirst);
-  meterConstructor("AggregateError", spreadFirst, undefined, true);
-  // RegExp: คอมไพล์ pattern ตามความยาว
-  meterConstructor("RegExp", (args) => {
-    const pattern = args[0];
-    if (typeof pattern === "string") return textUnits(pattern.length);
-    if (pattern !== null && typeof pattern === "object") {
-      const source = brandSize(regexpSource, pattern);
-      return typeof source === "string" ? textUnits(source.length) : 0;
+  meterConstructor("AggregateError", (args) => spreadFirst(args) + bigArgUnits(args[1]), undefined, true);   // + message (แปลงเป็น string)
+  // ---- regular expression: ปิดทั้งหมด ----
+  // engine ของ QuickJS backtrack ได้แบบ exponential (/(a+)+$/ กับ "aaa…b") และไม่มีทางรู้งานล่วงหน้า → คิดแก๊สให้ตรงกับ CPU ไม่ได้
+  // ทางที่สร้าง / รัน regex: RegExp(…) · match / matchAll / search (สร้างจาก string) · exec / test / Symbol.* ของ RegExp.prototype
+  //   (Symbol.split / matchAll สร้าง regex ใหม่จาก object ใดก็ได้ผ่าน species) · literal ถูก gasmeter.js ปฏิเสธตอน deploy
+  const noRegExp = () => {
+    throw new TypeErrorFn("regular expression ใช้ในโปรแกรมไม่ได้ (เวลาทำงานไม่แน่นอน — ใช้ indexOf / includes / split แทน)");
+  };
+  const RegExpFn = RegExp;
+  const LockedRegExp = new ProxyFn(RegExpFn, { apply: noRegExp, construct: noRegExp });
+  apply(wmSet, WRAPPED, [LockedRegExp, RegExpFn]);
+  define(G, "RegExp", LockedRegExp);
+  define(RegExpFn.prototype, "constructor", LockedRegExp);
+  const REGEXP_ENTRIES = [
+    [RegExpFn.prototype, ["exec", "test", "compile", Symbol.match, Symbol.matchAll, Symbol.replace, Symbol.search, Symbol.split]],
+    [String.prototype, ["match", "matchAll", "search"]],
+  ];
+  for (let i = 0; i < REGEXP_ENTRIES.length; i++) {
+    const target = REGEXP_ENTRIES[i][0];
+    const names = REGEXP_ENTRIES[i][1];
+    for (let j = 0; j < names.length; j++) {
+      const key = names[j];
+      const original = target[key];
+      const name = typeof key === "symbol" ? "[" + key.description + "]" : key;
+      const blocked = { [name]() { return noRegExp(); } }[name];
+      defineProperty(blocked, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+      apply(wmSet, WRAPPED, [blocked, original]);
+      define(target, key, blocked);
     }
-    return 0;
-  }, undefined, true);
+  }
+
+  // ---- BigInt ที่ engine แปลงเป็น string เองในตัวเมธอด / ค่า BigInt ที่เมธอดในตัวคืนให้ engine ----
+  // argument ที่เป็น BigInt ใหญ่ = W² (แปลงเป็นชื่อ property / string) · ผลที่เป็น BigInt ใหญ่ = W² (เผื่อผู้เรียกเป็น engine
+  //   เช่น { toString: Array.prototype.pop } · Map.prototype.get.bind(…)) · ค่า ≤ 512 bit ไม่คิด → แก๊สเท่าเดิม
+  function bigArgUnits(value) {
+    return typeof value === "bigint" ? convUnits(value) : 0;
+  }
+  function guardBigInt(target, key) {
+    if (target === null || target === undefined) return;
+    const desc = getOwnPropertyDescriptor(target, key);
+    if (desc === undefined || typeof desc.value !== "function") return;
+    const original = desc.value;
+    const name = typeof key === "symbol" ? "[" + key.description + "]" : key;
+    const wrapper = { [name](...args) {
+      if (dead) throw DEAD;
+      for (let i = 0; i < args.length; i++) if (typeof args[i] === "bigint") chargeConv(args[i]);
+      const result = apply(original, this, args);
+      if (typeof result === "bigint") chargeConv(result);
+      return result;
+    } }[name];
+    defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+    apply(wmSet, WRAPPED, [wrapper, original]);
+    defineProperty(target, key, { value: wrapper, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
+    return wrapper;
+  }
+  const WeakMapProto = WeakMapFn.prototype;
+  const GUARDED = [
+    [Object, ["hasOwn", "defineProperty", "getOwnPropertyDescriptor"]],
+    [ObjectProto, ["hasOwnProperty", "propertyIsEnumerable", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__"]],
+    [Reflect, ["get", "set", "has", "defineProperty", "deleteProperty", "getOwnPropertyDescriptor"]],
+    [Symbol, ["for"]],
+    [DateFn, ["parse"]],
+    [ArrayProto, ["pop", "at"]],
+    [MapProto, ["get", "getOrInsert", "getOrInsertComputed"]],
+    [WeakMapProto, ["get", "getOrInsert", "getOrInsertComputed"]],
+    [typeof Iterator === "function" ? Iterator.prototype : null, ["find", "reduce"]],
+    [BigIntProto, ["valueOf"]],
+  ];
+  for (let i = 0; i < GUARDED.length; i++) {
+    const names = GUARDED[i][1];
+    for (let j = 0; j < names.length; j++) guardBigInt(GUARDED[i][0], names[j]);
+  }
+  // parseInt / parseFloat: global กับ Number.* เป็นตัวเดียวกัน (ตามมาตรฐาน)
+  define(NumberFn, "parseInt", guardBigInt(G, "parseInt"));
+  define(NumberFn, "parseFloat", guardBigInt(G, "parseFloat"));
+  // String(x) / new String(x) · Symbol(x) · Error(x) / new Error(x) …: argument แปลงเป็น string
+  meterConstructor("String", (args) => bigArgUnits(args[0]), undefined, true);
+  meterConstructor("Symbol", (args) => bigArgUnits(args[0]), undefined, true);
+  const ERROR_NAMES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "InternalError"];
+  for (let i = 0; i < ERROR_NAMES.length; i++) meterConstructor(ERROR_NAMES[i], (args) => bigArgUnits(args[0]), undefined, true);
+  // BigInt(x): string → W² ก่อนแปลง · ผลเกินเพดาน = RangeError · ผลใหญ่ = W² (เผื่อผู้เรียกเป็น engine)
+  function toBigIntInput(value) {
+    if (isObject(value)) value = toPrimitive(value, "number");
+    if (typeof value === "string") chargeBig(parseUnits(value));
+    return value;
+  }
+  const LockedBigInt = new ProxyFn(BigIntFn, {
+    apply(target, self, args) {
+      if (dead) throw DEAD;
+      const result = BigIntFn(args.length ? toBigIntInput(args[0]) : undefined);
+      if (isSmall(result)) return result;
+      capped(result);
+      chargeConv(result);
+      return result;
+    },
+  });
+  apply(wmSet, WRAPPED, [LockedBigInt, BigIntFn]);
+  define(G, "BigInt", LockedBigInt);
+  define(BigIntProto, "constructor", LockedBigInt);
+  // BigInt.asIntN / asUintN(bits, x): ผลยาวได้ถึง bits → คิดก่อน · asUintN ของค่าติดลบ = bits เต็ม (เกินเพดาน = RangeError)
+  const AS_N = [["asIntN", true], ["asUintN", false]];
+  for (let i = 0; i < AS_N.length; i++) {
+    const name = AS_N[i][0];
+    const signed = AS_N[i][1];
+    const original = BigIntFn[name];
+    const wrapper = { [name](bits, bigint) {
+      if (dead) throw DEAD;
+      const n = +bits;   // ToIndex (BigInt → TypeError) · ค่าที่แปลงแล้วส่งต่อให้ engine ตรวจช่วงเอง
+      const value = toBigIntInput(bigint);
+      if (typeof value === "bigint" && n > 0 && n <= MAX_INDEX) {
+        const words = ceil((n < BIG_BITS + 64 ? n : BIG_BITS + 64) / 64);
+        if (words > SMALL_WORDS) chargeBig(words / 8);
+        if (!signed && NumberFn(value) < 0 && n > BIG_BITS) return overLimit();
+      }
+      const result = apply(original, BigIntFn, [n, value]);
+      if (isSmall(result)) return result;
+      capped(result);
+      chargeConv(result);
+      return result;
+    } }[name];
+    defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+    apply(wmSet, WRAPPED, [wrapper, original]);
+    define(BigIntFn, name, wrapper);
+  }
+  // DataView.setBigInt64 / setBigUint64(i, x): string → BigInt ในตัว engine → แปลงเอง (คิดแก๊ส) ก่อนส่งต่อ
+  const DV_SETTERS = ["setBigInt64", "setBigUint64"];
+  for (let i = 0; i < DV_SETTERS.length; i++) {
+    const name = DV_SETTERS[i];
+    const original = DataView.prototype[name];
+    const wrapper = { [name](byteOffset, value, littleEndian) {
+      if (dead) throw DEAD;
+      const index = +byteOffset;
+      return apply(original, this, [index, toBigIntInput(value), littleEndian]);
+    } }[name];
+    defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
+    apply(wmSet, WRAPPED, [wrapper, original]);
+    define(DataView.prototype, name, wrapper);
+  }
 
   // ---- Proxy ที่โปรแกรมสร้าง: จดไว้ (ownKeys / length ของ Proxy ตอบไม่เหมือนกันได้ทุกครั้งที่ถาม) ----
   const PROXIES = new WeakSetFn();
@@ -778,6 +1367,9 @@ function prelude(host, opText) {
       __str: meterString,
       __props: meterProps,
       __spread: spreadValue,
+      __add: bigAdd, __sub: bigSub, __mul: bigMul, __div: bigDiv, __mod: bigMod, __pow: bigPow, __shl: bigShl, __shr: bigShr,
+      __lt: bigLt, __gt: bigGt, __le: bigLe, __ge: bigGe, __eq: bigEq, __ne: bigNe, __in: bigIn,
+      __key: toKey, __big: bigReturn, __opm: bigCompound,
       map: makeMap,
       Date: BLOCK_DATE,
       Math: SEEDED_MATH,
@@ -808,6 +1400,7 @@ function prelude(host, opText) {
       return '{"t":"e","name":' + encode(error.constructor?.name ?? "Error") + ',"message":' + encode(error.message)
         + ',"stack":' + (typeof stack === "string" ? jsonStringify(stack) : "null") + "}";
     }
+    if (typeof error === "bigint") chargeConv(error);
     return '{"t":"s","text":' + jsonStringify(StringFn(error)) + "}";
   }
 
@@ -822,7 +1415,10 @@ function prelude(host, opText) {
     let outcome;
     try {
       const api = makeApi(act, address, blockNumberText === "" ? null : BigIntFn(blockNumberText));
-      const result = factory(api)[name](decode(paramsText));
+      reviveUnits = 0;
+      const params = decode(paramsText);
+      chargeRevive();
+      const result = factory(api)[name](params);
       outcome = typeof result?.then === "function" ? "a" + act.pending + "|" : "v" + act.pending + "|" + encode(result);
     } catch (error) {
       try {
@@ -857,7 +1453,7 @@ function prelude(host, opText) {
 }
 
 const PRELUDE_SOURCE = `(${prelude.toString()})`;
-const OP_TEXT = JSON.stringify({ ...OP, names: API_OPS.map(([name]) => name), kinds: API_OPS.map(([, kinds]) => kinds) });
+const OP_TEXT = JSON.stringify({ ...OP, names: API_OPS.map(([name]) => name), kinds: API_OPS.map(([, kinds]) => kinds), bigBits: BIGINT_MAX_BITS });
 
 const HOST_CALL = Symbol("host call");
 const INTERRUPT = Symbol("interrupt");
