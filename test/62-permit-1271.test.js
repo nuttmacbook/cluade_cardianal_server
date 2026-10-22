@@ -5,11 +5,12 @@ import { TOKEN_PROGRAM, PERMIT_TYPE, checkTokenStandard } from "../src/standards
 import { WALLET_PROGRAM, SIGNATURE_CHECKER, ERC1271_MAGIC_VALUE, ERC1271_INVALID_VALUE } from "../src/standards/wallet.js";
 import { MULTICALL_PROGRAM } from "../src/standards/multicall.js";
 import { addressOf } from "../src/crypto/signature.js";
-import { permitTypedData, permitDigest, signPermit, signWalletHash, signProgramMessage, recoverProgramMessage,
-  programMessageHash } from "../src/crypto/program-signature.js";
+import { permitTypedData, permitDigest, permitDomainSeparator, signPermit, signWalletHash, signProgramMessage, recoverProgramMessage,
+  recoverTypedDataDigest } from "../src/crypto/program-signature.js";
+import { TypedDataEncoder } from "ethers";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* permit (คล้าย ERC-2612) บน TOKEN_PROGRAM + ตรวจลายเซ็นของกระเป๋าโปรแกรม (คล้าย ERC-1271) */
+/* permit (ERC-2612 + EIP-712 จริง) บน TOKEN_PROGRAM + ตรวจลายเซ็นของกระเป๋าโปรแกรม (ERC-1271) · deadline เป็นวินาที */
 
 const T = "0x00000000000000000000000000000000000000f1";
 const W = "0x00000000000000000000000000000000000000e1";
@@ -45,15 +46,15 @@ function chain({ chainId = 7777 } = {}) {
   ]).forEach((r) => assert.equal(r.status, "success", JSON.stringify(r.error)));
   const call = (who, programUuid, functionName, input) => block((b) => [b.call({ programUuid, functionName, input, context: as(who) })])[0];
   const read = (programUuid, functionName, input = {}) => vm.query({ programUuid, functionName, input }).result;
-  /** เวลาของ block ถัดไป (ที่ tx ถัดไปจะเห็น) */
-  const nextTime = () => START + (number + 1) * 1000;
+  /** เวลาของ block ถัดไป (ที่ tx ถัดไปจะเห็น) เป็นวินาที (permit ใช้ deadline แบบ EIP-2612) */
+  const nextTime = () => (START + (number + 1) * 1000) / 1000;
   return { vm, call, read, nextTime, chainId };
 }
 
 const fields = (c, overrides = {}) => ({
   name: "Thai Baht Coin", chainId: c.chainId, verifyingContract: T, owner: OWNER, spender: SPENDER,
   value: 5_000_000n, nonce: BigInt(String(c.read(T, "nonces", { owner: overrides.owner ?? OWNER })).replace(/n$/, "")),
-  deadline: BigInt(c.nextTime() + 60_000), ...overrides,
+  deadline: BigInt(c.nextTime() + 60), ...overrides,
 });
 const input = (f, signature) => ({ owner: f.owner, spender: f.spender, value: `${f.value}n`, deadline: `${f.deadline}n`, signature });
 
@@ -65,19 +66,22 @@ test("TOKEN_PROGRAM ที่มี permit ยังผ่านมาตรฐ�
   assert.ok(TOKEN_PROGRAM.includes(PERMIT_TYPE));
 });
 
-test("ข้อความ permit: permitDomain() / DOMAIN_SEPARATOR() ในโปรแกรมตรงกับตัวช่วยฝั่ง wallet · digest = keccak256 ของ canonical JSON", () => {
+test("ข้อความ permit: permitDomain() / DOMAIN_SEPARATOR() ในโปรแกรมตรงกับ EIP-712 ของ ethers · digest = TypedDataEncoder.hash", () => {
   const c = chain();
   assert.deepEqual(c.read(T, "permitDomain"), { name: "Thai Baht Coin", version: "1", chainId: "7777n", verifyingContract: T });
   const typed = permitTypedData(fields(c));
-  assert.equal(c.read(T, "DOMAIN_SEPARATOR"), programMessageHash(typed.domain));
+  const domain = { name: "Thai Baht Coin", version: "1", chainId: 7777, verifyingContract: T };
+  assert.equal(c.read(T, "DOMAIN_SEPARATOR"), TypedDataEncoder.hashDomain(domain));
+  assert.equal(c.read(T, "DOMAIN_SEPARATOR"), permitDomainSeparator(fields(c)));
   assert.equal(typed.primaryType, "Permit");
-  assert.equal(typed.types, "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
-  assert.equal(permitDigest(fields(c)), VM.keccak256Hex(VM.canonicalJson(typed)));
-  assert.match(VM.canonicalJson(typed), /"chainId":"7777n"/);   // bigint เป็น "123n" แบบเดียวกับที่โปรแกรมเห็น
-  // ลายเซ็นกู้กลับได้ทั้งฝั่ง JS และฝั่งโปรแกรม (ecrecover)
+  assert.equal(TypedDataEncoder.from({ Permit: typed.types.Permit }).encodeType("Permit"), PERMIT_TYPE);
+  assert.deepEqual(typed.types.EIP712Domain.map((f) => f.name), ["name", "version", "chainId", "verifyingContract"]);
+  assert.equal(permitDigest(fields(c)), TypedDataEncoder.hash(domain, { Permit: typed.types.Permit }, typed.message));
+  assert.doesNotThrow(() => JSON.stringify(typed));   // ส่งให้ eth_signTypedData_v4 ได้ทั้งก้อน
+  // ลายเซ็นกู้กลับได้จาก digest · ตัวช่วยข้อความแบบเดิม (ecrecover ของข้อความ) ยังใช้ได้
   const signature = signPermit(fields(c), OWNER_KEY);
-  assert.equal(recoverProgramMessage(typed, signature), OWNER);
-  assert.equal(recoverProgramMessage(typed, "0x1234"), null);
+  assert.equal(recoverTypedDataDigest(permitDigest(fields(c)), signature), OWNER);
+  assert.equal(recoverTypedDataDigest(permitDigest(fields(c)), "0x1234"), null);
   assert.equal(recoverProgramMessage("hello", signProgramMessage("hello", OTHER_KEY)), addressOf(OTHER_KEY));
 });
 
@@ -156,6 +160,7 @@ test("permit: input ผิดชนิด → error ชัดเจน · ลา
   const signature = signPermit(f, OWNER_KEY);
   const cases = [
     [{ ...input(f, signature), deadline: "tomorrow" }, /deadline must be a bigint/],
+    [{ ...input(f, signature), owner: "0x1234" }, /owner and spender must be addresses/],
     [{ ...input(f, signature), value: "-1n" }, /value must be a non-negative bigint/],
     [{ ...input(f, signature), spender: undefined }, /owner and spender must be addresses/],
     [{ ...input(f, "0xdead") }, /invalid permit signature/],
@@ -185,9 +190,11 @@ test("ERC-1271: permit ของ owner ที่เป็นกระเป๋�
   assert.equal(check.type, "staticcall");
   assert.equal(c.read(T, "allowance", { owner: W, spender: SPENDER }), "5000000n");
   assert.equal(c.read(T, "nonces", { owner: W }), "1n");
-  // คนอื่นเซ็นแทนเจ้าของกระเป๋า / เซ็นข้อความ permit ตรง ๆ แบบ EOA → ใช้ไม่ได้
+  // เจ้าของกระเป๋าเซ็น typed data ของ permit (owner = กระเป๋า) ด้วย eth_signTypedData_v4 ได้ = ลายเซ็นเดียวกับ signWalletHash(digest)
   const g = fields(c, { owner: W });
-  for (const signature of [signWalletHash(permitDigest(g), OTHER_KEY), signPermit(g, WALLET_KEY)]) {
+  assert.equal(signPermit(g, WALLET_KEY), signWalletHash(permitDigest(g), WALLET_KEY));
+  // คนอื่นเซ็นแทนเจ้าของกระเป๋า / เจ้าของเซ็น permit ที่ owner เป็นตัวเอง (digest คนละค่า) → ใช้ไม่ได้
+  for (const signature of [signWalletHash(permitDigest(g), OTHER_KEY), signPermit({ ...g, owner: WALLET_OWNER }, WALLET_KEY)]) {
     assert.match(c.call(RELAYER, T, "permit", input(g, signature)).error.message, /invalid permit signature/);
   }
   // owner เป็นโปรแกรมที่ไม่มี isValidSignature → false (ไม่ใช่ error อื่น)

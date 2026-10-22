@@ -127,6 +127,9 @@ writeDB(map("used", params.input.message.nonce), true);
 
 ไม่มี nonce = ใครก็เอาลายเซ็นเดิมมายิงซ้ำได้ไม่จำกัด
 
+ลายเซ็นที่ผู้ใช้เซ็นด้วย MetaMask ใช้ `eip712Digest` + `ecrecoverDigest` และใส่ `chainId: ChainId()` + `verifyingContract: ThisAddress()` ใน domain เสมอ
+ไม่งั้นลายเซ็นเดียวกันเอาไปใช้กับ chain อื่น / โปรแกรมอื่นที่ใช้ข้อความหน้าตาเดียวกันได้ (ดู permit ใน `TOKEN_PROGRAM`)
+
 ## 8. ขนาดของ key และข้อมูล
 
 - key ของ storage ยาวได้ไม่เกิน **1,000 ไบต์** (ภาษาไทย 1 ตัว = 9 ไบต์หลัง encode)

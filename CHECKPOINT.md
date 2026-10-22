@@ -60,7 +60,7 @@ const mempool = new Mempool(vm, { maxPerSender: 16, maxSize: 5000, ttlMs: 5 * 60
 readDB / writeDB / deleteDB / map
 runProgram(target, method, input, { value })
 transferNative / setMetadata / emit
-keccak256 / ecrecover
+keccak256 / ecrecover · keccak256Bytes / ecrecoverDigest / eip712Digest / eip712DomainSeparator (EIP-712 แบบ MetaMask)
 ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
 Date (เวลาของ block) / Math (random แบบ deterministic)
 ```

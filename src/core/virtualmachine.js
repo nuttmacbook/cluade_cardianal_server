@@ -2,11 +2,11 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { blake2b } from "@noble/hashes/blake2.js";
-import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { review, reviewMessage } from "./autoreview.js";
 import { instrument, METER_FNS } from "./gasmeter.js";
 import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
+import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from "../crypto/eip712.js";
 
 /*
  *  const vm = new VirtualMachine(new DB("./data"), { timeoutMs: 1000, maxCallDepth: 8 })  // ดู db.js
@@ -69,6 +69,7 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
  *  API ในโปรแกรม: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
  *                 keccak256 / ecrecover / ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
  *                 sha256 / ripemd160 / blake2b / modexp / BlockHash / ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
+ *                 keccak256Bytes / ecrecoverDigest / eip712Digest / eip712DomainSeparator (byte ดิบ + EIP-712 แบบ eth_signTypedData_v4)
  *                 CodeHashOf / CodeSizeOf · runProgram(..., { readonly: true }) = เรียกแบบอ่านอย่างเดียว (STATICCALL)
  *  ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น เช่น 10n (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
  *    ยอด native (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() เป็น BigInt
@@ -245,6 +246,9 @@ export const ERRORS = {
   invalidDb: [INTERNAL, "db ต้องมี readKeys(keys) และ writeKeys(writes)"],
   numberNotAllowed: [INVALID_REQUEST, (label) => `${label}: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)`],
   invalidSignature: [INVALID_REQUEST, "signature ต้องเป็น hex 65 byte (r + s + v)"],
+  invalidDigest: [INVALID_REQUEST, "digest ต้องเป็น hex 32 byte (\"0x\" + 64 ตัว)"],
+  invalidBytes: [INVALID_REQUEST, (label) => `${label}: ต้องเป็น hex string "0x…" จำนวนไบต์เต็ม`],
+  invalidTypedData: [INVALID_REQUEST, (detail) => `EIP-712: ${detail}`],
   invalidEventName: [INVALID_REQUEST, "ชื่อ event ต้องเป็นตัวอักษรภาษาอังกฤษขึ้นต้น ยาวไม่เกิน 32"],
   invalidMetadata: [INVALID_REQUEST, "metadata ต้องเป็น object ของ field → ค่า"],
   invalidMetadataField: [INVALID_REQUEST, (field) => `ชื่อ field ไม่ถูกต้อง: '${field}'`],
@@ -300,6 +304,7 @@ const PROGRAM_API_NAMES = [
   "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber", "Date", "Math",
   "sha256", "ripemd160", "blake2b", "modexp",
   "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "BaseFee", "GasLeft", "CodeHashOf", "CodeSizeOf",
+  "keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator",
 ];
 
 /** BlockHash ย้อนได้กี่ block (เหมือน BLOCKHASH ของ EVM) */
@@ -2740,6 +2745,13 @@ export class VirtualMachine {
       }),
       CodeHashOf: guard((address) => this.programCodeOf(tx, address, true)),
       CodeSizeOf: guard((address) => this.programCodeOf(tx, address, false)),
+      // ---- byte ดิบ / EIP-712 (ลายเซ็นแบบ eth_signTypedData_v4 ของ MetaMask) ----
+      keccak256Bytes: guard((hex) => this.programKeccakBytes(tx, hex)),
+      ecrecoverDigest: guard((digest, signature) => this.programEcrecoverDigest(tx, digest, signature)),
+      eip712Digest: guard((domain, types, primaryType, message) => this.programEip712(tx, (meter) => eip712Digest(
+        toProgramValue(domain, "domain"), toProgramValue(types, "types"), primaryType, toProgramValue(message, "message"), meter))),
+      eip712DomainSeparator: guard((domain, types) => this.programEip712(tx, (meter) => eip712DomainSeparator(
+        toProgramValue(domain, "domain"), types === undefined || types === null ? undefined : toProgramValue(types, "types"), meter))),
     };
   }
 
@@ -2899,23 +2911,51 @@ export class VirtualMachine {
     return keccak256Hex(code);
   }
 
-  /** กู้ address ของผู้เซ็นจากข้อความ + ลายเซ็น (r + s + v เหมือน EIP-191/712) */
+  /** กู้ address ของผู้เซ็นจากข้อความ + ลายเซ็น (r + s + v เหมือน EIP-191/712) · digest = keccak256(UTF-8 ของข้อความ / canonical JSON) */
   programEcrecover(tx, value, signature) {
     if (!isNonEmptyString(signature) || !/^0x[0-9a-fA-F]{130}$/.test(signature)) fail(ERRORS.invalidSignature);
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ ecrecover"));
     tx.useGas(tx.gas.recover + tx.gas.byte * Buffer.byteLength(text, "utf8"));
+    return recoverAddress(hexToBytesStrict(keccak256Hex(text)), signature);
+  }
 
+  /**
+   * ecrecover แบบ EVM: กู้ address จาก digest 32 byte ตรง ๆ (ไม่ hash ซ้ำ) — ใช้กับ eip712Digest / keccak256Bytes
+   * ลายเซ็นใช้ไม่ได้ (v ไม่ใช่ 27/28, จุดไม่อยู่บนเส้นโค้ง) → null · รูปแบบผิด → throw (catch ได้) · แก๊ส = recover
+   */
+  programEcrecoverDigest(tx, digest, signature) {
+    if (typeof digest !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(digest)) fail(ERRORS.invalidDigest);
+    if (!isNonEmptyString(signature) || !/^0x[0-9a-fA-F]{130}$/.test(signature)) fail(ERRORS.invalidSignature);
+    tx.useGas(tx.gas.recover);
+    return recoverAddress(hexToBytesStrict(digest), signature);
+  }
+
+  /** keccak256 ของ byte ดิบ ("0x…" hex) → "0x…" 32 byte · แก๊ส = hash + byte × จำนวน byte (เท่า keccak256 ของข้อความยาวเท่ากัน) */
+  programKeccakBytes(tx, hex) {
+    let bytes;
     try {
-      const digest = hexToBytesStrict(keccak256Hex(text));
-      const bytes = hexToBytesStrict(signature);
-      const v = bytes[64];
-      if (v !== 27 && v !== 28) return null;
-      const recovered = new Uint8Array([v - 27, ...bytes.slice(0, 64)]);
-      const publicKey = secp256k1.recoverPublicKey(recovered, digest, { prehash: false });
-      const uncompressed = secp256k1.Point.fromBytes(publicKey).toBytes(false).slice(1);
-      return `0x${bytesToHex(keccak_256(uncompressed)).slice(-40)}`;
+      bytes = hexBytes(hex);
     } catch {
-      return null;   // ลายเซ็นใช้ไม่ได้ → คืน null ให้โปรแกรมตัดสินใจเอง
+      fail(ERRORS.invalidBytes, "keccak256Bytes");
+    }
+    tx.useGas(tx.gas.hash + tx.gas.byte * bytes.length);
+    return `0x${bytesToHex(keccak_256(bytes))}`;
+  }
+
+  /**
+   * eip712Digest / eip712DomainSeparator — คำนวณก่อน (งานเป็นเส้นตรงกับขนาดข้อมูลที่โปรแกรมจ่ายแก๊สสร้างมาแล้ว) แล้วคิดแก๊ส
+   * แก๊ส = hash × จำนวนครั้งที่ keccak + byte × byte ทั้งหมดที่ถูก hash (typeHash / string / bytes / array / struct / digest)
+   * ข้อมูลผิดรูปแบบ → INVALID_REQUEST (catch ได้) คิดแก๊สเท่าที่ทำไปแล้ว
+   */
+  programEip712(tx, compute) {
+    const meter = { hashes: 0, bytes: 0 };
+    try {
+      return compute(meter);
+    } catch (error) {
+      if (error instanceof VMError) throw error;
+      return fail(ERRORS.invalidTypedData, error.message);
+    } finally {
+      tx.useGas(tx.gas.hash * Math.max(meter.hashes, 1) + tx.gas.byte * meter.bytes);
     }
   }
 
