@@ -100,13 +100,20 @@ log `Index already caught up` แปลว่าไม่มี block ค้า�
 | หน้าใน Blockscout | มาจาก |
 |---|---|
 | Blocks / Transactions | `eth_getBlockByNumber`, receipt |
-| Token transfers + หน้า token (ชื่อ, symbol, supply, holders) | log `Transfer` + `eth_call` ของ token มาตรฐาน |
+| Token transfers + หน้า token (ชื่อ, symbol, supply, holders) | log `Transfer` + `eth_call` ของ token มาตรฐาน (ERC-20) |
+| NFT / multi-token (ERC-721 / ERC-1155) | log `Transfer` / `TransferSingle` / `TransferBatch` แบบ indexed + `eth_call` (`ownerOf` `tokenURI` `uri` …) |
+| แท็บ Logs ของ tx / กระเป๋า | **ทุก event** ของทุกโปรแกรม: emit แบบ indexed → topic0 = keccak(`ชื่อ(ชนิด,…)`) + topic ของ field ที่ indexed · ไม่มี indexed → topic0 = keccak(ชื่อ), data = JSON เป็น hex |
 | Coin balance history ของกระเป๋า (กราฟยอด) | `eth_getBalance` ตามเลข block |
 | Internal txns (เรียกซ้อน, transferNative) | `debug_traceBlockByNumber` / `debug_traceTransaction` |
 | Contract code | `eth_getCode` = ซอร์ส JS เป็น hex · กดดูแบบ UTF-8 |
 | Input data ของ tx | JSON `{action, method, input}` · กดดูแบบ UTF-8 |
+| Base fee / gas price ของ block และ tx (EIP-1559) | `baseFeePerGas` ใน block · tx type `0x2` + `effectiveGasPrice` ใน receipt · burnt fees ที่ Blockscout คำนวณ = baseFee × gasUsed (ตรงกับเชนเมื่อ `BURN_PERCENT=100`) |
+| tx ที่ถูกปฏิเสธ | อยู่ใน block ที่บันทึก (ครั้งเดียวต่อ hash) เป็น status `0x0` gasUsed `0` · มีแค่ใบที่ถูกปฏิเสธ เชนจะพักไว้จนมี tx จริงหรือครบ `REJECTED_HOLD_MS` (60 วิ) |
 
-ที่จะไม่เห็น / ใช้ไม่ได้ (ตามที่คาดไว้): ปุ่ม Read/Write contract, verify contract, ชื่อ event ที่ไม่ใช่ `Transfer`, ส่ง tx ผ่าน Blockscout, burnt fees
+ที่จะไม่เห็น / ใช้ไม่ได้ (ตามที่คาดไว้):
+- ปุ่ม Read/Write contract และ verify contract (Blockscout ต้องการ bytecode แบบ EVM + ซอร์ส Solidity) · ABI ของโปรแกรมดูได้ที่ explorer ของเชนเอง หรือ `cardianal_getAbi`
+- ชื่อ event ที่ถอดแล้วในแท็บ Logs สำหรับ event ที่ไม่ใช่มาตรฐาน (เห็นเป็น topic / data ดิบ เพราะ Blockscout ถอดได้เฉพาะ ABI ที่ verify แล้ว)
+- ส่ง tx ผ่าน Blockscout / MetaMask (`eth_sendRawTransaction`) — เชนรับเฉพาะลายเซ็นแบบของตัวเอง
 
 ## ดูว่า Blockscout ถามอะไร /evm ตอบอะไร: `scripts/evm-proxy.mjs`
 ตัวดักที่ log ทุกคำขอ JSON-RPC (แตก gzip ให้) แล้วส่งต่อไปที่ `/evm` — ไม่แตะเชน
