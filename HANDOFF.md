@@ -953,6 +953,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
 | `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
 | `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
+| `80-load-test` | `scripts/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
@@ -1033,6 +1034,70 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
   `memoryIfArmed` จึงเปลี่ยนเป็นสร้าง string 1 MB (`s + s`) แล้ว `keep.push([s].join(""))` วนไป (เขียนไว้ตอน `repeat` ยังถูก autoreview ห้าม · ตอนนี้ใช้ได้แล้ว) + `gasLimit` 1,500,000 → ยัง OUT_OF_MEMORY ใน block (จ่าย ~1.05M gas · สคริปต์ตรวจว่า gasUsed อยู่ระหว่าง 500K–1.5M)
 - ท้ายรายงานพิมพ์ gasUsed ของ tx ที่น่าดูแต่ละตัว + แก๊สรวมทุก block ของรอบนั้น (`gasByTx` / `gasUsed` ในไฟล์รายงาน) · `npm run scenario` ก็พิมพ์ gas/tx ต่อชนิดและแก๊สรวม
 
+### load test — ปิด block ใช้เวลาเท่าไหร่ (`npm run load:test`) — เทสต์ `80-load-test`
+
+`scripts/load-test.js` วัดเวลาปิด block ภายใต้โหลด **ในโปรเซสเดียว ไม่ผ่าน HTTP** ด้วยของจริงทั้งชุด: `VirtualMachine` (option เดียวกับ `server.js`: 500 tx / 16 ต่อ sender / maxBlockGas และ maxTxGas 3M / EIP-1559 / history)
++ `DB` (LMDB ในโฟลเดอร์ชั่วคราวบนดิสก์จริง) เทียบ `MemoryDB` + `Mempool` + `simulate` (+ `reviewProgram` ตอน deploy) = `/sendtx` ลบ HTTP
+ผู้ส่งเป็นกระเป๋าจาก genesis คนละใบ (1 ใบต่อกระเป๋าต่อ block → ไม่ติดเพดาน 16) · เซ็น tx ก่อน block (ฝั่ง client ไม่จับเวลา) แล้วแต่ละ block ทำแบบ miner ของ server: `mempool.add` ทีละใบ → `createBlock` → `mempool.take` → `commit`
+
+```
+npm run load:test                                       # ชุดเต็ม: native / token / mix × 100 / 250 / 500 tx × LMDB + memory (~10 นาที)
+npm run load:test -- --quick                            # ชุดเล็ก ~5 วินาที (ตัวที่เทสต์ 80 ใช้)
+npm run load:test -- --db lmdb --workload token --txs 500 --blocks 30 --out load.json   # เลือกเอง + รายงาน JSON ทุก block
+npm run load:test -- --data-dir /var/data/tmp --keep    # วาง LMDB บนดิสก์ที่จะใช้จริง · เก็บโฟลเดอร์ไว้ดู
+RATE_LIMIT=0 DATA=./data npm start                      # end-to-end: terminal 1
+npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --blocks 4   # terminal 2 · ยิง /sendtx จริง (ตรวจลายเซ็น + simulate + HTTP)
+```
+
+- ตัวเลือก: `--db lmdb|memory|both` · `--workload native,token,mix|all` · `--txs 100,250,500` · `--blocks` (10 · ที่วัด) · `--warmup` (2 · ไม่นับ) · `--rounds` (200 · ลูปของ MIX.work) · `--seed` · `--out`
+  `--url` เติมเงินด้วย tx จริง (funder → กระเป๋ากลาง ≤ 50 ใบต่อกระเป๋ากลาง เพราะ rate limit 60 ใบ/นาที/address) แล้วยิงพร้อมกัน `--concurrency` (16) · ไม่เกิน 800 tx ต่อรอบ · `--funder-key` / `--admin-key` (server ตั้ง `ADMINS`) · ต้อง `RATE_LIMIT=0`
+- workload: **native** โอน native · **token** `TOKEN_PROGRAM.transfer` (ทั้งสองแบบ ครึ่งหนึ่งไป address ใหม่ทุกใบ) · **mix** token 30% / native 20% / `MIX.work` (ลูป 200 รอบ + keccak256 + เขียน 3 key + emit indexed) 35% / `MIX.probe` (runProgram ไป token) 15%
+- คอลัมน์ (ms ต่อ block): **add** = `mempool.add` ทั้ง block (ตรวจลายเซ็น + simulate) · **take** = createBlock + take (รันทุกใบ) · **roots** = `block.hashes()` วัดแยก (ไม่รวมใน close) · **commit** = `block.commit()` ทั้งหมด · **write** = เฉพาะ `db.writeKeys`
+  · **close** = take + commit (สิ่งที่ miner ทำใน `setInterval`) · **slot** = add + close (server เป็น thread เดียว ทั้งสองต้องเสร็จใน `BLOCK_MS`) · **DB +/tx** = หน้า LMDB ที่ใช้เพิ่ม (`lastPageNumber × pageSize`) ต่อ tx
+
+**ผลวัดจริง 22 ต.ค.** (Xeon 2.8 GHz 4 vCPU · Node 22.22 · LMDB 3.5.7 บน `/tmp` = ดิสก์ virtio จริง ไม่ใช่ tmpfs · 10 block + อุ่น 2 · ทุกใบสำเร็จ ไม่มีใบถูกปฏิเสธ)
+
+| workload | tx/block | gas/block | add | take | roots | commit LMDB / mem | write LMDB / mem | **close p50 / p95 LMDB** | close p50 / p95 mem | slot p95 LMDB | LMDB +/tx |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| native | 100 | 130,000 | 377 | 22 | 16 | 45 / 26 | 21 / 4 | **66 / 96** | 47 / 67 | 513 | 9.6 KB |
+| native | 250 | 325,000 | 983 | 49 | 43 | 114 / 71 | 54 / 11 | **167 / 184** | 120 / 148 | 1,245 | 9.6 KB |
+| native | 500 | 650,000 | 2,148 | 103 | 83 | 231 / 146 | 89 / 26 | **329 / 391** | 257 / 315 | 2,855 | 9.6 KB |
+| token | 100 | 261,774 | 698 | 300 | 29 | 70 / 53 | 25 / 8 | **367 / 421** | 303 / 363 | 1,151 | 15 KB |
+| token | 250 | 654,369 | 1,845 | 683 | 74 | 188 / 134 | 72 / 23 | **886 / 1,007** | 780 / 867 | 2,871 | 14.8 KB |
+| token | 500 | 1,308,780 | 3,802 | 1,349 | 148 | 425 / 269 | 197 / 45 | **1,732 / 1,906** | 1,545 / 1,714 | 5,929 | 15 KB |
+| mix | 100 | 350,922 | 580 | 189 | 24 | 59 / 46 | 19 / 7 | **251 / 297** | 234 / 303 | 948 | 12.5 KB |
+| mix | 250 | 923,705 | 1,691 | 554 | 77 | 174 / 123 | 72 / 18 | **721 / 844** | 636 / 786 | 2,689 | 12.5 KB |
+| mix | 500 | 1,815,757 | 3,379 | 955 | 129 | 345 / 252 | 132 / 42 | **1,296 / 1,470** | 1,249 / 1,375 | 4,976 | 12.5 KB |
+
+(add / take / roots เป็นค่า p50 ของ LMDB — memory ใกล้เคียงกัน ±5%)
+- throughput ของการปิด block อย่างเดียว (LMDB): native ~1,450–1,500 tx/s (1.9 Mgas/s) · token ~275–285 tx/s (0.75 Mgas/s) · mix ~335–390 tx/s (1.3 Mgas/s) · memory เร็วกว่า 10–30%
+  รวมการรับ tx (slot): native ~200 tx/s · token ~90 tx/s · mix ~105 tx/s
+- **LMDB ไม่ใช่คอขวด**: `writeKeys` 90–200 ms ต่อ block 500 tx (~12–20 key ต่อ tx) · ต่างจาก memory ~10% ของ close
+  (lmdb-js เปิด `overlappingSync` เป็นค่าเริ่ม → fsync เกิดเบื้องหลัง ไม่อยู่ในเวลา write)
+  commit ส่วนที่เหลือ (~2/3) คือประกอบ header / body / ดัชนี / history + คำนวณ root (`hashes()` ~150 ms ต่อ block 500 token tx และถูกเรียกซ้ำใน `header()`)
+- **ปิด block กินเวลาตามจำนวนครั้งที่เรียก sandbox ไม่ใช่ตามแก๊ส**: token transfer ~2.7 ms/tx ใน block (simulate ~3.3 ms/tx) · native ~0.2 ms/tx
+- end-to-end `--url` (server LMDB `BLOCK_MS=3000` · client อยู่เครื่องเดียวกัน · concurrency 16):
+  token 250 ใบ/รอบ → **62–70 req/s** · `/sendtx` p50 ~160 ms p95 0.8–1.1 วิ · 250 ใบกระจายลง 2 block (~200 + ~50)
+  native 500 ใบ/รอบ → **~113 req/s** · p50 ~118 ms p95 ~260 ms · 500 ใบลง 2 block
+- profile (`node --cpu-prof scripts/load-test.js --db lmdb --workload token --txs 500 …`, CPU 33 วิ):
+  `verifyTransaction` 27% (secp256k1 `recoverPublicKey` ของ noble ~3.5 ms/ใบ) · sandbox 38% (`evalCode` คอมไพล์ factory ทุก call 17% · `restoreSnapshot` 9% ≈ 0.6 ms ต่อการรัน) · keccak 9% · `Mempool.prune` 2%
+
+**สรุป / ข้อแนะนำ**
+1. **`BLOCK_MS=3000` ปลอดภัยสำหรับการปิด block 500 tx** — แย่สุดที่วัดได้ token 500 ใบ p95 1.9 วิ (ทุก tx เรียก sandbox) · ไม่ควรลด `BLOCK_MS` ต่ำกว่า ~2,000 ถ้ายังให้ 500 tx ต่อ block
+   ⚠️ เวลาปิดขึ้นกับจำนวนครั้งที่เรียกโปรแกรม: tx ที่ `runProgram` หลายทอดต่อใบ (multicall / router) ทำให้ 500 ใบเกิน 3 วิได้ → ถ้าจะเพิ่ม `maxTransactions` หรือเปิดให้คนนอกใช้ ควรวัดด้วย workload แบบนั้นก่อน
+2. **ที่เต็มก่อนคือการรับ tx ไม่ใช่การปิด block**: รับ 500 token tx ใช้ ~3.8 วิในโปรเซส (~7.5 วิผ่าน HTTP) > 3 วิ ทั้งหมดอยู่ใน thread เดียวกับ miner
+   → รับได้จริง ~65 token / ~110 native tx/s ต่อ node (~200–330 tx ต่อ block 3 วิ) · ระหว่างปิด block `/sendtx` ค้าง (p95 ~1 วิ) — ไม่พัง แค่ tx ไหลไป block ถัดไป
+3. hotspot ที่คุ้มแก้ (**ยังไม่ได้แก้** — แตะ server / mempool / signature):
+   - `server.js` `handlePost` เรียก `verifyTransaction` เองแล้ว `mempool.add` เรียกซ้ำ → ตรวจลายเซ็น 2 รอบ (~3.5 ms × 2 ต่อใบ) · ส่งผลที่ตรวจแล้วเข้า mempool ได้ทันที (~ลดเวลารับ tx ~40%)
+   - `recoverPublicKey` ของ noble เป็น JS ล้วน (~3.5 ms) → ย้ายไป worker thread (ตรวจลายเซ็นขนานได้ ไม่แตะ state) หรือใช้ตัว native
+   - `Mempool.prune()` ถูกเรียกทุก `add` และวนทั้ง `#seen` (เก็บ ttl × 2 = 10 นาที) + `#recent` → ต้นทุนต่อใบโตตามจำนวน tx ที่เคยเห็น:
+     วัด native 500 × 40 block (memory): ส่วนที่ไม่ใช่ simulate 3.8 → 5.9 ms/ใบ เมื่อ `#seen` ~20,000 · ที่ 500 tx / 3 วิ ต่อเนื่อง 10 นาที `#seen` ~100,000 → คาดว่า +10 ms/ใบ
+     → prune ตามเวลา (ครั้งเดียวต่อ block) หรือเลิกวนเมื่อเจอรายการที่ยังไม่หมดอายุ (Map เรียงตามเวลาที่ใส่อยู่แล้ว)
+   - `Block.commit()` คำนวณ root (`hashes()`) ซ้ำ ~150 ms ต่อ block 500 token tx → cache หลัง tx ชุดสุดท้าย
+   - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
+4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
+   ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
+
 ---
 
 ## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
@@ -1057,7 +1122,9 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
 8. ~~แท็บ interactions / event ยังไม่มี pagination~~ เสร็จแล้ว: แบบ cursor (Newer / Older) ฝั่ง server `/program/:a/interactions` · `/program/:a/events?cursor=`
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
-10. ยังไม่มี load test (ยังไม่รู้ว่าปิด block 500 tx จริงใช้เวลาเท่าไหร่บน LMDB บนดิสก์จริง)
+10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
+    **แต่คอขวดจริงคือการรับ tx** (`/sendtx` ตรวจลายเซ็น ~3.5 ms × 2 รอบ + simulate) ใน thread เดียวกับ miner → รับได้จริง ~65 token tx/s · ~110 native tx/s ต่อ node
+    ที่ควรทำต่อ (ยังไม่ทำ): ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำตอน commit · แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     ยังค้นด้วย VM hash เท่านั้น ไม่รับ digest
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
