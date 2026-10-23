@@ -1144,6 +1144,14 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
 4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
    ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
+   ✅ ตัดข้อมูลซ้ำแล้ว (PR "storage-slim" · เทสต์ `83`): ดัชนีไม่มี history / ไม่อยู่ใน blockundo · txn ไม่เก็บ signature / digest · txto ไม่เก็บ blockNumber / index / timestamp
+   | วัด (500 tx × 10 block + อุ่น 2 · LMDB) | ก่อน | หลัง |
+   |---|---|---|
+   | ข้อมูลจริง (key + JSON ก่อนบีบอัด) token / native | 37.7 / 20.9 MB | 22.6 / 14.3 MB (−40% / −32%) |
+   | ไฟล์ LMDB token / native | 88 / 55 MB | 53 / 37 MB |
+   | LMDB +/tx token / native | 15.0 / 9.6 KB | 8.9 / 6.3 KB |
+   | commit p50 token / native | 142 / 82 ms | 117 / 64 ms |
+   | write p50 token / native | 81 / 55 ms | 65 / 39 ms |
 
 ---
 
