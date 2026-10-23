@@ -3148,6 +3148,7 @@ export class Block {
   #recordBlocks;
   #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
+  #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
   #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
 
   constructor(vm, {
@@ -3221,6 +3222,7 @@ export class Block {
       this.#upgrades.push({ program: programUuid, status: result.status, version: result.result?.version ?? null, error: result.error ?? null });
     }
     this.#state.set(dueKey, { type: WRITE.DEL, dbKey: dueKey });
+    this.#hashesCache = null;
   }
 
   /** โปรแกรมที่ถูกเปิดใช้โค้ดใหม่ตอนเริ่ม block นี้ (timelock ครบ) */
@@ -3377,6 +3379,13 @@ export class Block {
 
   /** hash ของ block: { hash, parentHash, txRoot, stateRoot } */
   hashes() {
+    // ผลเดิมจนกว่า block จะเปลี่ยน (รัน tx / บันทึกใบที่ถูกปฏิเสธ / เปิดใช้อัปเกรด) — header() / receipt() / commit() เรียกหลายรอบ
+    if (this.#hashesCache) return { ...this.#hashesCache };
+    this.#hashesCache = this.#computeHashes();
+    return { ...this.#hashesCache };
+  }
+
+  #computeHashes() {
     const writes = this.stateWrites();
     const txHashes = this.txHashes();
     const { receiptsRoot, logsBloom: bloom } = this.receiptRoots(txHashes);
@@ -3449,6 +3458,7 @@ export class Block {
       stage,
     };
     this.#rejectedTxs.push(entry);
+    this.#hashesCache = null;
     return { ...entry };
   }
 
@@ -3747,6 +3757,7 @@ export class Block {
 
   #execute(method, request, action = method) {
     if (this.#committed) fail(ERRORS.blockCommitted);
+    this.#hashesCache = null;
 
     const quotaError = this.#quotaError(request);
     if (quotaError) {
