@@ -86,7 +86,7 @@ import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from ".
  *    <addr>:txn:<nonce>:<txhash>  รายการ tx ของ address (สำหรับ explorer) — เปิดด้วย recordTransactions
  *    block:<number> | blockbody:<number> | blockhash:<hash> | latestblock | tx:<txhash> | sigtx:<digest>
  *    history:<dbKey>:<number>   ค่าก่อนเปลี่ยน (ย้อนดู state ณ block ใดก็ได้ด้วยการ seek ครั้งเดียว)
- *    blockundo:<number>         รายชื่อ key ที่ block นั้นแตะ
+ *    blockundo:<number>         รายชื่อ key ของ state ที่ block นั้นแตะ (ดัชนีไม่มี history — ดู isIndexKey)
  *       blockbody = tx ดิบของทุกใบใน block (ใช้ replay สร้าง state ใหม่ได้ทั้งหมด)
  *                          ข้อมูล block และดัชนีค้น tx จาก hash — เปิดด้วย recordBlocks + ส่ง number ตอน createBlock
  *
@@ -588,6 +588,16 @@ export const blockUndoKey = (number) => joinKey(KEY.BLOCK_UNDO, String(number).p
  *   rejfrom:<sender>:<block>:<index>  ดัชนีตามผู้ส่ง (explorer แบ่งหน้า)
  */
 export const REJECTED_KEY = { BLOCK: "blockrejected", TX: "rejtx", FROM: "rejfrom" };
+/**
+ * ดัชนี: เขียนตอนปิด block อย่างเดียว ตอนรัน tx ไม่มีใครอ่าน และสร้างใหม่ได้จาก blockbody
+ *   → ไม่เก็บ history / ไม่อยู่ใน blockundo · rebuildFrom ลบทิ้งแล้วให้ replay สร้างใหม่
+ */
+const INDEX_KINDS = new Set([KEY.TX, KEY.TXN, KEY.SIG_TX, KEY.TX_TO, KEY.EVENT, KEY.EVENT_INDEX, KEY.EVENT_SIG, KEY.HOLDING]);
+const REJECTED_HEADS = new Set(Object.values(REJECTED_KEY));
+export const isIndexKey = (dbKey) => INDEX_KINDS.has(decodeDbKey(dbKey).kind) || REJECTED_HEADS.has(dbKey.split(KEY.SEPARATOR, 1)[0]);
+/** prefix ของดัชนีที่ขึ้นต้นด้วยชนิด (txn ขึ้นต้นด้วย address จึงลบผ่านดัชนี tx) · blockrejected ลบทีละ block */
+const INDEX_PREFIXES = [KEY.TX, KEY.SIG_TX, KEY.TX_TO, KEY.EVENT, KEY.EVENT_INDEX, KEY.EVENT_SIG, KEY.HOLDING, REJECTED_KEY.TX, REJECTED_KEY.FROM]
+  .map((head) => `${head}${KEY.SEPARATOR}`);
 export const REJECTED_STAGES = ["sendtx", "block", "expired"];
 export const MAX_REJECTED_REASON = 500;
 export const blockRejectedKey = (number) => joinKey(REJECTED_KEY.BLOCK, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
@@ -2132,7 +2142,20 @@ export class VirtualMachine {
   /** tx ที่ส่งมาหา address นี้ (โปรแกรมถูกเรียก หรือได้รับเงิน) — ใหม่ไปเก่า */
   listTransactionsTo(address, { limit = 20, reverse = true, start } = {}) {
     const prefix = `${joinKey(KEY.TX_TO, normalizeAddress(address))}${KEY.SEPARATOR}`;
-    return this.listEntries(prefix, { limit, reverse, start }).map((entry) => entry.value);
+    const headers = new Map();
+    return this.listKeys(prefix, { limit, reverse, start }).map((dbKey) => this.readTransactionTo(dbKey, headers));
+  }
+
+  /**
+   * รายการ txto เต็ม: blockNumber + index มาจาก key · timestamp มาจาก header (ไม่เก็บซ้ำในค่า)
+   * headers = Map ที่ใช้ซ้ำในหน้าเดียวกัน (หลายแถวมักอยู่ block เดียวกัน)
+   */
+  readTransactionTo(dbKey, headers = new Map()) {
+    const value = this.read(dbKey);
+    if (!value) return value;
+    const { number, index } = decodeDbKey(dbKey);
+    if (!headers.has(number)) headers.set(number, this.getBlock(number)?.timestamp ?? null);
+    return { ...value, blockNumber: number, index, timestamp: value.timestamp ?? headers.get(number) };
   }
 
   /** ค้น event ที่โปรแกรมเคย emit — ใหม่ไปเก่า */
@@ -2195,11 +2218,18 @@ export class VirtualMachine {
   }
 
   /** ค้น tx จาก hash ของระบบ หรือจาก hash ที่ผู้ใช้เซ็น (EIP-712 digest) ก็ได้ */
-  getTransaction(hash) {
+  getTransaction(hash, { signature = false } = {}) {
     const entry = this.read(txIndexKey(hash)) ?? this.read(txIndexKey(this.read(sigTxKey(hash)) ?? ""));
     if (!entry) return null;
     const record = entry.from === null ? null : this.read(txnKey(entry.from, entry.nonce, entry.hash)) ?? null;
+    // ลายเซ็นเก็บใน blockbody ที่เดียว (txn ไม่เก็บซ้ำ) → อ่านเพิ่มเมื่อขอเท่านั้น
+    if (signature && record) return { ...entry, record: { ...record, signature: this.transactionSignature(entry), digest: entry.digest ?? null } };
     return { ...entry, record };
+  }
+
+  /** ลายเซ็นของ tx ใน block (จาก blockbody) · { blockNumber, index } ของดัชนี tx */
+  transactionSignature({ blockNumber, index }) {
+    return this.getBlockBody(blockNumber)?.[index]?.request?.signature ?? null;
   }
 
   /** โปรแกรม token ที่ address นี้เคยได้รับเหรียญ (จาก event Transfer) */
@@ -2210,7 +2240,14 @@ export class VirtualMachine {
   /** รายการ tx ของ address (ใหม่ไปเก่า) */
   listTransactionsOf(address, { limit = 20, reverse = true, start } = {}) {
     const prefix = joinKey(normalizeAddress(address), KEY.TXN, "");
-    return this.listEntries(prefix, { limit, reverse, start }).map((entry) => entry.value);
+    return this.listKeys(prefix, { limit, reverse, start }).map((dbKey) => this.readTransactionRecord(dbKey));
+  }
+
+  /** รายการ txn + digest จากดัชนี tx (txn ไม่เก็บซ้ำ) · ลายเซ็นอ่านทีละใบด้วย getTransaction(hash, { signature: true }) */
+  readTransactionRecord(dbKey) {
+    const record = this.read(dbKey);
+    if (!record || "digest" in record) return record;   // ข้อมูลรุ่นเก่ายังมี digest ในตัว
+    return { ...record, digest: this.read(txIndexKey(record.hash))?.digest ?? null };
   }
 
   /** storage ทั้งหมดของโปรแกรม → { key: [...], value } */
@@ -2268,6 +2305,7 @@ export class VirtualMachine {
 
     const snapshot = {};
     for (const dbKey of [...keys].sort()) {
+      if (isIndexKey(dbKey)) continue;   // ดัชนีไม่มี history → ค่าที่อ่านได้คือปัจจุบัน ไม่ใช่ ณ block นั้น
       const value = this.stateAt(number, dbKey);
       if (value !== undefined) snapshot[dbKey] = value;
     }
@@ -2352,10 +2390,12 @@ export class VirtualMachine {
       writes.push({ type: WRITE.DEL, dbKey: blockKey(number) });
       writes.push({ type: WRITE.DEL, dbKey: blockBodyKey(number) });
       writes.push({ type: WRITE.DEL, dbKey: blockUndoKey(number) });
+      writes.push({ type: WRITE.DEL, dbKey: blockRejectedKey(number) });
       if (header) writes.push({ type: WRITE.DEL, dbKey: blockHashKey(header.hash) });
     }
     writes.push({ type: WRITE.DEL, dbKey: LATEST_BLOCK_KEY });
     this.commit(writes);
+    this.#deleteIndexes();
 
     // 3) รัน block 1..target ใหม่
     for (const { header, body, rejected } of kept) {
@@ -2384,6 +2424,23 @@ export class VirtualMachine {
       keys: touched.size,
       stateRoot: target === 0 ? null : this.getBlock(target)?.stateRoot ?? null,
     };
+  }
+
+  /** ลบดัชนีทั้งหมด (มาจาก block เท่านั้น · genesis ไม่มีดัชนี) ทีละชุด ไม่ต้องถือทั้งหมดไว้ในหน่วยความจำ */
+  #deleteIndexes(batch = 10_000) {
+    for (const prefix of INDEX_PREFIXES) {
+      for (;;) {
+        const entries = prefix === INDEX_PREFIXES[0] ? this.listEntries(prefix, { limit: batch }) : this.listKeys(prefix, { limit: batch }).map((dbKey) => ({ dbKey }));
+        if (!entries.length) break;
+        const writes = [];
+        for (const { dbKey, value } of entries) {
+          writes.push({ type: WRITE.DEL, dbKey });
+          // txn ขึ้นต้นด้วย address → หาจากดัชนี tx (from + nonce + hash ครบ)
+          if (value?.from && value.nonce !== null && value.nonce !== undefined) writes.push({ type: WRITE.DEL, dbKey: txnKey(value.from, value.nonce, value.hash) });
+        }
+        this.commit(writes);
+      }
+    }
   }
 
   /**
@@ -2548,8 +2605,6 @@ export class VirtualMachine {
     tx.transaction = {
       hash: this.hashTransaction(request, { action }),
       action,
-      signature: request?.signature ?? null,
-      digest: request?.digest ?? null, // hash ที่ผู้ใช้เซ็น (EIP-712) — ใช้ค้นย้อนกลับได้
     };
   }
 
@@ -2557,11 +2612,11 @@ export class VirtualMachine {
   transactionRecordWrites(tx, { status, error = null }) {
     if (!tx.transaction) return [];
     const { address, nonce } = tx.payer;
-    const { hash, action, signature, digest } = tx.transaction;
+    const { hash, action } = tx.transaction;
     return [{
       type: WRITE.PUT,
       dbKey: txnKey(address, nonce, hash),
-      value: { hash, action, nonce, status, error, timestamp: tx.timestamp, gasUsed: tx.gasUsed, fee: encodeNative(tx.feeCharged), signature, digest },
+      value: { hash, action, nonce, status, error, timestamp: tx.timestamp, gasUsed: tx.gasUsed, fee: encodeNative(tx.feeCharged) },
     }];
   }
 
@@ -3365,7 +3420,7 @@ export class Block {
     // ข้อมูลของ chain เอง (block / ดัชนี) ไม่ต้องเก็บ history เพราะสร้างใหม่ได้จาก body
     const chainKinds = [KEY.HISTORY, KEY.BLOCK, KEY.BLOCK_BODY, KEY.BLOCK_UNDO, KEY.BLOCK_HASH, KEY.LATEST_BLOCK];
     const keys = [...new Set(writes.map((write) => write.dbKey))]
-      .filter((dbKey) => !chainKinds.includes(decodeDbKey(dbKey).kind));
+      .filter((dbKey) => !chainKinds.includes(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey));
     const history = keys.map((dbKey) => {
       const before = this.#beforeValue(dbKey);
       return {
@@ -3534,7 +3589,7 @@ export class Block {
             from: normalizeAddress(action === "transfer" ? request.from : request.context?.sender) ?? null,
             method: request.functionName ?? null,
             value: request.value ?? request.amount ?? 0,
-            blockNumber: this.#number, index, timestamp: this.#timestamp,
+            // blockNumber / index อยู่ใน key · timestamp อ่านจาก header (readTransactionTo)
           },
         });
       }
@@ -3551,7 +3606,6 @@ export class Block {
             from: normalizeAddress(call.sender ?? call.context?.sender) ?? null,
             method: call.functionName ?? null,
             depth: call.depth, via: normalizeAddress(request.programUuid) ?? null, value: 0,
-            blockNumber: this.#number, index, timestamp: this.#timestamp,
           },
         });
       });

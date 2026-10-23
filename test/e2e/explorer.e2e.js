@@ -94,12 +94,14 @@ test("หน้า block: header + รายการ tx ที่ replay ได
 
 test("หน้า tx: ค้นด้วย hash ของระบบและ hash ที่ผู้ใช้เซ็นได้ทั้งคู่", async () => {
   const [first] = (await get(`/address/${ME}`)).transactions;
-  const { digest } = await get(`/tx/${first.hash}`);
+  const { digest, record } = await get(`/tx/${first.hash}`);
+  assert.match(record.signature, /^0x[0-9a-f]{130}$/);   // ลายเซ็นอ่านจาก blockbody (txn ไม่เก็บซ้ำ)
   for (const hash of [first.hash, digest]) {
     await open(`#tx/${hash}`);
     const text = await view();
     assert.match(text, /Success/);
     assert.match(text, /Signed hash/);
+    assert.ok(text.includes(record.signature), "แสดงลายเซ็น");
   }
   assert.deepEqual(pageErrors, []);
 });

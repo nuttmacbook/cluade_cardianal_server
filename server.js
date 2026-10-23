@@ -142,11 +142,11 @@ const DYNAMIC = [
   [/^\/tx\/([^/]+)\/receipt$/, (m) => {
     const found = vm.getTransaction(m[1]);
     if (!found) return { status: 404, body: { error: "Transaction not found" } };
-    try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber }; }
+    try { return { ...vm.replayBlock(found.blockNumber).transactions[found.index], blockNumber: found.blockNumber, signature: vm.transactionSignature(found) }; }
     catch (error) { return { status: 409, body: { error: error.message, tx: found } }; }
   }],
   [/^\/tx\/([^/]+)$/, (m) => {
-    const found = vm.getTransaction(m[1]);
+    const found = vm.getTransaction(m[1], { signature: true });
     if (found) return found;
     if (mempool.has(m[1])) return { status: "pending", hash: m[1] };
     const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (off-chain · มี DATA = อยู่รอด restart)

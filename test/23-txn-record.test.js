@@ -51,7 +51,7 @@ test("txn: tx ที่สำเร็จเขียน <address>:txn:<nonce>:<
   assert.deepEqual(txnWrites(res), [{
     type: "put",
     dbKey: `alice:txn:0:${hash}`,
-    value: { hash, action: "call", nonce: 0, status: "success", error: null, timestamp: T, gasUsed: res.gasUsed, fee: res.fee, signature: null, digest: null },
+    value: { hash, action: "call", nonce: 0, status: "success", error: null, timestamp: T, gasUsed: res.gasUsed, fee: res.fee },
   }]);
   vm.commit(res.writes);
   assert.equal(vm.db.readKeys([`alice:txn:0:${hash}`])[0].status, "success");

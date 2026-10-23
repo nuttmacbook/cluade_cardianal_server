@@ -160,27 +160,39 @@ test("flow: transfer native ที่เซ็นแล้ว", () => {
   assert.equal(vm.nativeBalanceOf(bob).balance, 250n);   // nativeBalanceOf คืน BigInt
 });
 
-test("flow: ลายเซ็นถูกเก็บไว้ตรวจย้อนหลังใน <addr>:txn:<nonce>:<hash>", () => {
-  const vm = setup();
+/** ส่ง tx ผ่าน block (ลายเซ็นถูกเก็บใน blockbody) → hash ของระบบ */
+function submitInBlock(vm, tx, signature) {
+  const { method, request } = sign.verifyTransaction({ tx, signature });
+  const block = vm.createBlock({ timestamp: 1_700_000_000_000, feeRecipient: "0xminer" });
+  block[method](request);
+  block.commit();
+  return vm.getBlock(vm.latestBlockNumber()).txHashes[0];
+}
+
+test("flow: ลายเซ็นตรวจย้อนหลังได้ (เก็บใน blockbody ที่เดียว · txn ไม่เก็บซ้ำ)", () => {
+  const vm = setup({ recordBlocks: true });
   const tx = transferTx(0);
   const signature = sign.signTransaction(tx, ALICE_KEY);
-  submit(vm, tx, signature);
+  const hash = submitInBlock(vm, tx, signature);
 
   const [record] = vm.listTransactionsOf(alice);
-  assert.equal(record.signature, signature);
-  assert.equal(record.status, "success");
-  assert.equal(sign.recoverSigner(tx, record.signature), alice); // พิสูจน์ย้อนหลังได้ว่า alice เซ็นจริง
+  assert.equal(record.signature, undefined);
+  assert.equal(record.digest, sign.hashTypedData(tx));               // digest เติมจากดัชนี tx
+  const found = vm.getTransaction(hash, { signature: true });
+  assert.equal(found.record.signature, signature);
+  assert.equal(found.record.status, "success");
+  assert.equal(sign.recoverSigner(tx, found.record.signature), alice); // พิสูจน์ย้อนหลังได้ว่า alice เซ็นจริง
 });
 
-test("flow: tx ที่ล้มก็เก็บลายเซ็นไว้", () => {
-  const vm = setup();
+test("flow: tx ที่ล้มก็ตรวจลายเซ็นย้อนหลังได้", () => {
+  const vm = setup({ recordBlocks: true });
   const tx = transferTx(0, { input: { to: bob, amount: 99999 } });
   const signature = sign.signTransaction(tx, ALICE_KEY);
-  const res = submit(vm, tx, signature);
+  const hash = submitInBlock(vm, tx, signature);
 
-  assert.equal(res.error.code, "PROGRAM_ERROR");
-  vm.commit(res.writes); // tx ที่ล้มก็ยังต้องบันทึก nonce / record
-  assert.equal(vm.listTransactionsOf(alice)[0].signature, signature);
+  const found = vm.getTransaction(hash, { signature: true });
+  assert.equal(found.status, "throw");
+  assert.equal(found.record.signature, signature);
 });
 
 test("flow: หลาย tx ใน block เดียว ทุกใบต้องผ่านการตรวจก่อน", () => {
