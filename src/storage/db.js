@@ -15,6 +15,16 @@ import crypto from "node:crypto";
 
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
 const PREFIX_END = "\uffff";
+/** ขนาดจองของ LMDB ค่าเริ่ม 1 TB (บน 64-bit เป็นแค่ address space ไม่กินดิสก์) · เต็มแล้วเขียนไม่ได้ เชนหยุดปิด block */
+export const DEFAULT_MAP_SIZE = 1024 ** 4;
+
+/** "1T" / "500G" / "64M" / จำนวน byte → byte */
+export function parseSize(text) {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([kmgt]?)b?\s*$/i.exec(String(text ?? ""));
+  if (!match) throw new Error(`ขนาดไม่ถูกต้อง: ${text} (เช่น 1T, 500G, 64M)`);
+  const power = { "": 0, k: 1, m: 2, g: 3, t: 4 }[match[2].toLowerCase()];
+  return Math.floor(Number(match[1]) * 1024 ** power);
+}
 
 /** ตัวช่วยที่ทั้ง DB และ MemoryDB ใช้ร่วมกัน */
 class BaseDB {
@@ -81,11 +91,18 @@ class BaseDB {
 // ============================================================================
 
 export class DB extends BaseDB {
-  constructor(dbPath, { compression = true, mapSize = 100 * 1024 ** 3 } = {}) {   // จอง address space 100 GB (ใช้ดิสก์จริงเท่าที่เขียน)
+  constructor(dbPath, { compression = true, mapSize = DEFAULT_MAP_SIZE } = {}) {   // จอง address space (ใช้ดิสก์จริงเท่าที่เขียน) · server ตั้งด้วย LMDB_MAP_SIZE
     super();
     this.basekey = crypto.createHash("sha256").update(`primarydbkey|${dbPath}`).digest("hex");
     this.queue = [];
     this.server = open({ path: path.resolve(dbPath), compression, mapSize });   // path เต็ม (/var/data) ใช้ตามนั้น · path สั้นนับจากโฟลเดอร์ที่รัน
+  }
+
+  /** ขนาดไฟล์ที่ใช้ (หน้าสูงสุดที่เคยเขียน · หน้าว่างข้างในถูกนำกลับมาใช้) เทียบกับ mapSize → เขียนเกิน mapSize ไม่ได้ */
+  stats() {
+    const { pageSize, lastPageNumber, mapSize } = this.server.getStats();
+    const usedBytes = (lastPageNumber + 1) * pageSize;
+    return { usedBytes, mapSize, usedPercent: Math.round((usedBytes / mapSize) * 10_000) / 100 };
   }
 
   // ---------- ที่ VM ใช้ ----------
