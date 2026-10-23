@@ -194,13 +194,13 @@ export function slicePage(list, { page = 1, limit = 20 } = {}, { truncated = fal
 }
 
 /** key ใต้ prefix แบบแบ่งหน้า (ใหม่ไปเก่า) → อ่านค่าเฉพาะ key ของหน้านั้น */
-function pageEntries(vm, prefix, paging, { sort } = {}) {
+function pageEntries(vm, prefix, paging, { sort, read = (dbKey) => vm.read(dbKey) } = {}) {
   const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1, reverse: true });
   const truncated = keys.length > PAGE_SCAN;
   const list = keys.slice(0, PAGE_SCAN);
   if (sort) list.sort(sort);
   const result = slicePage(list, paging, { truncated });
-  return { ...result, items: result.items.map((dbKey) => vm.read(dbKey)) };
+  return { ...result, items: result.items.map(read) };
 }
 
 /** header ของ block ใหม่ไปเก่า · คำนวณจากเลข block จึงไม่ต้องไล่ key */
@@ -219,11 +219,14 @@ export function pageBlocks(vm, { page = 1, limit = 20 } = {}) {
 /** tx ที่ address นี้ส่ง · nonce ใน key ไม่ได้เติม 0 ข้างหน้า จึงเรียงด้วยตัวเลขของ nonce (มากไปน้อย) */
 export function pageTransactionsOf(vm, address, paging) {
   const nonceOf = (dbKey) => Number(dbKey.split(SEP)[2]);
-  return pageEntries(vm, `${lower(address)}${SEP}txn${SEP}`, paging, { sort: (a, b) => nonceOf(b) - nonceOf(a) });
+  return pageEntries(vm, `${lower(address)}${SEP}txn${SEP}`, paging, { sort: (a, b) => nonceOf(b) - nonceOf(a), read: (dbKey) => vm.readTransactionRecord(dbKey) });
 }
 
 /** tx ที่เข้ามาหา address นี้ (ได้รับเงิน / โปรแกรมถูกเรียก) */
-export const pageTransactionsTo = (vm, address, paging) => pageEntries(vm, `txto${SEP}${lower(address)}${SEP}`, paging);
+export function pageTransactionsTo(vm, address, paging) {
+  const headers = new Map();
+  return pageEntries(vm, `txto${SEP}${lower(address)}${SEP}`, paging, { read: (dbKey) => vm.readTransactionTo(dbKey, headers) });
+}
 
 /** event ที่โปรแกรม emit · name = เฉพาะชื่อนั้น */
 export const pageEvents = (vm, program, paging, name = "") =>
@@ -324,7 +327,10 @@ export function cursorEntries(vm, prefix, { limit = 20, cursor } = {}, map = (db
 }
 
 /** tx ที่เข้ามาหา address / โปรแกรม (รวม call ซ้อน) แบบ cursor */
-export const cursorTransactionsTo = (vm, address, options) => cursorEntries(vm, `txto${SEP}${lower(address)}${SEP}`, options);
+export function cursorTransactionsTo(vm, address, options) {
+  const headers = new Map();
+  return cursorEntries(vm, `txto${SEP}${lower(address)}${SEP}`, options, (dbKey) => vm.readTransactionTo(dbKey, headers));
+}
 
 /** query string ที่ไม่ใช่ตัวควบคุมหน้า (name / page / limit / cursor) = กรองด้วย field ที่ indexed → [[field, ค่า], ...] · ไม่มี → null */
 export function indexedFilterOf(query) {

@@ -179,7 +179,8 @@ test("replayBlock: block ที่ไม่มี → NOT_FOUND", () => {
 
 test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้ว state ตรงกับตอนนั้นเป๊ะ", () => {
   const vm = buildChain();
-  const stateKeys = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => !/^(block|blockbody|blockundo|blockhash|latestblock|history)[:$]/.test(key) && key !== "latestblock"));
+  // ดัชนีไม่มี history (สร้างใหม่จาก block) → เทียบเฉพาะ state · ดัชนีตรวจในเทสถัดไป
+  const stateKeys = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => !/^(block|blockbody|blockundo|blockhash|latestblock|history)[:$]/.test(key) && key !== "latestblock" && !VM.isIndexKey(key)));
   const expected = stateKeys(vm.snapshotAt(2));
   const stateRoot = vm.getBlock(2).stateRoot;
 

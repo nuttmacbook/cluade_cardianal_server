@@ -850,6 +850,7 @@ async function tx(hash, draw = el) {
       ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
       ["Tx hash", full(r.hash)],
       r.digest && ["Signed hash", full(r.digest)],
+      r.signature && ["Signature", full(r.signature)],
       ["Type", actionTag(r.action)],
       ["From", addr(r.from, r.from)],
       ["To", r.to ? addr(r.to, r.to) : '<span class="dim">—</span>'],

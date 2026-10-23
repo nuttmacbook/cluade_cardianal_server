@@ -508,7 +508,7 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 10
 - log แบบ EVM: มี indexed → topic0 = `keccak("Name(type,…)")` ของทุก field ตามลำดับใน data · topics ถัดไป = field ที่ indexed · data = ABI ของ field ที่เหลือ
   · ไม่มี indexed → topic0 = keccak(ชื่อ) + data เป็น JSON (เหมือนเดิม) · token / NFT / multi-token มาตรฐาน index ตาม ERC (Transfer from / to (+ tokenId) · Approval · ApprovalForAll · TransferSingle/Batch · URI · OwnershipTransferred)
 - `vm.listIndexedEvents({ program, name, field, value, limit, cursor, fromBlock, toBlock })` · `GET /program/:a/events?name=Transfer&to=0x…` (หลาย field = AND) · `eth_getLogs` ใช้ดัชนีเมื่อมี topic0 + topic อื่น
-- ดัชนีอยู่ใน `blockundo` → rebuild ลบ / สร้างใหม่ตาม block
+- ดัชนีไม่มี history และไม่อยู่ใน `blockundo` → `rebuildFrom` ลบดัชนีทั้งหมดแล้ว replay สร้างใหม่ (เทสต์ `83`)
 
 ### metadata.abi (เทสต์ `72-abi`)
 ```js
@@ -566,12 +566,12 @@ upgradeat:<n>                       ดัชนี: โปรแกรมที
 ```
 block:<n>              header (เลข n เติมศูนย์ 12 หลัก ทุก key ที่มีเลข block)
 blockbody:<n>          tx ดิบทุกใบ [{ action, method, request }] → replay สร้าง state ใหม่ได้ทั้งหมด
-blockundo:<n>          รายชื่อ key ที่ block นั้นแตะ
+blockundo:<n>          รายชื่อ key ของ state ที่ block นั้นแตะ (ไม่รวมดัชนี)
 blockhash:<hash>       hash → เลข block
 latestblock            เลข block ล่าสุด
 tx:<vmhash>            { hash, digest, blockNumber, index, action, status, from, nonce }
 sigtx:<digest>         EIP-712 digest → vm hash (ทำให้ค้นด้วย hash ที่ user เซ็นได้)
-txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้"
+txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้" (ค่าไม่เก็บ blockNumber / index / timestamp · `readTransactionTo` เติมจาก key + header)
 event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
 eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   ดัชนีของ field ที่ emit แบบ indexed → dbKey ของ event
 eventsig:<topic0>:<program>:<name>     topic0 แบบ EVM → { program, name, indexed } (eth_getLogs)
@@ -586,6 +586,9 @@ history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed:
 `history:` ออกแบบให้ `stateAt(block, key)` ทำงานด้วยการ seek ครั้งเดียว:
 หา `history:<key>:<n'>` ตัวแรกที่ `n' > block` ถ้าไม่มี = ค่าปัจจุบัน ถ้ามี = ค่า `before` ของตัวนั้น
 → ไม่ต้องไล่ย้อนทีละ block **ข้อมูลของ chain เอง (block/ดัชนี) ไม่เก็บ history** เพราะสร้างใหม่จาก body ได้
+(ดัชนี = `isIndexKey`: tx / txn / txto / sigtx / event / eventidx / eventsig / holding / rejtx / rejfrom / blockrejected · ตอนรัน tx ไม่มีใครอ่าน · `snapshotAt` ไม่คืนดัชนี)
+
+`<addr>:txn:<nonce>:<hash>` ไม่เก็บ signature / digest: ลายเซ็นอยู่ใน `blockbody` (`vm.transactionSignature` · `getTransaction(hash, { signature: true })` · `/tx/:hash` · `/tx/:hash/receipt` · eth_getTransactionByHash v r s) · digest อยู่ใน `tx:` (`readTransactionRecord` เติมให้รายการ tx ของกระเป๋า)
 
 `maxKeySize: 1000` ตั้งไว้เพราะ `history:` ต้องเอา key ไปซ้อนเป็น prefix
 
@@ -988,6 +991,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `80-load-test` | `scripts/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
+| `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
@@ -1140,6 +1144,14 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
 4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
    ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
+   ✅ ตัดข้อมูลซ้ำแล้ว (PR "storage-slim" · เทสต์ `83`): ดัชนีไม่มี history / ไม่อยู่ใน blockundo · txn ไม่เก็บ signature / digest · txto ไม่เก็บ blockNumber / index / timestamp
+   | วัด (500 tx × 10 block + อุ่น 2 · LMDB) | ก่อน | หลัง |
+   |---|---|---|
+   | ข้อมูลจริง (key + JSON ก่อนบีบอัด) token / native | 37.7 / 20.9 MB | 22.6 / 14.3 MB (−40% / −32%) |
+   | ไฟล์ LMDB token / native | 88 / 55 MB | 53 / 37 MB |
+   | LMDB +/tx token / native | 15.0 / 9.6 KB | 8.9 / 6.3 KB |
+   | commit p50 token / native | 142 / 82 ms | 117 / 64 ms |
+   | write p50 token / native | 81 / 55 ms | 65 / 39 ms |
 
 ---
 

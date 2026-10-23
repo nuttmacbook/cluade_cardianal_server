@@ -272,7 +272,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.effectiveGasPrice ?? receipt.gasPrice ?? vm.gas.price)),
       input: inputOf({ ...receipt, action: found.action }),
       ...feeFieldsOf(receipt), chainId: quantity(vm.chainId),
-      ...signatureParts(found.record?.signature),
+      ...signatureParts(vm.transactionSignature(found)),   // ลายเซ็นอยู่ใน blockbody
     };
   }
   /** type ของ tx แบบ EVM: 0x2 (EIP-1559) มี maxFeePerGas / maxPriorityFeePerGas · แบบเดิม 0x0 */
