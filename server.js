@@ -106,6 +106,9 @@ export function shouldMine(now = Date.now()) {
 }
 
 let mining = false;
+// ผลการปิด block ล่าสุด (ให้ /health บอกได้ว่าเชนหยุดเพราะปิด block ล้มเหลวติดกัน)
+export const minerState = { failures: 0, lastError: null, lastErrorAt: null };
+const STARTED_AT = Date.now();
 export const miner = setInterval(() => {
   if (mining || !shouldMine()) return;
   mining = true;
@@ -115,13 +118,38 @@ export const miner = setInterval(() => {
     block.commit();
     const rejected = block.rejectedTransactions().length;
     console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
+    minerState.failures = 0;
   } catch (error) {
     console.error("ปิด block ล้มเหลว:", error.message);
+    Object.assign(minerState, { failures: minerState.failures + 1, lastError: error.message, lastErrorAt: Date.now() });
   } finally { mining = false; }
 }, BLOCK_MS);
 miner.unref?.();
 
 const lower = (value) => String(value ?? "").toLowerCase();
+
+// /health: เชนหยุด = มี tx รอแต่ไม่มี block ใหม่นานกว่านี้ · พื้นที่ LMDB เกินนี้ = เตือน
+export const STALL_MS = Number(process.env.HEALTH_STALL_MS ?? Math.max(BLOCK_MS * 10, 30_000));
+export const DISK_WARN_PERCENT = Number(process.env.HEALTH_DISK_PERCENT ?? 90);
+
+/** สถานะของ node → { ok, problems, ... } · มีปัญหา = HTTP 503 (load balancer / ตัวเฝ้าระบบดูได้ทันที) */
+export function health(now = Date.now()) {
+  const latest = vm.latestBlockNumber();
+  const latestAt = latest === null ? null : vm.getBlock(latest)?.timestamp ?? null;
+  const since = latestAt ?? STARTED_AT;
+  const db = typeof vm.db.stats === "function" ? vm.db.stats() : null;
+  const waiting = mempool.size + (shouldMine(now) ? mempool.rejectedPending : 0);
+  const problems = [];
+  if (waiting > 0 && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
+  if (minerState.failures > 0) problems.push(`miner: ปิด block ล้มเหลว ${minerState.failures} ครั้งติดกัน (${minerState.lastError})`);
+  if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB ใช้ไป ${db.usedPercent}% ของ mapSize`);
+  return {
+    ok: problems.length === 0, problems,
+    latest, latestAt, blockAgeMs: latestAt === null ? null : now - latestAt, blockMs: BLOCK_MS,
+    historyFrom: vm.historyFrom(), pending: mempool.size, rejectedPending: mempool.rejectedPending,
+    producer: producer?.address ?? null, miner: { ...minerState }, db,
+  };
+}
 const limitOf = (query) => Math.min(Number(query.get("limit")) || 20, 200);
 
 const ROUTES = {
@@ -146,8 +174,10 @@ const ROUTES = {
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   // สถานะของ node: block ล่าสุด · ย้อนดูได้ตั้งแต่ block ไหน · พื้นที่ LMDB ที่ใช้ไป (เกิน mapSize = เขียนไม่ได้)
-  "/health": () => ({ ok: true, latest: vm.latestBlockNumber(), historyFrom: vm.historyFrom(), pending: mempool.size,
-    db: typeof vm.db.stats === "function" ? vm.db.stats() : null }),
+  "/health": () => {
+    const body = health();
+    return body.ok ? body : { status: 503, body };
+  },
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
     gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
     baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป

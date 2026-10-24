@@ -11,6 +11,7 @@
  */
 import { open } from "lmdb";
 import path from "node:path";
+import fs from "node:fs";
 import crypto from "node:crypto";
 
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
@@ -103,6 +104,18 @@ export class DB extends BaseDB {
     const { pageSize, lastPageNumber, mapSize } = this.server.getStats();
     const usedBytes = (lastPageNumber + 1) * pageSize;
     return { usedBytes, mapSize, usedPercent: Math.round((usedBytes / mapSize) * 10_000) / 100 };
+  }
+
+  /**
+   * สำรอง LMDB ทั้งก้อนลงโฟลเดอร์ใหม่ขณะ server ยังทำงาน (mdb_env_copy: อ่านจาก snapshot เดียว ได้ข้อมูล ณ commit ล่าสุดครบทุก key)
+   *   compact = true → ข้ามหน้าว่าง ไฟล์เล็กลง แต่ช้ากว่า · โฟลเดอร์ปลายทางต้องว่าง (กันทับของเดิม)
+   */
+  async backup(dir, { compact = false } = {}) {
+    const target = path.resolve(dir);
+    if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`โฟลเดอร์ ${target} ไม่ว่าง`);
+    fs.mkdirSync(target, { recursive: true });
+    await this.server.backup(target, compact);
+    return target;
   }
 
   // ---------- ที่ VM ใช้ ----------

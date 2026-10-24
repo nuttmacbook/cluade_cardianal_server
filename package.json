@@ -27,7 +27,9 @@
     "simulate": "node scripts/simulate-users.js",
     "scenario": "node scripts/scenario.js",
     "scenario:full": "node scripts/scenario-full.js",
-    "load:test": "node scripts/load-test.js"
+    "load:test": "node scripts/load-test.js",
+    "monitor": "node scripts/monitor.js",
+    "backup": "node scripts/backup.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
