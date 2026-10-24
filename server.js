@@ -20,6 +20,7 @@
  *   REJECTED_PER_BLOCK=1000  tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแต่ไม่ได้รัน) ที่บันทึกลง block ได้ต่อ block (ที่เกินยกไป block ถัดไป)
  *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
  *   REPLACED_LOG_DAYS=30     อายุสูงสุดของบันทึกใบที่ถูกแทนที่
+ *   VERIFY_WORKERS=N         worker thread ที่ตรวจลายเซ็นของ /sendtx (ค่าเริ่มต้น = จำนวน CPU − 1 ไม่เกิน 4) · 0 = ตรวจบน thread หลัก
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -27,7 +28,7 @@ import path from "node:path";
 import { VirtualMachine } from "./src/core/virtualmachine.js";
 import { reviewProgram } from "./src/core/autoreview.js";
 import { DB, MemoryDB, DEFAULT_MAP_SIZE, parseSize } from "./src/storage/db.js";
-import { verifyTransaction, addressOf } from "./src/crypto/signature.js";
+import { addressOf } from "./src/crypto/signature.js";
 import { signTypedDataDigest } from "./src/crypto/program-signature.js";
 import { resolveSettings, startupProblems } from "./src/node/genesis.js";
 import { Mempool } from "./src/node/mempool.js";
@@ -35,6 +36,7 @@ import { TxLog } from "./src/node/txlog.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
+import { VerifyPool, DEFAULT_VERIFY_WORKERS } from "./src/node/verify-pool.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
@@ -57,6 +59,7 @@ const BLOCK_MS = settings.blockMs;
 // โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
 // (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
+export const verifyPool = new VerifyPool({ size: process.env.VERIFY_WORKERS ?? DEFAULT_VERIFY_WORKERS });
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 // sandbox ของโปรแกรม (ดู src/core/sandbox.js): ทุกเครื่องในเครือข่ายต้องตั้งค่าเดียวกัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
 const MEMORY_LIMIT_MB = settings.memoryLimitMb;
@@ -298,11 +301,11 @@ const DYNAMIC = [
   }],
 ];
 
-function handlePost(url, body) {
+async function handlePost(url, body) {
   if (url === "/sendtx") {
     const { tx, signature } = body ?? {};
     let verified;
-    try { verified = verifyTransaction({ tx, signature }); }
+    try { verified = await verifyPool.verify({ tx, signature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
 
     // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
@@ -385,7 +388,7 @@ export const server = http.createServer(async (request, response) => {
         response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
         return send(response, 429, { error: "Too many requests, try again later" });
       }
-      result = handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
+      result = await handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
     } else if (ROUTES[url.pathname]) {
       result = ROUTES[url.pathname](url.searchParams);
     } else {

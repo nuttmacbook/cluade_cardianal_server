@@ -17,6 +17,7 @@
  *   - eth_getLogs: ข้าม block ด้วย logsBloom ของ header · มี topic0 + topic อื่น → ใช้ดัชนี eventidx: replay เฉพาะ block ที่ตรง
  *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (null = ไม่ได้ประกาศ)
  *     eth_call ของทั้งสองแบบ: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
+ *   - eth_call ของโปรแกรมอื่นที่ประกาศ metadata.abi: ถอด / เข้ารหัสตาม ABI ของ Solidity (src/node/evm-abi.js) → dApp ใช้ ethers / viem อ่านได้ตรง ๆ
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
  *   - debug_trace* (callTracer) แปลงจาก trace + nativeChanges ของการ replay block · ผล replay เก็บ cache ไว้ต่อ block
  */
@@ -26,6 +27,7 @@ import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataK
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
+import { abiFunctions, decodeInput, encodeOutput, AbiError } from "./evm-abi.js";
 
 export const EVM_ERROR = { PARSE: -32700, REQUEST: -32600, METHOD: -32601, PARAMS: -32602, INTERNAL: -32603, SERVER: -32000, LIMIT: -32005 };
 
@@ -109,9 +111,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   const readAt = (at, dbKey) => (at === null ? vm.read(dbKey) : vm.stateAt(at, dbKey));
   const isProgramAt = (address, at = null) => readAt(at, codeKey(address)) !== undefined;
   /** อ่านฟังก์ชันของโปรแกรมบน state ณ block นั้น (ไม่เขียนอะไร) */
-  const queryAt = (at, programUuid, functionName, input = {}) => {
+  const queryAt = (at, programUuid, functionName, input = {}, context = undefined) => {
     const options = at === null ? {} : { read: (dbKey) => vm.stateAt(at, dbKey), blockNumber: at, timestamp: headerAt(at)?.timestamp || undefined };
-    return vm.query({ programUuid, functionName, input }, options);
+    return vm.query({ programUuid, functionName, input, context }, options);
   };
   /** ข้อมูล token มาตรฐาน ณ block (null = ไม่ใช่ token มาตรฐาน / ยังไม่ได้ deploy) */
   const tokenAt = (address, at = null) => {
@@ -596,8 +598,10 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const at = stateBlock(tag);
     const data = String(request.data ?? request.input ?? "0x").toLowerCase();
     const arg = (i) => `0x${data.slice(10 + i * 64 + 24, 10 + (i + 1) * 64)}`;
+    // from = ผู้เรียก (context.sender ของโปรแกรม แบบ msg.sender) · ไม่ส่ง = ค่าเดิมของ vm.query
+    const context = isAddress(request.from) ? { sender: normalizeAddress(request.from), origin: normalizeAddress(request.from) } : undefined;
     const query = (functionName, input = {}) => {
-      const result = queryAt(at, to, functionName, input);
+      const result = queryAt(at, to, functionName, input, context);
       if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? functionName}`);
       return result.result;
     };
@@ -616,7 +620,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   function collectionCall(to, at, data, arg, query) {
     const kind = collectionAt(to, at);
     const fn = kind === "erc721" ? NFT_SELECTOR[data.slice(0, 10)] : kind === "erc1155" ? MULTITOKEN_SELECTOR[data.slice(0, 10)] : undefined;
-    if (!fn) fail(EVM_ERROR.SERVER, "execution reverted: only ERC-20 / ERC-721 / ERC-1155 reads on standard programs are supported");
+    if (!fn) return abiCall(to, at, data, query);
     const uint = (i) => {
       const hex = data.slice(10 + i * 64, 10 + (i + 1) * 64);
       return `${/^[0-9a-f]+$/.test(hex) ? BigInt(`0x${hex}`) : 0n}n`;
@@ -634,6 +638,19 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (fn === "balanceOf") return `0x${word(query(fn, { account: arg(0), id: uint(1) }))}`;
     if (fn === "totalSupply") return `0x${word(query(fn, { id: uint(0) }))}`;
     return abiString(query(fn, { id: uint(0) }));   // uri
+  }
+
+  /** eth_call ของโปรแกรมที่ประกาศ metadata.abi: selector = keccak("ชื่อ(ชนิด,…)") ตาม toEvmAbi → ถอด argument → query → เข้ารหัสผลตาม outputs */
+  function abiCall(to, at, data, query) {
+    const abi = readAt(at, metadataKey(to, "abi"));
+    const fn = abi ? abiFunctions(abi).get(data.slice(0, 10)) : undefined;
+    if (!fn) fail(EVM_ERROR.SERVER, abi ? `execution reverted: no function in metadata.abi matches selector ${data.slice(0, 10)}`
+      : "execution reverted: program has no metadata.abi (only ERC-20 / ERC-721 / ERC-1155 reads on standard programs work without one)");
+    try { return encodeOutput(fn, query(fn.name, decodeInput(fn, data))); }
+    catch (error) {
+      if (error instanceof AbiError) fail(EVM_ERROR.SERVER, `execution reverted: ${fn.signature}: ${error.message}`);
+      throw error;
+    }
   }
 
   // ---------- txpool ----------
