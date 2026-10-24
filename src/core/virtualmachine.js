@@ -296,7 +296,7 @@ const MIGRATE_FUNCTION = "migrate";   // รันครั้งเดียว
 const KEY = { SEPARATOR: ":", PENDING: "pending", CODE: "code", CONTEXT: "context", STORAGE: "storage", THIS: "this", NONCE: "nonce", NATIVE: "native", TXN: "txn",
   METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", EVENT_INDEX: "eventidx", EVENT_SIG: "eventsig", TX_TO: "txto",
   BLOCK: "block", BLOCK_BODY: "blockbody", BLOCK_HASH: "blockhash", LATEST_BLOCK: "latestblock", TX: "tx", GENESIS: "genesis",
-  HISTORY: "history", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding",
+  HISTORY: "history", HISTORY_FROM: "historyfrom", BLOCK_UNDO: "blockundo", SIG_TX: "sigtx", HOLDING: "holding",
   PENDING_UPGRADE: "pending-upgrade", SCHEDULED_UPGRADE: "scheduled-upgrade", UPGRADE_AT: "upgradeat", CODE_VERSION: "codeversion" };
 const PROGRAM_API_NAMES = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
@@ -609,6 +609,9 @@ export const rejectedFromKey = (sender, number, index) =>
 export const historyKey = (dbKey, number) => joinKey(KEY.HISTORY, dbKey, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 export const historyPrefix = (dbKey) => `${joinKey(KEY.HISTORY, dbKey)}${KEY.SEPARATOR}`;
 export const LATEST_BLOCK_KEY = KEY.LATEST_BLOCK;
+/** block แรกที่ history ครบต่อเนื่องถึงล่าสุด (replayBlock / snapshotAt เช็คครั้งเดียว ไม่ต้องไล่ blockundo ทุก block) */
+export const HISTORY_FROM_KEY = KEY.HISTORY_FROM;
+const KEY_END = "\uffff";
 
 /** key ซ้อน: map("balances", "alice") */
 export const map = (...parts) => ({ [MAP_PARTS]: parts });
@@ -2296,20 +2299,86 @@ export class VirtualMachine {
     return this.read(dbKey); // ไม่มีใครแก้ตั้งแต่ block นั้น → ค่าปัจจุบัน
   }
 
-  /** ข้อมูลตาม prefix ณ block นั้น (ใช้ blockundo หาว่ามี key อะไรเปลี่ยนไปบ้าง) */
+  /**
+   * block แรกที่ย้อนดูได้ (history ครบตั้งแต่ block นี้ถึงล่าสุด) · ไม่มี block = null
+   * เชนเก่าที่ยังไม่มี historyfrom → ไล่ blockundo ครั้งเดียว (ช้า) แล้ว block ถัดไปจะบันทึกค่าให้
+   */
+  historyFrom() {
+    const saved = this.read(HISTORY_FROM_KEY);
+    if (saved !== undefined) return saved;
+    const latest = this.latestBlockNumber();
+    if (latest === null) return null;
+    let from = latest + 1;
+    while (from > 1 && this.getBlockUndo(from - 1)) from -= 1;
+    return from;
+  }
+
+  /** ย้อนดู state ณ ตอนปิด block number ได้ไหม (ต้องมี history ของทุก block หลังจากนั้น) */
+  #checkHistoryAt(number) {
+    const latest = this.latestBlockNumber() ?? 0;
+    if (!Number.isSafeInteger(number) || number < 0 || number > latest) fail(ERRORS.blockMissing, number);
+    if (number < latest && number + 1 < (this.historyFrom() ?? 1)) fail(ERRORS.historyMissing, number + 1);
+  }
+
+  /** ข้อมูลตาม prefix ณ block นั้น → { dbKey: value } (ทั้งหมด · ดู pageSnapshotAt สำหรับแบ่งหน้า) */
   snapshotAt(number, prefix = "") {
-    const keys = new Set(this.listKeys(prefix));
-    for (let n = this.latestBlockNumber() ?? 0; n > number; n -= 1) {
-      for (const dbKey of this.getBlockUndo(n) ?? []) if (dbKey.startsWith(prefix)) keys.add(dbKey);
+    return Object.fromEntries(this.pageSnapshotAt(number, prefix).items);
+  }
+
+  /**
+   * ข้อมูลตาม prefix ณ block นั้น แบบแบ่งหน้า → { items: [[dbKey, value]], next } · next = after ของหน้าถัดไป (null = หมด)
+   * key ที่ต้องดู = key ที่มีตอนนี้ ∪ key ที่มี history (ถูกแก้ / ลบหลัง block นั้น)
+   * ไล่ history แบบกระโดดทีละ key (ไม่อ่าน history ทุกรายการ) → ต้นทุนตามจำนวน key ไม่ใช่ความยาวเชน
+   * ข้อจำกัด: key ลูกที่ส่วนถัดไปเป็นตัวเลขขึ้นต้นด้วย 0 ยาวพอ ๆ กับเลข block 12 หลัก (เช่น map("a", "0000000001")) และถูกลบไปแล้ว อาจไม่ขึ้น
+   */
+  pageSnapshotAt(number, prefix = "", { limit = Infinity, after } = {}) {
+    this.#checkHistoryAt(number);
+    const latest = this.latestBlockNumber() ?? 0;
+    const chunk = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 1000) : 1000;
+
+    // key ที่มีอยู่ตอนนี้ (เรียงอยู่แล้ว · start ของ listKeys รวมตัวมันเอง จึงข้าม after)
+    function* current(vm) {
+      let start = after;
+      for (;;) {
+        const keys = vm.listKeys(prefix, { start, limit: chunk + 1 });
+        for (const key of keys.slice(0, chunk)) if (after === undefined || key > after) yield key;
+        if (keys.length <= chunk) return;
+        start = keys[chunk];
+      }
+    }
+    // key ที่มี history: เจอ history:<key>:<n> แล้วกระโดดข้าม history ของ key นั้นทั้งหมด
+    function* changed(vm) {
+      const historyBase = `${KEY.HISTORY}${KEY.SEPARATOR}${prefix}`;
+      let start = after === undefined ? historyBase : `${historyKey(after, latest)}\u0000`;
+      for (;;) {
+        const [key] = vm.listKeys(historyBase, { start, limit: 1 });
+        if (key === undefined) return;
+        const { dbKey } = decodeDbKey(key);
+        if (after === undefined || dbKey > after) yield dbKey;
+        start = `${historyKey(dbKey, latest)}\u0000`;
+      }
     }
 
-    const snapshot = {};
-    for (const dbKey of [...keys].sort()) {
+    const a = current(this);
+    const b = changed(this);
+    let x = a.next();
+    let y = b.next();
+    const items = [];
+    let last;
+    while (!x.done || !y.done) {
+      let dbKey;
+      if (y.done || (!x.done && x.value < y.value)) { dbKey = x.value; x = a.next(); }
+      else if (x.done || y.value < x.value) { dbKey = y.value; y = b.next(); }
+      else { dbKey = x.value; x = a.next(); y = b.next(); }
+      if (dbKey === last) continue;
+      last = dbKey;
       if (isIndexKey(dbKey)) continue;   // ดัชนีไม่มี history → ค่าที่อ่านได้คือปัจจุบัน ไม่ใช่ ณ block นั้น
       const value = this.stateAt(number, dbKey);
-      if (value !== undefined) snapshot[dbKey] = value;
+      if (value === undefined) continue;
+      if (items.length === limit) return { items, next: items[items.length - 1][0] };
+      items.push([dbKey, value]);
     }
-    return snapshot;
+    return { items, next: null };
   }
 
   /**
@@ -2322,11 +2391,8 @@ export class VirtualMachine {
     const body = this.getBlockBody(number);
     if (!body) fail(ERRORS.historyMissing, number);
 
-    // ต้องมี blockundo ของทุก block ที่ใหม่กว่า ไม่งั้นย้อน state กลับไปไม่ได้
-    const latest = this.latestBlockNumber() ?? number;
-    for (let n = number; n <= latest; n += 1) {
-      if (!this.getBlockUndo(n)) fail(ERRORS.historyMissing, n);
-    }
+    // ต้องมี history ของทุก block ตั้งแต่ block นี้ ไม่งั้นย้อน state กลับไปไม่ได้ (เช็คครั้งเดียวจาก historyfrom)
+    if (number < (this.historyFrom() ?? 1)) fail(ERRORS.historyMissing, number);
 
     const overlay = new Map();
     const read = (dbKey) => {
@@ -2361,67 +2427,87 @@ export class VirtualMachine {
    * กู้ระบบ: ย้อน state ไปก่อน block 1 แล้วรัน block 1..target ใหม่จาก blockbody
    * ใช้แทน rollback (ช้ากว่าแต่สร้างจากข้อมูลต้นทาง จึงถูกต้องเสมอ)
    */
-  rebuildFrom(target, { verify = true } = {}) {
+  rebuildFrom(target, { verify = true, batch = 10_000 } = {}) {
     const latest = this.latestBlockNumber();
     if (latest === null) fail(ERRORS.blockMissing, target);
     if (!Number.isSafeInteger(target) || target < 0 || target > latest) fail(ERRORS.blockMissing, target);
+    if ((this.historyFrom() ?? 1) > 1) fail(ERRORS.historyMissing, this.historyFrom() - 1);
+    // ทุกขั้นทำทีละชุด (batch) ไม่ถือทั้งเชนไว้ในหน่วยความจำ · header / body ของ block ที่จะรันใหม่อ่านทีละ block ตอน replay
 
-    // เก็บ header + body ของ block ที่จะรันใหม่ไว้ก่อน (ของ block ที่ทิ้งเอาไว้ลบ)
-    const kept = [];
-    const touched = new Set();
-    for (let number = 1; number <= latest; number += 1) {
-      const header = this.getBlock(number);
-      const undo = this.getBlockUndo(number);
-      if (!header || !undo) fail(ERRORS.historyMissing, number);
-      for (const dbKey of undo) touched.add(dbKey);
-      if (number <= target) kept.push({ header, body: this.getBlockBody(number) ?? [], rejected: this.getBlockRejected(number) });
+    // 1) คืนทุก key ที่เคยถูกแตะ กลับไปเป็นสถานะก่อน block 1 = ค่า before ของ history รายการแรกของ key นั้น
+    //    (ไล่ history ทั้งหมดตามลำดับ · รายการแรกของ key คือรายการที่ seek จาก history:<key>: แล้วเจอเป็นตัวแรก)
+    const historyBase = `${KEY.HISTORY}${KEY.SEPARATOR}`;
+    let reverted = 0;
+    for (let start = historyBase; ;) {
+      const keys = this.listKeys(historyBase, { start, limit: batch + 1 });
+      const writes = [];
+      for (const key of keys.slice(0, batch)) {
+        const { dbKey } = decodeDbKey(key);
+        const [first] = this.listKeys(historyPrefix(dbKey), { limit: 1 });
+        if (first !== key) continue;
+        const entry = this.read(key);
+        writes.push(entry?.existed ? { type: WRITE.PUT, dbKey, value: copyValue(entry.before) } : { type: WRITE.DEL, dbKey });
+      }
+      reverted += writes.length;
+      this.commit(writes);
+      if (keys.length <= batch) break;
+      start = keys[batch];
     }
 
-    // 1) คืนทุก key ที่เคยถูกแตะ กลับไปเป็นสถานะก่อน block 1
-    const writes = [...touched].map((dbKey) => {
-      const before = this.stateAt(0, dbKey);
-      return before === undefined ? { type: WRITE.DEL, dbKey } : { type: WRITE.PUT, dbKey, value: before };
-    });
-
-    // 2) ลบข้อมูลของ block ทั้งหมด (จะถูกสร้างใหม่ตอน replay ยกเว้นที่เกิน target)
-    for (let number = 1; number <= latest; number += 1) {
-      for (const dbKey of this.getBlockUndo(number) ?? []) writes.push({ type: WRITE.DEL, dbKey: historyKey(dbKey, number) });
-      const header = this.getBlock(number);
-      writes.push({ type: WRITE.DEL, dbKey: blockKey(number) });
-      writes.push({ type: WRITE.DEL, dbKey: blockBodyKey(number) });
-      writes.push({ type: WRITE.DEL, dbKey: blockUndoKey(number) });
-      writes.push({ type: WRITE.DEL, dbKey: blockRejectedKey(number) });
-      if (header) writes.push({ type: WRITE.DEL, dbKey: blockHashKey(header.hash) });
+    // 2) ลบ history ทั้งหมด (replay สร้างใหม่ของ block 1..target) · ดัชนีทั้งหมด (replay สร้างใหม่)
+    for (;;) {
+      const keys = this.listKeys(historyBase, { limit: batch });
+      if (!keys.length) break;
+      this.commit(keys.map((dbKey) => ({ type: WRITE.DEL, dbKey })));
     }
-    writes.push({ type: WRITE.DEL, dbKey: LATEST_BLOCK_KEY });
-    this.commit(writes);
-    this.#deleteIndexes();
+    this.commit([{ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: 1 }]);
+    this.#deleteIndexes(batch);
 
-    // 3) รัน block 1..target ใหม่
-    for (const { header, body, rejected } of kept) {
+    // 3) รัน block 1..target ใหม่ทีละ block · บันทึกทับ header / body / undo เดิม (overwrite) ในการ commit เดียว
+    for (let number = 1; number <= target; number += 1) {
+      const header = this.getBlock(number);
+      if (!header) fail(ERRORS.historyMissing, number);
       const block = this.createBlock({
-        number: header.number,
+        number,
         parentHash: header.parentHash,
         parentStateRoot: header.parentStateRoot,
         timestamp: header.timestamp,
         feeRecipient: header.feeRecipient,
         burnPercent: header.burnPercent,
         checkChain: false,
+        overwrite: true,
         maxTransactions: null,
         maxTransactionsPerSender: null,
         maxBlockGas: null,
       });
-      for (const { method, request } of body) block[method](request);
-      for (const entry of rejected) block.recordRejected(entry);
-      if (verify && block.header().hash !== header.hash) fail(ERRORS.replayMismatch, header.number);
+      for (const { method, request } of this.getBlockBody(number) ?? []) block[method](request);
+      for (const entry of this.getBlockRejected(number)) block.recordRejected(entry);
+      if (verify && block.header().hash !== header.hash) fail(ERRORS.replayMismatch, number);
       block.commit();
     }
+
+    // 4) ลบ block ที่เกิน target ทีละชุด
+    for (let from = target + 1; from <= latest; from += batch) {
+      const writes = [];
+      for (let number = from; number <= Math.min(latest, from + batch - 1); number += 1) {
+        const header = this.getBlock(number);
+        writes.push({ type: WRITE.DEL, dbKey: blockKey(number) });
+        writes.push({ type: WRITE.DEL, dbKey: blockBodyKey(number) });
+        writes.push({ type: WRITE.DEL, dbKey: blockUndoKey(number) });
+        writes.push({ type: WRITE.DEL, dbKey: blockRejectedKey(number) });
+        if (header) writes.push({ type: WRITE.DEL, dbKey: blockHashKey(header.hash) });
+      }
+      this.commit(writes);
+    }
+    this.commit([target === 0
+      ? { type: WRITE.DEL, dbKey: LATEST_BLOCK_KEY }
+      : { type: WRITE.PUT, dbKey: LATEST_BLOCK_KEY, value: target }]);
 
     return {
       from: latest,
       to: target,
-      blocks: kept.length,
-      keys: touched.size,
+      blocks: target,
+      keys: reverted,
       stateRoot: target === 0 ? null : this.getBlock(target)?.stateRoot ?? null,
     };
   }
@@ -3201,6 +3287,7 @@ export class Block {
   #parentHash;
   #parentStateRoot;
   #recordBlocks;
+  #overwrite;
   #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
   #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
@@ -3217,6 +3304,7 @@ export class Block {
     recordBlocks = vm.recordBlocks,
     recordHistory = vm.recordHistory,
     checkChain = true,
+    overwrite = false,     // rebuildFrom: บันทึกทับ block เลขเดิม (header / body / undo) ใน commit เดียว
     maxTransactions = vm.maxTransactions,
     maxTransactionsPerSender = vm.maxTransactionsPerSender,
     maxBlockGas = vm.maxBlockGas,
@@ -3235,6 +3323,7 @@ export class Block {
     this.#parentStateRoot = parentStateRoot ?? previous?.stateRoot ?? null;
     this.#recordBlocks = recordBlocks && this.#number !== null;
     this.#recordHistory = recordHistory && this.#number !== null;
+    this.#overwrite = overwrite;
     this.#maxTransactions = maxTransactions;
     this.#maxTransactionsPerSender = maxTransactionsPerSender;
     this.#maxBlockGas = maxBlockGas;
@@ -3420,7 +3509,7 @@ export class Block {
     // ข้อมูลของ chain เอง (block / ดัชนี) ไม่ต้องเก็บ history เพราะสร้างใหม่ได้จาก body
     const chainKinds = [KEY.HISTORY, KEY.BLOCK, KEY.BLOCK_BODY, KEY.BLOCK_UNDO, KEY.BLOCK_HASH, KEY.LATEST_BLOCK];
     const keys = [...new Set(writes.map((write) => write.dbKey))]
-      .filter((dbKey) => !chainKinds.includes(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey));
+      .filter((dbKey) => !chainKinds.includes(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey) && dbKey !== HISTORY_FROM_KEY);
     const history = keys.map((dbKey) => {
       const before = this.#beforeValue(dbKey);
       return {
@@ -3640,6 +3729,9 @@ export class Block {
         }
       }
     });
+    // history ครบตั้งแต่ block ไหน: block นี้ไม่เก็บ history → นับใหม่จาก block ถัดไป · ยังไม่มีค่า → block แรกที่เก็บ
+    if (!this.#recordHistory) writes.push({ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: this.#number + 1 });
+    else if (this.#vm.read(HISTORY_FROM_KEY) === undefined) writes.push({ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: this.#vm.historyFrom() ?? this.#number });
     return writes;
   }
 
@@ -3751,7 +3843,7 @@ export class Block {
   /** บันทึก writes ของทั้ง block ลง DB ครั้งเดียว แล้วปิด block */
   commit() {
     if (this.#committed) fail(ERRORS.blockCommitted);
-    if (this.#recordBlocks && this.#vm.getBlock(this.#number)) fail(ERRORS.blockExists, this.#number);
+    if (this.#recordBlocks && !this.#overwrite && this.#vm.getBlock(this.#number)) fail(ERRORS.blockExists, this.#number);
     const result = this.#vm.commit(this.writes());
     this.#committed = true;
     return result;

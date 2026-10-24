@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { VirtualMachine } from "./src/core/virtualmachine.js";
 import { reviewProgram } from "./src/core/autoreview.js";
-import { DB, MemoryDB } from "./src/storage/db.js";
+import { DB, MemoryDB, DEFAULT_MAP_SIZE, parseSize } from "./src/storage/db.js";
 import { verifyTransaction } from "./src/crypto/signature.js";
 import { Mempool } from "./src/node/mempool.js";
 import { TxLog } from "./src/node/txlog.js";
@@ -49,7 +49,9 @@ const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต�
 // ตรวจโค้ดอัตโนมัติ (src/core/autoreview.js) ตอน /sendtx deploy / upgrade · AUTO_REVIEW=0 = ปิด (sandbox + แก๊สยังคุมอยู่)
 export const AUTO_REVIEW = !["0", "false", "off", "no"].includes(String(process.env.AUTO_REVIEW ?? "1").toLowerCase());
 
-export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA) : new MemoryDB(), {
+// LMDB จองพื้นที่ได้สูงสุดเท่านี้ (เต็ม = เขียนไม่ได้ เชนหยุด) · ค่าเริ่ม 1T · ดูที่ใช้ไปแล้วที่ /health
+const LMDB_MAP_SIZE = process.env.LMDB_MAP_SIZE ? parseSize(process.env.LMDB_MAP_SIZE) : DEFAULT_MAP_SIZE;
+export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA, { mapSize: LMDB_MAP_SIZE }) : new MemoryDB(), {
   chainId: Number(process.env.CHAIN_ID ?? 1),
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true,
@@ -126,6 +128,9 @@ const ROUTES = {
   "/programs/approved": (query) => pageApprovedPrograms(vm, pageOf(query)),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
+  // สถานะของ node: block ล่าสุด · ย้อนดูได้ตั้งแต่ block ไหน · พื้นที่ LMDB ที่ใช้ไป (เกิน mapSize = เขียนไม่ได้)
+  "/health": () => ({ ok: true, latest: vm.latestBlockNumber(), historyFrom: vm.historyFrom(), pending: mempool.size,
+    db: typeof vm.db.stats === "function" ? vm.db.stats() : null }),
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
     gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
     baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
@@ -224,7 +229,14 @@ const DYNAMIC = [
   [/^\/name\/([^/]+)$/, (m) => ({ namespace: lower(m[1]), address: vm.resolveNamespace(m[1]) })],
   [/^\/state\/([^/]+)$/, (m, query) => {
     const block = Number(query.get("block"));
-    return Number.isInteger(block) ? vm.snapshotAt(block, `${lower(m[1])}:storage:`) : vm.listProgramStorage(m[1]);
+    if (!Number.isInteger(block)) return vm.listProgramStorage(m[1]);
+    const prefix = `${lower(m[1])}:storage:`;
+    // ?limit=&cursor= → { items: { dbKey: value }, next } (ต้นทุนตามจำนวน key ที่ขอ ไม่ใช่ความยาวเชน) · ไม่ส่ง = ทั้งหมดแบบเดิม
+    try {
+      if (!query.has("limit") && !query.has("cursor")) return vm.snapshotAt(block, prefix);
+      const page = vm.pageSnapshotAt(block, prefix, { limit: limitOf(query), after: query.get("cursor") || undefined });
+      return { items: Object.fromEntries(page.items), next: page.next };
+    } catch (error) { return { status: 409, body: { error: error.message } }; }
   }],
   [/^\/sync$/, (m, query) => {
     const from = Math.max(1, Number(query.get("from")) || 1);

@@ -394,9 +394,11 @@ vm.query({ programUuid, functionName, input, context, value })
 
 // ย้อนหลัง / กู้ระบบ  (ต้องเปิด recordHistory)
 vm.stateAt(blockNumber, dbKey)            // ค่าของ key นั้น ณ block นั้น — อ่าน DB ≤3 ครั้ง
-vm.snapshotAt(blockNumber, prefix)        // ทั้ง prefix ณ block นั้น
+vm.snapshotAt(blockNumber, prefix)        // ทั้ง prefix ณ block นั้น (ต้นทุนตามจำนวน key ไม่ใช่ความยาวเชน)
+vm.pageSnapshotAt(n, prefix, { limit, after })   // แบบแบ่งหน้า → { items: [[dbKey, value]], next }
+vm.historyFrom()                          // block แรกที่ย้อนดูได้ (key historyfrom · เช็คครั้งเดียว ไม่ไล่ blockundo)
 vm.replayBlock(n, { verify })             // รัน block ซ้ำจาก blockbody → receipt เต็ม + เทียบ hash
-vm.rebuildFrom(targetBlock, { verify })   // ย้อน state กลับไป block นั้นแล้วรันใหม่ทั้งหมด
+vm.rebuildFrom(targetBlock, { verify, batch })   // ย้อน state กลับไปก่อน block 1 แล้วรันใหม่ทีละ block · ทุกขั้นทำทีละชุด (batch 10,000)
 vm.getBlockUndo(n)                        // รายชื่อ key ที่ block นั้นแตะ
 
 // ตรวจก่อนรับ
@@ -509,6 +511,20 @@ call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 10
   · ไม่มี indexed → topic0 = keccak(ชื่อ) + data เป็น JSON (เหมือนเดิม) · token / NFT / multi-token มาตรฐาน index ตาม ERC (Transfer from / to (+ tokenId) · Approval · ApprovalForAll · TransferSingle/Batch · URI · OwnershipTransferred)
 - `vm.listIndexedEvents({ program, name, field, value, limit, cursor, fromBlock, toBlock })` · `GET /program/:a/events?name=Transfer&to=0x…` (หลาย field = AND) · `eth_getLogs` ใช้ดัชนีเมื่อมี topic0 + topic อื่น
 - ดัชนีไม่มี history และไม่อยู่ใน `blockundo` → `rebuildFrom` ลบดัชนีทั้งหมดแล้ว replay สร้างใหม่ (เทสต์ `83`)
+
+### เชนยาว (เทสต์ `84-chain-scale`)
+- `historyfrom` = block แรกที่ history ครบต่อเนื่องถึงล่าสุด (block แรกที่เก็บ history · block ที่ไม่เก็บ → block ถัดไป) → `replayBlock` / `snapshotAt` เช็คครั้งเดียว แทนการอ่าน `blockundo` ทุก block ที่ใหม่กว่า
+- `snapshotAt` / `pageSnapshotAt`: key = ที่มีตอนนี้ ∪ ที่มี history (ไล่ `history:<prefix>` แบบกระโดดข้าม history ของแต่ละ key) → ไม่อ่าน `blockundo`
+  ข้อจำกัด: key ลูกที่ส่วนถัดไปเป็นตัวเลขขึ้นต้นด้วย 0 ยาวพอ ๆ กับเลข block 12 หลัก (เช่น `map("a", "0000000001")`) และถูกลบไปแล้ว อาจไม่ขึ้น
+- `rebuildFrom`: คืน state จาก history รายการแรกของแต่ละ key → ลบ history / ดัชนี → รัน block 1..target ทับของเดิม (`createBlock({ overwrite: true })`) → ลบ block ที่เกิน · ทุกขั้นทีละชุด
+- วัดบนเชน LMDB 30,000 block (block ละ 1 call · โปรแกรม 200 key):
+  | | ก่อน | หลัง |
+  |---|---|---|
+  | `replayBlock(2)` | 33.5 ms (โตตามจำนวน block ที่ใหม่กว่า) | 2.7 ms (เท่ากับ block ล่าสุด) |
+  | `snapshotAt(2)` | 38.2 ms (โตตามความยาวเชน) | 7.1 ms (ตามจำนวน key ของโปรแกรม) |
+  | `snapshotAt(ล่าสุด − 1)` | 1.7 ms | 3.6 ms |
+  | `rebuildFrom(29,990)` เวลา / heap สูงสุด | 109 วิ / +179 MB | 113 วิ / +15 MB |
+  เทียบที่ 10 ล้าน block: replay block เก่า ~11 วิ (อยู่ใน RAM) → ~3 ms · rebuild ยังต้องรันทั้งเชน (ต้องมี snapshot ถึงจะเร็ว) แต่ไม่ล้มเพราะหน่วยความจำ
 
 ### metadata.abi (เทสต์ `72-abi`)
 ```js
@@ -656,7 +672,8 @@ vm[method](request);
 | `GET /program/:a/interactions?limit&cursor` · `/program/:a/events?cursor=` · `/address/:a/incoming?cursor=` | แบบ cursor (เหมือนแถบ storage) `{ items, next }` อ่านแค่ limit + 1 key ไม่นับทั้งรายการ ไม่มีเพดาน 50,000 · ไม่ส่ง `cursor` = แบบเลขหน้าเดิม |
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
 | `GET /name/:ns` | namespace → address |
-| `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) |
+| `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
+| `GET /health` | `{ ok, latest, historyFrom, pending, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
@@ -992,6 +1009,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
 | `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
+| `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
@@ -1144,6 +1162,7 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
 4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
    ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
+   ✅ `mapSize` ค่าเริ่ม 1 TB แล้ว (env `LMDB_MAP_SIZE` เช่น `2T` · `/health` บอกที่ใช้ไป) — PR "chain-scale"
    ✅ ตัดข้อมูลซ้ำแล้ว (PR "storage-slim" · เทสต์ `83`): ดัชนีไม่มี history / ไม่อยู่ใน blockundo · txn ไม่เก็บ signature / digest · txto ไม่เก็บ blockNumber / index / timestamp
    | วัด (500 tx × 10 block + อุ่น 2 · LMDB) | ก่อน | หลัง |
    |---|---|---|
