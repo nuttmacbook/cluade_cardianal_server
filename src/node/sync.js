@@ -1,13 +1,36 @@
 /**
  * ซิงก์ block จาก node ผู้ผลิตมารันเองแล้วเทียบ hash
- *   const stop = startSync(vm, { url: "https://node1.example.com", genesis });
+ *   const stop = startSync(vm, { url: "https://node1.example.com", genesis, producers: genesis.config.producers });
  *
  * node ผู้อ่านไม่เชื่อ state ที่ส่งมา แต่รัน blockbody เองแล้วเทียบ blockHash
  * ถ้าไม่ตรง = ข้อมูลไม่ตรงกัน ให้หยุดทันที ไม่บันทึกอะไรต่อ
+ *
+ * ผู้ผลิต (header.producer อยู่ใน hash · header.producerSignature = ลายเซ็นบน hash):
+ *   มีลายเซ็น → ต้องกู้ได้ address ของ producer เสมอ
+ *   ส่ง producers (รายชื่อใน genesis) → ทุก block ต้องมีผู้ผลิตที่อยู่ในรายชื่อ และลายเซ็นถูก (block ไม่มีผู้ผลิต = ปฏิเสธ)
+ * tx ใน block รันด้วย vm.replayTimeoutMs (ผู้ผลิตกรอง TIMEOUT ไปแล้ว → เครื่องที่ช้ากว่าไม่ได้ผลต่าง)
  */
+import { recoverTypedDataDigest } from "../crypto/program-signature.js";
+
+const lower = (value) => String(value ?? "").toLowerCase();
+
+/** ตรวจผู้ผลิตของ header → throw ถ้าใช้ไม่ได้ */
+export function verifyProducer(header, producers = null) {
+  const allowed = producers ? producers.map(lower) : null;
+  if (!header.producer) {
+    if (allowed) throw new Error(`block ${header.number} ไม่มีผู้ผลิต (genesis กำหนดผู้ผลิตไว้)`);
+    return null;
+  }
+  const producer = lower(header.producer);
+  if (allowed && !allowed.includes(producer)) throw new Error(`block ${header.number} ผลิตโดย ${producer} ซึ่งไม่อยู่ในรายชื่อผู้ผลิต`);
+  const signer = header.producerSignature ? recoverTypedDataDigest(header.hash, header.producerSignature) : null;
+  if (signer !== producer) throw new Error(`block ${header.number} ลายเซ็นผู้ผลิตไม่ถูกต้อง`);
+  return producer;
+}
 
 /** รัน block ที่ดึงมา 1 อัน แล้วเทียบ hash */
-export function applyBlock(vm, { header, body, rejected = [] }) {
+export function applyBlock(vm, { header, body, rejected = [] }, { producers = null } = {}) {
+  verifyProducer(header, producers);
   const block = vm.createBlock({
     number: header.number,
     parentHash: header.parentHash,
@@ -15,6 +38,9 @@ export function applyBlock(vm, { header, body, rejected = [] }) {
     timestamp: header.timestamp,
     feeRecipient: header.feeRecipient,
     burnPercent: header.burnPercent,
+    producer: header.producer ?? null,
+    producerSignature: header.producerSignature ?? null,
+    timeoutMs: vm.replayTimeoutMs,
     checkChain: false,
     maxTransactions: null,
     maxTransactionsPerSender: null,
@@ -32,15 +58,15 @@ export function applyBlock(vm, { header, body, rejected = [] }) {
 }
 
 /** ดึง block ที่ขาดแล้วรันให้ครบ → จำนวน block ที่เพิ่มเข้ามา */
-export async function syncOnce(vm, fetchBlocks, { limit = 50 } = {}) {
+export async function syncOnce(vm, fetchBlocks, { limit = 50, producers = null } = {}) {
   const from = (vm.latestBlockNumber() ?? 0) + 1;
   const blocks = await fetchBlocks(from, limit);
-  for (const item of blocks) applyBlock(vm, item);
+  for (const item of blocks) applyBlock(vm, item, { producers });
   return blocks.length;
 }
 
 /** ซิงก์ต่อเนื่อง — คืนฟังก์ชันสำหรับหยุด */
-export function startSync(vm, { url, genesis, intervalMs = 3000, limit = 50, onError, onBlock } = {}) {
+export function startSync(vm, { url, genesis, producers = genesis?.config?.producers ?? null, intervalMs = 3000, limit = 50, onError, onBlock } = {}) {
   if (genesis) vm.applyGenesis(genesis);           // หยุดทันทีถ้า genesis ไม่ตรง
 
   const fetchBlocks = async (from, count) => {
@@ -55,7 +81,7 @@ export function startSync(vm, { url, genesis, intervalMs = 3000, limit = 50, onE
     if (running || stopped) return;
     running = true;
     try {
-      const added = await syncOnce(vm, fetchBlocks, { limit });
+      const added = await syncOnce(vm, fetchBlocks, { limit, producers });
       if (added) onBlock?.(vm.latestBlockNumber());
     } catch (error) {
       stopped = true;                               // ข้อมูลไม่ตรงกัน = หยุด ไม่เดินต่อ

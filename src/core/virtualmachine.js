@@ -7,6 +7,9 @@ import { instrument, METER_FNS } from "./gasmeter.js";
 import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from "../crypto/eip712.js";
+import { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson } from "./encoding.js";
+
+export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson };
 
 /*
  *  const vm = new VirtualMachine(new DB("./data"), { timeoutMs: 1000, maxCallDepth: 8 })  // ดู db.js
@@ -143,6 +146,8 @@ export const DEFAULT_OPTIONS = {
   memoryLimitBytes: SANDBOX_DEFAULTS.memoryLimitBytes, // หน่วยความจำของ sandbox ต่อ tx (รวมทุกโปรแกรมในสายการเรียก) เกิน → OUT_OF_MEMORY
   maxStackBytes: SANDBOX_DEFAULTS.maxStackBytes,       // stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน → RangeError ที่ catch ได้)
   wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
+  producer: null,                 // ผู้ผลิต block ของ node นี้ { address, sign(blockHash) → ลายเซ็น } · null = block ไม่มีผู้ผลิต (แบบเดิม)
+  replayTimeoutMs: 60_000,        // เวลาต่อ tx ตอน replay / rebuild / sync — ผู้ผลิตกรอง TIMEOUT ไปแล้ว จึงให้แก๊สหยุดก่อน (เครื่องช้ากว่าไม่ได้ผลต่าง)
 };
 
 /** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
@@ -152,7 +157,6 @@ export const BLOCK_NUMBER_WIDTH = 12;
 export const addressFromHash = (hash) => `0x${hash.slice(-40)}`;
 
 /** hash เริ่มต้น: keccak256 แบบเดียวกับ EVM (เปลี่ยนได้ด้วย option hashFunction) */
-export const keccak256Hex = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 const hexToBytesStrict = (hex) => hexToBytes(String(hex).replace(/^0x/, ""));
 /** precompile hash ที่โปรแกรมเรียกได้ (ชื่อ = ชื่อ API = ชื่อในตารางแก๊ส) */
 const DIGESTS = { sha256, ripemd160, blake2b };
@@ -332,7 +336,6 @@ const STATUS = { SUCCESS: "success", THROW: "throw", RUNNING: "running" };
 const STATE = { PENDING: "pending_review", ACTIVE: "active", REJECTED: "rejected", SCHEDULED: "scheduled" };
 const WRITE = { PUT: "put", DEL: "del" };
 
-const HEX_PATTERN = /^0x[0-9a-f]+$/i;
 const METADATA_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
 const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";   // โปรแกรม throw { code: ค่านี้ } = TIMEOUT (แบบเดิมของ node:vm)
 const MAP_PARTS = Symbol("map parts");
@@ -404,19 +407,6 @@ export const pickContext = ({ sender, origin }) => ({ sender, origin });
 
 /** address ของ wallet / program เป็นตัวพิมพ์เล็กเสมอ */
 const isWalletAddress = (value) => typeof value === "string" && /^0x[0-9a-f]{40}$/i.test(value);
-export const normalizeAddress = (value) => (typeof value === "string" ? value.toLowerCase() : value);
-
-/** string รูปแบบ 0x… hex → ตัวพิมพ์เล็ก, string อื่นไม่เปลี่ยน */
-export const normalizeHex = (value) => (typeof value === "string" && HEX_PATTERN.test(value) ? value.toLowerCase() : value);
-
-/** เดินทั้ง object / array: ค่าและชื่อ key ที่เป็น 0x… hex → ตัวพิมพ์เล็ก */
-export function normalizeHexDeep(value) {
-  if (Array.isArray(value)) return value.map(normalizeHexDeep);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [normalizeHex(key), normalizeHexDeep(item)]));
-  }
-  return normalizeHex(value);
-}
 
 export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddress(sender), origin: normalizeAddress(origin) });
 
@@ -629,28 +619,6 @@ export function storageKey(programUuid, key) {
   return joinKey(programUuid, KEY.STORAGE, ...encoded);
 }
 
-/**
- * แปลงข้อมูลเป็น string แบบเดียวกันทุกเครื่อง (เรียงชื่อ key, ไม่มีช่องว่าง)
- * ใช้ทำ hash ของ tx จึงต้องไม่ขึ้นกับลำดับที่ user ใส่ field มา
- */
-export function canonicalJson(value) {
-  if (typeof value === "bigint") return JSON.stringify(`${value}n`);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.keys(value)
-      .sort()
-      .filter((key) => value[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
-    return `{${entries.join(",")}}`;
-  }
-  try {
-    const json = JSON.stringify(value === undefined ? null : value);
-    return json === undefined ? JSON.stringify(String(value)) : json; // function / symbol
-  } catch {
-    return JSON.stringify(String(value)); // bigint ฯลฯ — ค่าจริงจะถูกปฏิเสธตอนตรวจ input อยู่แล้ว
-  }
-}
-
 /** เดา action จากหน้าตาของ request (ใช้เมื่อไม่ได้ระบุมา) */
 export function guessAction(request = {}) {
   if (request.from !== undefined && request.to !== undefined) return "transfer";
@@ -751,7 +719,9 @@ export function checkGasPrice(gasPrice, minimum) {
 }
 
 /** ฟิลด์ค่าแก๊สแบบ EIP-1559 ของ request (ไม่ส่ง = undefined) */
-export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined });
+// sponsor = ผู้จ่ายแก๊สแทน (paymaster) · ไม่ส่ง = ไม่อยู่ใน hash ของ tx (tx เดิมไม่เปลี่ยน)
+export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined,
+  sponsor: request?.sponsor ? normalizeAddress(request.sponsor) : undefined });
 
 /** request นี้ใช้ค่าแก๊สแบบ EIP-1559 (type 2) ไหม */
 export const isFeeMarketRequest = (request) => (request?.maxFeePerGas ?? null) !== null || (request?.maxPriorityFeePerGas ?? null) !== null;
@@ -1440,6 +1410,8 @@ export class VirtualMachine {
     memoryLimitBytes = DEFAULT_OPTIONS.memoryLimitBytes,
     maxStackBytes = DEFAULT_OPTIONS.maxStackBytes,
     wallClock = DEFAULT_OPTIONS.wallClock,
+    producer = DEFAULT_OPTIONS.producer,
+    replayTimeoutMs = DEFAULT_OPTIONS.replayTimeoutMs,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -1475,6 +1447,8 @@ export class VirtualMachine {
     this.memoryLimitBytes = memoryLimitBytes;
     this.maxStackBytes = maxStackBytes;
     this.wallClock = wallClock;
+    this.producer = producer ? { address: normalizeAddress(producer.address), sign: producer.sign } : null;
+    this.replayTimeoutMs = replayTimeoutMs;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
@@ -1902,7 +1876,7 @@ export class VirtualMachine {
    *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed มาจาก Block (ดู Block.receiptEntries) และอยู่ใน hash ด้วย
    */
   hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [],
-    baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null }) {
+    baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null, producer = null }) {
     const txRoot = this.hashData(txHashes);
     // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี (block ที่ไม่มี hash เหมือนเดิมทุกไบต์)
     const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
@@ -1917,6 +1891,8 @@ export class VirtualMachine {
       // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
       baseFeePerGas, gasUsed, receiptsRoot, logsBloom: bloom,
       ...(rejectedRoot ? { rejectedCount: rejected.length, rejectedRoot } : {}),
+      // ผู้ผลิต: อยู่ใน hash เฉพาะ block ที่มี (block แบบเดิม hash เหมือนเดิมทุกไบต์) · ลายเซ็นของผู้ผลิตเซ็น hash นี้ จึงอยู่นอก hash
+      ...(producer ? { producer } : {}),
     });
     return { hash, txRoot, stateRoot, rejectedRoot };
   }
@@ -1959,6 +1935,8 @@ export class VirtualMachine {
       burnedFee: result.burnedFee ?? "0n",
       producerFee: result.producerFee ?? "0n",
       fee: result.fee ?? "0n",
+      ...(request.sponsor ? { sponsor: normalizeAddress(request.sponsor) } : {}),   // ผู้จ่ายค่าแก๊สแทนผู้ส่ง (อยู่ใน hash ของ tx แล้ว)
+      ...(request.evmRaw ? { evmHash: request.digest } : {}),   // มาจาก eth_sendRawTransaction: hash แบบ Ethereum = keccak(raw)
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
       trace: (result.calls ?? []).map((call) => ({
@@ -2408,6 +2386,9 @@ export class VirtualMachine {
       timestamp: header.timestamp,
       feeRecipient: header.feeRecipient,
       burnPercent: header.burnPercent,
+      producer: header.producer ?? null,
+      producerSignature: header.producerSignature ?? null,
+      timeoutMs: this.replayTimeoutMs,
       checkChain: false,
       recordBlocks: false,
       recordHistory: false,
@@ -2474,6 +2455,9 @@ export class VirtualMachine {
         timestamp: header.timestamp,
         feeRecipient: header.feeRecipient,
         burnPercent: header.burnPercent,
+        producer: header.producer ?? null,
+        producerSignature: header.producerSignature ?? null,
+        timeoutMs: this.replayTimeoutMs,
         checkChain: false,
         overwrite: true,
         maxTransactions: null,
@@ -2555,13 +2539,14 @@ export class VirtualMachine {
   // ---------- Transaction / Response ----------
 
   /** options: { read, timestamp } */
-  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee } = {}) {
+  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee,
+    timeoutMs = this.timeoutMs } = {}) {
     return new Transaction({
       read,
       timestamp,
       blockNumber,
       baseFee: baseFee ?? this.currentBaseFee(),   // รันนอก block = base fee ของ block ถัดไป
-      timeoutMs: this.timeoutMs,
+      timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
       gas: this.gas,
@@ -2636,6 +2621,7 @@ export class VirtualMachine {
       burnedFee: encodeNative(tx.feeBurned),
       producerFee: encodeNative(tx.feeReward),
       ...(tx.fees?.type === 2 ? { feeType: 2, maxFeePerGas: encodeNative(tx.fees.maxFee), maxPriorityFeePerGas: encodeNative(tx.fees.maxPriority) } : {}),
+      ...(tx.payer?.sponsor ? { sponsor: tx.payer.sponsor } : {}),   // ผู้จ่ายค่าแก๊สของใบนี้
     };
   }
 
@@ -2662,7 +2648,7 @@ export class VirtualMachine {
   // ---------- nonce / ค่าแก๊ส ----------
 
   /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
-  preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, value = 0 } = {}) {
+  preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, sponsor, value = 0 } = {}) {
     const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
     // ราคาจริง = min(maxFee, baseFee + priority) · maxFee ต่ำกว่า baseFee ของ block → ไม่รับ (ไม่กิน nonce)
     tx.fees = resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas }, tx.baseFee);
@@ -2674,10 +2660,13 @@ export class VirtualMachine {
 
     const current = tx.current(nonceKey(address)) ?? 0;
     if (this.requireNonce && nonce !== current) fail(ERRORS.invalidNonce, current, nonce);
-    tx.payer = { address, nonce: current };
+    // sponsor: จ่ายแก๊สแทนผู้ส่ง (ผู้ส่งยังใช้ nonce ของตัวเองและจ่าย value เอง) · ตรวจลายเซ็นของ sponsor แล้วตอนรับ tx (verifyTransaction)
+    tx.payer = sponsor && sponsor !== address ? { address, nonce: current, sponsor } : { address, nonce: current };
 
     if (tx.chargeGas) {
-      const available = this.nativeBalance(tx, address) - readNative(value); // เงินที่เหลือหลังแนบ value ไปกับ tx
+      if (tx.payer.sponsor && this.nativeBalance(tx, address) < readNative(value)) fail(ERRORS.nativeInsufficient, address);
+      // เงินที่จ่ายแก๊สได้ = ยอดของผู้จ่าย (หัก value ที่แนบไปกับ tx เมื่อผู้จ่ายคือผู้ส่งเอง)
+      const available = tx.payer.sponsor ? this.nativeBalance(tx, tx.payer.sponsor) : this.nativeBalance(tx, address) - readNative(value);
       if (available < 0n) fail(ERRORS.nativeInsufficient, address);
       tx.gasLimit = tx.gasPrice > 0n ? Math.min(gasUnits(available / tx.gasPrice), requestedLimit) : requestedLimit;
     } else {
@@ -2709,6 +2698,7 @@ export class VirtualMachine {
   /** writes ของ nonce + ค่าแก๊ส (ส่วน base fee เผาตาม burnPercent · tip เข้าผู้ปิด block) */
   buildChargeWrites(tx, balance, raw) {
     const { address, nonce } = tx.payer;
+    const feePayer = tx.payer.sponsor ?? address;
     const due = tx.gasFee();
     const fee = due < balance ? due : balance > 0n ? balance : 0n;
     tx.feeCharged = fee;
@@ -2719,8 +2709,8 @@ export class VirtualMachine {
     // ค่าแก๊สเข้าช่อง consumed ของผู้จ่าย ส่วนที่ไม่ได้เผาทิ้งเข้าช่อง received ของผู้ปิด block
     writes.push({
       type: WRITE.PUT,
-      dbKey: nativeKey(address, NATIVE_FIELD.CONSUMED),
-      value: encodeNative(this.nativeField(tx, address, NATIVE_FIELD.CONSUMED, raw) + fee),
+      dbKey: nativeKey(feePayer, NATIVE_FIELD.CONSUMED),
+      value: encodeNative(this.nativeField(tx, feePayer, NATIVE_FIELD.CONSUMED, raw) + fee),
     });
 
     // EIP-1559: ส่วน base fee (แก๊ส × baseFee) เผา burnPercent % · tip (ส่วนที่เกิน baseFee) เข้าผู้ปิด block ทั้งหมด
@@ -2750,7 +2740,7 @@ export class VirtualMachine {
 
   chargeOnSuccess(tx) {
     if (!tx.payer) return [];
-    const balance = this.nativeBalance(tx, tx.payer.address);
+    const balance = this.nativeBalance(tx, tx.payer.sponsor ?? tx.payer.address);
     if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, tx.gasPrice > 0n ? gasUnits(balance / tx.gasPrice) : tx.gasLimit);
     return this.buildChargeWrites(tx, balance, false);
   }
@@ -2759,7 +2749,7 @@ export class VirtualMachine {
     if (!tx.payer) return [];
     try {
       // ค่าใน DB (writes ของ tx ถูกทิ้งไปแล้ว)
-      return this.buildChargeWrites(tx, this.nativeBalance(tx, tx.payer.address, true), true);
+      return this.buildChargeWrites(tx, this.nativeBalance(tx, tx.payer.sponsor ?? tx.payer.address, true), true);
     } catch {
       return []; // DB อ่านไม่ได้ → เก็บค่าแก๊สไม่ได้
     }
@@ -3292,6 +3282,9 @@ export class Block {
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
   #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
   #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
+  #producer;            // address ผู้ผลิต (อยู่ใน hash) · null = block แบบเดิม
+  #producerSignature;   // ลายเซ็นของผู้ผลิตบน hash ของ block (ส่งมา = sync / replay · ไม่ส่ง = เซ็นด้วย vm.producer ตอนต้องใช้)
+  #timeoutMs;           // เวลาต่อ tx (null = vm.timeoutMs) — replay / sync ใช้ vm.replayTimeoutMs
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -3308,6 +3301,9 @@ export class Block {
     maxTransactions = vm.maxTransactions,
     maxTransactionsPerSender = vm.maxTransactionsPerSender,
     maxBlockGas = vm.maxBlockGas,
+    producer = vm.producer?.address ?? null,
+    producerSignature = null,
+    timeoutMs = null,
   } = {}) {
     checkTimestamp(timestamp);
     this.#vm = vm;
@@ -3334,6 +3330,9 @@ export class Block {
     }
     this.#feeRecipient = feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient);
     this.#burnPercent = checkBurnPercent(burnPercent);
+    this.#producer = producer === null || producer === undefined ? null : normalizeAddress(producer);
+    this.#producerSignature = producerSignature;
+    this.#timeoutMs = timeoutMs;
     // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
     // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
     this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous);
@@ -3547,6 +3546,7 @@ export class Block {
       gasUsed: this.#gasUsed,
       receiptsRoot,
       logsBloom: bloom,
+      producer: this.#producer,
     });
     return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot, receiptsRoot, logsBloom: bloom };
   }
@@ -3770,7 +3770,27 @@ export class Block {
       txHashes,
       ...(this.#rejectedTxs.length ? { rejectedCount: this.#rejectedTxs.length, rejectedRoot: this.hashes().rejectedRoot } : {}),
       ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
+      ...(this.#producer ? { producer: this.#producer, producerSignature: this.producerSignature() } : {}),
     };
+  }
+
+  /**
+   * ลายเซ็นของผู้ผลิตบน hash ของ block → "0x" + r + s + v · null = ไม่มีผู้ผลิต หรือ node นี้ไม่ใช่ผู้ผลิตของ block
+   * node ผู้ผลิตเซ็นด้วย vm.producer.sign (ได้ค่าเดิมทุกครั้งต่อ hash เดียวกัน) · sync / replay ใช้ลายเซ็นที่มากับ header
+   */
+  producerSignature() {
+    if (!this.#producer) return null;
+    const { hash } = this.hashes();
+    if (this.#producerSignature?.hash === hash) return this.#producerSignature.signature;
+    if (typeof this.#producerSignature === "string") return this.#producerSignature;
+    const signer = this.#vm.producer;
+    if (!signer || signer.address !== this.#producer) return null;
+    this.#producerSignature = { hash, signature: signer.sign(hash) };
+    return this.#producerSignature.signature;
+  }
+
+  get producer() {
+    return this.#producer;
   }
 
   /** receipt ของทั้ง block สำหรับ explorer */
@@ -3919,6 +3939,7 @@ export class Block {
       feeRecipient: this.#feeRecipient,
       burnPercent: this.#burnPercent,
       baseFee: this.#baseFee,
+      ...(this.#timeoutMs === null ? {} : { timeoutMs: this.#timeoutMs }),
     });
     if (result.accepted === false) {
       this.#rejected.push({ action, request: copyValue(request) ?? {}, error: result.error });

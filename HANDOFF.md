@@ -22,9 +22,9 @@
 
 ```bash
 npm install
-npm test                         # 799 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 866 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
-npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
+npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
 node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
 ```
@@ -32,12 +32,29 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 2000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด)
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+`npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
 
 สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
+
+### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
+- **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
+  ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
+- **ไม่ใช่ `DEV=1`** → ต้องมี `ADMINS` (ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้) และ `PRODUCER_KEY` · producer ต้องอยู่ใน `config.producers` ถ้า genesis กำหนด
+- **ผู้ผลิตเซ็น block**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → header มี `producer` (อยู่ใน hash · block ที่ไม่มีผู้ผลิต hash เหมือนเดิมทุกไบต์) + `producerSignature` (r‖s‖v บน hash ของ block · อยู่นอก hash)
+  `sync.js`: `verifyProducer(header, producers)` · ส่ง `producers` → block ต้องมีผู้ผลิตในรายชื่อ + ลายเซ็นถูก · `startSync({ genesis })` อ่าน `genesis.config.producers` ให้เอง · `/genesis` บอก `producer` / `producers`
+  replay / rebuild ใช้ producer + ลายเซ็นจาก header เดิม (เครื่องที่ไม่มี key rebuild ได้ hash เดิม) · explorer หน้า block แสดง Producer
+- **timeout ตอน replay / sync**: tx รันด้วย `replayTimeoutMs` (ค่าเริ่ม 60 วิ) แทน `timeoutMs` ของผู้ผลิต — ผู้ผลิตกรอง TIMEOUT ออกก่อนเข้า block แล้ว (`code === TIMEOUT → accepted: false`) เครื่องที่ช้ากว่าจึงไม่ได้ผลต่าง · แก๊สยังเป็นตัวหยุดหลัก (3M แก๊สใช้ราว 0.1 วิ)
+- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, producer, miner, db }` · มีปัญหา = **HTTP 503**
+  problems: `stalled` (มี tx รอแต่ไม่มี block ใหม่เกิน `HEALTH_STALL_MS` ค่าเริ่ม max(10 × BLOCK_MS, 30 วิ)) · `miner` (ปิด block ล้มเหลวติดกัน) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT` ค่าเริ่ม 90%)
+- **`npm run monitor -- --url … [--webhook URL] [--interval 30] [--once]`** เตือนเมื่อสถานะเปลี่ยน (POST `{ text, url, problems, health }` ไปที่ webhook) · `--once` exit 1 = มีปัญหา (ใช้กับ cron)
+- **`npm run backup -- --data ./data --out ./backups [--keep 7] [--compact]`** สำรอง LMDB ขณะ server ทำงาน (`DB.backup` = mdb_env_copy อ่าน snapshot เดียว) + `replaced-tx.jsonl` + `manifest.json`
+  ตรวจทุกครั้ง: block ล่าสุดตรง manifest · parentHash ต่อกัน 1,000 block ล่าสุด · blockhash ชี้กลับ · `--verify <ชุด>` ตรวจอย่างเดียว
+  กู้: หยุด server แล้ว `npm run backup -- --restore <ชุด> --data ./data` (มีของเดิม → `--force` ย้ายไป `<data>.before-restore-<เวลา>`)
+- TLS: server เป็น `http` ล้วน ต้องมี reverse proxy (nginx / Caddy) ทำ HTTPS ข้างหน้า · rate limit นับต่อ IP ในหน่วยความจำของแต่ละโปรเซส
 
 ---
 
@@ -278,6 +295,8 @@ syntax ถูกตรวจทั้งกับ V8 (ข้อความ erro
 | ต้น tx | คืน memory เป็น snapshot (~0.13 ms) → ทุก tx เริ่มจาก heap เดียวกันทุกไบต์ ไม่มีอะไรจาก tx ก่อนค้าง (global ที่แก้ / ขยะของ GC) |
 | 1 tx ชั้นนอกสุด | = runtime เดียว · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียก (`runProgram` / init ของ `cloneProgram` ซ้อนรันใน runtime เดียวกัน) |
 | 1 โปรแกรมใน tx | = 1 context (global แยกกัน) · factory ถูกเรียกใหม่ทุก call → ตัวแปรระดับบนสุดไม่ค้างข้าม call |
+| ภาพอุ่น (เทสต์ `89-warm-sandbox`) | โปรแกรมแรกของ tx: ใช้ memory ที่ "snapshot ตั้งต้น + factory ของซอร์สนี้ถูกประเมินแล้ว" (LRU `SANDBOX_WARM_CACHE` ค่าเริ่ม 32 · `warmStats` / `clearWarmCache`) แทนการคอมไพล์ใหม่ · ภาพ = ผลของ (snapshot, source) อย่างเดียว → มี / ไม่มีใน cache ผลทุก tx เหมือนกันทุกไบต์ (รวมแก๊สและจุด OUT_OF_MEMORY) · token transfer 2.2 → 0.94 ms/tx · โปรแกรมที่สองของ tx คอมไพล์ใน tx ตามเดิม |
+| fuzz (เทสต์ `87-sandbox-fuzz`) | `npm run fuzz -- --iterations N --seed S`: สุ่มโปรแกรม + ค่าข้ามเขตแดน ตรวจ ไม่มี INTERNAL / throw หลุดถึงผู้เรียก · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · รอบยาว 20,000 รอบ (seed 1000) ไม่พบปัญหา |
 | ค่าข้ามเขตแดน | เป็นข้อความ JSON เสมอ (BigInt / undefined / NaN / -0 / map(...) ติดป้ายด้วย key `"\u0000"`) → ได้สำเนาใหม่ทุกครั้ง · function / symbol / object ที่ไม่ใช่ข้อมูลส่งเป็น "ไม่ใช่ข้อมูล" แล้ว host ปฏิเสธเหมือนเดิม · error ของ host ที่โปรแกรมได้รับเป็น `Error` ของฝั่งโปรแกรม (มี `code`) ถ้า throw ต่อ host ได้ error ตัวเดิมคืน |
 | global | built-in มาตรฐานของ JS + `Date` / `Math` ของ block (Math.random ถาม host) · `eval` / `new Function` / constructor ของ async / generator function ถูกปิด (EvalError) เพราะโค้ดที่สร้างตอนรันไม่ผ่านตัวนับแก๊ส · `console.*` เรียกได้แต่ไม่พิมพ์ · ไม่มี `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
 | แก๊ส | `__gas(n)` / `__str` / `__props` / `__spread` และเมธอดในตัวที่ถูกห่อไว้ ทำงานในฝั่งโปรแกรม (ไม่ข้ามไป host ทุกครั้ง) · ยอดค้างส่งให้ host ทุกครั้งที่เรียก API · ยอดค้างเกินที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดิม **ตัวเลขแก๊สเท่าเดิมทุกหน่วย** |
@@ -635,6 +654,13 @@ vm[method](request);
   - `deploy` มี field `upgrader` เพิ่มได้ → ถูกยุบเข้า string ที่เซ็นเป็น `canonicalJson({ input, code, upgrader })`
     **ไม่ส่ง = ไม่มี key นี้** → tx / ลายเซ็นเดิมทุกใบได้ digest เหมือนเดิม (ใน hash ของ VM ก็เช่นกัน)
 - `sender` มาจากการ recover ลายเซ็น**เท่านั้น** `tx.from` ใช้เทียบอย่างเดียว
+- **ผู้จ่ายแก๊สแทน (paymaster / fee payer · เทสต์ `93-paymaster`)**: `tx.sponsor` = address → ต่อ field `sponsor` (address) ท้ายชนิด (แบบเดิมหรือ 1559 · ไม่มี sponsor = digest เดิมทุกไบต์)
+  `/sendtx { tx, signature, sponsorSignature }` · `sponsorSignature` = sponsor เซ็น **digest เดียวกัน** (เห็น tx ทั้งใบก่อนยอมจ่าย) · ผู้ส่งเปลี่ยน sponsor ไม่ได้เพราะอยู่ในข้อมูลที่ตัวเองเซ็น
+  VM: `request.sponsor` อยู่ใน hash (`feeFields`) · ผู้ส่งใช้ nonce ตัวเอง + จ่าย value เอง · แก๊สหักจาก sponsor (`tx.payer.sponsor`) · receipt / explorer แสดง `sponsor` ("Gas paid by")
+  VM เชื่อ `request.sponsor` (ตรวจลายเซ็นตอนรับเข้า mempool เหมือนลายเซ็นของผู้ส่ง · sync เชื่อผู้ผลิตที่เซ็น block) · ใช้ VM ตรง ๆ ต้องตรวจเอง
+- **SDK ฝั่ง client** (`client-sdk/index.js` = `programvm/client` · เทสต์ `92-sdk`): ไม่ import VM / sandbox / node:* (ใช้ใน browser ได้ · helper ที่ใช้ร่วมย้ายไป `src/core/encoding.js`)
+  `createClient({ url })` → `send(fields, signer, { sponsor? })` (เติม chainId / from / nonce / ค่าแก๊ส 1559 เอง) · `prepare` · `submit` · `wait(hash)` (ตามใบที่แทนให้) · `query` · `balance` · `abi` · `receipt`
+  signer: `keySigner(key)` · `walletSigner(window.ethereum)` (eth_signTypedData_v4 ด้วย `walletTypedData` = field uint256 เป็นเลขฐานสิบล้วน เพราะกระเป๋าอ่าน `"5n"` ไม่ออก)
 
 ### tx มี 2 hash ค้นได้ทั้งคู่
 | | มาจาก | ใช้ |
@@ -673,7 +699,7 @@ vm[method](request);
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
 | `GET /name/:ns` | namespace → address |
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
-| `GET /health` | `{ ok, latest, historyFrom, pending, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
+| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, historyFrom, pending, rejectedPending, producer, miner, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
@@ -702,7 +728,7 @@ page เกินหน้าสุดท้าย → ได้หน้าส�
 
 ### เขียน
 ```
-POST /sendtx   { tx, signature }
+POST /sendtx   { tx, signature, sponsorSignature? }   ลายเซ็นตรวจใน worker thread (src/node/verify-pool.js · เทสต์ 90 · ~2.4 ms/tx → 3 worker เร็วขึ้น ~2.8 เท่า)
   200 → { queued: true, hash, sender, simulation }
   400 → { queued: false, error | issues | simulation }      ลายเซ็นผิด / autoreview ไม่ผ่าน / simulate ล้ม / คิวไม่รับ
 
@@ -715,7 +741,7 @@ POST /query    { programUuid, functionName, input, context?, value? }
 `simulate` รันบน state ปัจจุบันของ DB ไม่นับผลของใบที่รออยู่ในคิว → เป็นการ "ประเมิน" ไม่ใช่รับประกัน
 
 ### `/evm` — ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM / Blockscout (`src/node/evm-rpc.js` + `evm-ws.js` · เทสต์ `50-evm-rpc` `51-evm-ws` + e2e)
-**อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน** แค่อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem / Blockscout ต่อได้)
+อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem / Blockscout ต่อได้) · เขียนได้ทางเดียว: `eth_sendRawTransaction` ผ่าน intake เดียวกับ `/sendtx` (`submit` ของ server)
 ```
 POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP · 0 = ไม่จำกัด สำหรับ indexer)
 ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
@@ -725,7 +751,7 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 - รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
   `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi`
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
-  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 อ่านอย่างเดียว) `eth_estimateGas`
+  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 + โปรแกรมที่มี `metadata.abi`) `eth_estimateGas` `eth_sendRawTransaction`
   `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
 - **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
   (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
@@ -745,9 +771,15 @@ GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก
 - callTracer: root = tx (`CREATE` สำหรับ deploy), `calls[]` = trace ซ้อนตาม depth · native ที่โปรแกรมโอนด้วย `transferNative` (ไม่อยู่ใน trace)
   หาได้จาก `nativeChanges` หลังตัด value ของทุกชั้นและค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) → เป็น `CALL` จากโปรแกรมนั้นไปผู้รับ · ค่าแก๊สไม่เป็น internal tx
 - txpool: จาก `mempool.list()` (ไม่มี to / value เพราะ mempool ไม่ได้เปิดให้อ่าน)
-- **ส่ง tx ไม่ได้**: `eth_sendRawTransaction` ตอบ error (เชนรับเฉพาะ EIP-712 ของตัวเอง) → ส่งผ่าน explorer เหมือนเดิม
-- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่ใช่ token / NFT / multi-token มาตรฐาน, `balanceOfBatch` ผ่าน eth_call
-- chainId มาจาก `CHAIN_ID` ของเชน (ค่าเริ่มต้น 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet)
+- **`eth_call` ตาม `metadata.abi`** (`src/node/evm-abi.js` · เทสต์ `91-evm-abi-call`): หลัง ERC-20 / 721 / 1155 ของโปรแกรมมาตรฐาน → selector = keccak("ชื่อ(ชนิด,…)") ตาม `toEvmAbi` · ถอด argument แบบ Solidity (uint / int → `"123n"` · address ตัวเล็ก · bytes → `"0x…"` · object / array / any = string JSON ที่ parse ให้)
+  → `vm.query` (from = `context.sender`) → เข้ารหัสผลตาม outputs (หลายตัว = array ตามลำดับหรือ object ตามชื่อ · ไม่มี outputs = `0x`) · ถอดไม่ได้ / โปรแกรม throw = `execution reverted: …`
+- **`eth_sendRawTransaction`** (`src/node/evm-raw.js` · เทสต์ `94-evm-send-raw` ใช้ ethers JsonRpcProvider + Wallet แบบ Hardhat / dApp)
+  รับ legacy ที่มี chainId (EIP-155) และ type 2 (accessList ว่าง) · ไม่รับ: ไม่มี chainId · chainId ไม่ตรง · type 1 / 3 / 4 · deploy bytecode (`to` ว่าง) · data ไปที่ address ที่ไม่ใช่โปรแกรม · s สูง (EIP-2)
+  แปลง: ไม่ใช่โปรแกรม + data ว่าง → `transfer` · token มาตรฐาน + `transfer` / `approve` / `transferFrom` แบบ ERC-20 → ฟังก์ชันของ token · อื่น ๆ → ฟังก์ชันตาม `metadata.abi` (เขียนได้)
+  request เก็บ `digest = keccak(raw)` + `evmRaw` (raw ทั้งใบอยู่ใน block body ตรวจซ้ำได้) · `/tx/:hash` · receipt · getTransactionByHash ตอบด้วย hash ของ Ethereum (`evmHash` ใน receipt) · nonce ตัวนับเดียวกับ tx แบบ EIP-712
+- `eth_estimateGas`: โอน native = 21000 (ที่กระเป๋าคาด · จ่ายตามที่ใช้จริง) · เรียกโปรแกรม = จำลองด้วย `vm.query` × 1.25 + 1000 · ล้ม = `execution reverted`
+- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่มี ABI และไม่ใช่มาตรฐาน, `balanceOfBatch` ผ่าน eth_call · รายการ tx ใน block แบบไม่ full ของใบจากกระเป๋ายังเป็น hash ภายใน
+- chainId มาจาก `CHAIN_ID` ของเชน (`genesis.json` ในrepo = 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet) · ลองกับ MetaMask จริง: `docs/metamask-checklist.md` (genesis แยก chainId 7777)
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
   · Blockscout 9.x ต้องเพิ่ม `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm ไม่อ่าน gzip) · ขั้นตอนเต็ม + เปิด-ปิด + แก้ปัญหา: `docs/blockscout.md`
@@ -1009,6 +1041,16 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
 | `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
+| `85-genesis-producer` | `resolveSettings`: genesis ก่อน env · env ต่าง = error · ไม่มี config = ใช้ env · `startupProblems` (ADMINS / PRODUCER_KEY / producer นอกรายชื่อ · DEV ข้าม) · `server.js` จริงไม่ยอมเริ่ม · producer อยู่ใน hash + ลายเซ็นกู้ได้ · sync ปฏิเสธผู้ผลิตนอกรายชื่อ / ลายเซ็นปลอม / ไม่มีลายเซ็น / ไม่มีผู้ผลิต · replay / rebuild ได้ hash + ลายเซ็นเดิมแม้ไม่มี key · `replayTimeoutMs`: ผู้อ่านที่ timeout สั้นยังได้ hash ตรง |
+| `86-ops` | `/health` ปกติ 200 · stalled · ปิด block ล้มเหลว = 503 · `scripts/monitor.js` check (รวมติดต่อไม่ได้) · `scripts/backup.js` สำรองขณะ DB เปิด / manifest / ตรวจสาย block / keep · verify เจอ manifest ไม่ตรง + header หาย · restore ลงโฟลเดอร์ว่าง / ต้อง `--force` |
+| `87-sandbox-fuzz` | `fuzzOnce` / `fuzzDecoder` / `runFuzz` (seed คงที่ 150 รอบ): ไม่มี INTERNAL · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · ตัวสุ่มซ้ำได้ตาม seed |
+| `88-gas-cpu` | `scripts/bench-gas.js` (`npm run bench:gas`): ns ต่อแก๊สของ ~85 งาน เทียบลูปเลข · งานที่เคยถูกเกิน 8 เท่า (string ยาว `<` / `===` / switch, Map / Set key ยาว, JSON.stringify ซ้อนลึก, sort, flat, normalize) ราคาใหม่ · แก๊สเท่ากันทุก VM · ผล JS เหมือนเดิม |
+| `89-warm-sandbox` | ภาพอุ่นมี / ไม่มีใน cache / ปิด cache: ผลทุก tx เหมือนกันทุกไบต์ (รวมจุด OUT_OF_MEMORY) · global ไม่ค้าง · โปรแกรมที่สองของ tx ปกติ · LRU มีเพดาน |
+| `90-verify-pool` | worker ให้ผลเหมือน `verifyTransaction` ทุกไบต์ · error เดิม · ข้อมูลส่งข้าม thread ไม่ได้ = reject ไม่ค้าง · size 0 = thread หลัก · ปิดแล้วเรียกต่อได้ · 200 ใบพร้อมกัน thread หลักไม่ถูกบล็อก |
+| `91-evm-abi-call` | `eth_call` ตาม `metadata.abi`: ethers เข้ารหัส / ถอดได้ทุกชนิด · ตาม block · from = context.sender · selector ไม่ตรง / throw / calldata สั้น / JSON เสีย = reverted · codec ตรงกับ ethers |
+| `92-sdk` | `client-sdk` ไม่ import VM / sandbox / node:* · send ด้วย key / กระเป๋า EIP-1193 (ethers เซ็น typed data แบบ MetaMask) → wait ถึง block · nonce ผิด = `ChainError` พร้อม body |
+| `93-paymaster` | ไม่มี sponsor = ชนิดเดิม · มี sponsor = digest ตรงกับ ethers · ลายเซ็น sponsor หาย / ผิดคน / sponsor = ผู้ส่ง / เปลี่ยน sponsor = ปฏิเสธ · บนเชน: ผู้ใช้ยอด 0 ส่งได้ แก๊สหักจาก sponsor nonce ของผู้ส่ง · value ต้องเป็นเงินของผู้ส่ง |
+| `94-evm-send-raw` | ethers ส่งผ่าน `/evm`: native (type 2 + legacy) · ERC-20 transfer ของ token มาตรฐาน · ฟังก์ชันตาม ABI + estimateGas · receipt ด้วย hash ของ ethers · ปฏิเสธ ไม่มี chainId / chainId ผิด / deploy / type 1 / data ไป EOA / RLP เสีย · ถอดตรงกับ ethers |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
@@ -1179,14 +1221,15 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 ### บล็อกการเปิดให้คนนอก deploy
 1. ~~ไม่มี sandbox จริง~~ เสร็จแล้ว: โปรแกรมรันใน QuickJS (WebAssembly) — `src/core/sandbox.js` (หัวข้อ 4 "Sandbox")
    แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
-   ที่เหลือ: ความเร็ว (token transfer ~1.4 ms/tx เทียบ ~0.6 เดิม) และ fuzz / review ความปลอดภัยของตัวแปลงค่าข้ามเขตแดน
+   ~~ความเร็ว / fuzz~~ เสร็จแล้ว: ภาพอุ่นต่อโปรแกรม (token transfer 2.2 → 0.94 ms/tx) · fuzz 20,000 รอบไม่พบปัญหา · ราคาแก๊สเทียบเวลา CPU แล้ว (`npm run bench:gas`)
 2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node) · การคัดลอก / สร้างข้อมูลคิดตามขนาด (spread / rest / string `+` / เมธอดในตัว · 1 ต่อสมาชิกหรือ 32 byte)
    `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 3M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
 3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
 
 ### บล็อกการมี node ที่สอง
 4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) · ข้อ 2 เสร็จแล้ว ผลแก๊สไม่ขึ้นกับความเร็วเครื่อง
-   เหลือแค่กรณี timeout (ด่านสุดท้าย) ที่ tx ไม่เข้า block
+   ~~กรณี timeout~~ เสร็จแล้ว: replay / sync ใช้ `replayTimeoutMs` · ~~block ไม่มีลายเซ็นผู้ผลิต~~ เสร็จแล้ว: `producer` + `producerSignature` ตรวจกับ `config.producers` (หัวข้อ 1 "เปิดเครือข่ายจริง")
+   ที่เหลือคืองานใหญ่: P2P (ตอนนี้ดึงจาก URL เดียว) · ผู้ผลิตหลายราย · finality
 
 ### ค้างคาที่รู้อยู่
 5. ~~tx ที่ถูกปฏิเสธไม่เข้า block เลย~~ เสร็จแล้ว: บันทึกใน block (`rejectedRoot` อยู่ใน hash) ไม่รัน ไม่แตะ state — หัวข้อ mempool
@@ -1194,25 +1237,26 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 6. ~~native / gas ยังเป็น `number`~~ เสร็จแล้ว: native เป็น BigInt wei 18 ทศนิยม · แก๊สนับทีละขั้น (1 gas/node)
 7. ~~`/program/:a/groups` นับได้สูงสุด 5,000 key~~ เสร็จแล้ว: นับครบทีละช่วง (`scan` ≤ 50,000 key ต่อ request + `cursor`)
 8. ~~แท็บ interactions / event ยังไม่มี pagination~~ เสร็จแล้ว: แบบ cursor (Newer / Older) ฝั่ง server `/program/:a/interactions` · `/program/:a/events?cursor=`
-9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers)
-   แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ
+9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers) + ethers ส่งผ่าน `/evm` ได้ (เทสต์ 94)
+   แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ: `docs/metamask-checklist.md`
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
     **แต่คอขวดจริงคือการรับ tx** (`/sendtx` ตรวจลายเซ็น ~3.5 ms × 2 รอบ + simulate) ใน thread เดียวกับ miner → รับได้จริง ~65 token tx/s · ~110 native tx/s ต่อ node
     แก้แล้ว: ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำ (รับ tx ผ่าน HTTP เร็วขึ้น 46–75%)
-    ที่ควรทำต่อ (ยังไม่ทำ): ตรวจลายเซ็นใน worker thread · sandbox ไม่คอมไพล์ซ้ำทุก call · แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
+    ~~ตรวจลายเซ็นใน worker thread · sandbox ไม่คอมไพล์ซ้ำทุก call~~ เสร็จแล้ว (เทสต์ 90 / 89) · ที่เหลือ: แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
-    ยังค้นด้วย VM hash เท่านั้น ไม่รับ digest
+    (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
 13. ~~explorer ไม่มีฟอร์ม deploy / upgrade~~ เสร็จแล้ว: หน้า `#deploy` (upgrader ไม่บังคับ) · แถบ Upgrade (โค้ดใหม่ + migrate input, โอน / สละสิทธิ์, admin อนุมัติ / ปฏิเสธ) · ปุ่ม Approve / Reject ในรายการรออนุมัติ
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
-**ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
-ของจริงต้องเซ็นฝั่ง client เท่านั้น (explorer ทำถูกแล้ว — ใช้ `eth_signTypedData_v4`)
-**private key ต้องไม่เดินทางไปถึง server เลย** ส่วน `/sendtx` ต้องรับแค่ `{ tx, signature }` (ซึ่งทำถูกอยู่แล้ว)
+ไม่มี endpoint ไหนรับ private key · `scripts/*` เซ็นในเครื่องตัวเองแล้วส่งแค่ `{ tx, signature }` (ตรวจแล้ว 2026-10-24) แต่รับ key ทาง `--admin-key` / `--funder-key` และมี key ทดสอบในโค้ด → ใช้กับ key จริงไม่ได้
+ของจริงเซ็นฝั่ง client เท่านั้น (explorer ใช้ `eth_signTypedData_v4`) · key ของ `ADMINS` ควรอยู่ใน hardware wallet / multisig · `PRODUCER_KEY` อยู่ในเครื่องผู้ผลิตเท่านั้น
+ตั้ง `UPGRADE_DELAY_BLOCKS` > 0 ใน genesis เพื่อให้ผู้ใช้มีเวลาถอนออกก่อนโค้ดใหม่ใช้งาน
 
 ### เมื่อถึงเวลา
-rollback เร็ว · merkle tree จริง · factory (โปรแกรมสร้างโปรแกรม) · การอัปเกรดโปรแกรม ·
-มาตรฐานโทเคน · ตัด history เก่า / snapshot · หน้า holders ใน explorer
+rollback เร็ว · merkle tree จริง (+ `eth_getProof`) · ตัด history เก่า / snapshot sync · P2P · ผู้ผลิตหลายราย / finality · bridge
+(ทำแล้ว ลบออกจากรายการ 2026-10-24: factory = `cloneProgram` · การอัปเกรดโปรแกรม · มาตรฐานโทเคน / NFT / 1155 · หน้า holders)
+แผนเต็ม: `/mnt/project-files/cardianal_server/dev-plan.md` (ระยะ 1–5) · เทียบ EVM: `gap-vs-evm.md`
 
 ---
 
@@ -1224,6 +1268,8 @@ rollback เร็ว · merkle tree จริง · factory (โปรแกร
 | `CHECKPOINT.md` | สถานะ, ค่าตั้งต้นที่แนะนำสำหรับ production, ตัวเลข performance ที่วัดจริง |
 | `EXPLORER-SPEC.md` | สเปคฝั่ง API consumer — **รูปแบบ response ของทุก endpoint อยู่ที่นี่** อ่านก่อนทำ frontend |
 | `program-sdk/README.md` | สำหรับคนนอกที่จะเขียนโปรแกรม + testkit |
+| `client-sdk/index.js` | SDK ฝั่ง client (เซ็น + ส่ง tx + รอผล · ใช้ใน browser ได้) — หัวข้อ 6 |
+| `docs/metamask-checklist.md` | ลอง MetaMask จริงทีละขั้น (กรอกผลแล้วส่งกลับ) |
 | `program-sdk/patterns/SAFE-PATTERNS.md` | pattern กัน reentrancy และข้อผิดพลาดที่เจอบ่อย |
 
 ลำดับการอ่านที่แนะนำ: **ไฟล์นี้** → `EXPLORER-SPEC.md` (ถ้าทำ frontend) หรือ comment หัว `virtualmachine.js` (ถ้าทำ VM) → `CHECKPOINT.md`

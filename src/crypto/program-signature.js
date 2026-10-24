@@ -19,7 +19,7 @@
  */
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { canonicalJson, keccak256Hex, normalizeHex, normalizeHexDeep } from "../core/virtualmachine.js";
+import { canonicalJson, keccak256Hex, normalizeHex, normalizeHexDeep } from "../core/encoding.js";
 import { PERMIT_TYPES, PERMIT_VERSION } from "../standards/token.js";
 import { DOMAIN_FIELDS, eip712Digest, eip712DomainSeparator, recoverAddress } from "./eip712.js";
 

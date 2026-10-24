@@ -1,6 +1,10 @@
 /**
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
- *   PORT=3000 DATA=./data MINER=0x… ADMINS=0x… node server.js
+ *   PORT=3000 DATA=./data PRODUCER_KEY=0x… ADMINS=0x… node server.js      (ช่วงพัฒนา: DEV=1 node server.js หรือ npm run dev)
+ *   DEV=1             ช่วงพัฒนา: ไม่บังคับ ADMINS / PRODUCER_KEY (ไม่ตั้ง ADMINS = ใครก็อนุมัติ deploy / upgrade ได้)
+ *   GENESIS=genesis.json   ไฟล์ genesis · config ในไฟล์ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (src/node/genesis.js) — env ตั้งต่างจาก genesis = ไม่ยอมเริ่ม
+ *   PRODUCER_KEY=0x…  key ของผู้ผลิต block (เซ็น hash ของทุก block · node ผู้อ่านตรวจกับ config.producers ใน genesis)
+ *   MINER=0x…         ผู้รับค่าแก๊สของ block (ค่าเริ่ม = address ของ PRODUCER_KEY)
  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
  *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
  *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
@@ -16,6 +20,7 @@
  *   REJECTED_PER_BLOCK=1000  tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแต่ไม่ได้รัน) ที่บันทึกลง block ได้ต่อ block (ที่เกินยกไป block ถัดไป)
  *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
  *   REPLACED_LOG_DAYS=30     อายุสูงสุดของบันทึกใบที่ถูกแทนที่
+ *   VERIFY_WORKERS=N         worker thread ที่ตรวจลายเซ็นของ /sendtx (ค่าเริ่มต้น = จำนวน CPU − 1 ไม่เกิน 4) · 0 = ตรวจบน thread หลัก
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -23,12 +28,15 @@ import path from "node:path";
 import { VirtualMachine } from "./src/core/virtualmachine.js";
 import { reviewProgram } from "./src/core/autoreview.js";
 import { DB, MemoryDB, DEFAULT_MAP_SIZE, parseSize } from "./src/storage/db.js";
-import { verifyTransaction } from "./src/crypto/signature.js";
+import { addressOf } from "./src/crypto/signature.js";
+import { signTypedDataDigest } from "./src/crypto/program-signature.js";
+import { resolveSettings, startupProblems } from "./src/node/genesis.js";
 import { Mempool } from "./src/node/mempool.js";
 import { TxLog } from "./src/node/txlog.js";
 import { simulate } from "./src/node/simulate.js";
 import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
+import { VerifyPool, DEFAULT_VERIFY_WORKERS } from "./src/node/verify-pool.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
@@ -36,34 +44,46 @@ import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHo
   storageGroups, pageRejected, indexedFilterOf, cursorIndexedEvents, programAbi } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const MINER = process.env.MINER ?? "0x1111111111111111111111111111111111111111";
-const BLOCK_MS = Number(process.env.BLOCK_MS ?? 3000);
+export const DEV = ["1", "true", "yes", "on"].includes(String(process.env.DEV ?? "").toLowerCase());
+// genesis: ยอดเริ่มต้น + ค่าที่ทุกเครื่องต้องเหมือนกัน (config) — env ที่ตั้งต่างจาก genesis = ไม่ยอมเริ่ม (ดู startupProblems)
+const GENESIS_FILE = process.env.GENESIS ?? "genesis.json";
+export const genesis = fs.existsSync(GENESIS_FILE) ? JSON.parse(fs.readFileSync(GENESIS_FILE, "utf8")) : null;
+export const { settings, errors: settingErrors } = resolveSettings(genesis ?? {}, process.env);
+// ผู้ผลิต block: เซ็น hash ของ block ทุกอันด้วย key นี้ (key อยู่ในเครื่องนี้เท่านั้น ไม่มี endpoint ไหนรับ / ส่ง key)
+const PRODUCER_KEY = process.env.PRODUCER_KEY || null;
+export const producer = PRODUCER_KEY
+  ? { address: addressOf(PRODUCER_KEY), sign: (hash) => signTypedDataDigest(hash, PRODUCER_KEY) }
+  : null;
+const MINER = process.env.MINER ?? producer?.address ?? "0x1111111111111111111111111111111111111111";
+const BLOCK_MS = settings.blockMs;
 // โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
 // (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
+export const verifyPool = new VerifyPool({ size: process.env.VERIFY_WORKERS ?? DEFAULT_VERIFY_WORKERS });
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 // sandbox ของโปรแกรม (ดู src/core/sandbox.js): ทุกเครื่องในเครือข่ายต้องตั้งค่าเดียวกัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
-const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB ?? 32);
-const STACK_LIMIT_KB = Number(process.env.STACK_LIMIT_KB ?? 256);
-const GAS_PRICE = BigInt(process.env.GAS_PRICE ?? 1_000_000_000);   // wei ต่อแก๊ส (1 gwei)
+const MEMORY_LIMIT_MB = settings.memoryLimitMb;
+const STACK_LIMIT_KB = settings.stackLimitKb;
+const GAS_PRICE = settings.minBaseFee;   // wei ต่อแก๊ส (1 gwei)
 // ตรวจโค้ดอัตโนมัติ (src/core/autoreview.js) ตอน /sendtx deploy / upgrade · AUTO_REVIEW=0 = ปิด (sandbox + แก๊สยังคุมอยู่)
 export const AUTO_REVIEW = !["0", "false", "off", "no"].includes(String(process.env.AUTO_REVIEW ?? "1").toLowerCase());
 
 // LMDB จองพื้นที่ได้สูงสุดเท่านี้ (เต็ม = เขียนไม่ได้ เชนหยุด) · ค่าเริ่ม 1T · ดูที่ใช้ไปแล้วที่ /health
 const LMDB_MAP_SIZE = process.env.LMDB_MAP_SIZE ? parseSize(process.env.LMDB_MAP_SIZE) : DEFAULT_MAP_SIZE;
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA, { mapSize: LMDB_MAP_SIZE }) : new MemoryDB(), {
-  chainId: Number(process.env.CHAIN_ID ?? 1),
+  chainId: settings.chainId,
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true,
   // EIP-1559: base fee (ปรับตามความเต็มของ block) เผาทิ้ง · tip (maxPriorityFeePerGas) เข้าผู้ปิด block
-  feeRecipient: MINER, burnPercent: Number(process.env.BURN_PERCENT ?? 100), timeoutMs: TIMEOUT_MS,
-  minBaseFee: GAS_PRICE, gasTarget: process.env.GAS_TARGET ? Number(process.env.GAS_TARGET) : null,
-  baseFeeChangeDenominator: Number(process.env.BASE_FEE_DENOMINATOR ?? 8),
+  feeRecipient: MINER, burnPercent: settings.burnPercent, timeoutMs: TIMEOUT_MS,
+  minBaseFee: GAS_PRICE, gasTarget: settings.gasTarget,
+  baseFeeChangeDenominator: settings.baseFeeDenominator,
+  producer,
   memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
-  admins: process.env.ADMINS ? process.env.ADMINS.split(",") : null,
-  upgradeDelayBlocks: Number(process.env.UPGRADE_DELAY_BLOCKS ?? 0),   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
+  admins: settings.admins,
+  upgradeDelayBlocks: settings.upgradeDelayBlocks,   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
 });
 // ใบที่ถูกแทนที่ (replace-by-fee): จำแบบ off-chain มีเพดาน · มี DATA = ไฟล์ JSON lines ข้าง LMDB → /tx ตอบ "replaced" ได้แม้ restart
 export const replacedLog = new TxLog({
@@ -77,8 +97,10 @@ export const mempool = new Mempool(vm, { replacedLog, maxRejectedPerBlock: Numbe
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 // ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
 export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
-export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
-if (fs.existsSync("genesis.json")) vm.applyGenesis(JSON.parse(fs.readFileSync("genesis.json", "utf8")));
+// eth_sendRawTransaction → intake เดียวกับ /sendtx (ประกาศ function ไว้ด้านล่าง ใช้ได้เพราะ hoist)
+export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0),
+  submit: (verified) => intake({ tx: verified.tx, signature: verified.request.signature }, verified) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
+if (genesis) vm.applyGenesis(genesis);
 
 // มีแค่ tx ที่ถูกปฏิเสธ → พักไว้ให้ติดไปกับ block ที่มี tx จริง หรือปิด block เมื่อใบที่รอนานสุดครบ REJECTED_HOLD_MS (0 = ปิดทันที)
 export const REJECTED_HOLD_MS = Number(process.env.REJECTED_HOLD_MS ?? 60_000);
@@ -89,6 +111,9 @@ export function shouldMine(now = Date.now()) {
 }
 
 let mining = false;
+// ผลการปิด block ล่าสุด (ให้ /health บอกได้ว่าเชนหยุดเพราะปิด block ล้มเหลวติดกัน)
+export const minerState = { failures: 0, lastError: null, lastErrorAt: null };
+const STARTED_AT = Date.now();
 export const miner = setInterval(() => {
   if (mining || !shouldMine()) return;
   mining = true;
@@ -98,13 +123,38 @@ export const miner = setInterval(() => {
     block.commit();
     const rejected = block.rejectedTransactions().length;
     console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
+    minerState.failures = 0;
   } catch (error) {
     console.error("ปิด block ล้มเหลว:", error.message);
+    Object.assign(minerState, { failures: minerState.failures + 1, lastError: error.message, lastErrorAt: Date.now() });
   } finally { mining = false; }
 }, BLOCK_MS);
 miner.unref?.();
 
 const lower = (value) => String(value ?? "").toLowerCase();
+
+// /health: เชนหยุด = มี tx รอแต่ไม่มี block ใหม่นานกว่านี้ · พื้นที่ LMDB เกินนี้ = เตือน
+export const STALL_MS = Number(process.env.HEALTH_STALL_MS ?? Math.max(BLOCK_MS * 10, 30_000));
+export const DISK_WARN_PERCENT = Number(process.env.HEALTH_DISK_PERCENT ?? 90);
+
+/** สถานะของ node → { ok, problems, ... } · มีปัญหา = HTTP 503 (load balancer / ตัวเฝ้าระบบดูได้ทันที) */
+export function health(now = Date.now()) {
+  const latest = vm.latestBlockNumber();
+  const latestAt = latest === null ? null : vm.getBlock(latest)?.timestamp ?? null;
+  const since = latestAt ?? STARTED_AT;
+  const db = typeof vm.db.stats === "function" ? vm.db.stats() : null;
+  const waiting = mempool.size + (shouldMine(now) ? mempool.rejectedPending : 0);
+  const problems = [];
+  if (waiting > 0 && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
+  if (minerState.failures > 0) problems.push(`miner: ปิด block ล้มเหลว ${minerState.failures} ครั้งติดกัน (${minerState.lastError})`);
+  if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB ใช้ไป ${db.usedPercent}% ของ mapSize`);
+  return {
+    ok: problems.length === 0, problems,
+    latest, latestAt, blockAgeMs: latestAt === null ? null : now - latestAt, blockMs: BLOCK_MS,
+    historyFrom: vm.historyFrom(), pending: mempool.size, rejectedPending: mempool.rejectedPending,
+    producer: producer?.address ?? null, miner: { ...minerState }, db,
+  };
+}
 const limitOf = (query) => Math.min(Number(query.get("limit")) || 20, 200);
 
 const ROUTES = {
@@ -129,12 +179,16 @@ const ROUTES = {
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
   // สถานะของ node: block ล่าสุด · ย้อนดูได้ตั้งแต่ block ไหน · พื้นที่ LMDB ที่ใช้ไป (เกิน mapSize = เขียนไม่ได้)
-  "/health": () => ({ ok: true, latest: vm.latestBlockNumber(), historyFrom: vm.historyFrom(), pending: mempool.size,
-    db: typeof vm.db.stats === "function" ? vm.db.stats() : null }),
+  "/health": () => {
+    const body = health();
+    return body.ok ? body : { status: 503, body };
+  },
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
     gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
     baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
-    burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance }),
+    burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance,
+    // ผู้ผลิต block ของ node นี้ + รายชื่อผู้ผลิตที่ genesis อนุญาต (node ผู้อ่านส่งให้ startSync({ producers }))
+    producer: producer?.address ?? null, producers: settings.producers }),
 };
 
 const DYNAMIC = [
@@ -249,22 +303,29 @@ const DYNAMIC = [
   }],
 ];
 
-function handlePost(url, body) {
+/**
+ * รับ tx ที่ตรวจลายเซ็นแล้วเข้า mempool (/sendtx และ /evm eth_sendRawTransaction ใช้ร่วมกัน)
+ * ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
+ */
+function intake({ tx, signature, sponsorSignature }, verified) {
+  const check = (item) => {
+    if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
+      const reviewed = reviewProgram(tx.code);
+      if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
+    }
+    return simulate(vm, item);
+  };
+  return mempool.add({ tx, signature, sponsorSignature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้ว → ไม่ recover ซ้ำ
+}
+
+async function handlePost(url, body) {
   if (url === "/sendtx") {
-    const { tx, signature } = body ?? {};
+    const { tx, signature, sponsorSignature } = body ?? {};   // sponsorSignature: ผู้จ่ายแก๊สแทน (tx.sponsor) เซ็น digest เดียวกัน
     let verified;
-    try { verified = verifyTransaction({ tx, signature }); }
+    try { verified = await verifyPool.verify({ tx, signature, sponsorSignature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
 
-    // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
-    const check = (item) => {
-      if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
-        const reviewed = reviewProgram(tx.code);
-        if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
-      }
-      return simulate(vm, item);
-    };
-    const queued = mempool.add({ tx, signature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้วข้างบน → ไม่ recover ซ้ำ
+    const queued = intake({ tx, signature, sponsorSignature }, verified);
     if (queued.simulation?.issues) return { status: 400, body: { queued: false, error: queued.simulation.error, issues: queued.simulation.issues } };
     if (queued.simulation && !queued.ok) return { status: 400, body: { queued: false, hash: verified.hash, simulation: queued.simulation } };
     if (!queued.ok) return { status: 400, body: { queued: false, ...queued } };
@@ -314,6 +375,13 @@ async function handleEvm(request, response, url) {
   }
   let body;
   try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(response, 200, parseError()); }
+  // ส่ง tx ผ่าน /evm นับโควตาเดียวกับ POST /sendtx (RATE_LIMIT) ไม่ใช่โควตาอ่านของ /evm
+  const sends = (Array.isArray(body) ? body : [body]).filter((item) => item?.method === "eth_sendRawTransaction").length;
+  for (let i = 0; i < sends; i += 1) {
+    if (postLimiter.allow(ip)) continue;
+    response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
+    return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
+  }
   try { return send(response, 200, evmRpc.handle(body)); }
   catch (error) { console.error(error); return send(response, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: error.message } }); }
 }
@@ -336,7 +404,7 @@ export const server = http.createServer(async (request, response) => {
         response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
         return send(response, 429, { error: "Too many requests, try again later" });
       }
-      result = handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
+      result = await handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
     } else if (ROUTES[url.pathname]) {
       result = ROUTES[url.pathname](url.searchParams);
     } else {
@@ -354,4 +422,12 @@ export const server = http.createServer(async (request, response) => {
 // ws://host/evm: eth_subscribe newHeads / logs (นับ rate limit ร่วมกับ POST /evm)
 export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip) });
 
-if (process.argv[1]?.endsWith("server.js")) server.listen(PORT, () => console.log(`chain ทำงานที่ http://localhost:${PORT}`));
+if (process.argv[1]?.endsWith("server.js")) {
+  const problems = startupProblems({ settings, errors: settingErrors, dev: DEV, producer: producer?.address ?? null });
+  if (problems.length) {
+    console.error(`server ไม่เริ่ม:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
+    process.exit(1);
+  }
+  if (DEV) console.warn("DEV=1: โหมดพัฒนา (ไม่บังคับ ADMINS / PRODUCER_KEY) — ห้ามใช้กับเครือข่ายจริง");
+  server.listen(PORT, () => console.log(`chain ทำงานที่ http://localhost:${PORT}`));
+}

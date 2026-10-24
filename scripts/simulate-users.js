@@ -543,7 +543,7 @@ async function startServer() {
   API = `http://127.0.0.1:${port}`;
   child = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url).pathname,
-    env: { ...process.env, PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: "3000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) },
+    env: { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: "3000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) },
     stdio: "ignore",
   });
   for (let i = 0; i < 50; i += 1) {

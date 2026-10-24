@@ -31,7 +31,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 before(async () => {
   const port = await freePort();
   url = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(port), BLOCK_MS: "300", RATE_LIMIT: "0", REJECTED_HOLD_MS: "1000" }, stdio: "pipe" });
+  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, DEV: "1", PORT: String(port), BLOCK_MS: "300", RATE_LIMIT: "0", REJECTED_HOLD_MS: "1000" }, stdio: "pipe" });
   for (let i = 0; i < 50; i += 1) {
     if (await fetch(`${url}/genesis`).then(() => true, () => false)) break;
     await wait(100);

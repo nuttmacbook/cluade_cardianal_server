@@ -12,7 +12,7 @@ Blockscout ต่อเข้ากับ `/evm` ของเชน (ตัว�
 
 ## 1. รันเชน
 ```bash
-EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
+DEV=1 EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
 ```
 - `EVM_RATE_LIMIT=0` สำคัญ: indexer ยิงถี่มาก ถ้าเปิด limit ไว้ 600/นาที จะโดน 429
 - อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node scripts/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario`)
@@ -88,7 +88,7 @@ log `Index already caught up` แปลว่าไม่มี block ค้า�
 ## เปิด-ปิดประจำวัน
 | ต้องการ | คำสั่ง |
 |---|---|
-| เปิด | `colima start` (ถ้าปิดไว้) → รันเชน `EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
+| เปิด | `colima start` (ถ้าปิดไว้) → รันเชน `DEV=1 EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
 | หน้าเว็บขึ้น 502 หลังเปิด | `docker-compose -f geth.yml restart proxy` |
 | ปิด (ข้อมูลที่ index ไว้ยังอยู่) | `docker-compose -f geth.yml down` · ปิด colima ด้วย `colima stop` |
 | ปิด + ล้างข้อมูล Blockscout | `docker-compose -f geth.yml down -v` ⚠ ลบข้อมูลที่ index ไว้ทั้งหมด |
@@ -105,15 +105,29 @@ log `Index already caught up` แปลว่าไม่มี block ค้า�
 | แท็บ Logs ของ tx / กระเป๋า | **ทุก event** ของทุกโปรแกรม: emit แบบ indexed → topic0 = keccak(`ชื่อ(ชนิด,…)`) + topic ของ field ที่ indexed · ไม่มี indexed → topic0 = keccak(ชื่อ), data = JSON เป็น hex |
 | Coin balance history ของกระเป๋า (กราฟยอด) | `eth_getBalance` ตามเลข block |
 | Internal txns (เรียกซ้อน, transferNative) | `debug_traceBlockByNumber` / `debug_traceTransaction` |
-| Contract code | `eth_getCode` = ซอร์ส JS เป็น hex · กดดูแบบ UTF-8 |
-| Input data ของ tx | JSON `{action, method, input}` · กดดูแบบ UTF-8 |
+| Contract code (แท็บ Contract) | `eth_getCode` = ซอร์ส JS เป็น UTF-8 hex · Blockscout (v9.0.2 / frontend 2.3.5) แสดงเป็น hex อย่างเดียว ไม่มีปุ่มสลับ UTF-8 · "Contract creation code" = input ของ tx deploy (JSON) · อ่านซอร์สได้ตามหัวข้อ "อ่านโค้ดโปรแกรม" ข้างล่าง |
+| Input data ของ tx | JSON `{action, method, input}` เป็น hex · หน้า tx มีตัวเลือก Hex / UTF-8 ที่ช่อง Raw input |
 | Base fee / gas price ของ block และ tx (EIP-1559) | `baseFeePerGas` ใน block · tx type `0x2` + `effectiveGasPrice` ใน receipt · burnt fees ที่ Blockscout คำนวณ = baseFee × gasUsed (ตรงกับเชนเมื่อ `BURN_PERCENT=100`) |
 | tx ที่ถูกปฏิเสธ | อยู่ใน block ที่บันทึก (ครั้งเดียวต่อ hash) เป็น status `0x0` gasUsed `0` · มีแค่ใบที่ถูกปฏิเสธ เชนจะพักไว้จนมี tx จริงหรือครบ `REJECTED_HOLD_MS` (60 วิ) |
 
 ที่จะไม่เห็น / ใช้ไม่ได้ (ตามที่คาดไว้):
 - ปุ่ม Read/Write contract และ verify contract (Blockscout ต้องการ bytecode แบบ EVM + ซอร์ส Solidity) · ABI ของโปรแกรมดูได้ที่ explorer ของเชนเอง หรือ `cardianal_getAbi`
 - ชื่อ event ที่ถอดแล้วในแท็บ Logs สำหรับ event ที่ไม่ใช่มาตรฐาน (เห็นเป็น topic / data ดิบ เพราะ Blockscout ถอดได้เฉพาะ ABI ที่ verify แล้ว)
-- ส่ง tx ผ่าน Blockscout / MetaMask (`eth_sendRawTransaction`) — เชนรับเฉพาะลายเซ็นแบบของตัวเอง
+- ปุ่มเขียน (Write) ของ Blockscout · ส่ง tx จากกระเป๋าทำได้ผ่าน `eth_sendRawTransaction` (โอน native · token มาตรฐาน · ฟังก์ชันตาม `metadata.abi`) แต่ไม่ใช่ผ่านหน้า Blockscout
+
+อ่านโค้ดโปรแกรม (ซอร์ส JS) เมื่อ Blockscout แสดงเป็น hex:
+- explorer ของเชน: `http://localhost:3000/#address/<address>` → แท็บ Code
+- `curl -s localhost:3000/program/<address>`
+- ถอด `eth_getCode` เอง:
+  ```bash
+  curl -s localhost:3000/evm -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["<address>","latest"]}' \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(Buffer.from(JSON.parse(s).result.slice(2),"hex").toString("utf8")))'
+  ```
+- ใน Console ของ browser (กดปุ่ม copy ของช่อง Deployed bytecode ใน Blockscout แล้ววางแทน `0x...`):
+  ```js
+  new TextDecoder().decode(Uint8Array.from("0x...".slice(2).match(/../g), (h) => parseInt(h, 16)))
+  ```
 
 ## ดูว่า Blockscout ถามอะไร /evm ตอบอะไร: `scripts/evm-proxy.mjs`
 ตัวดักที่ log ทุกคำขอ JSON-RPC (แตก gzip ให้) แล้วส่งต่อไปที่ `/evm` — ไม่แตะเชน

@@ -8,7 +8,7 @@ npm test          # 550 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
-npm start         # server จริง + explorer ที่ http://localhost:3000
+npm run dev       # server + explorer ที่ http://localhost:3000 (DEV=1 · เครือข่ายจริงใช้ npm start + ADMINS + PRODUCER_KEY ดู HANDOFF หัวข้อ 1)
 npm run seed      # สร้างข้อมูลตัวอย่างผ่าน HTTP (ต้องรัน server ไว้ก่อน)
 ```
 
@@ -34,7 +34,9 @@ genesis.json               ยอดเงินตั้งต้น
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
 scripts/                   demo.js, examples.js
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
-test/                      44 ไฟล์ · 550 เคส
+client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
+docs/                      Blockscout · checklist ลอง MetaMask จริง
+test/                      94 ไฟล์ · 866 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              สถานะปัจจุบัน ค่าตั้งต้นที่แนะนำ และรายการที่ยังไม่ได้ทำ
 ```

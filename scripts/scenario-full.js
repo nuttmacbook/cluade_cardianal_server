@@ -953,7 +953,7 @@ async function startServer() {
   process.env.UPGRADE_DELAY_BLOCKS ??= "2";
   process.env.RATE_LIMIT = "0";
   process.env.EVM_RATE_LIMIT = "0";
-  const env = { ...process.env, PORT: String(port), ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };
+  const env = { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };
   if (!OPTIONS.data) delete env.DATA;
   const child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env, stdio: ["ignore", "ignore", "inherit"] });
   API = `http://127.0.0.1:${port}`;
