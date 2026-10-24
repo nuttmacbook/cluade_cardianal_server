@@ -594,7 +594,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (at === null) return quantity(vm.checkTransaction({ from: account, nonce: -1 }).expectedNonce ?? 0);
     return quantity(readAt(at, nonceKey(account)) ?? 0);
   };
-  // ไม่ใช่ bytecode: ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (Blockscout กดดูแบบ UTF-8 ได้) · กระเป๋า → 0x
+  // ไม่ใช่ bytecode: ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (Blockscout แสดงเป็น hex · ถอดดูตาม docs/blockscout.md) · กระเป๋า → 0x
   const code = (address, tag) => {
     const source = readAt(stateBlock(tag), codeKey(needAddress(address)));
     return source === undefined ? "0x" : codeHex(source);
