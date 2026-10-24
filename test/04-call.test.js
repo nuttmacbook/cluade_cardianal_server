@@ -9,7 +9,7 @@ test("call: เรียกฟังก์ชันที่ export ได้ �
   activate("counter", COUNTER, { initInput: { start: 1 } });
   const res = ok(callAs("alice", "counter", "add", { amount: 4 }));
   assert.equal(res.result, "5n");
-  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", input: { amount: 4 }, value: "0n", gasStart: 0, result: "5n", gasUsed: 750, status: "success" }]);   // 708 จาก API + 42 จาก node ที่รันผ่าน
+  assert.deepEqual(res.calls, [{ depth: 0, programUuid: "counter", functionName: "add", sender: "alice", origin: "alice", input: { amount: 4 }, value: "0n", gasStart: 0, result: "5n", gasUsed: 1750, status: "success" }]);   // 1708 จาก API (รวม stateKey 1,000 ของ key ที่เขียน) + 42 จาก node ที่รันผ่าน
 });
 
 test("call: ฟังก์ชัน internal เรียกจากในโปรแกรมได้ แต่เรียกจากข้างนอกไม่ได้ และไม่ถูกบันทึกใน calls", () => {

@@ -170,7 +170,7 @@ test("gasLimit: value + ค่าแก๊ส ต้องไม่เกิน�
 //  ส่วนแบ่งค่าแก๊สให้ผู้ปิด block
 // ---------------------------------------------------------------------------
 
-const GAS = { call: 100, read: 0, write: 0, byte: 0, price: 1 };
+const GAS = { call: 100, read: 0, write: 0, stateKey: 0, byte: 0, price: 1 };
 
 test("fee: แบ่งให้ผู้ปิด block ตาม burnPercent", () => {
   const vm = setup({ chargeGas: true, gas: GAS, feeRecipient: "0xMINER", burnPercent: 30 }, { alice: 10_000 });

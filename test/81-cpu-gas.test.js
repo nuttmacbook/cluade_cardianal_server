@@ -195,11 +195,12 @@ test("token transfer ทำงานเหมือนเดิม แก๊ส�
     vm.commit(res.writes);
     return res.gasUsed;
   };
-  // ตัวเลขเดียวกับก่อนเปลี่ยน (main 90facdb) — ค่า uint256 อยู่ในช่วง ≤ 512 bit ที่ไม่คิดเพิ่ม
-  assert.equal(send(1000n), 2722);
-  assert.equal(send(2n ** 254n + 12345n), 2875);
+  // ตัวเลขเดียวกับก่อนเปลี่ยน (main 90facdb) — ค่า uint256 อยู่ในช่วง ≤ 512 bit ที่ไม่คิดเพิ่ม · บวก stateKey ของ balance 2 key (ผู้ส่ง / ผู้รับ)
+  const { stateKey } = VM.DEFAULT_GAS;
+  assert.equal(send(1000n), 2722 + 2 * stateKey);
+  assert.equal(send(2n ** 254n + 12345n), 2875 + 2 * stateKey);
   const approve = vm.call({ programUuid: TOKEN, functionName: "approve", input: { spender: BOB, amount: String(2n ** 256n - 1n) + "n" }, context: as(OWNER) }, { timestamp: T });
-  assert.equal(approve.gasUsed, 1979);
+  assert.equal(approve.gasUsed, 1979 + stateKey);   // allowance 1 key
   const balance = vm.call({ programUuid: TOKEN, functionName: "balanceOf", input: { who: BOB }, context: as(OWNER) }, { timestamp: T });
   assert.equal(balance.result, String(2n ** 254n + 12345n + 1000n) + "n");
 });

@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 883 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 888 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 883 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 888 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -42,6 +42,7 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 
 ### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
 - **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
+  `genesis.forks` = ตาราง fork `{ ชื่อ: block }` (ไม่อยู่ใน genesis hash · เพิ่มทีหลังได้ · ดูหัวข้อค่าแก๊ส "fork ตาม block height")
   ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
 - **ไม่ใช่ `DEV=1`** → ต้องมี `ADMINS` (ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้) และ `PRODUCER_KEY` · producer ต้องอยู่ใน `config.producers` ถ้า genesis กำหนด
 - **ผู้ผลิตเซ็น block**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → header มี `producer` (อยู่ใน hash · block ที่ไม่มีผู้ผลิต hash เหมือนเดิมทุกไบต์) + `producerSignature` (r‖s‖v บน hash ของ block · อยู่นอก hash)
@@ -445,9 +446,15 @@ vm.stateRoot() / vm.getProof([dbKey]) / vm.rebuildTrie() / vm.pruneHistory({ kee
 ### ค่าแก๊ส
 
 ```
-call 100 · read 100 · write 500 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
+call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
 ```
 `emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
+**`stateKey`** = ต่อ key ของ state ที่ tx เขียน / ลบครั้งแรก (`writeDB` / `deleteDB` · key เดิมซ้ำใน tx ไม่คิดซ้ำ · `tx.stateKeys`) — ค่าอัปเดต Merkle trie + history ตอนปิด block
+  ไม่มีตัวนี้ block 3M gas ที่อัด key ใหม่ล้วน (5,450 key) ปิด 1.9–2.5 วิ ที่ state 1 ล้าน key · มีแล้ว ≤ ~1,950 key ปิด 0.74–0.86 วิ (`test/99`) · token transfer +2,000 (2 key) · native transfer ไม่เปลี่ยน
+**fork ตาม block height** (`FORKS` ใน virtualmachine.js · `genesis.json` `"forks": { "<ชื่อ>": <block> }` · เทสต์ `99-trie-gas-forks`): เปลี่ยนกติกาตั้งแต่ block ที่กำหนดโดยไม่ล้างเชน
+  `forks` ไม่อยู่ใน genesis hash (`vm.hashGenesis`) → เพิ่มตารางทีหลังได้ · ชื่อที่โค้ดไม่รู้จัก = VM ไม่ยอมสร้าง (node ต้องอัปเดตโปรแกรมก่อน) · `/genesis` บอก `forks`
+  กติกา: `FORKS.<ชื่อ> = { description, gas: { ค่าแก๊สใหม่ } }` (ยกเว้น `price`) → `vm.gasAt(blockNumber)` · กติกาแบบอื่นเช็ค `vm.forkActive(ชื่อ, blockNumber)` ตรงจุดที่เปลี่ยน
+  block ก่อนหน้าใช้กติกาเดิม → `replayBlock` / sync / `rebuildFrom` ได้ผลเดิม · node ที่ตั้งตารางต่างกัน = hash ไม่ตรงตั้งแต่ block นั้น · ตอนนี้ `FORKS` ว่าง (ยังไม่มี fork จริง)
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
 (n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง)
 · ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้
@@ -619,7 +626,7 @@ upgradeat:<n>                       ดัชนี: โปรแกรมที
   `loadSnapshot(vm, lines, { producers })` (DB ที่ยังไม่มี block): hash ของทุก header คำนวณกลับได้ · ต่อกัน · ผู้ผลิตเซ็น → สร้าง trie จาก state แล้วต้องได้ stateRoot ของ header N (ไม่ตรง = ล้าง state ทิ้ง throw)
   หลังโหลด: `historyfrom` = N + 1 · ไม่มี body ก่อน N · `startSync({ snapshot: true })` = DB ว่าง → โหลด `/snapshot` ของต้นทางก่อนแล้วซิงก์ต่อ · CLI `npm run snapshot -- export|import|verify`
 - **ความเร็ว** (เครื่องทดสอบ · LMDB · keccak เป็น JS ล้วนของ noble ~28µs ต่อ node 500 byte · Node ไม่มี keccak แบบ native)
-  load test 500 tx (close + roots p50 เทียบ main · วัดก่อนเปลี่ยน node เป็น byte): native 449 vs 242 ms · token 1008 vs 812 ms · mix 1388 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
+  load test 500 tx (close + roots p50 เทียบก่อนระยะ 4): native 355 vs 242 ms · token 909 vs 812 ms · mix 1186 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
   state 1 ล้าน key: `rebuildTrie` 65 วินาที (เรียง key แล้วสร้างทีเดียว `buildTrie`) · block แตะ 4,000 key = trieUpdate ~0.8–1.5 วินาที + commit ~0.45 วินาที · หลักฐาน ~2.6 KB
   node ใน DB เก็บเป็น byte (LMDB บีบอัดค่า > ~1000 byte ทำให้แบบ hex ช้า) · update ไม่ตรวจ hash ของ node ที่อ่าน (`proof()` ตรวจเสมอ · `new StateTrie({ verify: true })` ถ้าต้องการ)
 
@@ -1036,7 +1043,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 98 ไฟล์ · 883 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 99 ไฟล์ · 888 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1086,6 +1093,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `96-trie` | Merkle Patricia Trie ตรงกับ Ethereum (trie ว่าง · doe/dog/dogglesworth · geth TestDelete) · สุ่มใส่ / ลบ 200–300 รอบ = สร้างใหม่ทุกไบต์ ไม่มี node ค้าง (รวม key ที่เป็น prefix กัน / node ฝังในพ่อ / ค่าใน branch) · หลักฐานมี / ไม่มีค่า · แก้ node / root ผิด / node ขาด = ไม่ผ่าน |
 | `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
 | `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
+| `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |

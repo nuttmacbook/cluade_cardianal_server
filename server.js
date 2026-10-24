@@ -90,6 +90,7 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA,
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: settings.admins,
   upgradeDelayBlocks: settings.upgradeDelayBlocks,   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
+  forks: settings.forks,   // genesis.json "forks": กติกาใหม่ตั้งแต่ block ที่กำหนด (ชื่อที่โค้ดไม่รู้จัก = ไม่ยอมเริ่ม)
   historyKeep: process.env.HISTORY_KEEP_BLOCKS ? Number(process.env.HISTORY_KEEP_BLOCKS) : null,   // pruning (null = archive)
 });
 // snapshot ของ state ทุก SNAPSHOT_EVERY block (ถ่ายแบบไม่หยุดเชน · ต้องมี DATA หรือ SNAPSHOT_DIR)
@@ -201,6 +202,7 @@ const ROUTES = {
     gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
     baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance,
+    forks: vm.forkSchedule(),   // [{ name, block, active, description }] กติกาใหม่ตั้งแต่ block ที่กำหนด
     // ผู้ผลิต block ของ node นี้ + รายชื่อผู้ผลิตที่ genesis อนุญาต (node ผู้อ่านส่งให้ startSync({ producers }))
     producer: producer?.address ?? null, producers: settings.producers }),
 };

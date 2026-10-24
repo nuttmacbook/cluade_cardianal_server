@@ -110,7 +110,7 @@ test("emit: ย้อนดู event ของ block เก่าได้ด้
 });
 
 test("emit: คิดค่าแก๊สตามจำนวน event และขนาดข้อมูล", () => {
-  const gas = { call: 0, read: 0, write: 0, byte: 0, event: 200, code: 0, price: 1 };
+  const gas = { call: 0, read: 0, write: 0, stateKey: 0, byte: 0, event: 200, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
   vm.db.load({ "alice:native:received": "1000000n" });
 

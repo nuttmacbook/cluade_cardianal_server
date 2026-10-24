@@ -8,6 +8,7 @@
  * ค่าแต่ละตัว = genesis ก่อน → env → ค่าเริ่มต้น
  * genesis มีค่าแล้วแต่ env ตั้งเป็นค่าอื่น → errors (server ไม่ยอมเริ่ม) — กันเครื่องหนึ่งตั้งต่างจากเครือข่ายจน hash ไม่ตรง
  * genesis ไม่มี config (ช่วงพัฒนา) = ไม่ล็อกอะไร ใช้ env ตามเดิม
+ * genesis.forks = { "<ชื่อ>": <block> } ตาราง fork (ดู FORKS ใน virtualmachine.js) → settings.forks · ไม่อยู่ใน genesis hash เพิ่มทีหลังได้
  */
 
 const list = (value) => (Array.isArray(value) ? value : String(value).split(","))
@@ -60,6 +61,14 @@ export function resolveSettings(genesis = {}, env = {}) {
     } else {
       settings[name] = fromEnv ?? fallback;
     }
+  }
+  // ตาราง fork (กติกาใหม่ตั้งแต่ block ที่กำหนด · ไม่อยู่ใน genesis hash · ไม่มี env) — VM ตรวจว่ารู้จักชื่อ
+  const forks = genesis?.forks ?? {};
+  if (typeof forks !== "object" || Array.isArray(forks) || Object.values(forks).some((block) => !Number.isSafeInteger(block) || block < 0)) {
+    errors.push("genesis forks: ต้องเป็น { \"ชื่อ fork\": เลข block (จำนวนเต็ม ≥ 0) }");
+    settings.forks = {};
+  } else {
+    settings.forks = { ...forks };
   }
   return { settings, locked, errors };
 }

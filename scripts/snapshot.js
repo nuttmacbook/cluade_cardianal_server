@@ -22,7 +22,7 @@ for (let i = 0; i < rest.length; i += 1) if (rest[i].startsWith("--")) args[rest
 const GENESIS_FILE = process.env.GENESIS ?? "genesis.json";
 const genesis = fs.existsSync(GENESIS_FILE) ? JSON.parse(fs.readFileSync(GENESIS_FILE, "utf8")) : {};
 const { settings } = resolveSettings(genesis, process.env);
-const open = (data) => new VirtualMachine(data ? new DB(data) : new MemoryDB(), { chainId: settings.chainId, recordBlocks: true, recordHistory: true });
+const open = (data) => new VirtualMachine(data ? new DB(data) : new MemoryDB(), { chainId: settings.chainId, forks: settings.forks, recordBlocks: true, recordHistory: true });
 const producers = settings.producers ?? null;
 const report = (result) => console.log(JSON.stringify(result, null, 2));
 

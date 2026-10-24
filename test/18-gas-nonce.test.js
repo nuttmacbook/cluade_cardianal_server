@@ -106,9 +106,9 @@ test("gas: คิดตามจำนวน call / read / write + ขนาด�
   const value = "0123456789"; // JSON = "\"0123456789\"" = 12 byte
   const res = vm.call({ programUuid: "treasury", functionName: "gasProbe", input: { value }, context: user("alice") });
 
-  // gasProbe = 1 call + readDB 1 ครั้ง (ค่าว่าง) + writeDB 1 ครั้ง (12 byte)
-  const { call, read, write, byte } = VM.DEFAULT_GAS;
-  const expected = call + read + write + byte * JSON.stringify(value).length;
+  // gasProbe = 1 call + readDB 1 ครั้ง (ค่าว่าง) + writeDB 1 ครั้ง (12 byte) + key ของ state ที่เขียน 1 key
+  const { call, read, write, stateKey, byte } = VM.DEFAULT_GAS;
+  const expected = call + read + write + stateKey + byte * JSON.stringify(value).length;
   assert.equal(res.gasUsed, expected);
 
   const fee = expected * VM.DEFAULT_GAS.price;
@@ -129,7 +129,7 @@ test("gas: อ่านข้อมูลใหญ่กินแก๊สมา
 });
 
 test("gas: ตารางค่าแก๊สปรับได้", () => {
-  const { vm } = setup({ requireNonce: false, gas: { call: 1, read: 0, write: 0, byte: 0, price: 2 }, balances: { alice: 1000 } });
+  const { vm } = setup({ requireNonce: false, gas: { call: 1, read: 0, write: 0, stateKey: 0, byte: 0, price: 2 }, balances: { alice: 1000 } });
   const res = vm.call({ programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("alice") });
   assert.equal(res.gasUsed, 1);
   assert.deepEqual(res.writes, [
@@ -139,7 +139,7 @@ test("gas: ตารางค่าแก๊สปรับได้", () => {
 });
 
 test("gas: การเรียกข้ามโปรแกรมคิดค่า call ทุกชั้น และผู้จ่ายคือผู้เรียกชั้นนอกสุดเท่านั้น", () => {
-  const { vm } = setup({ requireNonce: false, gas: { call: 100, read: 0, write: 0, byte: 0, price: 1 }, balances: { alice: 10_000, treasury: 500 } });
+  const { vm } = setup({ requireNonce: false, gas: { call: 100, read: 0, write: 0, stateKey: 0, byte: 0, price: 1 }, balances: { alice: 10_000, treasury: 500 } });
   const res = vm.call({ programUuid: "treasury", functionName: "relayPayout", input: { target: "treasury", to: "bob", amount: 5 }, context: user("alice") });
 
   assert.equal(res.status, "success");
@@ -284,10 +284,10 @@ test("block: tx ที่ล้มยังกิน nonce และค่าแ
 });
 
 test("block: ค่าแก๊สหมดกลาง block → tx ถัดไป OUT_OF_GAS", () => {
-  const { vm } = setup({ requireNonce: false, balances: { alice: 2000 } });
+  const { vm } = setup({ requireNonce: false, balances: { alice: 4000 } });
   const block = vm.createBlock({ timestamp: T });
   const results = [1, 2, 3].map(() => block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice") }));
   assert.deepEqual(results.map((r) => r.status), ["success", "throw", "throw"]);
   assert.deepEqual(results.slice(1).map((r) => r.error.code), ["OUT_OF_GAS", "OUT_OF_GAS"]);
-  assert.equal(block.writes().find((w) => w.dbKey === "alice:native:consumed").value, "2000n"); // ใช้จนหมด
+  assert.equal(block.writes().find((w) => w.dbKey === "alice:native:consumed").value, "4000n"); // ใช้จนหมด
 });
