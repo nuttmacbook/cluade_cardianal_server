@@ -13,6 +13,7 @@
  *   BASE_FEE_DENOMINATOR=8 base fee เปลี่ยนได้ไม่เกิน 1/ค่านี้ ต่อ block (8 = 12.5% แบบ Ethereum)
  *   BURN_PERCENT=100       ส่วนของ base fee ที่เผาทิ้ง (tip เข้าผู้ปิด block เสมอ) — ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
+ *   TRUST_PROXY=0     จำนวนชั้นของ reverse proxy ข้างหน้า (nginx / Caddy = 1) → rate limit ใช้ IP จาก X-Forwarded-For (src/node/client-ip.js)
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
  *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
@@ -38,6 +39,7 @@ import { RateLimiter } from "./src/node/ratelimit.js";
 import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { VerifyPool, DEFAULT_VERIFY_WORKERS } from "./src/node/verify-pool.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
+import { clientIp } from "./src/node/client-ip.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
   programCounts, pagePendingPrograms, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
@@ -368,7 +370,7 @@ async function handleEvm(request, response, url) {
   if (request.method !== "POST") return send(response, 405, { error: "Use POST for JSON-RPC" });
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  const ip = request.socket.remoteAddress ?? "unknown";
+  const ip = clientIp(request);
   if (!evmLimiter.allow(ip)) {
     response.setHeader("retry-after", String(evmLimiter.retryAfter(ip)));
     return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
@@ -399,7 +401,7 @@ export const server = http.createServer(async (request, response) => {
     if (request.method === "POST") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
-      const ip = request.socket.remoteAddress ?? "unknown";
+      const ip = clientIp(request);
       if (!postLimiter.allow(ip)) {
         response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
         return send(response, 429, { error: "Too many requests, try again later" });

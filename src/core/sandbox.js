@@ -1689,13 +1689,21 @@ const engine = (() => {
   };
 })();
 
-/** ภาพ memory ตอนนี้ (ส่วนล่าง + heap ถึงก้อนว่างก้อนสุดท้าย) */
-function captureMemory() {
+/**
+ * ภาพ memory ตอนนี้ (ส่วนล่าง + heap ถึงก้อนว่างก้อนสุดท้าย)
+ * reuse = ภาพเก่าที่ถูกไล่ออกจากที่เก็บ: คัดลอกทับ buffer เดิมถ้าพอ (จอง buffer ใหม่ 3 MB ช้ากว่าคัดลอกทับ ~10 เท่า)
+ */
+function captureMemory(reuse = null) {
   const view = new Uint8Array(executorMemory.buffer);
   const memoryEnd = engine.topAddress === null
     ? executorMemory.buffer.byteLength
     : new Uint32Array(executorMemory.buffer)[engine.topAddress / 4] + PAGE;
-  return { low: view.slice(0, LOW_REGION), high: view.slice(engine.heapStart, memoryEnd) };
+  const length = memoryEnd - engine.heapStart;
+  const low = reuse?.low ?? new Uint8Array(LOW_REGION);
+  const store = reuse && reuse.store.length >= length ? reuse.store : new Uint8Array(length + 2 * PAGE);
+  low.set(view.subarray(0, LOW_REGION));
+  store.set(view.subarray(engine.heapStart, memoryEnd));
+  return { low, high: store.subarray(0, length), store };
 }
 
 /** memory ของ QuickJS กลับเป็นภาพที่เก็บไว้ (ค่าเริ่ม = ตอนเพิ่งสร้าง pool) — ห้ามเรียกระหว่างอยู่ใน QuickJS */
@@ -1712,6 +1720,11 @@ function restoreSnapshot(image = engine) {
  *   ทุกเครื่องจึงเริ่ม tx จาก heap เดียวกันเสมอ ไม่ว่า cache ของเครื่องจะเคยเห็นโปรแกรมนี้หรือไม่ (เทสต์ 89 คุม)
  *   source ที่คอมไพล์ไม่ผ่าน = เริ่มจาก snapshot ตั้งต้นแบบเดิม (ก็เป็นผลของ source อย่างเดียวเช่นกัน)
  * factory เก็บเป็น property ของฟังก์ชัน configure ของช่องแรก (โค้ดของผู้ใช้เข้าไม่ถึง configure)
+ *
+ * ภาพละ ~3.3 MB (heap ทั้งก้อนถึงก้อนว่างก้อนสุดท้าย) → ค่าเริ่ม 32 ภาพ ≈ 105 MB RAM
+ * ไม่มีในที่เก็บ: คืน snapshot ตั้งต้น → คอมไพล์ → memory ตอนนี้ "คือ" ภาพอุ่นแล้ว ใช้ต่อได้เลย (ไม่คืนภาพซ้ำ)
+ *   ถ่ายเก็บเฉพาะเมื่อที่เก็บมีที่ (SANDBOX_WARM_CACHE > 0) · 0 = ไม่เก็บ ไม่คัดลอก memory เลย (ต้นทุนเท่าคอมไพล์ทุก tx แบบเดิม)
+ *   heap ตอนเริ่ม tx เหมือนกันทุกไบต์ทั้งสามทาง (มีภาพ / เพิ่งคอมไพล์แล้วเก็บ / เพิ่งคอมไพล์ไม่เก็บ) → ตั้งค่าต่างกันข้ามเครื่องได้
  */
 export const WARM_FACTORY_KEY = "\u0000factory";
 const warmImages = new Map();   // source → ภาพ memory | null (คอมไพล์ไม่ผ่าน) · เรียงตามที่ใช้ล่าสุด (LRU)
@@ -1723,31 +1736,46 @@ export function clearWarmCache() {
   warmStats.size = 0;
 }
 
-function warmImage(source) {
-  // SANDBOX_WARM_CACHE = จำนวนภาพที่จำไว้เท่านั้น (0 = สร้างใหม่ทุก tx) — ภาพที่ใช้เหมือนกันเสมอ จึงตั้งต่างกันข้ามเครื่องได้
+/**
+ * เตรียม memory ให้เป็นภาพอุ่นของ source (หรือ snapshot ตั้งต้นถ้าคอมไพล์ไม่ผ่าน)
+ * คืน true = memory อยู่ในสภาพภาพอุ่นแล้ว (factory อยู่ในช่องแรก) · false = snapshot ตั้งต้น
+ */
+function enterWarm(source) {
+  const limit = Math.max(0, warmStats.limit);
   if (warmImages.has(source)) {
     const image = warmImages.get(source);
     warmImages.delete(source);
     warmImages.set(source, image);
     warmStats.hits += 1;
-    return image;
+    restoreSnapshot(image ?? engine);
+    return image !== null;
   }
   warmStats.misses += 1;
   restoreSnapshot();
   const { ctx, configure } = engine.pool[0];
   const result = ctx.evalCode(source, "program");
-  let image = null;
   if (result.error) {
     result.error.dispose();
-  } else {
-    ctx.setProp(configure, WARM_FACTORY_KEY, result.value);
-    result.value.dispose();
-    image = captureMemory();
+    restoreSnapshot();   // evalCode ที่ล้มทิ้งขยะไว้ใน heap → กลับเป็น snapshot ตั้งต้นให้เหมือนเครื่องที่จำว่า "ไม่มีภาพ"
+    if (limit > 0) remember(source, null, limit);
+    return false;
   }
-  warmImages.set(source, image);
-  while (warmImages.size > Math.max(0, warmStats.limit)) warmImages.delete(warmImages.keys().next().value);
+  ctx.setProp(configure, WARM_FACTORY_KEY, result.value);
+  result.value.dispose();
+  if (limit > 0) remember(source, (spare) => captureMemory(spare), limit);
+  return true;
+}
+
+/** เก็บภาพ (เต็ม = ไล่ตัวที่ใช้นานที่สุด แล้วให้ภาพใหม่ใช้ buffer ของมันต่อ) */
+function remember(source, makeImage, limit) {
+  let spare = null;
+  while (warmImages.size >= limit) {
+    const oldest = warmImages.keys().next().value;
+    spare = warmImages.get(oldest) ?? spare;
+    warmImages.delete(oldest);
+  }
+  warmImages.set(source, typeof makeImage === "function" ? makeImage(spare) : makeImage);
   warmStats.size = warmImages.size;
-  return image;
 }
 
 /**
@@ -1847,10 +1875,8 @@ export class Sandbox {
     if (this.#active) return;
     if (brokenReason) throw new Error(`QuickJS ใช้งานไม่ได้: ${brokenReason}`);
     if (current) throw new Error("sandbox ถูกใช้โดย tx อื่นที่ยังไม่จบ");
-    // โปรแกรมแรกของ tx คอมไพล์ไว้แล้วในภาพอุ่น (ดู warmImage) · ไม่มี = snapshot ตั้งต้น
-    const image = warmImage(source);
-    this.#warmSource = image ? source : null;
-    restoreSnapshot(image ?? engine);
+    // โปรแกรมแรกของ tx คอมไพล์ไว้แล้วในภาพอุ่น (ดู enterWarm) · ไม่มี = snapshot ตั้งต้น
+    this.#warmSource = enterWarm(source) ? source : null;
     current = this;
     this.#active = true;
     sandboxStats.active += 1;
