@@ -126,7 +126,8 @@ export function createClient({ url, fetch: fetchImpl = globalThis.fetch, gasLimi
       if (header.hash !== proof.blockHash || header.stateRoot !== proof.stateRoot) throw new Error("หลักฐานไม่ได้มาจาก block นี้");
       if (producers) {
         const signer = header.producerSignature ? recoverTypedDataDigest(header.hash, header.producerSignature) : null;
-        if (!signer || !producers.map((p) => p.toLowerCase()).includes(signer)) throw new Error("ลายเซ็นผู้ผลิตของ header ไม่ถูกต้อง");
+        const allowed = typeof producers === "function" ? producers(header.number) : producers;   // รายชื่อ หรือ (เลข block) => รายชื่อ
+        if (!signer || !allowed?.map((p) => p.toLowerCase()).includes(signer)) throw new Error("ลายเซ็นผู้ผลิตของ header ไม่ถูกต้อง");
       }
       const values = {};
       for (const item of proof.proofs) {

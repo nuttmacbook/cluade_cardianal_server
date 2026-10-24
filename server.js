@@ -25,6 +25,9 @@
  *   HISTORY_KEEP_BLOCKS=N    pruning: เก็บ history (ค่าก่อนแก้ของ state) แค่ N block ล่าสุด → ย้อนดู state / replay / rebuild ได้แค่ช่วงนั้น · ไม่ตั้ง = เก็บทั้งหมด (archive)
  *   SNAPSHOT_EVERY=N         ถ่าย snapshot ของ state ทุก N block (GET /snapshot · node ใหม่เริ่มจาก snapshot ได้ — src/node/snapshot.js) · 0 = ปิด
  *   SNAPSHOT_DIR=<DATA>/snapshots   ที่เก็บไฟล์ snapshot · SNAPSHOT_KEEP=2 จำนวนไฟล์ที่เก็บไว้
+ *   FOLLOW=<url>             เครื่องสำรอง: ซิงก์ block จากผู้ผลิตตลอด ไม่ผลิต block ไม่รับ tx (/sendtx = 503) · ไม่ต้องมี PRODUCER_KEY
+ *   FOLLOW_SNAPSHOT=1        เครื่องสำรองที่ DB ว่าง: เริ่มจาก snapshot ของต้นทาง (GET /snapshot) แทนซิงก์ตั้งแต่ block 1
+ *   FAILOVER_FROM=<url>      ย้ายมาผลิตแทนเครื่องเดิม: ถามเครื่องเดิมก่อน — ยังผลิตอยู่ = ไม่ยอมเริ่ม · ไม่ผลิตแล้ว = ซิงก์ที่ขาดก่อน (src/node/failover.js)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -34,7 +37,9 @@ import { reviewProgram } from "./src/core/autoreview.js";
 import { DB, MemoryDB, DEFAULT_MAP_SIZE, parseSize } from "./src/storage/db.js";
 import { addressOf } from "./src/crypto/signature.js";
 import { signTypedDataDigest } from "./src/crypto/program-signature.js";
-import { resolveSettings, startupProblems } from "./src/node/genesis.js";
+import { resolveSettings, startupProblems, startupWarnings, producersAt } from "./src/node/genesis.js";
+import { startSync } from "./src/node/sync.js";
+import { prepareFailover } from "./src/node/failover.js";
 import { Mempool } from "./src/node/mempool.js";
 import { TxLog } from "./src/node/txlog.js";
 import { simulate } from "./src/node/simulate.js";
@@ -60,6 +65,9 @@ const PRODUCER_KEY = process.env.PRODUCER_KEY || null;
 export const producer = PRODUCER_KEY
   ? { address: addressOf(PRODUCER_KEY), sign: (hash) => signTypedDataDigest(hash, PRODUCER_KEY) }
   : null;
+// เครื่องสำรอง (FOLLOW) ซิงก์ตามผู้ผลิต · ย้ายมาผลิตแทน (FAILOVER_FROM) ต้องผ่าน prepareFailover ก่อนเปิด miner
+export const FOLLOW = process.env.FOLLOW || null;
+const FAILOVER_FROM = process.env.FAILOVER_FROM || null;
 const MINER = process.env.MINER ?? producer?.address ?? "0x1111111111111111111111111111111111111111";
 const BLOCK_MS = settings.blockMs;
 // โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
@@ -124,14 +132,28 @@ export function shouldMine(now = Date.now()) {
   return now - (mempool.oldestRejectionAt ?? now) >= REJECTED_HOLD_MS;
 }
 
+// รายชื่อผู้ผลิตของ block n (config.producers แล้วเปลี่ยนตาม producerSchedule) · null = genesis ไม่กำหนด
+export const producersOf = settings.producers?.length ? (number) => producersAt(settings, number) : null;
+/** key ของ node นี้ผลิต block ถัดไปได้ไหม (ถูกถอดออกด้วย producerSchedule = ไม่ได้) */
+export function canProduce(number = (vm.latestBlockNumber() ?? 0) + 1) {
+  const allowed = producersOf?.(number);
+  return !allowed || (producer !== null && allowed.includes(producer.address));
+}
+// false = ไม่ผลิต block (FOLLOW / รอ prepareFailover ตอนเริ่ม)
+export let miningEnabled = !FOLLOW && !(FAILOVER_FROM && process.argv[1]?.endsWith("server.js"));
+
 let mining = false;
 // ผลการปิด block ล่าสุด (ให้ /health บอกได้ว่าเชนหยุดเพราะปิด block ล้มเหลวติดกัน)
 export const minerState = { failures: 0, lastError: null, lastErrorAt: null };
 const STARTED_AT = Date.now();
 export const miner = setInterval(() => {
-  if (mining || !shouldMine()) return;
+  if (mining || !miningEnabled || !shouldMine()) return;
   mining = true;
   try {
+    const next = (vm.latestBlockNumber() ?? 0) + 1;
+    if (!canProduce(next)) {   // producerSchedule ถอด key นี้ออกตั้งแต่ block นี้ → หยุดผลิต (block ที่ผลิตไป node อื่นก็ไม่รับ)
+      throw new Error(`PRODUCER_KEY (${producer?.address ?? "ไม่มี"}) ไม่อยู่ในรายชื่อผู้ผลิตของ block ${next} (${producersOf(next).join(", ")})`);
+    }
     const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: MINER });
     const included = mempool.take(block);
     block.commit();
@@ -149,8 +171,25 @@ miner.unref?.();
 const lower = (value) => String(value ?? "").toLowerCase();
 
 // /health: เชนหยุด = มี tx รอแต่ไม่มี block ใหม่นานกว่านี้ · พื้นที่ LMDB เกินนี้ = เตือน
+// เครื่องสำรอง: สถานะการซิงก์ (/health บอกได้ว่าซิงก์ค้าง / หยุดเพราะ block ไม่ตรง)
+export const followState = { url: FOLLOW, lastSyncAt: null, error: null, errorAt: null };
+export let stopFollow = null;
+if (FOLLOW) {
+  stopFollow = startSync(vm, { url: FOLLOW, producers: producersOf, intervalMs: Math.max(BLOCK_MS, 1000),
+    snapshot: ["1", "true", "yes", "on"].includes(String(process.env.FOLLOW_SNAPSHOT ?? "").toLowerCase()),
+    onBlock: (number) => { followState.lastSyncAt = Date.now(); snapshots?.onBlock(number); },
+    onSnapshot: (loaded) => console.log(`เริ่มจาก snapshot block ${loaded.number ?? loaded}`),
+    onError: (error) => { Object.assign(followState, { error: error.message, errorAt: Date.now() }); console.error("ซิงก์หยุด:", error.message); } });
+}
+
 export const STALL_MS = Number(process.env.HEALTH_STALL_MS ?? Math.max(BLOCK_MS * 10, 30_000));
 export const DISK_WARN_PERCENT = Number(process.env.HEALTH_DISK_PERCENT ?? 90);
+
+export function role() {
+  if (FOLLOW) return "follower";
+  if (!canProduce()) return "retired";
+  return miningEnabled ? "producer" : "standby";
+}
 
 /** สถานะของ node → { ok, problems, ... } · มีปัญหา = HTTP 503 (load balancer / ตัวเฝ้าระบบดูได้ทันที) */
 export function health(now = Date.now()) {
@@ -161,13 +200,15 @@ export function health(now = Date.now()) {
   const waiting = mempool.size + (shouldMine(now) ? mempool.rejectedPending : 0);
   const problems = [];
   if (waiting > 0 && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
+  if (followState.error) problems.push(`follow: ซิงก์จาก ${FOLLOW} หยุด (${followState.error})`);
   if (minerState.failures > 0) problems.push(`miner: ปิด block ล้มเหลว ${minerState.failures} ครั้งติดกัน (${minerState.lastError})`);
   if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB ใช้ไป ${db.usedPercent}% ของ mapSize`);
   return {
     ok: problems.length === 0, problems,
     latest, latestAt, blockAgeMs: latestAt === null ? null : now - latestAt, blockMs: BLOCK_MS,
     historyFrom: vm.historyFrom(), pending: mempool.size, rejectedPending: mempool.rejectedPending,
-    producer: producer?.address ?? null, miner: { ...minerState }, db,
+    // role: producer = ผลิต block อยู่ · follower = เครื่องสำรอง (FOLLOW) · retired = key ถูกถอดจากรายชื่อ · standby = รอ prepareFailover
+    role: role(), producer: producer?.address ?? null, miner: { ...minerState }, follow: FOLLOW ? { ...followState } : null, db,
   };
 }
 const limitOf = (query) => Math.min(Number(query.get("limit")) || 20, 200);
@@ -204,7 +245,10 @@ const ROUTES = {
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance,
     forks: vm.forkSchedule(),   // [{ name, block, active, description }] กติกาใหม่ตั้งแต่ block ที่กำหนด
     // ผู้ผลิต block ของ node นี้ + รายชื่อผู้ผลิตที่ genesis อนุญาต (node ผู้อ่านส่งให้ startSync({ producers }))
-    producer: producer?.address ?? null, producers: settings.producers }),
+    // producers = รายชื่อของ block ถัดไป · producerSchedule = [{ fromBlock, producers }] เปลี่ยนรายชื่อตั้งแต่ block ที่กำหนด
+    producer: producer?.address ?? null, role: role(),
+    producers: producersOf?.((vm.latestBlockNumber() ?? 0) + 1) ?? settings.producers, baseProducers: settings.producers,
+    producerSchedule: settings.producerSchedule }),
 };
 
 const DYNAMIC = [
@@ -330,6 +374,7 @@ const DYNAMIC = [
  * ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
  */
 function intake({ tx, signature, sponsorSignature }, verified) {
+  if (FOLLOW) return { ok: false, follower: true, error: `node นี้เป็นเครื่องสำรอง (ไม่รับ tx) — ส่งที่ ${FOLLOW}` };
   const check = (item) => {
     if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
       const reviewed = reviewProgram(tx.code);
@@ -343,6 +388,7 @@ function intake({ tx, signature, sponsorSignature }, verified) {
 async function handlePost(url, body) {
   if (url === "/sendtx") {
     const { tx, signature, sponsorSignature } = body ?? {};   // sponsorSignature: ผู้จ่ายแก๊สแทน (tx.sponsor) เซ็น digest เดียวกัน
+    if (FOLLOW) return { status: 503, body: { queued: false, error: `node นี้เป็นเครื่องสำรอง (ไม่รับ tx) — ส่งที่ ${FOLLOW}` } };
     let verified;
     try { verified = await verifyPool.verify({ tx, signature, sponsorSignature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
@@ -464,11 +510,28 @@ export const server = http.createServer(async (request, response) => {
 export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip) });
 
 if (process.argv[1]?.endsWith("server.js")) {
-  const problems = startupProblems({ settings, errors: settingErrors, dev: DEV, producer: producer?.address ?? null });
+  const problems = startupProblems({ settings, errors: settingErrors, dev: DEV, producer: producer?.address ?? null,
+    follow: Boolean(FOLLOW), nextBlock: FAILOVER_FROM ? null : (vm.latestBlockNumber() ?? 0) + 1 });   // failover: ตรวจรายชื่อหลังซิงก์
+  if (FOLLOW && FAILOVER_FROM) problems.push("ตั้ง FOLLOW กับ FAILOVER_FROM พร้อมกันไม่ได้ (เครื่องสำรอง / ผู้ผลิตแทน เลือกอย่างเดียว)");
   if (problems.length) {
     console.error(`server ไม่เริ่ม:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
     process.exit(1);
   }
   if (DEV) console.warn("DEV=1: โหมดพัฒนา (ไม่บังคับ ADMINS / PRODUCER_KEY) — ห้ามใช้กับเครือข่ายจริง");
+  for (const warning of startupWarnings({ settings, dev: DEV })) console.warn(`เตือน: ${warning}`);
+  if (FOLLOW) console.log(`เครื่องสำรอง: ซิงก์จาก ${FOLLOW} (ไม่ผลิต block ไม่รับ tx)`);
+  if (FAILOVER_FROM) {
+    try {
+      const result = await prepareFailover(vm, { url: FAILOVER_FROM, producers: producersOf });
+      if (result.warning) console.warn(`เตือน: ${result.warning}`);
+      else console.log(`failover: ซิงก์จาก ${FAILOVER_FROM} เพิ่ม ${result.synced} block แล้ว`);
+      const next = (vm.latestBlockNumber() ?? 0) + 1;
+      if (!canProduce(next)) throw new Error(`PRODUCER_KEY (${producer?.address ?? "ไม่มี"}) ไม่อยู่ในรายชื่อผู้ผลิตของ block ${next}`);
+      miningEnabled = true;
+    } catch (error) {
+      console.error(`server ไม่เริ่ม (failover):\n  - ${error.message}`);
+      process.exit(1);
+    }
+  }
   server.listen(PORT, () => console.log(`chain ทำงานที่ http://localhost:${PORT}`));
 }

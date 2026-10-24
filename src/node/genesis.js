@@ -9,6 +9,8 @@
  * genesis มีค่าแล้วแต่ env ตั้งเป็นค่าอื่น → errors (server ไม่ยอมเริ่ม) — กันเครื่องหนึ่งตั้งต่างจากเครือข่ายจน hash ไม่ตรง
  * genesis ไม่มี config (ช่วงพัฒนา) = ไม่ล็อกอะไร ใช้ env ตามเดิม
  * genesis.forks = { "<ชื่อ>": <block> } ตาราง fork (ดู FORKS ใน virtualmachine.js) → settings.forks · ไม่อยู่ใน genesis hash เพิ่มทีหลังได้
+ * genesis.producerSchedule = [{ fromBlock, producers }] เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (เอา key ที่หลุดออก / ใส่ key ใหม่)
+ *   → settings.producerSchedule · ไม่อยู่ใน genesis hash · producersAt(settings, n) = รายชื่อที่ใช้กับ block n
  */
 
 const list = (value) => (Array.isArray(value) ? value : String(value).split(","))
@@ -70,21 +72,71 @@ export function resolveSettings(genesis = {}, env = {}) {
   } else {
     settings.forks = { ...forks };
   }
+  const schedule = parseProducerSchedule(genesis?.producerSchedule, settings.producers);
+  if (schedule.error) errors.push(`genesis producerSchedule: ${schedule.error}`);
+  settings.producerSchedule = schedule.entries;
   return { settings, locked, errors };
+}
+
+/** genesis.producerSchedule → { entries: [{ fromBlock, producers }] เรียงตาม block, error } */
+export function parseProducerSchedule(raw, base = null) {
+  if (raw === undefined || raw === null) return { entries: [] };
+  if (!Array.isArray(raw)) return { entries: [], error: "ต้องเป็น [{ \"fromBlock\": เลข block, \"producers\": [\"0x…\"] }]" };
+  if (raw.length && !base?.length) return { entries: [], error: "ต้องมี config.producers (รายชื่อตั้งแต่ block 1) ก่อน" };
+  const entries = [];
+  for (const item of raw) {
+    const fromBlock = item?.fromBlock;
+    const producers = Array.isArray(item?.producers) ? list(item.producers) : [];
+    if (!Number.isSafeInteger(fromBlock) || fromBlock < 2) return { entries: [], error: `fromBlock ต้องเป็นจำนวนเต็ม ≥ 2 (ได้ ${fromBlock})` };
+    if (!producers.length || producers.some((address) => !/^0x[0-9a-f]{40}$/.test(address))) {
+      return { entries: [], error: `block ${fromBlock}: producers ต้องเป็น address อย่างน้อย 1 ตัว` };
+    }
+    entries.push({ fromBlock, producers });
+  }
+  entries.sort((a, b) => a.fromBlock - b.fromBlock);
+  if (entries.some((entry, index) => index > 0 && entry.fromBlock === entries[index - 1].fromBlock)) return { entries: [], error: "fromBlock ซ้ำกัน" };
+  return { entries };
+}
+
+/** รายชื่อผู้ผลิตที่ใช้กับ block number (config.producers แล้วแทนด้วย producerSchedule ที่ถึงแล้ว) · null = ไม่บังคับ */
+export function producersAt({ producers = null, producerSchedule = [] } = {}, number) {
+  let current = producers?.length ? producers : null;
+  for (const entry of producerSchedule ?? []) if (number >= entry.fromBlock) current = entry.producers;
+  return current;
+}
+
+/** ตัวตรวจผู้ผลิตตาม block จาก genesis ดิบ (startSync / loadSnapshot / client) → (number) => รายชื่อ | null · ไม่มีรายชื่อ = null */
+export function producerSetOf(genesis) {
+  const producers = genesis?.config?.producers ? list(genesis.config.producers) : null;
+  if (!producers?.length) return null;
+  const { entries, error } = parseProducerSchedule(genesis.producerSchedule, producers);
+  if (error) throw new Error(`genesis producerSchedule: ${error}`);
+  return (number) => producersAt({ producers, producerSchedule: entries }, number);
 }
 
 /**
  * ปัญหาที่ทำให้ server ไม่ควรเริ่ม (ว่าง = เริ่มได้)
  *   dev = true (DEV=1) → ข้ามข้อบังคับของเครือข่ายจริง (ADMINS / PRODUCER_KEY)
+ *   follow = true (FOLLOW) → ไม่ต้องมี PRODUCER_KEY · nextBlock = block ที่จะผลิตถัดไป (ตรวจ key กับ producerSchedule) · null = ไม่ตรวจรายชื่อ
  */
-export function startupProblems({ settings, errors = [], dev = false, producer = null }) {
+export function startupProblems({ settings, errors = [], dev = false, producer = null, follow = false, nextBlock = 1 }) {
   const problems = [...errors];
   if (!dev) {
     if (!settings.admins?.length) problems.push("ต้องตั้ง ADMINS (หรือ config.admins ใน genesis) — ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้ · ช่วงพัฒนาใช้ DEV=1");
-    if (!producer) problems.push("ต้องตั้ง PRODUCER_KEY (key ที่ใช้เซ็น block) · ช่วงพัฒนาใช้ DEV=1");
+    if (!producer && !follow) problems.push("ต้องตั้ง PRODUCER_KEY (key ที่ใช้เซ็น block) · ช่วงพัฒนาใช้ DEV=1 · เครื่องสำรองใช้ FOLLOW=<url>");
   }
-  if (producer && settings.producers?.length && !settings.producers.includes(producer.toLowerCase())) {
-    problems.push(`PRODUCER_KEY เป็นของ ${producer} ซึ่งไม่อยู่ในรายชื่อผู้ผลิตของ genesis (${settings.producers.join(", ")})`);
+  const allowed = nextBlock === null ? null : producersAt(settings, nextBlock);   // null = ตรวจทีหลัง (FAILOVER_FROM: หลังซิงก์)
+  if (producer && !follow && allowed && !allowed.includes(producer.toLowerCase())) {
+    problems.push(`PRODUCER_KEY เป็นของ ${producer} ซึ่งไม่อยู่ในรายชื่อผู้ผลิตของ block ${nextBlock} (${allowed.join(", ")})`);
   }
   return problems;
+}
+
+/** ข้อควรระวังที่ไม่หยุด server (พิมพ์เตือนตอนเริ่ม) */
+export function startupWarnings({ settings, dev = false }) {
+  const warnings = [];
+  if (!dev && settings.producers?.length === 1) {
+    warnings.push("config.producers มี key เดียว — key หาย = ผลิต block ต่อไม่ได้ (ต้องล้างเชน) · ใส่ key สำรองที่เก็บ offline ไว้ในรายชื่อด้วย");
+  }
+  return warnings;
 }

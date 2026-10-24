@@ -2288,9 +2288,9 @@ export class VirtualMachine {
     return { received, sended, consumed, balance: received - sended - consumed };   // BigInt
   }
 
-  /** hash ของ genesis (ไม่รวม "forks" — ตาราง fork เพิ่มทีหลังได้โดย genesis hash เดิม) */
+  /** hash ของ genesis (ไม่รวม "forks" / "producerSchedule" — ตารางที่เพิ่มทีหลังได้โดย genesis hash เดิม) */
   hashGenesis(genesis = {}) {
-    const { forks, ...rest } = genesis ?? {};
+    const { forks, producerSchedule, ...rest } = genesis ?? {};
     return this.hashData(rest);
   }
 
