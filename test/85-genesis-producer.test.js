@@ -181,3 +181,13 @@ test("replay / sync ใช้ replayTimeoutMs: tx ที่ผู้ผลิต
   old.replayTimeoutMs = 1;
   assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 ไม่ตรงกับผู้ผลิต/);
 });
+
+test("ค่าเริ่มของ block: 1 วิ · 1M แก๊ส (gasTarget = ครึ่งหนึ่ง) · genesis ล็อก maxBlockGas ได้", () => {
+  const { settings } = resolveSettings({}, {});
+  assert.equal(settings.blockMs, 1000);
+  assert.equal(settings.maxBlockGas, 1_000_000);
+  assert.equal(new VM.VirtualMachine(new MemoryDB(), { maxBlockGas: settings.maxBlockGas }).gasTarget, 500_000);
+  assert.equal(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, {}).settings.maxBlockGas, 1_500_000);
+  assert.equal(resolveSettings({}, { MAX_BLOCK_GAS: "2000000" }).settings.maxBlockGas, 2_000_000);
+  assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 ไม่ตรงกับ genesis/);
+});

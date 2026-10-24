@@ -29,7 +29,8 @@ export const GENESIS_SETTINGS = {
   minBaseFee: { env: "GAS_PRICE", parse: wei, default: 1_000_000_000n },
   gasTarget: { env: "GAS_TARGET", parse: integer, default: null },
   baseFeeDenominator: { env: "BASE_FEE_DENOMINATOR", parse: integer, default: 8 },
-  blockMs: { env: "BLOCK_MS", parse: integer, default: 3000 },
+  blockMs: { env: "BLOCK_MS", parse: integer, default: 1000 },
+  maxBlockGas: { env: "MAX_BLOCK_GAS", parse: integer, default: 1_000_000 },   // gasTarget ไม่ตั้ง = ครึ่งหนึ่งของค่านี้ (มีผลกับ base fee → ทุกเครื่องต้องเหมือนกัน)
   upgradeDelayBlocks: { env: "UPGRADE_DELAY_BLOCKS", parse: integer, default: 0 },
   memoryLimitMb: { env: "MEMORY_LIMIT_MB", parse: integer, default: 32 },
   stackLimitKb: { env: "STACK_LIMIT_KB", parse: integer, default: 256 },
