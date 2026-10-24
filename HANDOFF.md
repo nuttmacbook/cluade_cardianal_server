@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 899 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 901 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 899 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 901 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -793,7 +793,8 @@ POST /query    { programUuid, functionName, input, context?, value? }
 POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP · 0 = ไม่จำกัด สำหรับ indexer)
 ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
 GET  /evm                      ค่าสำหรับ wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
-GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก์ "ดูใน explorer" ของกระเป๋า)
+GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (EIP-3091 · block รับทั้งเลขและ hash · ลิงก์ "ดูใน explorer" ของกระเป๋า)
+GET  /evm/explorer                                302 → / (URL explorer ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง)
 ```
 - รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
   `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi` `cardianal_getProof` (`eth_getProof` = error ชี้ไปตัวนี้)
@@ -1051,7 +1052,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 101 ไฟล์ · 899 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 102 ไฟล์ · 901 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1102,6 +1103,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
 | `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
 | `101-block-gas-defer` | แก๊สที่เหลือใน block ไม่พอ → ใบนั้นรอ block ถัดไป (ไม่ถูกปฏิเสธ · ใบ nonce ถัดไปเข้าตาม) · server `mineOnce`: ไม่มีใบที่เข้าได้ + base fee ขั้นต่ำ = ไม่ปิด block ว่าง · `/health` ไม่ขึ้น stalled ระหว่างนั้น |
+| `102-evm-explorer-links` | ลิงก์ explorer ตาม EIP-3091 ใต้ `/evm/explorer` (tx / address / token / block ด้วยเลขหรือ hash) · `/evm/explorer` เปิดแล้วได้หน้า explorer (สำหรับลงทะเบียน chainlist) |
 | `100-producer-failover` | `producerSchedule` ตรวจรูปแบบ / เรียง / `producersAt` · ไม่อยู่ใน genesis hash · key หลุด: key เดิมผลิตหลัง block N = ปฏิเสธ (block ก่อน N ซิงก์ได้) · `client.verifiedState` รับฟังก์ชันรายชื่อ · key สำรองผลิตต่อได้ + เตือนเมื่อมี key เดียว · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (ยังผลิต = ไม่เริ่ม · ซิงก์ที่ขาด · ติดต่อไม่ได้ = เตือน · ซิงก์ไม่ครบ = ไม่เริ่ม) · server จริงหลายโปรเซส: FOLLOW ซิงก์ + 503 · FAILOVER_FROM ตอนเดิมยังผลิต = exit 1 · เดิมดับ → สำรองผลิตต่อด้วย DATA เดิม · schedule ถอด key → `retired` → key ใหม่ซิงก์แล้วผลิตต่อ |
 | `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
