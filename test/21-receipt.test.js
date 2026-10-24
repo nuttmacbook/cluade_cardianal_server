@@ -7,7 +7,7 @@ import { TOKEN, WALLET, SHOP, COUNTER, FAULTY } from "./programs.js";
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { ...API_GAS_ONLY, call: 100, read: 10, write: 50, byte: 0, price: 1 };
+const GAS = { ...API_GAS_ONLY, call: 100, read: 10, write: 50, stateKey: 0, byte: 0, price: 1 };
 let endpointCounter = 0;
 
 function setup(options = {}, balances = { alice: 100_000 }) {

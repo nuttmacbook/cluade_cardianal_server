@@ -149,6 +149,8 @@ export const DEFAULT_OPTIONS = {
   wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
   producer: null,                 // ผู้ผลิต block ของ node นี้ { address, sign(blockHash) → ลายเซ็น } · null = block ไม่มีผู้ผลิต (แบบเดิม)
   replayTimeoutMs: 60_000,        // เวลาต่อ tx ตอน replay / rebuild / sync — ผู้ผลิตกรอง TIMEOUT ไปแล้ว จึงให้แก๊สหยุดก่อน (เครื่องช้ากว่าไม่ได้ผลต่าง)
+  forks: {},                      // ตาราง fork { ชื่อ: block ที่เริ่มใช้ } (genesis.json "forks") · ดู FORKS
+  forkRules: {},                  // กติกาของ fork เพิ่มจาก FORKS (ใช้ในเทสต์)
   historyKeep: null,              // pruning: เก็บ history แค่ N block ล่าสุด (ย้อนดู state / replay ได้แค่ช่วงนั้น) · null = เก็บทั้งหมด (archive)
 };
 
@@ -174,6 +176,7 @@ export const DEFAULT_GAS = {
   call: 100,   // ต่อการเรียกโปรแกรม 1 ครั้ง (รวมชั้นนอกสุด)
   read: 100,   // ต่อ readDB 1 ครั้ง
   write: 500,  // ต่อ writeDB / deleteDB 1 ครั้ง
+  stateKey: 1000, // ต่อ key ของ state ที่ tx เขียน / ลบ ครั้งแรก (ค่าอัปเดต Merkle trie + history ตอนปิด block · เขียน key เดิมซ้ำใน tx เดียวกันไม่คิดซ้ำ)
   byte: 1,     // ต่อ byte ของข้อมูลที่อ่าน / เขียน
   event: 200,  // ต่อ event 1 รายการ (บวกค่า byte ของข้อมูลใน event)
   hash: 100,   // ต่อการเรียก keccak256 (บวกค่า byte ของข้อมูล)
@@ -191,6 +194,19 @@ export const DEFAULT_GAS = {
                //   ArrayBuffer / typed array / RegExp ตามขนาด · input / ผลของ runProgram (ดู sandbox.js "แก๊สตามขนาดข้อมูล")
   price: 1,    // native ต่อ 1 gas
 };
+
+/**
+ * fork: เปลี่ยนกติกาของเชนตั้งแต่ block ที่กำหนด (แบบ hard fork ของ Ethereum) โดยไม่ต้องล้างเชน
+ *   ตาราง (ว่าจะเปิดที่ block ไหน) อยู่ใน genesis.json `"forks": { "<ชื่อ>": <block> }` — ไม่อยู่ใน genesis hash จึงเพิ่มทีหลังได้
+ *   กติกาของแต่ละ fork อยู่ในโค้ดตรงนี้ · node ที่โค้ดไม่รู้จักชื่อใน genesis = ไม่ยอมเริ่ม (ต้องอัปเดตโปรแกรมก่อน)
+ *   block ก่อนเลขที่กำหนดใช้กติกาเดิม → replay / sync / rebuild block เก่าได้ผลเดิมทุกไบต์
+ *   node ที่ตั้งตารางต่างกัน = hash ของ block ไม่ตรงตั้งแต่ block นั้น (sync หยุด) · ทุกเครื่องต้องอัปเดตก่อนถึง block
+ *
+ *   ชื่อ → { description, gas?: { ชื่อค่าแก๊ส: ค่าใหม่ } }
+ *     gas: แทนค่าใน DEFAULT_GAS ตั้งแต่ block นั้น (ยกเว้น price — ราคาขั้นต่ำอยู่ใน genesis.config.minBaseFee)
+ *     กติกาแบบอื่น (field ใหม่ใน header, คำสั่งใหม่) → เช็ค vm.forkActive("<ชื่อ>", blockNumber) ในจุดที่เปลี่ยน
+ */
+export const FORKS = {};
 
 export const ERROR_CODE = {
   INVALID_REQUEST: "INVALID_REQUEST",
@@ -277,6 +293,8 @@ export const ERRORS = {
   replayMismatch: [INTERNAL, (number) => `รัน block ${number} ใหม่แล้วได้ hash ไม่ตรงกับที่บันทึกไว้`],
   trieStale: [INTERNAL, "trie ของ state เปลี่ยนระหว่างปิด block (มีการ commit อื่นแทรก) — สร้าง block ใหม่"],
   invalidHistoryKeep: [INVALID_REQUEST, "historyKeep ต้องเป็นจำนวนเต็ม ≥ 1 หรือ null"],
+  unknownFork: [INVALID_REQUEST, (name) => `ไม่รู้จัก fork '${name}' — โปรแกรมของ node นี้เก่ากว่า genesis (อัปเดตโปรแกรมก่อนเริ่ม)`],
+  invalidFork: [INVALID_REQUEST, (name, detail) => `fork '${name}': ${detail}`],
   blockTimestampOrder: [INVALID_REQUEST, (timestamp, previous) => `timestamp ของ block ต้องมากกว่า block ก่อนหน้า (${timestamp} <= ${previous})`],
   immutableProgram: [FORBIDDEN, (id) => `โปรแกรม '${id}' อัปเกรดไม่ได้ (ไม่มี upgrader)`],
   notUpgrader: [FORBIDDEN, (address) => `'${address}' ไม่ใช่ upgrader ของโปรแกรมนี้`],
@@ -1241,6 +1259,14 @@ export class Transaction {
     this.events = [];        // event ที่โปรแกรม emit (ถูกย้อนพร้อม writes)
     this.before = new Map(); // dbKey → ค่าก่อนรัน
     this.loaded = new Set(); // dbKey ที่โปรแกรมอ่าน
+    this.stateKeys = new Set(); // dbKey ที่คิดแก๊ส stateKey ไปแล้ว (ไม่คืนตอน rollback ของกิ่ง — แก๊สที่ใช้ไปแล้วไม่คืน)
+  }
+
+  /** แก๊สของ key ของ state ที่ tx เขียนครั้งแรก (writeDB / deleteDB) */
+  useStateKeyGas(dbKey) {
+    if (this.stateKeys.has(dbKey)) return;
+    this.useGas(this.gas.stateKey);
+    this.stateKeys.add(dbKey);
   }
 
   // ---------- DB ----------
@@ -1425,6 +1451,8 @@ export class VirtualMachine {
     producer = DEFAULT_OPTIONS.producer,
     replayTimeoutMs = DEFAULT_OPTIONS.replayTimeoutMs,
     historyKeep = DEFAULT_OPTIONS.historyKeep,
+    forks = DEFAULT_OPTIONS.forks,
+    forkRules = DEFAULT_OPTIONS.forkRules,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -1466,6 +1494,7 @@ export class VirtualMachine {
     this.historyKeep = historyKeep;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
+    this.#setForks(forks ?? {}, { ...FORKS, ...forkRules });
     // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
     this.minBaseFee = parseNative(minBaseFee ?? this.gas.price);
     if (this.minBaseFee === null || this.minBaseFee < 0n) fail(ERRORS.invalidBaseFeeOption, "minBaseFee");
@@ -1514,6 +1543,58 @@ export class VirtualMachine {
     if (trie && trie.parentRoot !== this.stateRoot()) fail(ERRORS.trieStale);
     const update = trie ?? this.trieUpdate(writes);
     return this.db.writeKeys(update.writes.length ? [...writes, ...update.writes] : writes);
+  }
+
+  // ---------- fork (กติกาตาม block height · ดู FORKS) ----------
+
+  #forks = [];          // [{ name, block, rule }] เรียงตาม block
+  #gasCache = new Map(); // ชื่อ fork ที่เปิดแล้ว → ตารางแก๊ส
+
+  #setForks(forks, rules) {
+    if (typeof forks !== "object" || Array.isArray(forks)) fail(ERRORS.invalidFork, "(ตาราง)", "ต้องเป็น { ชื่อ: block }");
+    this.#forks = Object.entries(forks).map(([name, block]) => {
+      const rule = Object.hasOwn(rules, name) ? rules[name] : null;
+      if (!rule) fail(ERRORS.unknownFork, name);
+      if (!Number.isSafeInteger(block) || block < 0) fail(ERRORS.invalidFork, name, `block ต้องเป็นจำนวนเต็ม ≥ 0 (ได้ ${block})`);
+      for (const [field, value] of Object.entries(rule.gas ?? {})) {
+        if (field === "price" || !Object.hasOwn(DEFAULT_GAS, field)) fail(ERRORS.invalidFork, name, `เปลี่ยนค่าแก๊ส '${field}' ไม่ได้`);
+        if (!Number.isSafeInteger(value) || value < 0) fail(ERRORS.invalidFork, name, `ค่าแก๊ส '${field}' ต้องเป็นจำนวนเต็ม ≥ 0`);
+      }
+      return { name, block, rule };
+    }).sort((a, b) => a.block - b.block || (a.name < b.name ? -1 : 1));
+    this.#gasCache.clear();
+  }
+
+  /** block ที่ tx ที่รันนอก block (query / simulate / mempool) จะได้อยู่ = block ถัดไป */
+  #effectiveBlock(blockNumber) {
+    return blockNumber ?? (this.latestBlockNumber() ?? 0) + 1;
+  }
+
+  /** fork นี้เปิดใช้แล้วที่ block นั้นไหม (ไม่ส่ง = block ถัดไป) */
+  forkActive(name, blockNumber = null) {
+    const fork = this.#forks.find((item) => item.name === name);
+    return Boolean(fork) && this.#effectiveBlock(blockNumber) >= fork.block;
+  }
+
+  /** ตาราง fork → [{ name, block, active, description }] (active = เปิดแล้วที่ block ถัดไป) */
+  forkSchedule() {
+    const next = this.#effectiveBlock(null);
+    return this.#forks.map(({ name, block, rule }) => ({ name, block, active: next >= block, description: rule.description ?? null }));
+  }
+
+  /** ตารางแก๊สที่ใช้ใน block นั้น = ค่าตั้งต้นของ VM แล้วแทนด้วย fork ที่เปิดแล้วตามลำดับ */
+  gasAt(blockNumber = null) {
+    if (!this.#forks.length) return this.gas;   // ไม่มี fork = ไม่ต้องอ่านเลข block จาก DB
+    const number = this.#effectiveBlock(blockNumber);
+    const active = this.#forks.filter((fork) => number >= fork.block && fork.rule.gas);
+    if (!active.length) return this.gas;
+    const id = active.map((fork) => fork.name).join(",");
+    let table = this.#gasCache.get(id);
+    if (!table) {
+      table = Object.freeze(Object.assign({}, this.gas, ...active.map((fork) => fork.rule.gas)));
+      this.#gasCache.set(id, table);
+    }
+    return table;
   }
 
   // ---------- trie ของ state (ระยะ 4.3 · src/core/trie.js) ----------
@@ -2207,6 +2288,12 @@ export class VirtualMachine {
     return { received, sended, consumed, balance: received - sended - consumed };   // BigInt
   }
 
+  /** hash ของ genesis (ไม่รวม "forks" — ตาราง fork เพิ่มทีหลังได้โดย genesis hash เดิม) */
+  hashGenesis(genesis = {}) {
+    const { forks, ...rest } = genesis ?? {};
+    return this.hashData(rest);
+  }
+
   /** hash ของ genesis ที่บันทึกไว้ */
   genesisHash() {
     return this.read(KEY.GENESIS) ?? null;
@@ -2214,7 +2301,7 @@ export class VirtualMachine {
 
   /** ตั้งสถานะเริ่มต้นของ chain แล้วบันทึก hash ไว้ให้ node อื่นเทียบ */
   applyGenesis(genesis = {}) {
-    const hash = this.hashData(genesis);
+    const hash = this.hashGenesis(genesis);
     const current = this.genesisHash();
     if (current !== null) {
       if (current !== hash) fail(ERRORS.genesisMismatch, current, hash);
@@ -2231,7 +2318,7 @@ export class VirtualMachine {
 
   /** เทียบ genesis ที่ node นี้ใช้กับของที่ส่งมา */
   checkGenesis(genesis) {
-    const hash = this.hashData(genesis);
+    const hash = this.hashGenesis(genesis);
     const current = this.genesisHash();
     if (current !== null && current !== hash) fail(ERRORS.genesisMismatch, current, hash);
     return hash;
@@ -2676,7 +2763,7 @@ export class VirtualMachine {
       timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
-      gas: this.gas,
+      gas: this.gasAt(blockNumber),   // ตามกติกาของ block ที่ tx อยู่ (fork)
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
       burnPercent: checkBurnPercent(burnPercent),
@@ -3032,12 +3119,16 @@ export class VirtualMachine {
     if (value === undefined) fail(ERRORS.writeUndefined);
     const stored = this.checkValueSize(fromProgram(value, "ค่าที่ writeDB"), "writeDB");
     tx.useGas(tx.gas.write + tx.gas.byte * valueSize(stored));
-    tx.put(this.checkKeySize(tx.touch(programUuid, key)), stored);
+    const dbKey = this.checkKeySize(tx.touch(programUuid, key));
+    tx.useStateKeyGas(dbKey);
+    tx.put(dbKey, stored);
   }
 
   programDeleteDB(tx, programUuid, key) {
     tx.useGas(tx.gas.write);
-    tx.delete(this.checkKeySize(tx.touch(programUuid, key)));
+    const dbKey = this.checkKeySize(tx.touch(programUuid, key));
+    tx.useStateKeyGas(dbKey);
+    tx.delete(dbKey);
   }
 
   /** ยอดสะสมแต่ละช่อง */

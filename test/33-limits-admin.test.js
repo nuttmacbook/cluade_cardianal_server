@@ -8,7 +8,7 @@ import { TOKEN, COUNTER } from "./programs.js";
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { ...API_GAS_ONLY, call: 100, read: 0, write: 0, byte: 0, price: 1 };
+const GAS = { ...API_GAS_ONLY, call: 100, read: 0, write: 0, stateKey: 0, byte: 0, price: 1 };
 
 const ADMIN_KEY = sign.randomPrivateKey();
 const admin = sign.addressOf(ADMIN_KEY);
