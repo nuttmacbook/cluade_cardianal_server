@@ -661,6 +661,8 @@ async function block(number, draw = el) {
       ["Parent block", header.parentHash ? `<span class="mono full"><a onclick="go('#block/${header.number - 1}')">${esc(header.parentHash)}</a>${copy(header.parentHash)}</span>` : '<span class="dim">First block</span>'],
       ["State root", full(header.stateRoot)],
       ["Fee recipient", addr(header.feeRecipient, header.feeRecipient)],
+      header.producer && ["Producer", `${addr(header.producer, header.producer)} <span class="dim">· signed</span>`],
+      header.producerSignature && ["Producer signature", full(header.producerSignature)],
       ["Transactions", `${num(header.txCount)} <span class="dim">(${header.successCount} succeeded · ${header.failedCount} failed)</span>`],
       ["Gas used", `${gas(header.gasUsed)}${header.gasTarget ? ` <span class="dim">(target ${gas(header.gasTarget)})</span>` : ""} <span class="dim">· fee ${coin(header.fee)}</span>`],
       header.baseFeePerGas && ["Base fee", `${gwei(header.baseFeePerGas)} gwei <span class="dim">per gas · next block ${baseFeeTrend(header)}</span>`],

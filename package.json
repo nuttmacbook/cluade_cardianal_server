@@ -20,6 +20,7 @@
     "demo": "node scripts/demo.js",
     "examples": "node scripts/examples.js",
     "start": "node server.js",
+    "dev": "DEV=1 node server.js",
     "seed": "node scripts/seed.js",
     "demo:market": "node scripts/demo-market.js",
     "demo:chain": "node scripts/demo-chain.js",

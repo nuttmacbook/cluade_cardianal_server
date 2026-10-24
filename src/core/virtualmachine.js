@@ -143,6 +143,8 @@ export const DEFAULT_OPTIONS = {
   memoryLimitBytes: SANDBOX_DEFAULTS.memoryLimitBytes, // หน่วยความจำของ sandbox ต่อ tx (รวมทุกโปรแกรมในสายการเรียก) เกิน → OUT_OF_MEMORY
   maxStackBytes: SANDBOX_DEFAULTS.maxStackBytes,       // stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน → RangeError ที่ catch ได้)
   wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
+  producer: null,                 // ผู้ผลิต block ของ node นี้ { address, sign(blockHash) → ลายเซ็น } · null = block ไม่มีผู้ผลิต (แบบเดิม)
+  replayTimeoutMs: 60_000,        // เวลาต่อ tx ตอน replay / rebuild / sync — ผู้ผลิตกรอง TIMEOUT ไปแล้ว จึงให้แก๊สหยุดก่อน (เครื่องช้ากว่าไม่ได้ผลต่าง)
 };
 
 /** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
@@ -1440,6 +1442,8 @@ export class VirtualMachine {
     memoryLimitBytes = DEFAULT_OPTIONS.memoryLimitBytes,
     maxStackBytes = DEFAULT_OPTIONS.maxStackBytes,
     wallClock = DEFAULT_OPTIONS.wallClock,
+    producer = DEFAULT_OPTIONS.producer,
+    replayTimeoutMs = DEFAULT_OPTIONS.replayTimeoutMs,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -1475,6 +1479,8 @@ export class VirtualMachine {
     this.memoryLimitBytes = memoryLimitBytes;
     this.maxStackBytes = maxStackBytes;
     this.wallClock = wallClock;
+    this.producer = producer ? { address: normalizeAddress(producer.address), sign: producer.sign } : null;
+    this.replayTimeoutMs = replayTimeoutMs;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
@@ -1902,7 +1908,7 @@ export class VirtualMachine {
    *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed มาจาก Block (ดู Block.receiptEntries) และอยู่ใน hash ด้วย
    */
   hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [],
-    baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null }) {
+    baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null, producer = null }) {
     const txRoot = this.hashData(txHashes);
     // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี (block ที่ไม่มี hash เหมือนเดิมทุกไบต์)
     const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
@@ -1917,6 +1923,8 @@ export class VirtualMachine {
       // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
       baseFeePerGas, gasUsed, receiptsRoot, logsBloom: bloom,
       ...(rejectedRoot ? { rejectedCount: rejected.length, rejectedRoot } : {}),
+      // ผู้ผลิต: อยู่ใน hash เฉพาะ block ที่มี (block แบบเดิม hash เหมือนเดิมทุกไบต์) · ลายเซ็นของผู้ผลิตเซ็น hash นี้ จึงอยู่นอก hash
+      ...(producer ? { producer } : {}),
     });
     return { hash, txRoot, stateRoot, rejectedRoot };
   }
@@ -2408,6 +2416,9 @@ export class VirtualMachine {
       timestamp: header.timestamp,
       feeRecipient: header.feeRecipient,
       burnPercent: header.burnPercent,
+      producer: header.producer ?? null,
+      producerSignature: header.producerSignature ?? null,
+      timeoutMs: this.replayTimeoutMs,
       checkChain: false,
       recordBlocks: false,
       recordHistory: false,
@@ -2474,6 +2485,9 @@ export class VirtualMachine {
         timestamp: header.timestamp,
         feeRecipient: header.feeRecipient,
         burnPercent: header.burnPercent,
+        producer: header.producer ?? null,
+        producerSignature: header.producerSignature ?? null,
+        timeoutMs: this.replayTimeoutMs,
         checkChain: false,
         overwrite: true,
         maxTransactions: null,
@@ -2555,13 +2569,14 @@ export class VirtualMachine {
   // ---------- Transaction / Response ----------
 
   /** options: { read, timestamp } */
-  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee } = {}) {
+  createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee,
+    timeoutMs = this.timeoutMs } = {}) {
     return new Transaction({
       read,
       timestamp,
       blockNumber,
       baseFee: baseFee ?? this.currentBaseFee(),   // รันนอก block = base fee ของ block ถัดไป
-      timeoutMs: this.timeoutMs,
+      timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
       gas: this.gas,
@@ -3292,6 +3307,9 @@ export class Block {
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
   #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
   #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
+  #producer;            // address ผู้ผลิต (อยู่ใน hash) · null = block แบบเดิม
+  #producerSignature;   // ลายเซ็นของผู้ผลิตบน hash ของ block (ส่งมา = sync / replay · ไม่ส่ง = เซ็นด้วย vm.producer ตอนต้องใช้)
+  #timeoutMs;           // เวลาต่อ tx (null = vm.timeoutMs) — replay / sync ใช้ vm.replayTimeoutMs
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -3308,6 +3326,9 @@ export class Block {
     maxTransactions = vm.maxTransactions,
     maxTransactionsPerSender = vm.maxTransactionsPerSender,
     maxBlockGas = vm.maxBlockGas,
+    producer = vm.producer?.address ?? null,
+    producerSignature = null,
+    timeoutMs = null,
   } = {}) {
     checkTimestamp(timestamp);
     this.#vm = vm;
@@ -3334,6 +3355,9 @@ export class Block {
     }
     this.#feeRecipient = feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient);
     this.#burnPercent = checkBurnPercent(burnPercent);
+    this.#producer = producer === null || producer === undefined ? null : normalizeAddress(producer);
+    this.#producerSignature = producerSignature;
+    this.#timeoutMs = timeoutMs;
     // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
     // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
     this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous);
@@ -3547,6 +3571,7 @@ export class Block {
       gasUsed: this.#gasUsed,
       receiptsRoot,
       logsBloom: bloom,
+      producer: this.#producer,
     });
     return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot, receiptsRoot, logsBloom: bloom };
   }
@@ -3770,7 +3795,27 @@ export class Block {
       txHashes,
       ...(this.#rejectedTxs.length ? { rejectedCount: this.#rejectedTxs.length, rejectedRoot: this.hashes().rejectedRoot } : {}),
       ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
+      ...(this.#producer ? { producer: this.#producer, producerSignature: this.producerSignature() } : {}),
     };
+  }
+
+  /**
+   * ลายเซ็นของผู้ผลิตบน hash ของ block → "0x" + r + s + v · null = ไม่มีผู้ผลิต หรือ node นี้ไม่ใช่ผู้ผลิตของ block
+   * node ผู้ผลิตเซ็นด้วย vm.producer.sign (ได้ค่าเดิมทุกครั้งต่อ hash เดียวกัน) · sync / replay ใช้ลายเซ็นที่มากับ header
+   */
+  producerSignature() {
+    if (!this.#producer) return null;
+    const { hash } = this.hashes();
+    if (this.#producerSignature?.hash === hash) return this.#producerSignature.signature;
+    if (typeof this.#producerSignature === "string") return this.#producerSignature;
+    const signer = this.#vm.producer;
+    if (!signer || signer.address !== this.#producer) return null;
+    this.#producerSignature = { hash, signature: signer.sign(hash) };
+    return this.#producerSignature.signature;
+  }
+
+  get producer() {
+    return this.#producer;
   }
 
   /** receipt ของทั้ง block สำหรับ explorer */
@@ -3919,6 +3964,7 @@ export class Block {
       feeRecipient: this.#feeRecipient,
       burnPercent: this.#burnPercent,
       baseFee: this.#baseFee,
+      ...(this.#timeoutMs === null ? {} : { timeoutMs: this.#timeoutMs }),
     });
     if (result.accepted === false) {
       this.#rejected.push({ action, request: copyValue(request) ?? {}, error: result.error });

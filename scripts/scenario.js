@@ -403,7 +403,7 @@ function summary() {
 // ============================================================================
 async function startServer() {
   const port = await new Promise((resolve) => { const probe = net.createServer().listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => resolve(port)); }); });
-  const env = { ...process.env, PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: process.env.BLOCK_MS ?? "3000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };
+  const env = { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: process.env.BLOCK_MS ?? "3000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };
   const child = spawn(process.execPath, ["server.js"], { cwd: new URL("..", import.meta.url).pathname, env, stdio: ["ignore", "ignore", "inherit"] });
   API = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i += 1) { if (await fetch(`${API}/genesis`).then(() => true, () => false)) break; await wait(100); }
