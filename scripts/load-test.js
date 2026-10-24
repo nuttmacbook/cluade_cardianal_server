@@ -7,7 +7,7 @@
  *   npm run load:test -- --url http://localhost:3000 --txs 200 --blocks 5    # ยิง /sendtx ของ server ที่รันอยู่ (end-to-end)
  *
  * โหมดในโปรเซส (ค่าเริ่ม) ใช้ของจริงทั้งหมดแบบเดียวกับ server.js — ไม่ผ่าน HTTP
- *   VirtualMachine (option เดียวกับ server: maxTransactions 500 · ต่อ sender 16 · maxBlockGas / maxTxGas 3M · EIP-1559 · history ฯลฯ)
+ *   VirtualMachine (option แบบ server: maxTransactions 500 · ต่อ sender 16 · EIP-1559 · history ฯลฯ · แต่ maxBlockGas / maxTxGas 3M แทน 1M ของ server เพื่อให้ block 500 tx ของ token / mix ไม่เต็มแก๊ส)
  *   + DB (LMDB ในโฟลเดอร์ชั่วคราวบนดิสก์) หรือ MemoryDB · Mempool + simulate + reviewProgram ตอนรับ tx (= /sendtx ลบ HTTP)
  *   ทุก block: เซ็น tx (ฝั่ง client · ไม่จับเวลา) → mempool.add ทีละใบ (ตรวจลายเซ็น + simulate) → createBlock → mempool.take → commit
  *   ผู้ส่งหลายกระเป๋าจาก genesis (1 ใบต่อกระเป๋าต่อ block) → ไม่ติดเพดาน 16 ใบต่อ sender

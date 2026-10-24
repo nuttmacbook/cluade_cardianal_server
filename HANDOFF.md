@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 896 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 897 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 896 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 897 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 1000) `MAX_BLOCK_GAS` (1M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -41,7 +41,7 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
 
 ### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
-- **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
+- **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `maxBlockGas` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
   `genesis.forks` = ตาราง fork `{ ชื่อ: block }` (ไม่อยู่ใน genesis hash · เพิ่มทีหลังได้ · ดูหัวข้อค่าแก๊ส "fork ตาม block height")
   `genesis.producerSchedule` = `[{ fromBlock, producers }]` เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (ไม่อยู่ใน genesis hash · ดู "ผู้ผลิตเสีย / key หาย / key หลุด" ข้างล่าง)
   ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
@@ -354,7 +354,7 @@ POST /sendtx
       reviewProgram(code)       เฉพาะ action deploy
       simulate(vm, verified)    รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400
                                 ครั้งที่ simulate ไม่ผ่านก็ถูกนับใน rate limit ต่อ address
-  ⏱ ทุก BLOCK_MS (3 วินาที)
+  ⏱ ทุก BLOCK_MS (1 วินาที)
   → vm.createBlock() → mempool.take(block) → block.commit()
 ```
 
@@ -519,7 +519,7 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
 | ค่า (option ของ VM · env ของ server) | ค่าเริ่มต้น | ความหมาย |
 |---|---|---|
 | `minBaseFee` · `GAS_PRICE` | `gas.price` (server 1 gwei) | base fee ต่ำสุด (และ base fee ของ block แรก) |
-| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 1,500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
+| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
 | `baseFeeChangeDenominator` · `BASE_FEE_DENOMINATOR` | 8 | เปลี่ยนได้ไม่เกิน 1/8 = 12.5% ต่อ block |
 | `burnPercent` · `BURN_PERCENT` | 100 | % ของ**ส่วน base fee** ที่เผา (เดิม server ใช้ 50 ของค่าแก๊สทั้งหมด) |
 
@@ -1051,7 +1051,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 100 ไฟล์ · 896 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 100 ไฟล์ · 897 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1284,7 +1284,9 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 | native 500 ใบ/รอบ | 200–310 req/s · ล้นไป 2 block 2 ใน 4 รอบ | **632–859 req/s · p95 41–51 ms · เข้า block เดียวทุกรอบ** |
 
 **คอขวดย้ายแล้ว**: รับ tx ได้ 400–800 req/s เร็วกว่าที่เชนบรรจุได้ = `maxTransactions` 500 ต่อ `BLOCK_MS` 3 วิ ≈ **167 tx/s ต่อเครือข่าย**
-จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS` · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
+จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS`
+**ค่าเริ่มตอนนี้ (หลังจำลอง 0.25–3 วิ): block 1 วิ · 1M แก๊ส (gasTarget 500k) · 500 tx** — แก๊สต่อวินาทีเท่าเดิม (3M / 3 วิ) · block เต็มแบบ mix ปิด 334 ms (p95 489) · ต่ำกว่า 0.75 วิไม่ได้ความจุเพิ่ม (CPU ต่อ tx คงที่ · block เล็กมากมีต้นทุนคงที่ต่อ block) · ผลวัดเต็มใน block-time-sim.md ของโปรเจกต์
+`load-test.js` ยังใช้ maxBlockGas 3M เพื่อวัด block 500 tx ได้ · `scenario:full --spawn` ตั้ง `MAX_BLOCK_GAS=3000000` (กับดัก OUT_OF_MEMORY ใช้ ~1.05M แก๊สใน tx เดียว · server ค่าเริ่ม = ข้ามหัวข้อนั้น) · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
 ยังไม่ได้วัด: โหลดต่อเนื่องนาน ๆ (ยิงเป็นรอบ ≤ 800 ใบ) · client กับ server อยู่เครื่องเดียวกัน
 
 ---
@@ -1296,7 +1298,7 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
    แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
    ~~ความเร็ว / fuzz~~ เสร็จแล้ว: ภาพอุ่นต่อโปรแกรม (token transfer 2.2 → 0.94 ms/tx) · fuzz 20,000 รอบไม่พบปัญหา · ราคาแก๊สเทียบเวลา CPU แล้ว (`npm run bench:gas`)
 2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node) · การคัดลอก / สร้างข้อมูลคิดตามขนาด (spread / rest / string `+` / เมธอดในตัว · 1 ต่อสมาชิกหรือ 32 byte)
-   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 3M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
+   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 1M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
 3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
 
 ### บล็อกการมี node ที่สอง

@@ -719,6 +719,8 @@ async function main() {
     report.txs["rejected (spin OUT_OF_GAS at /sendtx)"] = sent.hash;
 
     // กับดัก: arm แล้ว loop / memory ใน block เดียวกัน (simulate ตอนส่งเห็น state ก่อน arm จึงผ่าน)
+    // หน่วยความจำ 32 MB ≈ 1.05M แก๊ส → ต้องมี maxBlockGas ≥ 2M (loop 400k + memory 1.5M ใน block เดียว) · server ค่าเริ่ม 1M = ข้าม
+    if (Number((await get("/genesis")).maxBlockGas) < 2_000_000) return skip("กับดัก OUT_OF_GAS / OUT_OF_MEMORY ใน block", "maxBlockGas ของ server < 2M (ใช้ --spawn หรือ MAX_BLOCK_GAS=3000000)");
     let items = null;
     for (let attempt = 1; attempt <= 3 && !items; attempt += 1) {
       await freshBlock();
@@ -745,7 +747,7 @@ async function main() {
     report.txs["failed in block (OUT_OF_GAS)"] = items.loop.hash;
     report.txs["failed in block (OUT_OF_MEMORY)"] = items.memory.hash;
     T.oog = items.loop.hash;
-    skip("TIMEOUT_MS (หมดเวลา)", "แก๊สหมดก่อนเสมอ: maxTxGas 3M ≈ 60 ms ใน sandbox · timeout (5 วิ) เป็นด่านสุดท้ายที่ทดสอบไม่ได้โดยไม่ลด TIMEOUT_MS ของ server (เทสต์ 08 / 58 คุมอยู่)");
+    skip("TIMEOUT_MS (หมดเวลา)", "แก๊สหมดก่อนเสมอ: maxTxGas 1–3M ≈ 20–60 ms ใน sandbox · timeout (5 วิ) เป็นด่านสุดท้ายที่ทดสอบไม่ได้โดยไม่ลด TIMEOUT_MS ของ server (เทสต์ 08 / 58 คุมอยู่)");
   });
 
   await section("14 event แบบ indexed: REST + eth_getLogs ตาม topic", async () => {
@@ -951,6 +953,7 @@ async function startServer() {
   // env เดียวกันนี้ถูกใช้กับ node ผู้อ่านในหัวข้อ sync ด้วย (import server.js ในโปรเซสนี้) → ตั้งไว้ใน process.env
   process.env.BLOCK_MS ??= OPTIONS.quick ? "300" : "1000";
   process.env.UPGRADE_DELAY_BLOCKS ??= "2";
+  process.env.MAX_BLOCK_GAS ??= "3000000";   // กับดัก OUT_OF_MEMORY ต้องใช้ ~1.05M แก๊สใน tx เดียว (ค่าเริ่มของ server = 1M)
   process.env.RATE_LIMIT = "0";
   process.env.EVM_RATE_LIMIT = "0";
   const env = { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };

@@ -9,7 +9,9 @@
  *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
  *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
  *   GAS_PRICE=1000000000   base fee ต่ำสุด (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei) — EIP-1559: base fee ของแต่ละ block ไม่ต่ำกว่านี้
- *   GAS_TARGET=1500000     แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
+ *   BLOCK_MS=1000          เวลาต่อ block (ms) · ปิด block เฉพาะตอนมี tx รอ
+ *   MAX_BLOCK_GAS=1000000  แก๊สรวมสูงสุดต่อ block (genesis config ล็อกได้) · MAX_TX_GAS=<MAX_BLOCK_GAS> แก๊สสูงสุดต่อ tx · MAX_TX_PER_BLOCK=500
+ *   GAS_TARGET=500000      แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
  *   BASE_FEE_DENOMINATOR=8 base fee เปลี่ยนได้ไม่เกิน 1/ค่านี้ ต่อ block (8 = 12.5% แบบ Ethereum)
  *   BURN_PERCENT=100       ส่วนของ base fee ที่เผาทิ้ง (tip เข้าผู้ปิด block เสมอ) — ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
@@ -70,6 +72,8 @@ export const FOLLOW = process.env.FOLLOW || null;
 const FAILOVER_FROM = process.env.FAILOVER_FROM || null;
 const MINER = process.env.MINER ?? producer?.address ?? "0x1111111111111111111111111111111111111111";
 const BLOCK_MS = settings.blockMs;
+const MAX_TX_PER_BLOCK = Number(process.env.MAX_TX_PER_BLOCK ?? 500);
+const MAX_TX_GAS = Math.min(Number(process.env.MAX_TX_GAS ?? settings.maxBlockGas), settings.maxBlockGas);   // แก๊สสูงสุดต่อ tx (ไม่เกิน maxBlockGas)
 // โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
 // (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
@@ -95,7 +99,8 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA,
   producer,
   memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
   gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
-  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
+  // block 1 วิ · 1M แก๊ส · 500 tx (ผลวัด: block-time-sim.md) — เพดาน tx ต่อ block / แก๊สต่อ tx ไม่ใช่ค่าที่ node อื่นตรวจ ตั้งต่างกันได้
+  maxTransactions: MAX_TX_PER_BLOCK, maxTransactionsPerSender: 16, maxBlockGas: settings.maxBlockGas, maxTxGas: MAX_TX_GAS,
   admins: settings.admins,
   upgradeDelayBlocks: settings.upgradeDelayBlocks,   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
   forks: settings.forks,   // genesis.json "forks": กติกาใหม่ตั้งแต่ block ที่กำหนด (ชื่อที่โค้ดไม่รู้จัก = ไม่ยอมเริ่ม)
