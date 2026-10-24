@@ -288,8 +288,11 @@ export class Mempool {
       if (included.length >= limit) break;
       if (effectiveTip(item.request, baseFee, { defaultGasPrice: this.#vm.gas.price }) === null) continue;   // maxFee < baseFee → รอ block ที่ถูกลง
       if (!block.checkTransaction(item.request).ok) continue;   // nonce ยังไม่ถึงคิว หรือโควตา block เต็ม
+      const gasLeft = block.capacity?.(item.sender)?.gas ?? Infinity;
       const result = block[item.method](item.request);
-      // VM ไม่รับเข้า block (TIMEOUT / แก๊สของ block เต็ม ฯลฯ) → หลุดจากคิวไปเลย จึงบันทึกไว้ให้ /tx ตอบได้
+      // แก๊สที่เหลือใน block นี้ไม่พอ แต่ block ว่างรับได้ → รอ block ถัดไป (ไม่ปฏิเสธ · ใบ nonce ถัดไปของคนเดิมรอตาม)
+      if (result?.accepted === false && result.error?.code === "LIMIT_EXCEEDED" && gasLeft < this.#vm.maxBlockGas) continue;
+      // VM ไม่รับเข้า block (TIMEOUT / ใหญ่เกิน block ว่าง ฯลฯ) → หลุดจากคิวไปเลย จึงบันทึกไว้ให้ /tx ตอบได้
       included.push(item.hash);
       if (result?.accepted === false) {
         this.remove([item.hash]);

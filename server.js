@@ -149,28 +149,37 @@ export let miningEnabled = !FOLLOW && !(FAILOVER_FROM && process.argv[1]?.endsWi
 
 let mining = false;
 // ผลการปิด block ล่าสุด (ให้ /health บอกได้ว่าเชนหยุดเพราะปิด block ล้มเหลวติดกัน)
-export const minerState = { failures: 0, lastError: null, lastErrorAt: null };
+export const minerState = { failures: 0, lastError: null, lastErrorAt: null, idleAt: null };
 const STARTED_AT = Date.now();
-export const miner = setInterval(() => {
-  if (mining || !miningEnabled || !shouldMine()) return;
+/** ปิด block 1 รอบ (miner เรียกทุก BLOCK_MS) → block ที่ปิด | null (ไม่มีอะไรต้องปิด / ปิดไม่ได้) */
+export function mineOnce(now = Date.now()) {
+  if (mining || !miningEnabled || !shouldMine(now)) return null;
   mining = true;
   try {
     const next = (vm.latestBlockNumber() ?? 0) + 1;
     if (!canProduce(next)) {   // producerSchedule ถอด key นี้ออกตั้งแต่ block นี้ → หยุดผลิต (block ที่ผลิตไป node อื่นก็ไม่รับ)
       throw new Error(`PRODUCER_KEY (${producer?.address ?? "ไม่มี"}) ไม่อยู่ในรายชื่อผู้ผลิตของ block ${next} (${producersOf(next).join(", ")})`);
     }
-    const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: MINER });
+    const block = vm.createBlock({ timestamp: now, feeRecipient: MINER });
     const included = mempool.take(block);
+    // ไม่มีอะไรเข้า block (ใบที่รอติด nonce ที่ขาด ฯลฯ) และ base fee ลงถึงขั้นต่ำแล้ว → ไม่ปิด block ว่าง (block ว่างช่วยแค่ลด base fee)
+    if (included.length === 0 && block.rejectedTransactions().length === 0 && BigInt(String(block.baseFee ?? vm.minBaseFee).replace(/n$/, "")) <= vm.minBaseFee) {
+      minerState.idleAt = now;   // miner ยังทำงาน แค่ไม่มีใบที่เข้า block ได้ (/health ไม่นับเป็น stalled)
+      return null;
+    }
     block.commit();
     snapshots?.onBlock(block.number);
     const rejected = block.rejectedTransactions().length;
     console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
     minerState.failures = 0;
+    return block;
   } catch (error) {
     console.error("ปิด block ล้มเหลว:", error.message);
-    Object.assign(minerState, { failures: minerState.failures + 1, lastError: error.message, lastErrorAt: Date.now() });
+    Object.assign(minerState, { failures: minerState.failures + 1, lastError: error.message, lastErrorAt: now });
+    return null;
   } finally { mining = false; }
-}, BLOCK_MS);
+}
+export const miner = setInterval(() => mineOnce(), BLOCK_MS);
 miner.unref?.();
 
 const lower = (value) => String(value ?? "").toLowerCase();
@@ -204,7 +213,8 @@ export function health(now = Date.now()) {
   const db = typeof vm.db.stats === "function" ? vm.db.stats() : null;
   const waiting = mempool.size + (shouldMine(now) ? mempool.rejectedPending : 0);
   const problems = [];
-  if (waiting > 0 && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
+  const idle = minerState.idleAt !== null && now - minerState.idleAt < Math.max(BLOCK_MS * 3, 5_000);   // ใบที่รอเข้า block ไม่ได้ (เช่น nonce ขาด) ≠ เชนหยุด
+  if (waiting > 0 && !idle && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
   if (followState.error) problems.push(`follow: ซิงก์จาก ${FOLLOW} หยุด (${followState.error})`);
   if (minerState.failures > 0) problems.push(`miner: ปิด block ล้มเหลว ${minerState.failures} ครั้งติดกัน (${minerState.lastError})`);
   if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB ใช้ไป ${db.usedPercent}% ของ mapSize`);

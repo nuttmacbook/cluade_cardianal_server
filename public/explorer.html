@@ -2019,5 +2019,5 @@ setInterval(async () => {
   document.getElementById("wbtn").textContent = wallet ? cut(wallet) : "Connect wallet";
   // refresh the home page only while it shows the newest blocks and nothing is being typed
   if (!location.hash && pageOf("blocks") === 1 && !document.activeElement?.matches("#view input")) { const seq = renderSeq; home((html) => { if (seq === renderSeq && !location.hash) el(html); }); }
-}, 3000);
+}, 2000);   // blocks every 1 s: poll every 2 s (each open tab hits /genesis + the home page)
 </script></body></html>
