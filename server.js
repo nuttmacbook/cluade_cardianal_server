@@ -428,12 +428,19 @@ const send = (response, status, data) => {
 
 /**
  * /evm — JSON-RPC แบบ EVM (POST) · ค่าสำหรับเพิ่มเชนใน MetaMask (GET /evm)
- * /evm/explorer/{tx,address,token,block}/:id — ลิงก์ "ดูใน explorer" ของกระเป๋า → หน้า explorer เดิม
+ * /evm/explorer/{tx,address,token,block}/:id — ลิงก์ "ดูใน explorer" ของกระเป๋า (EIP-3091) → หน้า explorer เดิม
+ * /evm/explorer — หน้าแรกของ explorer (URL ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง ต้องได้ 2xx หลัง redirect)
  */
 async function handleEvm(request, response, url) {
+  if (url.pathname === "/evm/explorer" || url.pathname === "/evm/explorer/") {
+    response.writeHead(302, { location: "/" });
+    return response.end();
+  }
   const explorerLink = /^\/evm\/explorer\/(tx|address|token|block)\/([^/]+)$/.exec(url.pathname);
   if (explorerLink) {
-    const [, kind, id] = explorerLink;
+    const [, kind, raw] = explorerLink;
+    // EIP-3091: block/<hash หรือเลข> · หน้า block ของ explorer รับแต่เลข
+    const id = kind === "block" && /^0x[0-9a-f]{64}$/i.test(raw) ? (vm.getBlockByHash(raw.toLowerCase())?.number ?? raw) : raw;
     response.writeHead(302, { location: `/#${kind === "token" ? "address" : kind}/${encodeURIComponent(id)}` });
     return response.end();
   }
