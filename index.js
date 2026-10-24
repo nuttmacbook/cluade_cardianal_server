@@ -8,3 +8,5 @@ export { simulate } from "./src/node/simulate.js";
 export { Mempool, DEFAULT_MEMPOOL } from "./src/node/mempool.js";
 export { RateLimiter, DEFAULT_RATE_LIMIT } from "./src/node/ratelimit.js";
 export { startSync, syncOnce, applyBlock, syncRoute } from "./src/node/sync.js";
+export { StateTrie, verifyProof, EMPTY_ROOT } from "./src/core/trie.js";
+export { writeSnapshot, loadSnapshot, readSnapshotFile, snapshotLines, syncFromSnapshot, createSnapshotter } from "./src/node/snapshot.js";

@@ -135,7 +135,7 @@ POST /query
   "txCount": 3, "successCount": 2, "failedCount": 1,
   "gasUsed": 4210, "fee": "4210000000000n",
   "baseFeePerGas": "1000000000n", "gasTarget": 1500000, "burnedFee": "4210000000000n", "producerFee": "0n",
-  "parentStateRoot": "0x…", "txRoot": "0x…", "stateRoot": "0x…",
+  "parentStateRoot": "0x…", "txRoot": "0x…", "stateRoot": "0x…", "writesRoot": "0x…",
   "receiptsRoot": "0x…", "logsBloom": "0x…(512 hex)",
   "txHashes": ["0x…", "0x…", "0x…"],
   "rejectedCount": 1, "rejectedRoot": "0x…"
@@ -144,7 +144,7 @@ POST /query
 
 `rejectedCount` / `rejectedRoot` มีเฉพาะ block ที่มี tx ถูกปฏิเสธ (อยู่ใน hash ของ block) · รายการอยู่ใน `?full=1` → `rejected: [{ hash, sender, nonce, action, to, gasPrice, reason, code, stage }]`
 
-`stateRoot` เป็นแบบสะสม ถ้ามีใครแก้ข้อมูลเก่า ค่าของ block หลังจากนั้นจะไม่ตรงทั้งหมด
+`stateRoot` = root ของ Merkle Patricia Trie ของ state ทั้งหมดหลัง block นี้ (ตรวจค่าใดค่าหนึ่งได้ด้วย `GET /proof?key=` · `cardianal_getProof`) · `writesRoot` = hash ของ writes ของ state ใน block นี้ · `parentStateRoot` = stateRoot ของ block ก่อนหน้า (ไม่อยู่ใน hash)
 
 `baseFeePerGas` (EIP-1559 · คำนวณจาก block ก่อนหน้า) · `receiptsRoot` (hash ของ receipt ย่อทุกใบ) · `logsBloom` (bloom ของ log แบบ EVM) **อยู่ใน hash ของ block**
 `burnedFee` / `producerFee` = ค่าแก๊สส่วนที่เผา / ส่วนที่ `feeRecipient` ได้ (tip + base fee ส่วนที่ไม่เผา) · explorer แสดงเป็น Base fee + Fee split

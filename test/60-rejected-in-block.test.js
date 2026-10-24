@@ -19,10 +19,11 @@ const entry = (n, extra = {}) => ({ hash: HASH(n), sender: alice, nonce: n, acti
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, ...options });
-  vm.db.load({ [`${alice}:native:received`]: "1000000000000n", [`${bob}:native:received`]: "1000000000000n" });
+  // stateRoot = trie ของ state ทั้งหมด → ผู้ผลิตกับผู้อ่านต้องเริ่มจาก state เดียวกันทุกไบต์ (เวลาตอน deploy คงที่ · เขียนผ่าน commit ให้เข้า trie)
+  vm.commit([{ type: "put", dbKey: `${alice}:native:received`, value: "1000000000000n" }, { type: "put", dbKey: `${bob}:native:received`, value: "1000000000000n" }]);
   const plain = new VM.VirtualMachine(vm.db);
-  vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: { sender: alice, origin: alice }, initInput: { supply: 10_000 } }).writes);
-  vm.commit(plain.init({ programUuid: "token" }).writes);
+  vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: { sender: alice, origin: alice }, initInput: { supply: 10_000 } }, { timestamp: T - 2 }).writes);
+  vm.commit(plain.init({ programUuid: "token" }, { timestamp: T - 1 }).writes);
   return vm;
 }
 

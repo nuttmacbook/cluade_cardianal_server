@@ -14,9 +14,10 @@ function setup(options = {}) {
     requireNonce: true, recordTransactions: true, recordBlocks: true, ...options,
   });
   const plain = new VM.VirtualMachine(vm.db);
-  vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }).writes);
-  vm.commit(plain.init({ programUuid: "token" }).writes);
-  vm.db.load({ "alice:native:received": "1000000n" });
+  // เวลาคงที่: stateRoot = root ของ trie ของ state ทั้งหมด (รวมข้อมูลตอน deploy) → setup สองครั้งต้องได้ state เดียวกันทุกไบต์
+  vm.commit(plain.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 } }, { timestamp: T - 2 }).writes);
+  vm.commit(plain.init({ programUuid: "token" }, { timestamp: T - 1 }).writes);
+  vm.commit([{ type: "put", dbKey: "alice:native:received", value: "1000000n" }]);
   return vm;
 }
 
@@ -107,13 +108,13 @@ test("header: สรุปข้อมูลของ block", () => {
   const header = block.header();
 
   assert.deepEqual(
-    { ...header, hash: null, txRoot: null, stateRoot: null, txHashes: header.txHashes.length },
+    { ...header, hash: null, txRoot: null, stateRoot: null, writesRoot: null, txHashes: header.txHashes.length },
     {
       number: 5, hash: null, parentHash: "0xp", parentStateRoot: null, timestamp: T, feeRecipient: "miner", burnPercent: 100,
       txCount: 2, successCount: 1, failedCount: 1,
       gasUsed: block.results().reduce((sum, r) => sum + r.gasUsed, 0),
       fee: `${block.results().reduce((sum, r) => sum + num(r.fee), 0)}n`,
-      txRoot: null, stateRoot: null, txHashes: 2,
+      txRoot: null, stateRoot: null, writesRoot: null, txHashes: 2,
       // EIP-1559 + receipt (ไม่ได้ตั้ง maxBlockGas → base fee คงที่ที่ราคาขั้นต่ำ · ไม่มี event → bloom ว่าง)
       baseFeePerGas: "1n", gasTarget: null, burnedFee: "0n", producerFee: "0n",
       receiptsRoot: block.receiptRoots().receiptsRoot, logsBloom: `0x${"0".repeat(512)}`,
@@ -291,39 +292,50 @@ test("stateRoot: สะสมจาก block ก่อนหน้า (อ่า
   assert.equal(second.header().parentStateRoot, first.header().stateRoot);
 });
 
-test("stateRoot: block ที่มี writes เหมือนกัน แต่ต่อจากสายคนละสาย → stateRoot ต่างกัน", () => {
+test("stateRoot = root ของ trie ของ state ทั้งหมดหลัง block: writes เหมือนกันบน state ต่างกัน → ต่างกัน · parentStateRoot ที่ส่งมาไม่มีผล", () => {
   const vm = setup();
   const block = (parentStateRoot) => {
     const target = vm.createBlock({ timestamp: T, number: 9, parentStateRoot, feeRecipient: "miner" });
     target.call(callTx(0));
-    return target.header().stateRoot;
+    return target;
   };
-  assert.notEqual(block(null), block("0xสายอื่น"));
-  assert.equal(block("0xเดียวกัน"), block("0xเดียวกัน"));
+  assert.equal(block(null).header().stateRoot, block("0xสายอื่น").header().stateRoot);
+
+  const other = setup();
+  other.commit([{ type: "put", dbKey: "carol:native:received", value: "1n" }]);   // state ก่อน block ต่างกัน 1 key
+  const a = block(null);
+  const b = other.createBlock({ timestamp: T, number: 9, feeRecipient: "miner" });
+  b.call(callTx(0));
+  assert.equal(a.header().writesRoot, b.header().writesRoot);
+  assert.notEqual(a.header().stateRoot, b.header().stateRoot);
+
+  // หลัง commit: root ของ trie ใน DB = stateRoot ของ header = สร้าง trie ใหม่จาก state ทั้งหมดได้ค่าเดียวกัน
+  const header = a.header();
+  a.commit();
+  assert.equal(vm.stateRoot(), header.stateRoot);
+  assert.equal(vm.rebuildTrie().root, header.stateRoot);
+  assert.equal(vm.hashHeader(vm.getBlock(9)), header.hash);   // hash คำนวณกลับจาก field ของ header ได้
 });
 
-test("stateRoot: แก้ข้อมูลของ block เก่าย้อนหลัง → block ถัดไปคำนวณได้ root ใหม่ ไม่ตรงกับที่บันทึกไว้", () => {
+test("stateRoot: แก้ state ใน DB ตรง ๆ (ไม่ผ่าน commit) → สร้าง trie ใหม่ได้ root ไม่ตรงกับ header · แก้ node ของ trie → getProof ตรวจเจอ (update ไม่ตรวจ: storage ของเครื่องเอง)", () => {
   const vm = setup();
   let parentHash = null;
-  const headers = [];
   for (let number = 1; number <= 3; number += 1) {
     const block = vm.createBlock({ timestamp: T + number, number, parentHash, feeRecipient: "miner" });
     block.call(callTx(number - 1));
-    const header = block.header();
-    headers.push(header);
-    parentHash = header.hash;
+    parentHash = block.header().hash;
     block.commit();
   }
+  const { stateRoot } = vm.getBlock(3);
+  assert.equal(vm.stateRoot(), stateRoot);
 
-  // มีคนแก้ stateRoot ของ block 1 ใน DB ตรง ๆ
-  const tampered = { ...headers[0], stateRoot: "0xแก้มือ" };
-  vm.db.writeKeys([{ type: "put", dbKey: "block:000000000001", value: tampered }]);
+  const tampered = new VM.VirtualMachine(new MemoryDB(vm.db.snapshot()), { recordBlocks: true });
+  tampered.db.writeKeys([{ type: "put", dbKey: "token:storage:balances:bob", value: "999n" }]);
+  assert.notEqual(tampered.rebuildTrie().root, stateRoot);
 
-  // คำนวณ block 2 ใหม่จากสายที่ถูกแก้ → ได้ stateRoot คนละค่ากับที่บันทึกไว้
-  const recomputed = vm.hashBlock({
-    number: 2, parentHash: headers[0].hash, parentStateRoot: tampered.stateRoot,
-    timestamp: headers[1].timestamp, feeRecipient: "miner", burnPercent: 100,
-    txHashes: headers[1].txHashes, writes: [],
-  });
-  assert.notEqual(recomputed.stateRoot, headers[1].stateRoot);
+  const broken = new VM.VirtualMachine(new MemoryDB(vm.db.snapshot()), { recordBlocks: true });
+  const nodes = broken.listKeys("trie:", { limit: 1000 }).filter((key) => key !== "trie:");   // ทุก node ยกเว้นราก
+  assert.ok(nodes.length > 0);
+  broken.db.writeKeys(nodes.map((dbKey) => { const value = broken.read(dbKey); value[5] ^= 1; return { type: "put", dbKey, value }; }));
+  assert.throws(() => broken.getProof(["token:storage:balances:bob"]), /ไม่ตรงกับ hash/);
 });

@@ -26,7 +26,9 @@ src/
   crypto/signature.js      EIP-712 บน secp256k1 — เซ็นและตรวจลายเซ็น
   node/
     mempool.js             คิว tx: rate limit, TTL, กัน tx ซ้ำ, เรียงตาม gasPrice
-    sync.js                node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
+    sync.js                node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash (เริ่มจาก snapshot ได้)
+    snapshot.js            snapshot ของ state ณ block N (export / โหลดแบบตรวจกับ stateRoot)
+  core/trie.js             Merkle Patricia Trie แบบ Ethereum — stateRoot + หลักฐาน (getProof / verifyProof)
 
 server.js                  server จริง (node:http ไม่มี dependency เพิ่ม)
 public/explorer.html       หน้า explorer ไฟล์เดียว

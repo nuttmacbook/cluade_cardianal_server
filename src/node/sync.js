@@ -9,8 +9,10 @@
  *   มีลายเซ็น → ต้องกู้ได้ address ของ producer เสมอ
  *   ส่ง producers (รายชื่อใน genesis) → ทุก block ต้องมีผู้ผลิตที่อยู่ในรายชื่อ และลายเซ็นถูก (block ไม่มีผู้ผลิต = ปฏิเสธ)
  * tx ใน block รันด้วย vm.replayTimeoutMs (ผู้ผลิตกรอง TIMEOUT ไปแล้ว → เครื่องที่ช้ากว่าไม่ได้ผลต่าง)
+ * snapshot: true → DB ยังไม่มี block และต้นทางมี /snapshot = โหลด state ณ block N ก่อน (ตรวจกับ stateRoot ที่ผู้ผลิตเซ็น) แล้วซิงก์ต่อจาก N + 1
  */
 import { recoverTypedDataDigest } from "../crypto/program-signature.js";
+import { syncFromSnapshot } from "./snapshot.js";
 
 const lower = (value) => String(value ?? "").toLowerCase();
 
@@ -66,7 +68,8 @@ export async function syncOnce(vm, fetchBlocks, { limit = 50, producers = null }
 }
 
 /** ซิงก์ต่อเนื่อง — คืนฟังก์ชันสำหรับหยุด */
-export function startSync(vm, { url, genesis, producers = genesis?.config?.producers ?? null, intervalMs = 3000, limit = 50, onError, onBlock } = {}) {
+export function startSync(vm, { url, genesis, producers = genesis?.config?.producers ?? null, intervalMs = 3000, limit = 50, snapshot = false,
+  onError, onBlock, onSnapshot } = {}) {
   if (genesis) vm.applyGenesis(genesis);           // หยุดทันทีถ้า genesis ไม่ตรง
 
   const fetchBlocks = async (from, count) => {
@@ -81,6 +84,11 @@ export function startSync(vm, { url, genesis, producers = genesis?.config?.produ
     if (running || stopped) return;
     running = true;
     try {
+      if (snapshot) {
+        snapshot = false;   // ครั้งเดียวตอนเริ่ม
+        const loaded = await syncFromSnapshot(vm, { url, producers });
+        if (loaded) onSnapshot?.(loaded);
+      }
       const added = await syncOnce(vm, fetchBlocks, { limit, producers });
       if (added) onBlock?.(vm.latestBlockNumber());
     } catch (error) {

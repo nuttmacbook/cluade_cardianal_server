@@ -18,9 +18,13 @@ import { addressOf, buildTypedData, hashTypedData, signTransaction, normalizeTra
   from "../src/crypto/signature.js";
 import { signPermit, permitTypedData, signProgramMessage, recoverProgramMessage, signTypedDataDigest, recoverTypedDataDigest, typedDataDigest }
   from "../src/crypto/program-signature.js";
+import { verifyProof, EMPTY_ROOT } from "../src/core/trie.js";
+import { keccak256Hex, canonicalJson, headerFields } from "../src/core/encoding.js";
 
 export { addressOf, buildTypedData, hashTypedData, signTransaction, normalizeTransaction, randomPrivateKey, parseUint, DOMAIN_NAME, DOMAIN_VERSION };
 export { signPermit, permitTypedData, signProgramMessage, recoverProgramMessage, signTypedDataDigest, recoverTypedDataDigest, typedDataDigest };
+/** ตรวจหลักฐาน Merkle ของ /proof · cardianal_getProof กับ stateRoot ของ header ที่เชื่อได้ (ผู้ผลิตเซ็น) → { exists, value } · ไม่ตรง = throw */
+export { verifyProof, EMPTY_ROOT, headerFields };
 
 export const DEFAULT_GAS_LIMIT = 500_000;
 
@@ -108,6 +112,29 @@ export function createClient({ url, fetch: fetchImpl = globalThis.fetch, gasLimi
     program: (address) => get(`/program/${id(address)}`),
     abi: (address) => get(`/program/${id(address)}/abi`),
     query: ({ programUuid, functionName, input = {}, context } = {}) => post("/query", { programUuid, functionName, input, context }),
+
+    /**
+     * อ่านค่าใน state แบบไม่ต้องเชื่อ node (ระยะ 4.3): ขอหลักฐาน Merkle (/proof) + header ของ block นั้น แล้วตรวจเองทั้งหมด
+     *   hash ของ header คำนวณกลับได้ · stateRoot ตรงกับหลักฐาน · producers (รายชื่อใน genesis) → ลายเซ็นผู้ผลิตต้องถูก
+     *   → { blockNumber, blockHash, stateRoot, values: { dbKey: ค่า | undefined } } · ไม่ผ่าน = throw
+     */
+    async verifiedState(keys, { producers = null } = {}) {
+      const proof = await get(`/proof?${keys.map((key) => `key=${id(key)}`).join("&")}`);
+      const header = await get(`/block/${proof.blockNumber}`);
+      const { chainId } = await client.genesis();
+      if (keccak256Hex(canonicalJson(headerFields(header, chainId))) !== header.hash) throw new Error("hash ของ header ไม่ตรงกับข้อมูลใน header");
+      if (header.hash !== proof.blockHash || header.stateRoot !== proof.stateRoot) throw new Error("หลักฐานไม่ได้มาจาก block นี้");
+      if (producers) {
+        const signer = header.producerSignature ? recoverTypedDataDigest(header.hash, header.producerSignature) : null;
+        if (!signer || !producers.map((p) => p.toLowerCase()).includes(signer)) throw new Error("ลายเซ็นผู้ผลิตของ header ไม่ถูกต้อง");
+      }
+      const values = {};
+      for (const item of proof.proofs) {
+        const checked = verifyProof(header.stateRoot, item.dbKey, item.proof);
+        values[item.dbKey] = checked.exists ? checked.value : undefined;
+      }
+      return { blockNumber: header.number, blockHash: header.hash, stateRoot: header.stateRoot, values };
+    },
 
     /** เติม chainId / from / nonce / ค่าแก๊สที่ยังไม่ได้ใส่ → tx ที่พร้อมเซ็น */
     async prepare(fields = {}, { from } = {}) {

@@ -7,7 +7,8 @@ import { instrument, METER_FNS } from "./gasmeter.js";
 import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from "../crypto/eip712.js";
-import { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson } from "./encoding.js";
+import { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson, headerFields } from "./encoding.js";
+import { StateTrie, buildTrie, trieKeyOf, trieValueOf, TRIE_PREFIX, trieNodeKey } from "./trie.js";
 
 export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson };
 
@@ -148,6 +149,7 @@ export const DEFAULT_OPTIONS = {
   wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
   producer: null,                 // ผู้ผลิต block ของ node นี้ { address, sign(blockHash) → ลายเซ็น } · null = block ไม่มีผู้ผลิต (แบบเดิม)
   replayTimeoutMs: 60_000,        // เวลาต่อ tx ตอน replay / rebuild / sync — ผู้ผลิตกรอง TIMEOUT ไปแล้ว จึงให้แก๊สหยุดก่อน (เครื่องช้ากว่าไม่ได้ผลต่าง)
+  historyKeep: null,              // pruning: เก็บ history แค่ N block ล่าสุด (ย้อนดู state / replay ได้แค่ช่วงนั้น) · null = เก็บทั้งหมด (archive)
 };
 
 /** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
@@ -273,6 +275,8 @@ export const ERRORS = {
   genesisMismatch: [INTERNAL, (current, given) => `genesis ไม่ตรงกัน (ของ node นี้ ${current} / ที่ส่งมา ${given})`],
   blockMissing: [NOT_FOUND, (number) => `ไม่พบ block ${number}`],
   replayMismatch: [INTERNAL, (number) => `รัน block ${number} ใหม่แล้วได้ hash ไม่ตรงกับที่บันทึกไว้`],
+  trieStale: [INTERNAL, "trie ของ state เปลี่ยนระหว่างปิด block (มีการ commit อื่นแทรก) — สร้าง block ใหม่"],
+  invalidHistoryKeep: [INVALID_REQUEST, "historyKeep ต้องเป็นจำนวนเต็ม ≥ 1 หรือ null"],
   blockTimestampOrder: [INVALID_REQUEST, (timestamp, previous) => `timestamp ของ block ต้องมากกว่า block ก่อนหน้า (${timestamp} <= ${previous})`],
   immutableProgram: [FORBIDDEN, (id) => `โปรแกรม '${id}' อัปเกรดไม่ได้ (ไม่มี upgrader)`],
   notUpgrader: [FORBIDDEN, (address) => `'${address}' ไม่ใช่ upgrader ของโปรแกรมนี้`],
@@ -601,6 +605,14 @@ export const historyPrefix = (dbKey) => `${joinKey(KEY.HISTORY, dbKey)}${KEY.SEP
 export const LATEST_BLOCK_KEY = KEY.LATEST_BLOCK;
 /** block แรกที่ history ครบต่อเนื่องถึงล่าสุด (replayBlock / snapshotAt เช็คครั้งเดียว ไม่ต้องไล่ blockundo ทุก block) */
 export const HISTORY_FROM_KEY = KEY.HISTORY_FROM;
+/** ข้อมูลของ chain เอง (block / history) — ไม่ใช่ state: สร้างใหม่ได้จาก body */
+const CHAIN_KINDS = new Set([KEY.HISTORY, KEY.BLOCK, KEY.BLOCK_BODY, KEY.BLOCK_UNDO, KEY.BLOCK_HASH, KEY.LATEST_BLOCK]);
+/**
+ * key ของ state (ที่ tx อ่าน / เขียน) = อยู่ใน trie (stateRoot) · มี history · อยู่ใน snapshot
+ * ไม่ใช่ state: block / history / ดัชนี / historyfrom / genesis (hash ของ genesis) / node ของ trie เอง
+ */
+export const isStateKey = (dbKey) => !dbKey.startsWith(TRIE_PREFIX) && dbKey !== HISTORY_FROM_KEY && dbKey !== KEY.GENESIS
+  && !CHAIN_KINDS.has(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey);
 const KEY_END = "\uffff";
 
 /** key ซ้อน: map("balances", "alice") */
@@ -1412,6 +1424,7 @@ export class VirtualMachine {
     wallClock = DEFAULT_OPTIONS.wallClock,
     producer = DEFAULT_OPTIONS.producer,
     replayTimeoutMs = DEFAULT_OPTIONS.replayTimeoutMs,
+    historyKeep = DEFAULT_OPTIONS.historyKeep,
     hashFunction = keccak256Hex,
     gas,
   } = {}) {
@@ -1449,6 +1462,8 @@ export class VirtualMachine {
     this.wallClock = wallClock;
     this.producer = producer ? { address: normalizeAddress(producer.address), sign: producer.sign } : null;
     this.replayTimeoutMs = replayTimeoutMs;
+    if (historyKeep !== null && (!Number.isSafeInteger(historyKeep) || historyKeep < 1)) fail(ERRORS.invalidHistoryKeep);
+    this.historyKeep = historyKeep;
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
@@ -1490,9 +1505,122 @@ export class VirtualMachine {
     return this.db.readKeys([dbKey])[0];
   }
 
-  /** บันทึก writes ลง DB ผ่าน db.writeKeys */
-  commit(writes) {
-    return this.db.writeKeys(writes);
+  /**
+   * บันทึก writes ลง DB ผ่าน db.writeKeys · key ของ state ที่เปลี่ยน → อัปเดต trie (stateRoot) ใน commit เดียวกัน
+   *   trie = ผลของ trieUpdate(writes) ที่คำนวณไว้แล้ว (Block ใช้ตัวเดียวกับที่ทำ stateRoot ใน header) · ไม่ส่ง = คำนวณเอง
+   */
+  commit(writes, { trie } = {}) {
+    this.#ensureTrie();
+    if (trie && trie.parentRoot !== this.stateRoot()) fail(ERRORS.trieStale);
+    const update = trie ?? this.trieUpdate(writes);
+    return this.db.writeKeys(update.writes.length ? [...writes, ...update.writes] : writes);
+  }
+
+  // ---------- trie ของ state (ระยะ 4.3 · src/core/trie.js) ----------
+
+  #trieReady = false;
+
+  /** trie ของ state ล่าสุดใน DB (node อยู่ที่ trie:<path> · เก็บแค่ของล่าสุด) */
+  #trie() {
+    return new StateTrie({ load: (path) => this.read(trieNodeKey(path)) });
+  }
+
+  /** DB ที่มี state แต่ยังไม่มี trie (สร้างก่อนระยะ 4.3 / เขียน state ตรง ๆ) → สร้าง trie จาก state ทั้งหมดครั้งเดียว */
+  #ensureTrie() {
+    if (this.#trieReady) return;
+    this.#trieReady = true;
+    if (this.read(trieNodeKey("")) !== undefined || typeof this.db.listKeys !== "function") return;
+    this.rebuildTrie();
+  }
+
+  /** root ของ trie ของ state ตอนนี้ (= stateRoot ของ block ล่าสุด) */
+  stateRoot() {
+    this.#ensureTrie();
+    return this.#trie().root;
+  }
+
+  /** writes → { parentRoot, root, writes: node ของ trie ที่ต้องบันทึก } (ยังไม่บันทึก · เฉพาะ key ของ state) */
+  trieUpdate(writes) {
+    this.#ensureTrie();
+    const trie = this.#trie();
+    const parentRoot = trie.root;
+    const entries = writes.filter((write) => isStateKey(write.dbKey))
+      .map((write) => ({ dbKey: write.dbKey, value: write.type === WRITE.DEL ? undefined : write.value }));
+    if (!entries.length) return { parentRoot, root: parentRoot, writes: [] };
+    return { parentRoot, ...trie.update(entries) };
+  }
+
+  /**
+   * สร้าง trie ใหม่จาก state ทั้งหมดใน DB (ลบ node เดิมก่อน) → { root, keys } · ใช้ตอนย้ายข้อมูล / โหลด snapshot
+   * อ่าน key ของ state ทั้งหมดมาเรียงในหน่วยความจำ (≈ 150–250 byte ต่อ key) แล้วสร้างทั้งต้นทีเดียว (buildTrie)
+   */
+  rebuildTrie({ batch = 5_000 } = {}) {
+    for (;;) {
+      const keys = this.listKeys(TRIE_PREFIX, { limit: batch });
+      if (!keys.length) break;
+      this.db.writeKeys(keys.map((dbKey) => ({ type: WRITE.DEL, dbKey })));
+    }
+    const items = [];
+    for (let start; ;) {
+      const keys = this.listKeys("", { start, limit: batch + 1 });
+      const state = keys.slice(0, batch).filter(isStateKey);
+      if (state.length) {
+        const values = this.db.readKeys(state);
+        state.forEach((dbKey, index) => items.push({ key: trieKeyOf(dbKey), bytes: trieValueOf(values[index]) }));
+      }
+      if (keys.length <= batch) break;
+      start = keys[batch];
+    }
+    items.sort((a, b) => (a.key < b.key ? -1 : 1));
+    let pending = [];
+    const root = buildTrie(items, (path, enc) => {
+      pending.push({ type: WRITE.PUT, dbKey: trieNodeKey(path), value: enc });
+      if (pending.length >= batch) { this.db.writeKeys(pending); pending = []; }
+    });
+    if (pending.length) this.db.writeKeys(pending);
+    this.#trieReady = true;
+    return { root, keys: items.length };
+  }
+
+  /**
+   * หลักฐานของ key ใน state ล่าสุด (แบบ eth_getProof · ตรวจได้ด้วย verifyProof ของ src/core/trie.js / client-sdk)
+   *   → { blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof: [hex ของ node จากราก] }] }
+   * value undefined = ไม่มี key นี้ (หลักฐานพิสูจน์ว่าไม่มีได้เหมือนกัน)
+   */
+  getProof(dbKeys) {
+    if (!Array.isArray(dbKeys) || dbKeys.some((dbKey) => !isNonEmptyString(dbKey))) fail(ERRORS.invalidKey);
+    this.#ensureTrie();
+    const trie = this.#trie();
+    const blockNumber = this.latestBlockNumber();
+    return {
+      blockNumber,
+      blockHash: blockNumber === null ? null : this.getBlock(blockNumber)?.hash ?? null,
+      stateRoot: trie.root,
+      proofs: dbKeys.map((dbKey) => ({ dbKey, ...trie.proof(dbKey) })),
+    };
+  }
+
+  /**
+   * pruning (ระยะ 4.2): ลบ history ของ block ที่เก่ากว่า historyKeep block ล่าสุด → ย้อนดู state / replay ได้แค่ช่วงนั้น
+   * header / body ของ block ยังอยู่ครบ (ซิงก์ให้ node อื่นได้) · ลบทีละไม่เกิน maxKeys key ต่อครั้ง (เปิดบนเชนยาว = ทยอยลบทุก block)
+   *   → { from, to, keys } · to = historyfrom ใหม่
+   */
+  pruneHistory({ keep = this.historyKeep, maxKeys = 50_000 } = {}) {
+    const latest = this.latestBlockNumber();
+    let from = this.historyFrom() ?? 1;
+    const start = from;
+    let keys = 0;
+    if (keep === null || latest === null) return { from: start, to: from, keys };
+    for (const target = latest - keep; from <= target && keys < maxKeys; from += 1) {
+      const touched = this.getBlockUndo(from) ?? [];
+      this.db.writeKeys([
+        ...touched.map((dbKey) => ({ type: WRITE.DEL, dbKey: historyKey(dbKey, from) })),
+        { type: WRITE.DEL, dbKey: blockUndoKey(from) },
+        { type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: from + 1 },
+      ]);
+      keys += touched.length;
+    }
+    return { from: start, to: from, keys };
   }
 
   // ---------- API ของ server ----------
@@ -1871,31 +1999,29 @@ export class VirtualMachine {
 
   /**
    * hash ของ block
-   *   txRoot    = hash ของรายการ tx hash ทั้งหมด (เรียงตาม index)
-   *   stateRoot = hash ของ stateRoot ก่อนหน้า + writes ทั้งหมดของ block นี้ (เรียงตาม dbKey)
+   *   txRoot     = hash ของรายการ tx hash ทั้งหมด (เรียงตาม index)
+   *   stateRoot  = root ของ Merkle Patricia Trie ของ state ทั้งหมดหลัง block นี้ (ระยะ 4.3 · Block คำนวณจาก trie ใน DB แล้วส่งมา)
+   *   writesRoot = hash ของ writes ของ state ใน block นี้ (เรียงตาม dbKey) — replay block เก่าตรวจผลการรันด้วยตัวนี้ (trie เก็บแค่ของล่าสุด)
    *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed มาจาก Block (ดู Block.receiptEntries) และอยู่ใน hash ด้วย
    */
-  hashBlock({ number, parentHash, parentStateRoot = null, timestamp, feeRecipient, burnPercent, txHashes, writes, rejected = [],
+  hashBlock({ number, parentHash, timestamp, feeRecipient, burnPercent, txHashes, writes, stateRoot, rejected = [],
     baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null, producer = null }) {
     const txRoot = this.hashData(txHashes);
-    // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี (block ที่ไม่มี hash เหมือนเดิมทุกไบต์)
+    // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี
     const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
-    // สะสมจาก block ก่อนหน้า: แก้ข้อมูลย้อนหลังแล้ว root ของทุก block ถัดไปจะไม่ตรงทันที
-    const stateRoot = this.hashData({
-      parentStateRoot,
-      writes: [...writes].sort((a, b) => (a.dbKey < b.dbKey ? -1 : 1)).map((write) => [write.type, write.dbKey, write.value ?? null]),
+    const writesRoot = this.hashData([...writes].sort((a, b) => (a.dbKey < b.dbKey ? -1 : 1)).map((write) => [write.type, write.dbKey, write.value ?? null]));
+    const hash = this.hashHeader({
+      number, parentHash, timestamp, feeRecipient, burnPercent, txCount: txHashes.length, txRoot, stateRoot, writesRoot,
+      baseFeePerGas, gasUsed, receiptsRoot, logsBloom: bloom, rejectedCount: rejected.length, rejectedRoot, producer,
     });
-    const hash = this.hashData({
-      chainId: this.chainId, number, parentHash: parentHash ?? null, timestamp,
-      feeRecipient: feeRecipient ?? null, burnPercent, txCount: txHashes.length, txRoot, stateRoot,
-      // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
-      baseFeePerGas, gasUsed, receiptsRoot, logsBloom: bloom,
-      ...(rejectedRoot ? { rejectedCount: rejected.length, rejectedRoot } : {}),
-      // ผู้ผลิต: อยู่ใน hash เฉพาะ block ที่มี (block แบบเดิม hash เหมือนเดิมทุกไบต์) · ลายเซ็นของผู้ผลิตเซ็น hash นี้ จึงอยู่นอก hash
-      ...(producer ? { producer } : {}),
-    });
-    return { hash, txRoot, stateRoot, rejectedRoot };
+    return { hash, txRoot, stateRoot, writesRoot, rejectedRoot };
   }
+
+  /** hash จาก field ของ header (ไม่ต้องมี tx / writes) — header ที่บันทึกไว้ คำนวณกลับได้ hash เดิม (ใช้ตรวจ header ของ snapshot) */
+  hashHeader(header) {
+    return this.hashData(headerFields(header, this.chainId));
+  }
+
 
   /**
    * แปลง request + ผลลัพธ์ เป็น receipt สำหรับ explorer
@@ -2383,6 +2509,7 @@ export class VirtualMachine {
       number,
       parentHash: header.parentHash,
       parentStateRoot: header.parentStateRoot,
+      stateRoot: header.stateRoot,   // trie ใน DB เป็นของล่าสุด → ใช้ root ที่บันทึกไว้ · ผลการรันตรวจด้วย writesRoot / receiptsRoot
       timestamp: header.timestamp,
       feeRecipient: header.feeRecipient,
       burnPercent: header.burnPercent,
@@ -3281,6 +3408,8 @@ export class Block {
   #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
   #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
   #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
+  #trieCache = null;    // node ของ trie ที่ hashes() คำนวณไว้ (commit ใช้ตัวเดียวกัน)
+  #trustedStateRoot;    // replayBlock: stateRoot จาก header ที่บันทึกไว้ (trie ใน DB เป็นของล่าสุด คำนวณของ block เก่าไม่ได้)
   #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
   #producer;            // address ผู้ผลิต (อยู่ใน hash) · null = block แบบเดิม
   #producerSignature;   // ลายเซ็นของผู้ผลิตบน hash ของ block (ส่งมา = sync / replay · ไม่ส่ง = เซ็นด้วย vm.producer ตอนต้องใช้)
@@ -3294,6 +3423,7 @@ export class Block {
     number,
     parentHash,
     parentStateRoot,
+    stateRoot = null,
     recordBlocks = vm.recordBlocks,
     recordHistory = vm.recordHistory,
     checkChain = true,
@@ -3333,6 +3463,7 @@ export class Block {
     this.#producer = producer === null || producer === undefined ? null : normalizeAddress(producer);
     this.#producerSignature = producerSignature;
     this.#timeoutMs = timeoutMs;
+    this.#trustedStateRoot = stateRoot;
     // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
     // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
     this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous);
@@ -3506,9 +3637,7 @@ export class Block {
     if (!this.#recordHistory) return [];
 
     // ข้อมูลของ chain เอง (block / ดัชนี) ไม่ต้องเก็บ history เพราะสร้างใหม่ได้จาก body
-    const chainKinds = [KEY.HISTORY, KEY.BLOCK, KEY.BLOCK_BODY, KEY.BLOCK_UNDO, KEY.BLOCK_HASH, KEY.LATEST_BLOCK];
-    const keys = [...new Set(writes.map((write) => write.dbKey))]
-      .filter((dbKey) => !chainKinds.includes(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey) && dbKey !== HISTORY_FROM_KEY);
+    const keys = [...new Set(writes.map((write) => write.dbKey))].filter(isStateKey);
     const history = keys.map((dbKey) => {
       const before = this.#beforeValue(dbKey);
       return {
@@ -3520,7 +3649,7 @@ export class Block {
     return [...history, { type: WRITE.PUT, dbKey: blockUndoKey(this.#number), value: keys }];
   }
 
-  /** hash ของ block: { hash, parentHash, txRoot, stateRoot } */
+  /** hash ของ block: { hash, parentHash, txRoot, stateRoot, writesRoot, ... } */
   hashes() {
     // ผลเดิมจนกว่า block จะเปลี่ยน (รัน tx / บันทึกใบที่ถูกปฏิเสธ / เปิดใช้อัปเกรด) — header() / receipt() / commit() เรียกหลายรอบ
     if (this.#hashesCache) return { ...this.#hashesCache };
@@ -3532,10 +3661,12 @@ export class Block {
     const writes = this.stateWrites();
     const txHashes = this.txHashes();
     const { receiptsRoot, logsBloom: bloom } = this.receiptRoots(txHashes);
-    const { hash, txRoot, stateRoot, rejectedRoot } = this.#vm.hashBlock({
+    // stateRoot = root ของ trie หลังใส่ writes ของ block นี้ลงบน trie ล่าสุดใน DB (= state ก่อน block นี้)
+    this.#trieCache = this.#trustedStateRoot === null ? this.#vm.trieUpdate(writes) : null;
+    const { hash, txRoot, stateRoot, writesRoot, rejectedRoot } = this.#vm.hashBlock({
       number: this.#number,
       parentHash: this.#parentHash,
-      parentStateRoot: this.#parentStateRoot,
+      stateRoot: this.#trustedStateRoot ?? this.#trieCache.root,
       timestamp: this.#timestamp,
       feeRecipient: this.#feeRecipient,
       burnPercent: this.#burnPercent,
@@ -3548,7 +3679,7 @@ export class Block {
       logsBloom: bloom,
       producer: this.#producer,
     });
-    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, rejectedRoot, receiptsRoot, logsBloom: bloom };
+    return { hash, parentHash: this.#parentHash, parentStateRoot: this.#parentStateRoot, txRoot, stateRoot, writesRoot, rejectedRoot, receiptsRoot, logsBloom: bloom };
   }
 
   /**
@@ -3743,7 +3874,7 @@ export class Block {
   /** header ของ block (ไม่มีรายละเอียด tx) */
   header() {
     const txHashes = this.txHashes();
-    const { hash, txRoot, stateRoot, receiptsRoot, logsBloom: bloom } = this.hashes();
+    const { hash, txRoot, stateRoot, writesRoot, receiptsRoot, logsBloom: bloom } = this.hashes();
     const statuses = this.#results.map((result) => result.status);
     const sum = (field) => encodeNative(this.#results.reduce((total, result) => total + readNative(result[field]), 0n));
     return {
@@ -3764,7 +3895,8 @@ export class Block {
       producerFee: sum("producerFee"),              // ค่าแก๊สที่ผู้ปิด block ได้ (tip + base fee ส่วนที่ไม่ได้เผา)
       parentStateRoot: this.#parentStateRoot,
       txRoot,
-      stateRoot,
+      stateRoot,                                     // root ของ trie ของ state ทั้งหมดหลัง block นี้ (ตรวจค่าด้วย getProof ได้)
+      writesRoot,                                    // hash ของ writes ของ state ใน block นี้
       receiptsRoot,                                  // hash ของ receipt ย่อทุกใบ (อยู่ใน hash)
       logsBloom: bloom,                              // bloom ของ log ทุกใบแบบ EVM (อยู่ใน hash)
       txHashes,
@@ -3864,8 +3996,10 @@ export class Block {
   commit() {
     if (this.#committed) fail(ERRORS.blockCommitted);
     if (this.#recordBlocks && !this.#overwrite && this.#vm.getBlock(this.#number)) fail(ERRORS.blockExists, this.#number);
-    const result = this.#vm.commit(this.writes());
+    const writes = this.writes();   // คำนวณ hashes (+ trie) ถ้ายังไม่ได้ทำ
+    const result = this.#vm.commit(writes, this.#trieCache ? { trie: this.#trieCache } : {});
     this.#committed = true;
+    if (this.#recordBlocks && this.#recordHistory && this.#vm.historyKeep !== null) this.#vm.pruneHistory();
     return result;
   }
 
