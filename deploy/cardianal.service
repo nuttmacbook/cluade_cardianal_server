@@ -1,0 +1,19 @@
+# /etc/systemd/system/cardianal.service
+#   sudo systemctl enable --now cardianal · ดู log: journalctl -u cardianal -f
+# เครื่องผู้ผลิตเครื่องเดียว restart อัตโนมัติได้ · ถ้ามีเครื่องสำรอง ห้ามให้เครื่องสำรองกลายเป็นผู้ผลิตเอง (ย้ายด้วยมือตาม FAILOVER_FROM)
+[Unit]
+Description=Cardianal chain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cardianal
+WorkingDirectory=/opt/cardianal
+ExecStartPre=/usr/bin/node --env-file=/opt/cardianal/deploy/producer.env scripts/preflight.js
+ExecStart=/usr/bin/node --env-file=/opt/cardianal/deploy/producer.env server.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

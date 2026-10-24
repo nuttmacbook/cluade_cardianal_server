@@ -32,13 +32,14 @@ src/
 
 server.js                  server จริง (node:http ไม่มี dependency เพิ่ม)
 public/explorer.html       หน้า explorer ไฟล์เดียว
-genesis.json               ยอดเงินตั้งต้น
+genesis.json               ยอดเงินตั้งต้น (ช่วงพัฒนา · เปิดจริงใช้ deploy/genesis.mainnet.example.json)
+deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
 scripts/                   demo.js, examples.js
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
 docs/                      Blockscout · checklist ลอง MetaMask จริง
-test/                      95 ไฟล์ · 868 เคส
+test/                      103 ไฟล์ · 903 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              สถานะปัจจุบัน ค่าตั้งต้นที่แนะนำ และรายการที่ยังไม่ได้ทำ
 ```

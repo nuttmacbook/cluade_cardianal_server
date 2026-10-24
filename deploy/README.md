@@ -1,0 +1,101 @@
+# deploy: เปิดเชนสาธารณะแบบเครื่องเดียว
+
+เครื่องเดียว = ผลิต block + RPC + explorer ในเครื่องเดียว ไม่มีเครื่องสำรองที่ซิงก์ตาม
+เครื่องล่ม = เชนหยุดจนกว่าจะกู้จาก backup ดังนั้น **backup ต้องดีกว่าปกติ** (ข้อ 5)
+
+ไฟล์ในโฟลเดอร์นี้:
+
+| ไฟล์ | ใช้ทำอะไร |
+|---|---|
+| `genesis.mainnet.example.json` | copy เป็น `genesis.mainnet.json` แล้วแก้ `0xADDRESS_…` (ข้อ 1) · ไม่มีความลับ commit ได้ และทุกเครื่องต้องใช้ไฟล์เดียวกัน |
+| `producer.env.example` | copy เป็น `producer.env` (ข้อ 2) · มี key · อยู่ใน .gitignore |
+| `follower.env.example` | เครื่องสำรอง (ถ้ามีภายหลัง) |
+| `nginx.conf` | HTTPS ข้างหน้า (ข้อ 3) |
+| `cardianal.service` | systemd (ข้อ 4) · ตรวจด้วย preflight ก่อนเริ่มทุกครั้ง |
+| `crontab.example` | backup + monitor (ข้อ 5) |
+| `check.sh` | ตรวจจากข้างนอกหลังเปิด (ข้อ 6) |
+| `../scripts/preflight.js` | ตรวจ genesis + env ก่อนเปิด ไม่แตะข้อมูล |
+
+ลำดับสั้น ๆ:
+```
+cp deploy/genesis.mainnet.example.json deploy/genesis.mainnet.json   # แก้ address
+cp deploy/producer.env.example deploy/producer.env && chmod 600 deploy/producer.env   # ใส่ key
+node --env-file=deploy/producer.env scripts/preflight.js            # ต้องขึ้น "ผ่าน"
+sudo cp deploy/cardianal.service /etc/systemd/system/ && sudo systemctl enable --now cardianal
+./deploy/check.sh https://chain.example.com 272727
+```
+
+---
+
+## 1. genesis.mainnet.json (ล็อกถาวร · แก้หลังเปิด = ล้างเชน)
+
+| ค่า | ตั้งเป็น | เหตุผล |
+|---|---|---|
+| `chainId` | 272727 (หรือเลขที่เช็คแล้วว่าว่าง) | ต้องไม่ซ้ำเชนอื่น กัน tx ข้ามเชน |
+| `balances` | address ของคุณ → ยอดตั้งต้น (wei + `n`) | เหรียญทั้งหมดที่มีตอนเริ่ม · ไม่มีการขุดเหรียญเพิ่ม |
+| `config.admins` | 2 address (hardware wallet) | อนุมัติ deploy / upgrade โปรแกรม · มี 2 เผื่อหายหนึ่ง |
+| `config.producers` | key หลัก + key สำรอง | **แม้มีเครื่องเดียวก็ใส่ key สำรอง** key หลักหาย = ใช้ key สำรองผลิตต่อได้ ไม่ต้องล้างเชน |
+| `blockMs` | 1000 | ตามที่ตกลง |
+| `maxBlockGas` | 1000000 | ~216 tx token / block · ปิด block ~0.3 วิ |
+| `gasTarget` | 500000 | ใช้เกินครึ่ง base fee ขึ้น |
+| `minBaseFee` | "1000000000" (1 gwei) | ราคาแก๊สต่ำสุด |
+| `burnPercent` | 100 | base fee เผาทิ้งทั้งหมด ผู้ผลิตได้แค่ tip · ถ้าอยากให้ผู้ผลิตได้ค่าแก๊สด้วยให้ลดลง |
+| `upgradeDelayBlocks` | 3600 | อนุมัติอัปเกรดแล้วต้องรอ 1 ชม. ผู้ใช้มีเวลาเห็นก่อนโค้ดใหม่ใช้จริง |
+| `memoryLimitMb` / `stackLimitKb` | 32 / 256 | ค่าเดิมที่ทดสอบแล้ว |
+
+## 2. env ของเครื่อง (`deploy/producer.env` · chmod 600 · ห้าม commit)
+
+```
+GENESIS=deploy/genesis.mainnet.json
+DATA=/var/lib/cardianal
+HOST=127.0.0.1
+PORT=3000
+PRODUCER_KEY=0x<key หลัก>
+TRUST_PROXY=1
+SNAPSHOT_EVERY=3600
+EVM_NAME=Cardianal
+EVM_SYMBOL=CARD
+```
+
+| ค่า | ทำไม |
+|---|---|
+| `HOST=127.0.0.1` | ฟังเฉพาะในเครื่อง มีแค่ nginx ที่เข้าได้ · คนนอกเข้าพอร์ต 3000 ตรงไม่ได้ (ข้าม HTTPS ได้ · ปลอม X-Forwarded-For หลบ rate limit ได้ · ส่ง body ใหญ่ไม่จำกัดได้) |
+| `TRUST_PROXY=1` | อยู่หลัง nginx · ไม่ตั้ง = rate limit เห็นทุกคนเป็น IP เดียว (127.0.0.1) แล้วบล็อกทุกคนพร้อมกัน |
+| `SNAPSHOT_EVERY=3600` | snapshot ทุกชั่วโมง ใช้กู้ / เปิดเครื่องใหม่เร็วกว่าซิงก์ตั้งแต่ block 1 |
+| `EVM_NAME` / `EVM_SYMBOL` | ชื่อที่ MetaMask เห็นตอนกด Add network · ต้องตรงกับที่ลง chainlist |
+| ไม่ตั้ง `DEV` | DEV=1 ปิดการบังคับ admin / key |
+| ไม่ตั้ง `HISTORY_KEEP_BLOCKS` | เก็บประวัติทั้งหมดไว้ก่อน (ดิสก์ ~7–9 KB ต่อ tx) ตัดทีหลังได้ |
+| ค่าเริ่มที่ไม่ต้องแตะ | `RATE_LIMIT=120` POST ต่อ IP ต่อนาที · `EVM_RATE_LIMIT=600` · `TIMEOUT_MS=5000` · `MAX_TX_PER_BLOCK=500` |
+
+## 3. nginx (HTTPS ข้างหน้า)
+
+ไฟล์ `deploy/nginx.conf` → `/etc/nginx/conf.d/cardianal.conf` แทนโดเมน แล้ว `nginx -t && systemctl reload nginx`
+- ใบรับรอง: `certbot --nginx -d chain.example.com`
+- `/snapshot` เปิดให้ทุกคนโหลดได้ ถ้าไม่อยากให้คนนอกดึง ใส่ `location /snapshot { allow <IP ของคุณ>; deny all; proxy_pass … }`
+- firewall: เปิดแค่ 80, 443, 22 (`ufw allow 22,80,443/tcp`) · ตั้ง `HOST=127.0.0.1` แล้วพอร์ต 3000 ปิดจากข้างนอกอยู่แล้ว firewall เป็นชั้นที่สอง
+
+URL ที่ได้: RPC `https://chain.example.com/evm` · explorer `https://chain.example.com/` (หรือ `/evm/explorer` สำหรับ chainlist)
+
+## 4. systemd (เปิดเองตอนบูต / ล่มแล้วเปิดใหม่)
+
+ไฟล์ `deploy/cardianal.service` → `/etc/systemd/system/` แล้ว `sudo systemctl enable --now cardianal` · log: `journalctl -u cardianal -f`
+ก่อนเริ่มทุกครั้งรัน `scripts/preflight.js` ถ้าตั้งค่าผิด server จะไม่เริ่ม (ดูเหตุผลใน log)
+เครื่องเดียวจึง restart อัตโนมัติได้ปลอดภัย (ไม่มีเครื่องอื่นที่ผลิตพร้อมกัน)
+
+## 5. backup + monitor (สำคัญกว่าปกติเพราะไม่มีเครื่องสำรอง)
+
+ตัวอย่าง cron ใน `deploy/crontab.example`: backup ทุก 6 ชม. ส่งออกนอกเครื่อง · monitor ทุกนาทีจาก**เครื่องอื่น** (เครื่องเชนล่มแล้วเตือนตัวเองไม่ได้)
+- ซ้อมกู้อย่างน้อย 1 ครั้งก่อนประกาศ: `node scripts/backup.js --verify <ชุด>` แล้ว `--restore` บนเครื่องทดสอบ
+- เครื่องพัง: เครื่องใหม่ + restore ชุดล่าสุด + `PRODUCER_KEY` เดิม → ผลิตต่อจาก block ล่าสุดใน backup (tx ที่อยู่ใน block หลัง backup หาย · ยิ่ง backup ถี่ยิ่งหายน้อย)
+
+## 6. ตรวจก่อนประกาศ
+
+```
+./deploy/check.sh https://chain.example.com 272727
+```
+ตรวจ /health, chainId, explorer, rpcUrl ของปุ่ม Add network เป็น https และพอร์ต 3000 ปิดจากข้างนอก · เก็บ genesis hash ที่พิมพ์ออกมาไว้ประกาศ
+แล้วเพิ่มเชนใน MetaMask จากปุ่มในหน้า explorer · โอน 1 ครั้ง · ดูใน explorer
+
+## เครื่องที่ควรใช้
+
+ผลวัดที่ผ่านมาใช้ 4 vCPU (thread หลักใช้ ~70% ตอนเต็ม 1M แก๊ส/วิ) → **4 vCPU, RAM 8 GB, SSD 200 GB+** เริ่มได้ · ดิสก์โตตามจำนวน tx (~7–9 KB ต่อ tx) ดูจริงหลังเปิด 1–2 สัปดาห์

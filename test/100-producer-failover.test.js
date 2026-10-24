@@ -121,14 +121,14 @@ test("กรณี 2 key หาย: key สำรองใน config.producers �
   assert.equal(await syncOnce(reader, async (from) => itemsOf(source, from), { producers }), 4);
   assert.deepEqual([1, 2, 3, 4].map((n) => reader.getBlock(n).producer), [P, P, SPARE, SPARE]);
 
-  const one = resolveSettings({ config: { admins: ["0xaa"], producers: [P] } }, {}).settings;
+  const one = resolveSettings({ config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [P] } }, {}).settings;
   assert.match(startupWarnings({ settings: one }).join(), /key เดียว/);
   assert.deepEqual(startupWarnings({ settings: one, dev: true }), []);
   assert.deepEqual(startupWarnings({ settings: resolveSettings({ config: { producers: [P, SPARE] } }, {}).settings }), []);
 });
 
 test("startupProblems: FOLLOW ไม่ต้องมี PRODUCER_KEY · ตรวจ key กับรายชื่อของ block ถัดไป · nextBlock null = ตรวจทีหลัง", () => {
-  const settings = resolveSettings({ config: { admins: ["0xaa"], producers: [P] }, producerSchedule: [{ fromBlock: 5, producers: [NEW] }] }, {}).settings;
+  const settings = resolveSettings({ config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [P] }, producerSchedule: [{ fromBlock: 5, producers: [NEW] }] }, {}).settings;
   assert.match(startupProblems({ settings }).join(), /ต้องตั้ง PRODUCER_KEY/);
   assert.deepEqual(startupProblems({ settings, follow: true }), []);
   assert.deepEqual(startupProblems({ settings, producer: P, nextBlock: 4 }), []);
@@ -220,7 +220,7 @@ const latestOf = async (url) => (await get(`${url}/health`)).body.latest;
 test("server.js: FOLLOW ซิงก์ตาม + ไม่รับ tx · FAILOVER_FROM ตอนเครื่องเดิมยังผลิต = ไม่เริ่ม · เครื่องเดิมดับ → สำรองผลิตต่อด้วย DATA เดิม", { timeout: 90_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "failover-"));
   const genesisFile = path.join(dir, "genesis.json");
-  fs.writeFileSync(genesisFile, JSON.stringify({ chainId: 9, balances: { [alice]: "1000000000000000000n" }, config: { admins: ["0xaa"], producers: [P, SPARE] } }));
+  fs.writeFileSync(genesisFile, JSON.stringify({ chainId: 9, balances: { [alice]: "1000000000000000000n" }, config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [P, SPARE] } }));
   const base = { GENESIS: genesisFile, RATE_LIMIT: "0" };
   const nodes = [];
   try {
@@ -274,7 +274,7 @@ test("server.js: producerSchedule ถอด key → เครื่องเด�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-"));
   const genesisFile = path.join(dir, "genesis.json");
   fs.writeFileSync(genesisFile, JSON.stringify({ chainId: 9, balances: { [alice]: "1000000000000000000n" },
-    config: { admins: ["0xaa"], producers: [P] }, producerSchedule: [{ fromBlock: 2, producers: [NEW] }] }));
+    config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [P] }, producerSchedule: [{ fromBlock: 2, producers: [NEW] }] }));
   const base = { GENESIS: genesisFile, RATE_LIMIT: "0" };
   nonce = 0;
   const nodes = [];
