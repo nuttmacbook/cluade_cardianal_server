@@ -12,9 +12,9 @@
 |---|---|
 | ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
-| โค้ดทั้งหมด | ~4,200 บรรทัด (VM เอง 2,521) |
+| โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 799 เคส |
+| เทสต์ | `npm test` → 868 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 866 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 868 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -55,6 +55,9 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
   ตรวจทุกครั้ง: block ล่าสุดตรง manifest · parentHash ต่อกัน 1,000 block ล่าสุด · blockhash ชี้กลับ · `--verify <ชุด>` ตรวจอย่างเดียว
   กู้: หยุด server แล้ว `npm run backup -- --restore <ชุด> --data ./data` (มีของเดิม → `--force` ย้ายไป `<data>.before-restore-<เวลา>`)
 - TLS: server เป็น `http` ล้วน ต้องมี reverse proxy (nginx / Caddy) ทำ HTTPS ข้างหน้า · rate limit นับต่อ IP ในหน่วยความจำของแต่ละโปรเซส
+- **อยู่หลัง proxy ต้องตั้ง `TRUST_PROXY=1`** (CDN + nginx = 2) · ไม่ตั้ง = ทุกคนได้ IP ของ proxy → ใช้โควตา `RATE_LIMIT` / `EVM_RATE_LIMIT` ร่วมกันทั้งเครือข่าย (`src/node/client-ip.js` · เทสต์ `95-client-ip`)
+  IP = นับจากขวาของ `X-Forwarded-For` + socket (ผู้ใช้ปลอมได้แค่ส่วนซ้ายที่ proxy ไม่ได้เติม) · nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` · Caddy เติมให้เอง
+  ⚠️ ตั้ง `TRUST_PROXY` > 0 แล้วต้องเปิด port ของ server ให้เฉพาะ proxy (ไม่งั้นผู้ใช้ส่ง header ปลอม IP ได้)
 
 ---
 
@@ -295,7 +298,7 @@ syntax ถูกตรวจทั้งกับ V8 (ข้อความ erro
 | ต้น tx | คืน memory เป็น snapshot (~0.13 ms) → ทุก tx เริ่มจาก heap เดียวกันทุกไบต์ ไม่มีอะไรจาก tx ก่อนค้าง (global ที่แก้ / ขยะของ GC) |
 | 1 tx ชั้นนอกสุด | = runtime เดียว · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียก (`runProgram` / init ของ `cloneProgram` ซ้อนรันใน runtime เดียวกัน) |
 | 1 โปรแกรมใน tx | = 1 context (global แยกกัน) · factory ถูกเรียกใหม่ทุก call → ตัวแปรระดับบนสุดไม่ค้างข้าม call |
-| ภาพอุ่น (เทสต์ `89-warm-sandbox`) | โปรแกรมแรกของ tx: ใช้ memory ที่ "snapshot ตั้งต้น + factory ของซอร์สนี้ถูกประเมินแล้ว" (LRU `SANDBOX_WARM_CACHE` ค่าเริ่ม 32 · `warmStats` / `clearWarmCache`) แทนการคอมไพล์ใหม่ · ภาพ = ผลของ (snapshot, source) อย่างเดียว → มี / ไม่มีใน cache ผลทุก tx เหมือนกันทุกไบต์ (รวมแก๊สและจุด OUT_OF_MEMORY) · token transfer 2.2 → 0.94 ms/tx · โปรแกรมที่สองของ tx คอมไพล์ใน tx ตามเดิม |
+| ภาพอุ่น (เทสต์ `89-warm-sandbox`) | โปรแกรมแรกของ tx: ใช้ memory ที่ "snapshot ตั้งต้น + factory ของซอร์สนี้ถูกประเมินแล้ว" (LRU `SANDBOX_WARM_CACHE` ค่าเริ่ม 32 · `warmStats` / `clearWarmCache`) แทนการคอมไพล์ใหม่ · ภาพ = ผลของ (snapshot, source) อย่างเดียว → มี / ไม่มีใน cache ผลทุก tx เหมือนกันทุกไบต์ (รวมแก๊สและจุด OUT_OF_MEMORY) · token transfer 2.2 → 0.94 ms/tx (load test) · โปรแกรมที่สองของ tx (`runProgram`) คอมไพล์ใน tx ตามเดิม<br>ภาพละ ~3.4 MB → 32 ภาพ ≈ 110 MB RAM · ไม่มีในที่เก็บ: คอมไพล์แล้วใช้ memory ตอนนั้นต่อเลย (ไม่คืนภาพซ้ำ) แล้วถ่ายเก็บทับ buffer ของภาพที่ถูกไล่ออก · `0` = ไม่เก็บไม่คัดลอก (ต้นทุนเท่าคอมไพล์ทุก tx แบบเดิม) · โปรแกรมที่ใช้สลับกันเกิน limit = miss ทุกครั้ง ช้ากว่าไม่มี cache ~30% (เพิ่ม `SANDBOX_WARM_CACHE` ถ้ามีโปรแกรมยอดนิยมมากกว่า 32 ตัว) |
 | fuzz (เทสต์ `87-sandbox-fuzz`) | `npm run fuzz -- --iterations N --seed S`: สุ่มโปรแกรม + ค่าข้ามเขตแดน ตรวจ ไม่มี INTERNAL / throw หลุดถึงผู้เรียก · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · รอบยาว 20,000 รอบ (seed 1000) ไม่พบปัญหา |
 | ค่าข้ามเขตแดน | เป็นข้อความ JSON เสมอ (BigInt / undefined / NaN / -0 / map(...) ติดป้ายด้วย key `"\u0000"`) → ได้สำเนาใหม่ทุกครั้ง · function / symbol / object ที่ไม่ใช่ข้อมูลส่งเป็น "ไม่ใช่ข้อมูล" แล้ว host ปฏิเสธเหมือนเดิม · error ของ host ที่โปรแกรมได้รับเป็น `Error` ของฝั่งโปรแกรม (มี `code`) ถ้า throw ต่อ host ได้ error ตัวเดิมคืน |
 | global | built-in มาตรฐานของ JS + `Date` / `Math` ของ block (Math.random ถาม host) · `eval` / `new Function` / constructor ของ async / generator function ถูกปิด (EvalError) เพราะโค้ดที่สร้างตอนรันไม่ผ่านตัวนับแก๊ส · `console.*` เรียกได้แต่ไม่พิมพ์ · ไม่มี `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
@@ -1004,7 +1007,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 78 ไฟล์ · 799 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 95 ไฟล์ · 868 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1051,6 +1054,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `92-sdk` | `client-sdk` ไม่ import VM / sandbox / node:* · send ด้วย key / กระเป๋า EIP-1193 (ethers เซ็น typed data แบบ MetaMask) → wait ถึง block · nonce ผิด = `ChainError` พร้อม body |
 | `93-paymaster` | ไม่มี sponsor = ชนิดเดิม · มี sponsor = digest ตรงกับ ethers · ลายเซ็น sponsor หาย / ผิดคน / sponsor = ผู้ส่ง / เปลี่ยน sponsor = ปฏิเสธ · บนเชน: ผู้ใช้ยอด 0 ส่งได้ แก๊สหักจาก sponsor nonce ของผู้ส่ง · value ต้องเป็นเงินของผู้ส่ง |
 | `94-evm-send-raw` | ethers ส่งผ่าน `/evm`: native (type 2 + legacy) · ERC-20 transfer ของ token มาตรฐาน · ฟังก์ชันตาม ABI + estimateGas · receipt ด้วย hash ของ ethers · ปฏิเสธ ไม่มี chainId / chainId ผิด / deploy / type 1 / data ไป EOA / RLP เสีย · ถอดตรงกับ ethers |
+| `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
@@ -1214,6 +1218,26 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
    | commit p50 token / native | 142 / 82 ms | 117 / 64 ms |
    | write p50 token / native | 81 / 55 ms | 65 / 39 ms |
 
+**ผลวัดซ้ำ 24 ต.ค. หลัง PR #43** (เครื่องสเปกเดียวกับตาราง 22 ต.ค. · ชุดเต็ม 10 block + อุ่น 2 · ทุกใบสำเร็จ · แก๊สต่อ block เท่าเดิมทุกชุด · ตารางเต็ม `/mnt/project-files/cardianal_server/load-test-2026-10-24.md`)
+ส่วนที่ดีขึ้นรวมผลของ PR "perf-intake" และ "storage-slim" ที่ merge หลังวัด 22 ต.ค. ด้วย · โหมดในโปรเซสตรวจลายเซ็นบน thread หลัก (worker เห็นผลในโหมด `--url`)
+
+| 500 tx / block · LMDB | add p50 | take p50 | close p50 / p95 | LMDB +/tx |
+|---|---|---|---|---|
+| native | 2,148 → 1,460 ms | 103 → 77 | 329 / 391 → **170 / 224** | 9.6 → 6.3 KB |
+| token | 3,802 → 2,338 ms | 1,349 → 493 | 1,732 / 1,906 → **660 / 804** | 15 → 8.9 KB |
+| mix | 3,379 → 2,698 ms | 955 → 842 | 1,296 / 1,470 → **988 / 1,146** | 12.5 → 8.0 KB |
+
+end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
+
+| ชุด | `VERIFY_WORKERS=0` | worker 3 ตัว (ค่าเริ่มบนเครื่อง 4 vCPU) |
+|---|---|---|
+| token 250 ใบ/รอบ | 175–216 req/s · p95 130–184 ms | **338–521 req/s · p95 44–69 ms** |
+| native 500 ใบ/รอบ | 200–310 req/s · ล้นไป 2 block 2 ใน 4 รอบ | **632–859 req/s · p95 41–51 ms · เข้า block เดียวทุกรอบ** |
+
+**คอขวดย้ายแล้ว**: รับ tx ได้ 400–800 req/s เร็วกว่าที่เชนบรรจุได้ = `maxTransactions` 500 ต่อ `BLOCK_MS` 3 วิ ≈ **167 tx/s ต่อเครือข่าย**
+จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS` · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
+ยังไม่ได้วัด: โหลดต่อเนื่องนาน ๆ (ยิงเป็นรอบ ≤ 800 ใบ) · client กับ server อยู่เครื่องเดียวกัน
+
 ---
 
 ## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
@@ -1240,9 +1264,9 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers) + ethers ส่งผ่าน `/evm` ได้ (เทสต์ 94)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ: `docs/metamask-checklist.md`
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
-    **แต่คอขวดจริงคือการรับ tx** (`/sendtx` ตรวจลายเซ็น ~3.5 ms × 2 รอบ + simulate) ใน thread เดียวกับ miner → รับได้จริง ~65 token tx/s · ~110 native tx/s ต่อ node
-    แก้แล้ว: ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำ (รับ tx ผ่าน HTTP เร็วขึ้น 46–75%)
-    ~~ตรวจลายเซ็นใน worker thread · sandbox ไม่คอมไพล์ซ้ำทุก call~~ เสร็จแล้ว (เทสต์ 90 / 89) · ที่เหลือ: แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
+    ~~คอขวดคือการรับ tx (~65 token / ~110 native tx/s ต่อ node)~~ แก้แล้ว: ตรวจลายเซ็นครั้งเดียว + ใน worker thread · `Mempool.prune` เบาลง · ไม่คำนวณ root ซ้ำ · ภาพอุ่นของ sandbox (เทสต์ 82 / 89 / 90)
+    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ → **เพดานตอนนี้คือ 500 tx ต่อ block 3 วิ ≈ 167 tx/s** (หัวข้อ 10 "load test")
+    ที่เหลือ: แผนตัด history (LMDB โต ~6–9 KB ต่อ tx) · `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
@@ -1252,6 +1276,7 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 ไม่มี endpoint ไหนรับ private key · `scripts/*` เซ็นในเครื่องตัวเองแล้วส่งแค่ `{ tx, signature }` (ตรวจแล้ว 2026-10-24) แต่รับ key ทาง `--admin-key` / `--funder-key` และมี key ทดสอบในโค้ด → ใช้กับ key จริงไม่ได้
 ของจริงเซ็นฝั่ง client เท่านั้น (explorer ใช้ `eth_signTypedData_v4`) · key ของ `ADMINS` ควรอยู่ใน hardware wallet / multisig · `PRODUCER_KEY` อยู่ในเครื่องผู้ผลิตเท่านั้น
 ตั้ง `UPGRADE_DELAY_BLOCKS` > 0 ใน genesis เพื่อให้ผู้ใช้มีเวลาถอนออกก่อนโค้ดใหม่ใช้งาน
+อยู่หลัง nginx / Caddy → ตั้ง `TRUST_PROXY=1` และเปิด port ของ server ให้เฉพาะ proxy (หัวข้อ 1 "เปิดเครือข่ายจริง") · CORS ยังเปิด `*`
 
 ### เมื่อถึงเวลา
 rollback เร็ว · merkle tree จริง (+ `eth_getProof`) · ตัด history เก่า / snapshot sync · P2P · ผู้ผลิตหลายราย / finality · bridge

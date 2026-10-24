@@ -52,8 +52,13 @@ test("ภาพอุ่นมี / ไม่มีใน cache / ปิด cach
     assert.ok(warmStats.hits > hitsBefore);
     warmStats.limit = 0;
     clearWarmCache();
-    const none = play();                        // ไม่จำภาพ (สร้างใหม่ทุก tx)
+    const none = play();                        // ไม่จำภาพ: คอมไพล์ในที่ทุก tx ไม่คัดลอก memory
+    assert.equal(warmStats.size, 0);
+    warmStats.limit = 1;
+    clearWarmCache();
+    const thrash = play();                      // ภาพถูกไล่ทิ้งสลับกัน: miss / hit ปนกัน
     assert.deepEqual(warm, cold);
+    assert.deepEqual(thrash, cold);
     assert.deepEqual(none, cold);
     assert.equal(cold[0].code, "OUT_OF_MEMORY");
     assert.equal(cold[5].gasUsed, cold[0].gasUsed);   // จุดเดียวกันทุกครั้ง

@@ -12,6 +12,7 @@
  */
 import crypto from "node:crypto";
 import { EVM_ERROR, parseError } from "./evm-rpc.js";
+import { clientIp } from "./client-ip.js";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_PAYLOAD = 1 << 20;
@@ -127,7 +128,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
     const accept = crypto.createHash("sha1").update(key + GUID).digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
 
-    const ip = request.socket.remoteAddress ?? "unknown";
+    const ip = clientIp(request);
     const client = {
       subscriptions: new Map(),
       send: (value) => { if (!socket.destroyed) socket.write(frame(OP.TEXT, Buffer.from(JSON.stringify(value)))); },
