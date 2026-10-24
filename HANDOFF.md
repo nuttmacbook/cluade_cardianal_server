@@ -619,7 +619,7 @@ upgradeat:<n>                       ดัชนี: โปรแกรมที
   `loadSnapshot(vm, lines, { producers })` (DB ที่ยังไม่มี block): hash ของทุก header คำนวณกลับได้ · ต่อกัน · ผู้ผลิตเซ็น → สร้าง trie จาก state แล้วต้องได้ stateRoot ของ header N (ไม่ตรง = ล้าง state ทิ้ง throw)
   หลังโหลด: `historyfrom` = N + 1 · ไม่มี body ก่อน N · `startSync({ snapshot: true })` = DB ว่าง → โหลด `/snapshot` ของต้นทางก่อนแล้วซิงก์ต่อ · CLI `npm run snapshot -- export|import|verify`
 - **ความเร็ว** (เครื่องทดสอบ · LMDB · keccak เป็น JS ล้วนของ noble ~28µs ต่อ node 500 byte · Node ไม่มี keccak แบบ native)
-  load test 500 tx (close + roots p50 เทียบ main): native 449 vs 242 ms · token 1008 vs 812 ms · mix 1388 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
+  load test 500 tx (close + roots p50 เทียบ main · วัดก่อนเปลี่ยน node เป็น byte): native 449 vs 242 ms · token 1008 vs 812 ms · mix 1388 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
   state 1 ล้าน key: `rebuildTrie` 65 วินาที (เรียง key แล้วสร้างทีเดียว `buildTrie`) · block แตะ 4,000 key = trieUpdate ~0.8–1.5 วินาที + commit ~0.45 วินาที · หลักฐาน ~2.6 KB
   node ใน DB เก็บเป็น byte (LMDB บีบอัดค่า > ~1000 byte ทำให้แบบ hex ช้า) · update ไม่ตรวจ hash ของ node ที่อ่าน (`proof()` ตรวจเสมอ · `new StateTrie({ verify: true })` ถ้าต้องการ)
 
