@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 901 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 903 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 901 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 903 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -33,7 +33,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
 env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 1000) `MAX_BLOCK_GAS` (1M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
-`npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
+`npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง · ไฟล์ตั้งค่าครบชุดสำหรับเปิดจริงอยู่ใน `deploy/` (อ่าน `deploy/README.md`)
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
@@ -1052,7 +1052,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 102 ไฟล์ · 901 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 103 ไฟล์ · 903 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1104,6 +1104,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
 | `101-block-gas-defer` | แก๊สที่เหลือใน block ไม่พอ → ใบนั้นรอ block ถัดไป (ไม่ถูกปฏิเสธ · ใบ nonce ถัดไปเข้าตาม) · server `mineOnce`: ไม่มีใบที่เข้าได้ + base fee ขั้นต่ำ = ไม่ปิด block ว่าง · `/health` ไม่ขึ้น stalled ระหว่างนั้น |
 | `102-evm-explorer-links` | ลิงก์ explorer ตาม EIP-3091 ใต้ `/evm/explorer` (tx / address / token / block ด้วยเลขหรือ hash) · `/evm/explorer` เปิดแล้วได้หน้า explorer (สำหรับลงทะเบียน chainlist) |
+| `103-deploy-preflight` | `scripts/preflight.js` กับไฟล์ใน `deploy/`: ค่าตัวอย่างที่ลืมแก้ / genesis ของช่วงพัฒนา / DEV = ไม่ผ่าน · กรอกครบ = ผ่าน · `HOST=127.0.0.1` ฟังเฉพาะในเครื่อง |
 | `100-producer-failover` | `producerSchedule` ตรวจรูปแบบ / เรียง / `producersAt` · ไม่อยู่ใน genesis hash · key หลุด: key เดิมผลิตหลัง block N = ปฏิเสธ (block ก่อน N ซิงก์ได้) · `client.verifiedState` รับฟังก์ชันรายชื่อ · key สำรองผลิตต่อได้ + เตือนเมื่อมี key เดียว · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (ยังผลิต = ไม่เริ่ม · ซิงก์ที่ขาด · ติดต่อไม่ได้ = เตือน · ซิงก์ไม่ครบ = ไม่เริ่ม) · server จริงหลายโปรเซส: FOLLOW ซิงก์ + 503 · FAILOVER_FROM ตอนเดิมยังผลิต = exit 1 · เดิมดับ → สำรองผลิตต่อด้วย DATA เดิม · schedule ถอด key → `retired` → key ใหม่ซิงก์แล้วผลิตต่อ |
 | `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
@@ -1354,6 +1355,7 @@ rollback เร็ว · P2P · ผู้ผลิตหลายราย / fin
 | `program-sdk/README.md` | สำหรับคนนอกที่จะเขียนโปรแกรม + testkit |
 | `client-sdk/index.js` | SDK ฝั่ง client (เซ็น + ส่ง tx + รอผล · ใช้ใน browser ได้) — หัวข้อ 6 |
 | `docs/metamask-checklist.md` | ลอง MetaMask จริงทีละขั้น (กรอกผลแล้วส่งกลับ) |
+| `deploy/README.md` | เปิดเชนสาธารณะเครื่องเดียว: ค่าใน genesis / env, nginx, systemd, backup + monitor, ตรวจก่อนประกาศ (`scripts/preflight.js`, `deploy/check.sh`) |
 | `program-sdk/patterns/SAFE-PATTERNS.md` | pattern กัน reentrancy และข้อผิดพลาดที่เจอบ่อย |
 
 ลำดับการอ่านที่แนะนำ: **ไฟล์นี้** → `EXPLORER-SPEC.md` (ถ้าทำ frontend) หรือ comment หัว `virtualmachine.js` (ถ้าทำ VM) → `CHECKPOINT.md`

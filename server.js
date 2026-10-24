@@ -1,6 +1,7 @@
 /**
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data PRODUCER_KEY=0x… ADMINS=0x… node server.js      (ช่วงพัฒนา: DEV=1 node server.js หรือ npm run dev)
+ *   HOST=127.0.0.1    ฟังเฉพาะในเครื่อง (อยู่หลัง nginx · คนนอกเข้าพอร์ตตรงไม่ได้) · ไม่ตั้ง = ทุก interface · ตั้งค่าใช้งานจริงดู deploy/README.md
  *   DEV=1             ช่วงพัฒนา: ไม่บังคับ ADMINS / PRODUCER_KEY (ไม่ตั้ง ADMINS = ใครก็อนุมัติ deploy / upgrade ได้)
  *   GENESIS=genesis.json   ไฟล์ genesis · config ในไฟล์ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (src/node/genesis.js) — env ตั้งต่างจาก genesis = ไม่ยอมเริ่ม
  *   PRODUCER_KEY=0x…  key ของผู้ผลิต block (เซ็น hash ของทุก block · node ผู้อ่านตรวจกับ config.producers ใน genesis)
@@ -57,6 +58,7 @@ import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHo
   storageGroups, pageRejected, indexedFilterOf, cursorIndexedEvents, programAbi } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
+const HOST = process.env.HOST || undefined;   // undefined = ทุก interface
 export const DEV = ["1", "true", "yes", "on"].includes(String(process.env.DEV ?? "").toLowerCase());
 // genesis: ยอดเริ่มต้น + ค่าที่ทุกเครื่องต้องเหมือนกัน (config) — env ที่ตั้งต่างจาก genesis = ไม่ยอมเริ่ม (ดู startupProblems)
 const GENESIS_FILE = process.env.GENESIS ?? "genesis.json";
@@ -555,5 +557,5 @@ if (process.argv[1]?.endsWith("server.js")) {
       process.exit(1);
     }
   }
-  server.listen(PORT, () => console.log(`chain ทำงานที่ http://localhost:${PORT}`));
+  server.listen(PORT, HOST, () => console.log(`chain ทำงานที่ http://${HOST ?? "localhost"}:${server.address().port}`));
 }

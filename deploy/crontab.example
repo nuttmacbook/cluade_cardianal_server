@@ -1,0 +1,6 @@
+# ---- บนเครื่องเชน (crontab -e ของ user cardianal)
+# backup ทุก 6 ชม. เก็บ 8 ชุด แล้วส่งออกนอกเครื่อง (rclone ตั้ง remote เอง) · เครื่องเดียว = backup คือทางกู้ทางเดียว
+0 */6 * * *  cd /opt/cardianal && node scripts/backup.js --data /var/lib/cardianal --out /backups --keep 8 && rclone sync /backups remote:cardianal-backups
+
+# ---- บนเครื่องอื่น (เครื่องเชนล่มแล้วเตือนตัวเองไม่ได้)
+* * * * *  cd ~/cardianal && node scripts/monitor.js --url https://chain.example.com --once >/dev/null || curl -s -d "Cardianal: /health มีปัญหา" https://hooks.example.com/<webhook>

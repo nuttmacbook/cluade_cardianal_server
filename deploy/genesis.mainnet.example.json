@@ -1,0 +1,19 @@
+{
+  "chainId": 272727,
+  "balances": {
+    "0xADDRESS_ที่ได้เหรียญตั้งต้น": "1000000000000000000000000n"
+  },
+  "config": {
+    "admins": ["0xADDRESS_ADMIN_1", "0xADDRESS_ADMIN_2"],
+    "producers": ["0xADDRESS_ผู้ผลิตหลัก", "0xADDRESS_ผู้ผลิตสำรอง"],
+    "blockMs": 1000,
+    "maxBlockGas": 1000000,
+    "gasTarget": 500000,
+    "minBaseFee": "1000000000",
+    "baseFeeDenominator": 8,
+    "burnPercent": 100,
+    "upgradeDelayBlocks": 3600,
+    "memoryLimitMb": 32,
+    "stackLimitKb": 256
+  }
+}

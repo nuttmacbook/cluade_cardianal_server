@@ -78,10 +78,15 @@ test("startupProblems: ไม่ใช่ DEV ต้องมี ADMINS + PRODUC
   const empty = resolveSettings({}, {}).settings;
   assert.equal(startupProblems({ settings: empty }).length, 2);
   assert.deepEqual(startupProblems({ settings: empty, dev: true }), []);
-  const settings = resolveSettings({ config: { admins: ["0xaa"], producers: [PRODUCER] } }, {}).settings;
+  const settings = resolveSettings({ config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [PRODUCER] } }, {}).settings;
   assert.deepEqual(startupProblems({ settings, producer: PRODUCER }), []);
   assert.match(startupProblems({ settings, producer: sign.addressOf(OTHER_KEY) })[0], /ไม่อยู่ในรายชื่อผู้ผลิต/);
   assert.deepEqual(startupProblems({ settings: empty, errors: ["x"], dev: true }), ["x"]);
+  // ลืมแก้ค่าตัวอย่างใน genesis → ไม่ยอมเริ่ม (address ผิดรูปแบบ = ไม่มีใครเป็น admin / ผู้ผลิตได้จริง)
+  const placeholder = resolveSettings({ config: { admins: ["0xADDRESS_ADMIN_1"], producers: [PRODUCER, "0xaddress_spare"] } }, {}).settings;
+  const problems = startupProblems({ settings: placeholder, producer: PRODUCER });
+  assert.deepEqual(problems, ["config.admins มีค่าที่ไม่ใช่ address: 0xaddress_admin_1", "config.producers มีค่าที่ไม่ใช่ address: 0xaddress_spare"]);
+  assert.deepEqual(startupProblems({ settings: placeholder, producer: PRODUCER, dev: true }), []);   // DEV ไม่ตรวจ
 });
 
 test("server.js: ไม่ตั้ง ADMINS / PRODUCER_KEY = ไม่ยอมเริ่ม · env ต่างจาก genesis = ไม่ยอมเริ่ม", () => {

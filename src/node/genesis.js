@@ -125,6 +125,11 @@ export function startupProblems({ settings, errors = [], dev = false, producer =
   if (!dev) {
     if (!settings.admins?.length) problems.push("ต้องตั้ง ADMINS (หรือ config.admins ใน genesis) — ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้ · ช่วงพัฒนาใช้ DEV=1");
     if (!producer && !follow) problems.push("ต้องตั้ง PRODUCER_KEY (key ที่ใช้เซ็น block) · ช่วงพัฒนาใช้ DEV=1 · เครื่องสำรองใช้ FOLLOW=<url>");
+    // address ผิดรูปแบบ (เช่นลืมแก้ค่าตัวอย่างใน genesis) = ไม่มีใครเป็น admin / ผู้ผลิตได้จริง และแก้ทีหลังต้องล้างเชน
+    for (const [name, list] of [["admins", settings.admins], ["producers", settings.producers]]) {
+      const bad = (list ?? []).filter((address) => !/^0x[0-9a-f]{40}$/.test(address));
+      if (bad.length) problems.push(`config.${name} มีค่าที่ไม่ใช่ address: ${bad.join(", ")}`);
+    }
   }
   const allowed = nextBlock === null ? null : producersAt(settings, nextBlock);   // null = ตรวจทีหลัง (FAILOVER_FROM: หลังซิงก์)
   if (producer && !follow && allowed && !allowed.includes(producer.toLowerCase())) {
