@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 888 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 896 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 888 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 896 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -43,14 +43,22 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 ### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
 - **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
   `genesis.forks` = ตาราง fork `{ ชื่อ: block }` (ไม่อยู่ใน genesis hash · เพิ่มทีหลังได้ · ดูหัวข้อค่าแก๊ส "fork ตาม block height")
+  `genesis.producerSchedule` = `[{ fromBlock, producers }]` เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (ไม่อยู่ใน genesis hash · ดู "ผู้ผลิตเสีย / key หาย / key หลุด" ข้างล่าง)
   ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
 - **ไม่ใช่ `DEV=1`** → ต้องมี `ADMINS` (ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้) และ `PRODUCER_KEY` · producer ต้องอยู่ใน `config.producers` ถ้า genesis กำหนด
 - **ผู้ผลิตเซ็น block**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → header มี `producer` (อยู่ใน hash · block ที่ไม่มีผู้ผลิต hash เหมือนเดิมทุกไบต์) + `producerSignature` (r‖s‖v บน hash ของ block · อยู่นอก hash)
   `sync.js`: `verifyProducer(header, producers)` · ส่ง `producers` → block ต้องมีผู้ผลิตในรายชื่อ + ลายเซ็นถูก · `startSync({ genesis })` อ่าน `genesis.config.producers` ให้เอง · `/genesis` บอก `producer` / `producers`
   replay / rebuild ใช้ producer + ลายเซ็นจาก header เดิม (เครื่องที่ไม่มี key rebuild ได้ hash เดิม) · explorer หน้า block แสดง Producer
+- **ผู้ผลิตเสีย / key หาย / key หลุด** (เทสต์ `100-producer-failover` · อธิบายเต็มใน producer-key.md ของโปรเจกต์)
+  เครื่องเสีย: เครื่องสำรอง `FOLLOW=<url ผู้ผลิต>` (+ `DATA`) ซิงก์ตามตลอด ไม่ผลิต block ไม่รับ tx (`/sendtx` 503 · `eth_sendRawTransaction` error) ไม่ต้องมี `PRODUCER_KEY` · `FOLLOW_SNAPSHOT=1` = เริ่มจาก snapshot
+  ย้ายมาผลิต: restart เครื่องสำรองด้วย `PRODUCER_KEY` + `FAILOVER_FROM=<url เครื่องเดิม>` (ไม่ตั้ง `FOLLOW`) → `prepareFailover` (`src/node/failover.js`) ถาม `/health` ของเครื่องเดิมก่อน: `role: "producer"` (หรือรุ่นเก่าไม่บอก role) = **ไม่ยอมเริ่ม** · ไม่ผลิตแล้ว = ซิงก์ที่ขาดให้ครบก่อน · ติดต่อไม่ได้ = เริ่ม + เตือน (เครือข่ายขาดแต่เครื่องเดิมยังผลิต = เชนแยก ผู้ดูแลต้องแน่ใจว่าดับจริง) · ห้ามเปิดเครื่องเดิมเป็นผู้ผลิตอีก ให้กลับมาเป็น `FOLLOW=<เครื่องใหม่>`
+  key หาย: ใส่ key สำรอง (เก็บ offline) ไว้ใน `config.producers` ตั้งแต่ล้างเชน → ผลิตต่อด้วย key สำรองได้ทันที · มี key เดียว = server เตือนตอนเริ่ม (`startupWarnings`)
+  key หลุด: เพิ่ม `producerSchedule: [{ fromBlock: N, producers: [key ใหม่] }]` ใน genesis.json ของ**ทุก node** แล้ว restart (genesis hash เดิม) → ตั้งแต่ block N key เดิมผลิตไม่ได้ (ลายเซ็นถูกก็ปฏิเสธ) · block ก่อน N ยังซิงก์ได้ · ผู้ผลิตที่ถูกถอดหยุดผลิตเอง (`/health` `role: "retired"` + problem `miner`) · key ใหม่เริ่มด้วย `FAILOVER_FROM`
+  `producersAt(settings, n)` / `producerSetOf(genesis)` → `(n) => รายชื่อ` · `verifyProducer` / `startSync` / `loadSnapshot` / `client.verifiedState({ producers })` รับทั้งรายชื่อและฟังก์ชัน · `/genesis` บอก `producers` (ของ block ถัดไป) `baseProducers` `producerSchedule` `role`
 - **timeout ตอน replay / sync**: tx รันด้วย `replayTimeoutMs` (ค่าเริ่ม 60 วิ) แทน `timeoutMs` ของผู้ผลิต — ผู้ผลิตกรอง TIMEOUT ออกก่อนเข้า block แล้ว (`code === TIMEOUT → accepted: false`) เครื่องที่ช้ากว่าจึงไม่ได้ผลต่าง · แก๊สยังเป็นตัวหยุดหลัก (3M แก๊สใช้ราว 0.1 วิ)
-- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, producer, miner, db }` · มีปัญหา = **HTTP 503**
-  problems: `stalled` (มี tx รอแต่ไม่มี block ใหม่เกิน `HEALTH_STALL_MS` ค่าเริ่ม max(10 × BLOCK_MS, 30 วิ)) · `miner` (ปิด block ล้มเหลวติดกัน) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT` ค่าเริ่ม 90%)
+- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db }` · มีปัญหา = **HTTP 503**
+  `role`: `producer` / `follower` (FOLLOW) / `retired` (key ถูกถอดด้วย producerSchedule) / `standby` (รอ prepareFailover)
+  problems: `stalled` (มี tx รอแต่ไม่มี block ใหม่เกิน `HEALTH_STALL_MS` ค่าเริ่ม max(10 × BLOCK_MS, 30 วิ)) · `miner` (ปิด block ล้มเหลวติดกัน) · `follow` (เครื่องสำรองซิงก์หยุด เช่น block ไม่ตรง) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT` ค่าเริ่ม 90%)
 - **`npm run monitor -- --url … [--webhook URL] [--interval 30] [--once]`** เตือนเมื่อสถานะเปลี่ยน (POST `{ text, url, problems, health }` ไปที่ webhook) · `--once` exit 1 = มีปัญหา (ใช้กับ cron)
 - **`npm run backup -- --data ./data --out ./backups [--keep 7] [--compact]`** สำรอง LMDB ขณะ server ทำงาน (`DB.backup` = mdb_env_copy อ่าน snapshot เดียว) + `replaced-tx.jsonl` + `manifest.json`
   ตรวจทุกครั้ง: block ล่าสุดตรง manifest · parentHash ต่อกัน 1,000 block ล่าสุด · blockhash ชี้กลับ · `--verify <ชุด>` ตรวจอย่างเดียว
@@ -1043,7 +1051,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 99 ไฟล์ · 888 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 100 ไฟล์ · 896 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1093,6 +1101,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `96-trie` | Merkle Patricia Trie ตรงกับ Ethereum (trie ว่าง · doe/dog/dogglesworth · geth TestDelete) · สุ่มใส่ / ลบ 200–300 รอบ = สร้างใหม่ทุกไบต์ ไม่มี node ค้าง (รวม key ที่เป็น prefix กัน / node ฝังในพ่อ / ค่าใน branch) · หลักฐานมี / ไม่มีค่า · แก้ node / root ผิด / node ขาด = ไม่ผ่าน |
 | `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
 | `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
+| `100-producer-failover` | `producerSchedule` ตรวจรูปแบบ / เรียง / `producersAt` · ไม่อยู่ใน genesis hash · key หลุด: key เดิมผลิตหลัง block N = ปฏิเสธ (block ก่อน N ซิงก์ได้) · `client.verifiedState` รับฟังก์ชันรายชื่อ · key สำรองผลิตต่อได้ + เตือนเมื่อมี key เดียว · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (ยังผลิต = ไม่เริ่ม · ซิงก์ที่ขาด · ติดต่อไม่ได้ = เตือน · ซิงก์ไม่ครบ = ไม่เริ่ม) · server จริงหลายโปรเซส: FOLLOW ซิงก์ + 503 · FAILOVER_FROM ตอนเดิมยังผลิต = exit 1 · เดิมดับ → สำรองผลิตต่อด้วย DATA เดิม · schedule ถอด key → `retired` → key ใหม่ซิงก์แล้วผลิตต่อ |
 | `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |

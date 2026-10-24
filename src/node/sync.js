@@ -7,18 +7,23 @@
  *
  * ผู้ผลิต (header.producer อยู่ใน hash · header.producerSignature = ลายเซ็นบน hash):
  *   มีลายเซ็น → ต้องกู้ได้ address ของ producer เสมอ
- *   ส่ง producers (รายชื่อใน genesis) → ทุก block ต้องมีผู้ผลิตที่อยู่ในรายชื่อ และลายเซ็นถูก (block ไม่มีผู้ผลิต = ปฏิเสธ)
+ *   ส่ง producers (รายชื่อใน genesis หรือ producerSetOf(genesis) ที่เปลี่ยนตาม producerSchedule) → ทุก block ต้องมีผู้ผลิตที่อยู่ในรายชื่อของ block นั้น และลายเซ็นถูก (block ไม่มีผู้ผลิต = ปฏิเสธ)
  * tx ใน block รันด้วย vm.replayTimeoutMs (ผู้ผลิตกรอง TIMEOUT ไปแล้ว → เครื่องที่ช้ากว่าไม่ได้ผลต่าง)
  * snapshot: true → DB ยังไม่มี block และต้นทางมี /snapshot = โหลด state ณ block N ก่อน (ตรวจกับ stateRoot ที่ผู้ผลิตเซ็น) แล้วซิงก์ต่อจาก N + 1
  */
 import { recoverTypedDataDigest } from "../crypto/program-signature.js";
 import { syncFromSnapshot } from "./snapshot.js";
+import { producerSetOf } from "./genesis.js";
 
 const lower = (value) => String(value ?? "").toLowerCase();
 
-/** ตรวจผู้ผลิตของ header → throw ถ้าใช้ไม่ได้ */
+/**
+ * ตรวจผู้ผลิตของ header → throw ถ้าใช้ไม่ได้
+ *   producers = รายชื่อ หรือ (เลข block) => รายชื่อ (producerSetOf(genesis) · รายชื่อเปลี่ยนตาม producerSchedule)
+ */
 export function verifyProducer(header, producers = null) {
-  const allowed = producers ? producers.map(lower) : null;
+  const list = typeof producers === "function" ? producers(header.number) : producers;
+  const allowed = list ? list.map(lower) : null;
   if (!header.producer) {
     if (allowed) throw new Error(`block ${header.number} ไม่มีผู้ผลิต (genesis กำหนดผู้ผลิตไว้)`);
     return null;
@@ -68,7 +73,7 @@ export async function syncOnce(vm, fetchBlocks, { limit = 50, producers = null }
 }
 
 /** ซิงก์ต่อเนื่อง — คืนฟังก์ชันสำหรับหยุด */
-export function startSync(vm, { url, genesis, producers = genesis?.config?.producers ?? null, intervalMs = 3000, limit = 50, snapshot = false,
+export function startSync(vm, { url, genesis, producers = producerSetOf(genesis), intervalMs = 3000, limit = 50, snapshot = false,
   onError, onBlock, onSnapshot } = {}) {
   if (genesis) vm.applyGenesis(genesis);           // หยุดทันทีถ้า genesis ไม่ตรง
 
