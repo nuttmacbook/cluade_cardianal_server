@@ -12,7 +12,7 @@ Blockscout ต่อเข้ากับ `/evm` ของเชน (ตัว�
 
 ## 1. รันเชน
 ```bash
-EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
+DEV=1 EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
 ```
 - `EVM_RATE_LIMIT=0` สำคัญ: indexer ยิงถี่มาก ถ้าเปิด limit ไว้ 600/นาที จะโดน 429
 - อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node scripts/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario`)
@@ -88,7 +88,7 @@ log `Index already caught up` แปลว่าไม่มี block ค้า�
 ## เปิด-ปิดประจำวัน
 | ต้องการ | คำสั่ง |
 |---|---|
-| เปิด | `colima start` (ถ้าปิดไว้) → รันเชน `EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
+| เปิด | `colima start` (ถ้าปิดไว้) → รันเชน `DEV=1 EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
 | หน้าเว็บขึ้น 502 หลังเปิด | `docker-compose -f geth.yml restart proxy` |
 | ปิด (ข้อมูลที่ index ไว้ยังอยู่) | `docker-compose -f geth.yml down` · ปิด colima ด้วย `colima stop` |
 | ปิด + ล้างข้อมูล Blockscout | `docker-compose -f geth.yml down -v` ⚠ ลบข้อมูลที่ index ไว้ทั้งหมด |

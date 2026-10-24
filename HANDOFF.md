@@ -24,7 +24,7 @@
 npm install
 npm test                         # 799 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
-npm start                        # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory)
+npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
 node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
 ```
@@ -32,12 +32,29 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 2000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด)
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+`npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
 
 สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
+
+### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
+- **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
+  ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
+- **ไม่ใช่ `DEV=1`** → ต้องมี `ADMINS` (ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้) และ `PRODUCER_KEY` · producer ต้องอยู่ใน `config.producers` ถ้า genesis กำหนด
+- **ผู้ผลิตเซ็น block**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → header มี `producer` (อยู่ใน hash · block ที่ไม่มีผู้ผลิต hash เหมือนเดิมทุกไบต์) + `producerSignature` (r‖s‖v บน hash ของ block · อยู่นอก hash)
+  `sync.js`: `verifyProducer(header, producers)` · ส่ง `producers` → block ต้องมีผู้ผลิตในรายชื่อ + ลายเซ็นถูก · `startSync({ genesis })` อ่าน `genesis.config.producers` ให้เอง · `/genesis` บอก `producer` / `producers`
+  replay / rebuild ใช้ producer + ลายเซ็นจาก header เดิม (เครื่องที่ไม่มี key rebuild ได้ hash เดิม) · explorer หน้า block แสดง Producer
+- **timeout ตอน replay / sync**: tx รันด้วย `replayTimeoutMs` (ค่าเริ่ม 60 วิ) แทน `timeoutMs` ของผู้ผลิต — ผู้ผลิตกรอง TIMEOUT ออกก่อนเข้า block แล้ว (`code === TIMEOUT → accepted: false`) เครื่องที่ช้ากว่าจึงไม่ได้ผลต่าง · แก๊สยังเป็นตัวหยุดหลัก (3M แก๊สใช้ราว 0.1 วิ)
+- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, producer, miner, db }` · มีปัญหา = **HTTP 503**
+  problems: `stalled` (มี tx รอแต่ไม่มี block ใหม่เกิน `HEALTH_STALL_MS` ค่าเริ่ม max(10 × BLOCK_MS, 30 วิ)) · `miner` (ปิด block ล้มเหลวติดกัน) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT` ค่าเริ่ม 90%)
+- **`npm run monitor -- --url … [--webhook URL] [--interval 30] [--once]`** เตือนเมื่อสถานะเปลี่ยน (POST `{ text, url, problems, health }` ไปที่ webhook) · `--once` exit 1 = มีปัญหา (ใช้กับ cron)
+- **`npm run backup -- --data ./data --out ./backups [--keep 7] [--compact]`** สำรอง LMDB ขณะ server ทำงาน (`DB.backup` = mdb_env_copy อ่าน snapshot เดียว) + `replaced-tx.jsonl` + `manifest.json`
+  ตรวจทุกครั้ง: block ล่าสุดตรง manifest · parentHash ต่อกัน 1,000 block ล่าสุด · blockhash ชี้กลับ · `--verify <ชุด>` ตรวจอย่างเดียว
+  กู้: หยุด server แล้ว `npm run backup -- --restore <ชุด> --data ./data` (มีของเดิม → `--force` ย้ายไป `<data>.before-restore-<เวลา>`)
+- TLS: server เป็น `http` ล้วน ต้องมี reverse proxy (nginx / Caddy) ทำ HTTPS ข้างหน้า · rate limit นับต่อ IP ในหน่วยความจำของแต่ละโปรเซส
 
 ---
 
@@ -673,7 +690,7 @@ vm[method](request);
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
 | `GET /name/:ns` | namespace → address |
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
-| `GET /health` | `{ ok, latest, historyFrom, pending, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
+| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, historyFrom, pending, rejectedPending, producer, miner, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
@@ -1009,6 +1026,8 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
 | `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
+| `85-genesis-producer` | `resolveSettings`: genesis ก่อน env · env ต่าง = error · ไม่มี config = ใช้ env · `startupProblems` (ADMINS / PRODUCER_KEY / producer นอกรายชื่อ · DEV ข้าม) · `server.js` จริงไม่ยอมเริ่ม · producer อยู่ใน hash + ลายเซ็นกู้ได้ · sync ปฏิเสธผู้ผลิตนอกรายชื่อ / ลายเซ็นปลอม / ไม่มีลายเซ็น / ไม่มีผู้ผลิต · replay / rebuild ได้ hash + ลายเซ็นเดิมแม้ไม่มี key · `replayTimeoutMs`: ผู้อ่านที่ timeout สั้นยังได้ hash ตรง |
+| `86-ops` | `/health` ปกติ 200 · stalled · ปิด block ล้มเหลว = 503 · `scripts/monitor.js` check (รวมติดต่อไม่ได้) · `scripts/backup.js` สำรองขณะ DB เปิด / manifest / ตรวจสาย block / keep · verify เจอ manifest ไม่ตรง + header หาย · restore ลงโฟลเดอร์ว่าง / ต้อง `--force` |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
 
@@ -1186,7 +1205,8 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 
 ### บล็อกการมี node ที่สอง
 4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) · ข้อ 2 เสร็จแล้ว ผลแก๊สไม่ขึ้นกับความเร็วเครื่อง
-   เหลือแค่กรณี timeout (ด่านสุดท้าย) ที่ tx ไม่เข้า block
+   ~~กรณี timeout~~ เสร็จแล้ว: replay / sync ใช้ `replayTimeoutMs` · ~~block ไม่มีลายเซ็นผู้ผลิต~~ เสร็จแล้ว: `producer` + `producerSignature` ตรวจกับ `config.producers` (หัวข้อ 1 "เปิดเครือข่ายจริง")
+   ที่เหลือคืองานใหญ่: P2P (ตอนนี้ดึงจาก URL เดียว) · ผู้ผลิตหลายราย · finality
 
 ### ค้างคาที่รู้อยู่
 5. ~~tx ที่ถูกปฏิเสธไม่เข้า block เลย~~ เสร็จแล้ว: บันทึกใน block (`rejectedRoot` อยู่ใน hash) ไม่รัน ไม่แตะ state — หัวข้อ mempool
@@ -1201,18 +1221,19 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
     แก้แล้ว: ตรวจลายเซ็นครั้งเดียว · `Mempool.prune` ไม่วนทั้งหมดทุก `add` · ไม่คำนวณ root ซ้ำ (รับ tx ผ่าน HTTP เร็วขึ้น 46–75%)
     ที่ควรทำต่อ (ยังไม่ทำ): ตรวจลายเซ็นใน worker thread · sandbox ไม่คอมไพล์ซ้ำทุก call · แผนตัด history (LMDB โต ~10–15 KB ต่อ tx)
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
-    ยังค้นด้วย VM hash เท่านั้น ไม่รับ digest
+    (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
 13. ~~explorer ไม่มีฟอร์ม deploy / upgrade~~ เสร็จแล้ว: หน้า `#deploy` (upgrader ไม่บังคับ) · แถบ Upgrade (โค้ดใหม่ + migrate input, โอน / สละสิทธิ์, admin อนุมัติ / ปฏิเสธ) · ปุ่ม Approve / Reject ในรายการรออนุมัติ
 
 ### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
-**ตอนนี้ `scripts/*` ส่ง private key ไปเซ็นฝั่งเดียวกับ server ได้ เพราะยังเป็นช่วงทดสอบ**
-ของจริงต้องเซ็นฝั่ง client เท่านั้น (explorer ทำถูกแล้ว — ใช้ `eth_signTypedData_v4`)
-**private key ต้องไม่เดินทางไปถึง server เลย** ส่วน `/sendtx` ต้องรับแค่ `{ tx, signature }` (ซึ่งทำถูกอยู่แล้ว)
+ไม่มี endpoint ไหนรับ private key · `scripts/*` เซ็นในเครื่องตัวเองแล้วส่งแค่ `{ tx, signature }` (ตรวจแล้ว 2026-10-24) แต่รับ key ทาง `--admin-key` / `--funder-key` และมี key ทดสอบในโค้ด → ใช้กับ key จริงไม่ได้
+ของจริงเซ็นฝั่ง client เท่านั้น (explorer ใช้ `eth_signTypedData_v4`) · key ของ `ADMINS` ควรอยู่ใน hardware wallet / multisig · `PRODUCER_KEY` อยู่ในเครื่องผู้ผลิตเท่านั้น
+ตั้ง `UPGRADE_DELAY_BLOCKS` > 0 ใน genesis เพื่อให้ผู้ใช้มีเวลาถอนออกก่อนโค้ดใหม่ใช้งาน
 
 ### เมื่อถึงเวลา
-rollback เร็ว · merkle tree จริง · factory (โปรแกรมสร้างโปรแกรม) · การอัปเกรดโปรแกรม ·
-มาตรฐานโทเคน · ตัด history เก่า / snapshot · หน้า holders ใน explorer
+rollback เร็ว · merkle tree จริง (+ `eth_getProof`) · ตัด history เก่า / snapshot sync · P2P · ผู้ผลิตหลายราย / finality · bridge
+(ทำแล้ว ลบออกจากรายการ 2026-10-24: factory = `cloneProgram` · การอัปเกรดโปรแกรม · มาตรฐานโทเคน / NFT / 1155 · หน้า holders)
+แผนเต็ม: `/mnt/project-files/cardianal_server/dev-plan.md` (ระยะ 1–5) · เทียบ EVM: `gap-vs-evm.md`
 
 ---
 

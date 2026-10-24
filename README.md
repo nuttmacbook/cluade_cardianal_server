@@ -8,7 +8,7 @@ npm test          # 550 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
-npm start         # server จริง + explorer ที่ http://localhost:3000
+npm run dev       # server + explorer ที่ http://localhost:3000 (DEV=1 · เครือข่ายจริงใช้ npm start + ADMINS + PRODUCER_KEY ดู HANDOFF หัวข้อ 1)
 npm run seed      # สร้างข้อมูลตัวอย่างผ่าน HTTP (ต้องรัน server ไว้ก่อน)
 ```
 
