@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JsonRpcProvider, Wallet, Contract, Transaction } from "ethers";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
-import { createClient, keySigner } from "../sdk/index.js";
+import { createClient, keySigner } from "../client-sdk/index.js";
 import { decodeRawTransaction, rlpEncode } from "../src/node/evm-raw.js";
 
 /*

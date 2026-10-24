@@ -16,9 +16,11 @@ const post = (path, body) => fetch(API + path, { method: "POST", headers: { "con
 const get = (path) => fetch(API + path).then((r) => r.json());
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const { chainId } = await get("/genesis");   // ตามเชนที่รันอยู่ (เช่น genesis ที่ตั้ง chainId ไว้ใช้กับ MetaMask)
+
 async function send(fields) {
   const { nonce } = await get(`/nonce/${me}`);
-  const tx = { chainId: 1, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
+  const tx = { chainId, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, KEY) });
   if (!result.queued) {
     console.error(`${tx.action} ไม่เข้าคิว:`, JSON.stringify(result).slice(0, 200));

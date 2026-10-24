@@ -175,7 +175,9 @@ test("replay / sync ใช้ replayTimeoutMs: tx ที่ผู้ผลิต
   assert.equal(reader.getBlock(2).hash, source.getBlock(2).hash);
   assert.equal(reader.replayBlock(2).hash, source.getBlock(2).hash);
   // เทียบ: ถ้าใช้ timeout 1 ms ตอน sync (แบบเดิม) → tx TIMEOUT → hash ไม่ตรง
-  const old = slow(1);
+  // block 1 (deploy + init) ซิงก์ด้วย timeout ยาว ไม่งั้นเครื่องที่ยุ่ง (เทสต์รันขนานกัน) ก็ TIMEOUT ได้ตั้งแต่ block นี้
+  const old = slow(60_000);
   applyBlock(old, itemsOf(source)[0]);
-  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /ไม่ตรงกับผู้ผลิต/);
+  old.replayTimeoutMs = 1;
+  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 ไม่ตรงกับผู้ผลิต/);
 });

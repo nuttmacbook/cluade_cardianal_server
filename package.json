@@ -6,7 +6,7 @@
     ".": "./index.js",
     "./core": "./src/core/virtualmachine.js",
     "./db.js": "./src/storage/db.js",
-    "./sdk": "./sdk/index.js",
+    "./client": "./client-sdk/index.js",
     "./signature.js": "./src/crypto/signature.js",
     "./program-signature.js": "./src/crypto/program-signature.js",
     "./standards/*": "./src/standards/*",

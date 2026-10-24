@@ -1,5 +1,5 @@
 /**
- * ตัวช่วยแปลงข้อมูลที่ไม่พึ่ง VM / sandbox (ใช้ทั้งฝั่ง node และ SDK ฝั่ง client — ดู sdk/index.js)
+ * ตัวช่วยแปลงข้อมูลที่ไม่พึ่ง VM / sandbox (ใช้ทั้งฝั่ง node และ SDK ฝั่ง client — ดู client-sdk/index.js)
  * virtualmachine.js export ตัวเดียวกันนี้ต่อ (ของเดิม import จากที่นั่นได้เหมือนเดิม)
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";

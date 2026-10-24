@@ -1,7 +1,7 @@
 /**
  * SDK ฝั่ง client ของเชน (ระยะ 3.3) — ใช้ได้ทั้ง node และ browser (ไม่ดึง VM / sandbox / LMDB มาด้วย)
  *
- *   import { createClient, keySigner, walletSigner } from "programvm/sdk";
+ *   import { createClient, keySigner, walletSigner } from "programvm/client";
  *   const client = createClient({ url: "http://localhost:3000" });
  *   const signer = keySigner(PRIVATE_KEY);                         // หรือ await walletSigner(window.ethereum) = MetaMask เซ็น
  *   const sent = await client.send({ action: "call", to: TOKEN, method: "transfer", input: { to: BOB, amount: "5n" } }, signer);

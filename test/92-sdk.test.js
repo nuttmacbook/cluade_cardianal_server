@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { Wallet } from "ethers";
-import { createClient, keySigner, walletSigner, fromChainValue, toChainValue, ChainError, hashTypedData } from "../sdk/index.js";
+import { createClient, keySigner, walletSigner, fromChainValue, toChainValue, ChainError, hashTypedData } from "../client-sdk/index.js";
 
 /*
- * ระยะ 3.3: SDK ฝั่ง client (sdk/index.js)
+ * ระยะ 3.3: SDK ฝั่ง client (client-sdk/index.js)
  *   ไม่ดึง VM / sandbox มาด้วย (ใช้ใน browser ได้) · send เติม chainId / nonce / แก๊สเอง · wait ตามจนถึง block
  *   walletSigner เซ็นด้วย eth_signTypedData_v4 → ลายเซ็นจากกระเป๋าแบบ EIP-712 มาตรฐาน (ethers แทน MetaMask) ผ่าน /sendtx
  */
@@ -25,7 +25,7 @@ test("sdk ไม่ import VM / sandbox / storage / node:* (ใช้ใน brow
       if (spec.startsWith(".")) walk(path.resolve(path.dirname(file), spec));
     }
   };
-  walk(path.resolve("sdk/index.js"));
+  walk(path.resolve("client-sdk/index.js"));
   const files = [...seen].map((file) => path.relative(".", file)).sort();
   assert.deepEqual(files.filter((file) => /virtualmachine|sandbox|gasmeter|storage|src\/node/.test(file)), []);
   assert.ok(files.includes("src/crypto/signature.js"));

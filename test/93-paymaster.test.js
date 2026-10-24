@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { TypedDataEncoder } from "ethers";
 import * as sign from "../src/crypto/signature.js";
-import { createClient, keySigner, walletTypedData } from "../sdk/index.js";
+import { createClient, keySigner, walletTypedData } from "../client-sdk/index.js";
 
 /*
  * ระยะ 3.4: ผู้จ่ายแก๊สแทน (paymaster / fee payer)

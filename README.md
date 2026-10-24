@@ -34,7 +34,9 @@ genesis.json               ยอดเงินตั้งต้น
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
 scripts/                   demo.js, examples.js
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
-test/                      44 ไฟล์ · 550 เคส
+client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
+docs/                      Blockscout · checklist ลอง MetaMask จริง
+test/                      94 ไฟล์ · 866 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              สถานะปัจจุบัน ค่าตั้งต้นที่แนะนำ และรายการที่ยังไม่ได้ทำ
 ```
