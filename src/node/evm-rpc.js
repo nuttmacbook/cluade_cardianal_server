@@ -18,6 +18,9 @@
  *     tx แบบ 1559 → type 0x2 + maxFeePerGas / maxPriorityFeePerGas · receipt มี effectiveGasPrice
  *   - eth_getLogs: ข้าม block ด้วย logsBloom ของ header · มี topic0 + topic อื่น → ใช้ดัชนี eventidx: replay เฉพาะ block ที่ตรง
  *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (null = ไม่ได้ประกาศ)
+ *   - cardianal_getProof([key, …]) → หลักฐาน Merkle ของ key ใน state ล่าสุด เทียบกับ stateRoot ของ block ล่าสุด (vm.getProof)
+ *       key = dbKey ("0xprog:storage:balances:0xabc") หรือ { program, key } (key เป็น string หรือ array = map(...))
+ *     eth_getProof ตอบ error: state ของเชนไม่ใช่ account trie แบบ EVM (ไม่มี storageHash / slot 32 byte) → ใช้ cardianal_getProof
  *     eth_call ของทั้งสองแบบ: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
  *   - eth_call ของโปรแกรมอื่นที่ประกาศ metadata.abi: ถอด / เข้ารหัสตาม ABI ของ Solidity (src/node/evm-abi.js) → dApp ใช้ ethers / viem อ่านได้ตรง ๆ
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
@@ -25,7 +28,8 @@
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataKey, eventLog, logsBloom, bloomContains, toEvmAbi, decodeDbKey } from "../core/virtualmachine.js";
+import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataKey, eventLog, logsBloom, bloomContains, toEvmAbi, decodeDbKey,
+  storageKey, map } from "../core/virtualmachine.js";
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
@@ -747,6 +751,18 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       const abi = vm.read(metadataKey(needAddress(address), "abi"));
       return abi ? toEvmAbi(abi) : null;
     },
+    cardianal_getProof: ([keys]) => {
+      if (!Array.isArray(keys) || keys.length === 0 || keys.length > 100) fail(EVM_ERROR.PARAMS, "keys must be an array of 1-100 items");
+      const dbKeys = keys.map((item) => {
+        if (typeof item === "string" && item) return item;
+        if (item && typeof item === "object" && typeof item.program === "string") {
+          return storageKey(normalizeAddress(item.program), Array.isArray(item.key) ? map(...item.key) : item.key);
+        }
+        return fail(EVM_ERROR.PARAMS, "key must be a dbKey string or { program, key }");
+      });
+      return vm.getProof(dbKeys);
+    },
+    eth_getProof: () => fail(EVM_ERROR.METHOD, "eth_getProof is not supported: state is not an EVM account trie — use cardianal_getProof([dbKey | { program, key }])"),
     eth_getBalance: ([address, tag]) => balance(address, tag),
     eth_getTransactionCount: ([address, tag]) => nonce(address, tag),
     eth_getCode: ([address, tag]) => code(address, tag),

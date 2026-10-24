@@ -180,7 +180,8 @@ test("block.commit: บันทึกทีเดียวแล้วปิด
   const block = vm.createBlock();
   block.call(transfer("alice", "bob", 10));
   assert.equal(block.committed, false);
-  assert.equal(block.commit(), 2);
+  const trieNodes = vm.trieUpdate(block.writes()).writes.length;   // + node ของ trie (stateRoot) ใน commit เดียวกัน
+  assert.equal(block.commit(), 2 + trieNodes);
   assert.equal(block.committed, true);
   assert.equal(stored("token", "balances", "bob"), "10n");
 

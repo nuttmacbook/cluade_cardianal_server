@@ -45,3 +45,20 @@ export function canonicalJson(value) {
     return JSON.stringify(String(value)); // bigint ฯลฯ — ค่าจริงจะถูกปฏิเสธตอนตรวจ input อยู่แล้ว
   }
 }
+
+/**
+ * ข้อมูลที่ hash เป็น hash ของ block (จาก field ของ header) — VM.hashHeader และ client-sdk (ตรวจ header ที่ได้มา) ใช้ตัวเดียวกัน
+ *   hash ของ block = keccak256(canonicalJson(headerFields(header, chainId)))
+ */
+export function headerFields({ number, parentHash, timestamp, feeRecipient, burnPercent, txCount, txRoot, stateRoot, writesRoot,
+  baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom = null, rejectedCount = 0, rejectedRoot = null, producer = null }, chainId) {
+  return {
+    chainId, number, parentHash: parentHash ?? null, timestamp,
+    feeRecipient: feeRecipient ?? null, burnPercent, txCount, txRoot, stateRoot, writesRoot,
+    // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
+    baseFeePerGas, gasUsed, receiptsRoot, logsBloom,
+    ...(rejectedRoot ? { rejectedCount, rejectedRoot } : {}),
+    // ผู้ผลิต: อยู่ใน hash เฉพาะ block ที่มี · ลายเซ็นของผู้ผลิตเซ็น hash นี้ จึงอยู่นอก hash
+    ...(producer ? { producer } : {}),
+  };
+}

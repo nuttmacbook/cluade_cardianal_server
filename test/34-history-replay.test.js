@@ -180,13 +180,15 @@ test("replayBlock: block ที่ไม่มี → NOT_FOUND", () => {
 test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้ว state ตรงกับตอนนั้นเป๊ะ", () => {
   const vm = buildChain();
   // ดัชนีไม่มี history (สร้างใหม่จาก block) → เทียบเฉพาะ state · ดัชนีตรวจในเทสถัดไป
-  const stateKeys = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => !/^(block|blockbody|blockundo|blockhash|latestblock|history)[:$]/.test(key) && key !== "latestblock" && !VM.isIndexKey(key)));
+  // node ของ trie ไม่มี history (เก็บแค่ของล่าสุด) → ตรวจด้วย stateRoot แทน
+  const stateKeys = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => VM.isStateKey(key)));
   const expected = stateKeys(vm.snapshotAt(2));
   const stateRoot = vm.getBlock(2).stateRoot;
 
   const result = vm.rebuildFrom(2);
   assert.deepEqual({ from: result.from, to: result.to, blocks: result.blocks }, { from: 5, to: 2, blocks: 2 });
   assert.equal(result.stateRoot, stateRoot);
+  assert.equal(vm.stateRoot(), stateRoot);   // trie ถูกย้อนตาม state ด้วย
 
   assert.equal(vm.latestBlockNumber(), 2);
   assert.equal(vm.db.readKeys([BALANCE])[0], "990n");

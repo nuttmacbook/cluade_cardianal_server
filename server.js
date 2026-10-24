@@ -22,6 +22,9 @@
  *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
  *   REPLACED_LOG_DAYS=30     อายุสูงสุดของบันทึกใบที่ถูกแทนที่
  *   VERIFY_WORKERS=N         worker thread ที่ตรวจลายเซ็นของ /sendtx (ค่าเริ่มต้น = จำนวน CPU − 1 ไม่เกิน 4) · 0 = ตรวจบน thread หลัก
+ *   HISTORY_KEEP_BLOCKS=N    pruning: เก็บ history (ค่าก่อนแก้ของ state) แค่ N block ล่าสุด → ย้อนดู state / replay / rebuild ได้แค่ช่วงนั้น · ไม่ตั้ง = เก็บทั้งหมด (archive)
+ *   SNAPSHOT_EVERY=N         ถ่าย snapshot ของ state ทุก N block (GET /snapshot · node ใหม่เริ่มจาก snapshot ได้ — src/node/snapshot.js) · 0 = ปิด
+ *   SNAPSHOT_DIR=<DATA>/snapshots   ที่เก็บไฟล์ snapshot · SNAPSHOT_KEEP=2 จำนวนไฟล์ที่เก็บไว้
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -40,6 +43,7 @@ import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { VerifyPool, DEFAULT_VERIFY_WORKERS } from "./src/node/verify-pool.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { clientIp } from "./src/node/client-ip.js";
+import { createSnapshotter } from "./src/node/snapshot.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
   programCounts, pagePendingPrograms, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
@@ -86,7 +90,14 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA,
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: settings.admins,
   upgradeDelayBlocks: settings.upgradeDelayBlocks,   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
+  historyKeep: process.env.HISTORY_KEEP_BLOCKS ? Number(process.env.HISTORY_KEEP_BLOCKS) : null,   // pruning (null = archive)
 });
+// snapshot ของ state ทุก SNAPSHOT_EVERY block (ถ่ายแบบไม่หยุดเชน · ต้องมี DATA หรือ SNAPSHOT_DIR)
+const SNAPSHOT_EVERY = Number(process.env.SNAPSHOT_EVERY ?? 0);
+const SNAPSHOT_DIR = process.env.SNAPSHOT_DIR || (process.env.DATA ? path.join(process.env.DATA, "snapshots") : null);
+export const snapshots = SNAPSHOT_EVERY > 0 && SNAPSHOT_DIR
+  ? createSnapshotter(vm, { dir: SNAPSHOT_DIR, every: SNAPSHOT_EVERY, keep: Number(process.env.SNAPSHOT_KEEP ?? 2) })
+  : null;
 // ใบที่ถูกแทนที่ (replace-by-fee): จำแบบ off-chain มีเพดาน · มี DATA = ไฟล์ JSON lines ข้าง LMDB → /tx ตอบ "replaced" ได้แม้ restart
 export const replacedLog = new TxLog({
   file: process.env.DATA ? path.join(process.env.DATA, "replaced-tx.jsonl") : null,
@@ -123,6 +134,7 @@ export const miner = setInterval(() => {
     const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: MINER });
     const included = mempool.take(block);
     block.commit();
+    snapshots?.onBlock(block.number);
     const rejected = block.rejectedTransactions().length;
     console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
     minerState.failures = 0;
@@ -294,6 +306,12 @@ const DYNAMIC = [
       return { items: Object.fromEntries(page.items), next: page.next };
     } catch (error) { return { status: 409, body: { error: error.message } }; }
   }],
+  // หลักฐาน Merkle ของ key ใน state ล่าสุด: ?key=<dbKey>&key=… → { blockNumber, blockHash, stateRoot, proofs } (ตรวจด้วย verifyProof ของ client-sdk)
+  [/^\/proof$/, (m, query) => {
+    const keys = query.getAll("key");
+    if (!keys.length || keys.length > 100) return { status: 400, body: { error: "ต้องส่ง key 1–100 ตัว" } };
+    return vm.getProof(keys);
+  }],
   [/^\/sync$/, (m, query) => {
     const from = Math.max(1, Number(query.get("from")) || 1);
     const blocks = [];
@@ -388,9 +406,28 @@ async function handleEvm(request, response, url) {
   catch (error) { console.error(error); return send(response, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: error.message } }); }
 }
 
+/**
+ * GET /snapshot → { number, hash, stateRoot, size, file } ของ snapshot ล่าสุด · GET /snapshot/<N> → ไฟล์ (gzip JSON lines)
+ * ผู้ดาวน์โหลดตรวจเองทั้งหมด (src/node/snapshot.js loadSnapshot) จึงส่งได้โดยไม่ต้องเชื่อ node นี้
+ */
+function handleSnapshot(response, url) {
+  const latest = snapshots?.latest();
+  if (!latest) return send(response, 404, { error: "node นี้ไม่มี snapshot (ตั้ง SNAPSHOT_EVERY)" });
+  if (url.pathname === "/snapshot") {
+    const header = vm.getBlock(latest.number);
+    return send(response, 200, { number: latest.number, hash: header?.hash ?? null, stateRoot: header?.stateRoot ?? null, size: latest.size, file: `/snapshot/${latest.number}` });
+  }
+  const number = Number(url.pathname.slice("/snapshot/".length));
+  const file = Number.isSafeInteger(number) ? snapshots.fileOf(number) : null;
+  if (!file || !fs.existsSync(file)) return send(response, 404, { error: "ไม่มี snapshot ของ block นี้" });
+  response.writeHead(200, { "content-type": "application/gzip", "content-length": fs.statSync(file).size, "access-control-allow-origin": "*" });
+  return fs.createReadStream(file).pipe(response);
+}
+
 export const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   if (url.pathname === "/evm" || url.pathname.startsWith("/evm/")) return handleEvm(request, response, url);
+  if (request.method === "GET" && (url.pathname === "/snapshot" || url.pathname.startsWith("/snapshot/"))) return handleSnapshot(response, url);
   if (request.method === "OPTIONS") return send(response, 204, {});
   if (url.pathname === "/" || url.pathname === "/explorer") {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

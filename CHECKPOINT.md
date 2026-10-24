@@ -116,6 +116,6 @@ tx:<txhash> | sigtx:<digest> | history:<dbKey>:<n>
 - ทดสอบลายเซ็นกับ MetaMask จริง
 
 **เมื่อถึงเวลา**
-- rollback เร็ว, merkle tree
+- rollback เร็ว · ~~merkle tree~~ ทำแล้ว (ระยะ 4: stateRoot = Merkle trie + `cardianal_getProof`)
 - factory (โปรแกรมสร้างโปรแกรม), การอัปเกรดโปรแกรม, มาตรฐานโทเคน
-- native เป็น BigInt (ทำพร้อม gas แบบนับขั้น), ตัด history เก่า / snapshot
+- native เป็น BigInt (ทำพร้อม gas แบบนับขั้น) · ~~ตัด history เก่า / snapshot~~ ทำแล้ว (ระยะ 4: `HISTORY_KEEP_BLOCKS` · `SNAPSHOT_EVERY` + `startSync({ snapshot: true })`)

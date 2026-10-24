@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -438,7 +438,8 @@ block.checkTransaction(request)           // เช็คโควตา + nonce
 block.header() / block.body() / block.hashes() / block.txHashes()
 block.receipt({ number })                 // receipt ของทุก tx
 block.writes()                            // writes สุดท้าย (1 รายการต่อ key) + history
-block.commit()                            // เขียนทีเดียวผ่าน db.writeKeys (atomic)
+block.commit()                            // เขียนทีเดียวผ่าน db.writeKeys (atomic) · รวม node ของ trie (stateRoot) · historyKeep → ตัด history เก่าต่อ
+vm.stateRoot() / vm.getProof([dbKey]) / vm.rebuildTrie() / vm.pruneHistory({ keep }) / vm.hashHeader(header)   // ระยะ 4
 ```
 
 ### ค่าแก๊ส
@@ -597,6 +598,27 @@ upgradeat:<n>                       ดัชนี: โปรแกรมที
 ```
 `pending-upgrade:` / `scheduled-upgrade:` ใช้ขีดกลาง จึงไม่ปนกับ `pending:` (รายการรออนุมัติ deploy นับด้วย prefix `pending:`)
 
+### ระยะ 4: Merkle trie · pruning · snapshot (เทสต์ `96-trie` `97-phase4` `98-phase4-server`)
+⚠️ **เปลี่ยนวิธีคำนวณ hash ของ block → ต้องล้างเชนเดิม** (ข้อมูล LMDB เก่าเปิดได้ แต่ block ใหม่ต่อจาก header เก่าไม่ได้ · sync กับ node รุ่นเก่าไม่ได้)
+- **stateRoot = root ของ Merkle Patricia Trie แบบ Ethereum ของ state ทั้งหมด** (`src/core/trie.js` · ตรงกับเวกเตอร์ของ geth ทุกไบต์)
+  key ใน trie = keccak256(dbKey) · ค่า = utf8(canonicalJson(ค่า)) · state = `isStateKey(dbKey)` (ไม่ใช่ block / history / ดัชนี / historyfrom / genesis / trie)
+  node เก็บที่ `trie:<nibble path>` **แค่ trie ล่าสุด** (เขียนทับที่เดิม · node ที่หายไปถูกลบ แบบ path-based ของ geth) → ไม่โตตามจำนวน block
+  `vm.commit(writes)` อัปเดต trie ใน commit เดียวกันเสมอ (genesis / block / rebuild) · Block คำนวณครั้งเดียวตอน `hashes()` แล้ว commit ใช้ชุดเดิม (DB ถูกแก้ระหว่างนั้น = `trieStale`)
+  DB ที่มี state แต่ไม่มี trie (ก่อนระยะ 4) → `rebuildTrie()` ให้เองครั้งแรก · `vm.stateRoot()` = root ตอนนี้
+- header มี **`writesRoot`** = hash ของ writes ของ state ใน block (เรียงตาม key · แบบ stateRoot เดิมแต่ไม่ต่อสาย) · `parentStateRoot` ยังอยู่ใน header แต่ไม่อยู่ใน hash แล้ว
+  `replayBlock` ของ block เก่าคำนวณ trie ของตอนนั้นไม่ได้ → ใช้ `stateRoot` จาก header เดิม (`createBlock({ stateRoot })`) แล้วตรวจผลการรันด้วย writesRoot / receiptsRoot
+  `vm.hashHeader(header)` คำนวณ hash กลับจาก field ของ header (`headerFields` ใน `encoding.js` · SDK ใช้ตัวเดียวกัน)
+- **หลักฐาน**: `vm.getProof([dbKey])` → `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (ไม่มี key = พิสูจน์ว่าไม่มีได้)
+  `GET /proof?key=…&key=…` · `/evm` `cardianal_getProof([dbKey | { program, key }])` · `eth_getProof` = error (state ไม่ใช่ account trie แบบ EVM)
+  ฝั่ง client: `verifyProof(root, dbKey, proof)` · `client.verifiedState(keys, { producers })` ตรวจ hash ของ header + ลายเซ็นผู้ผลิต + หลักฐาน ไม่ต้องเชื่อ node
+- **pruning** (`historyKeep` / `HISTORY_KEEP_BLOCKS=N`): หลัง commit ทุก block ลบ `history:` + `blockundo:` ของ block ที่เก่ากว่า N block (ทีละ ≤ 50,000 key) · `historyfrom` เลื่อนตาม
+  ย้อนดู state / `replayBlock` / `/block/:n?full=1` / eth_* ตาม block ได้แค่ N block ล่าสุด · `rebuildFrom` ใช้ไม่ได้ (ต้องมี history ตั้งแต่ block 1) · header / body เก็บครบ (ซิงก์ให้ node อื่นได้)
+  ไม่อยู่ใน hash → ตั้งต่างกันได้ทุกเครื่อง · ให้มีอย่างน้อย 1 เครื่องเป็น archive (ไม่ตั้ง) สำหรับ explorer / rebuild
+- **snapshot** (`src/node/snapshot.js`): ไฟล์ gzip JSON lines = manifest + header 256 block ล่าสุด (BlockHash · base fee) + `[dbKey, value]` ของ state ณ block N
+  `writeSnapshot(vm, file)` ไม่หยุดเชน (อ่านทีละชุด · block ที่ปิดระหว่างนั้นอ่านค่า ณ N จาก history) · `SNAPSHOT_EVERY=N` ถ่ายอัตโนมัติ → `GET /snapshot` (manifest) · `GET /snapshot/<N>` (ไฟล์)
+  `loadSnapshot(vm, lines, { producers })` (DB ที่ยังไม่มี block): hash ของทุก header คำนวณกลับได้ · ต่อกัน · ผู้ผลิตเซ็น → สร้าง trie จาก state แล้วต้องได้ stateRoot ของ header N (ไม่ตรง = ล้าง state ทิ้ง throw)
+  หลังโหลด: `historyfrom` = N + 1 · ไม่มี body ก่อน N · `startSync({ snapshot: true })` = DB ว่าง → โหลด `/snapshot` ของต้นทางก่อนแล้วซิงก์ต่อ · CLI `npm run snapshot -- export|import|verify`
+
 **ยอดคงเหลือ = received − sended − consumed** (`consumed` = ค่าแก๊สที่จ่ายไป) ไม่มี key ที่เก็บยอดสุทธิ
 ออกแบบให้ทุกค่าเพิ่มทางเดียว เพื่อให้ tx ที่ไม่เกี่ยวกันไม่แย่ง key เดียวกัน
 
@@ -614,7 +636,8 @@ event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
 eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   ดัชนีของ field ที่ emit แบบ indexed → dbKey ของ event
 eventsig:<topic0>:<program>:<name>     topic0 แบบ EVM → { program, name, indexed } (eth_getLogs)
 holding:<addr>:<program>   ดัชนี "address นี้เคยได้/ส่งเหรียญของโปรแกรมนี้" จาก event Transfer (from/to) ของ tx ที่สำเร็จ · ต้อง recordBlocks
-history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before }
+history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before } (pruning ลบของ block ที่เก่ากว่า HISTORY_KEEP_BLOCKS)
+trie:<nibbles>         node ของ Merkle trie ของ state ล่าสุด (RLP hex · path จากราก · "trie:" = ราก) — stateRoot ของ block ล่าสุด
 0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
 ```
 
@@ -702,6 +725,8 @@ vm[method](request);
 | `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
 | `GET /name/:ns` | namespace → address |
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
+| `GET /proof?key=<dbKey>&key=…` | หลักฐาน Merkle ของ key ใน state ล่าสุด `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (1–100 key) · ตรวจด้วย `verifyProof` / `client.verifiedState` |
+| `GET /snapshot` · `GET /snapshot/:n` | manifest ของ snapshot ล่าสุด `{ number, hash, stateRoot, size, file }` · ไฟล์ gzip (ต้องตั้ง `SNAPSHOT_EVERY` · ไม่มี = 404) |
 | `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, historyFrom, pending, rejectedPending, producer, miner, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
@@ -752,7 +777,7 @@ GET  /evm                      ค่าสำหรับ wallet_addEthereumCha
 GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (ลิงก์ "ดูใน explorer" ของกระเป๋า)
 ```
 - รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
-  `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi`
+  `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi` `cardianal_getProof` (`eth_getProof` = error ชี้ไปตัวนี้)
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
   `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 + โปรแกรมที่มี `metadata.abi`) `eth_estimateGas` `eth_sendRawTransaction`
   `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
@@ -1054,6 +1079,9 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `92-sdk` | `client-sdk` ไม่ import VM / sandbox / node:* · send ด้วย key / กระเป๋า EIP-1193 (ethers เซ็น typed data แบบ MetaMask) → wait ถึง block · nonce ผิด = `ChainError` พร้อม body |
 | `93-paymaster` | ไม่มี sponsor = ชนิดเดิม · มี sponsor = digest ตรงกับ ethers · ลายเซ็น sponsor หาย / ผิดคน / sponsor = ผู้ส่ง / เปลี่ยน sponsor = ปฏิเสธ · บนเชน: ผู้ใช้ยอด 0 ส่งได้ แก๊สหักจาก sponsor nonce ของผู้ส่ง · value ต้องเป็นเงินของผู้ส่ง |
 | `94-evm-send-raw` | ethers ส่งผ่าน `/evm`: native (type 2 + legacy) · ERC-20 transfer ของ token มาตรฐาน · ฟังก์ชันตาม ABI + estimateGas · receipt ด้วย hash ของ ethers · ปฏิเสธ ไม่มี chainId / chainId ผิด / deploy / type 1 / data ไป EOA / RLP เสีย · ถอดตรงกับ ethers |
+| `96-trie` | Merkle Patricia Trie ตรงกับ Ethereum (trie ว่าง · doe/dog/dogglesworth · geth TestDelete) · สุ่มใส่ / ลบ 200–300 รอบ = สร้างใหม่ทุกไบต์ ไม่มี node ค้าง (รวม key ที่เป็น prefix กัน / node ฝังในพ่อ / ค่าใน branch) · หลักฐานมี / ไม่มีค่า · แก้ node / root ผิด / node ขาด = ไม่ผ่าน |
+| `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
+| `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
 | `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
 | `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
@@ -1266,7 +1294,7 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
     ~~คอขวดคือการรับ tx (~65 token / ~110 native tx/s ต่อ node)~~ แก้แล้ว: ตรวจลายเซ็นครั้งเดียว + ใน worker thread · `Mempool.prune` เบาลง · ไม่คำนวณ root ซ้ำ · ภาพอุ่นของ sandbox (เทสต์ 82 / 89 / 90)
     วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ → **เพดานตอนนี้คือ 500 tx ต่อ block 3 วิ ≈ 167 tx/s** (หัวข้อ 10 "load test")
-    ที่เหลือ: แผนตัด history (LMDB โต ~6–9 KB ต่อ tx) · `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
+    ~~แผนตัด history~~ มีแล้ว: `HISTORY_KEEP_BLOCKS` (ระยะ 4 · หัวข้อ 4 "ระยะ 4") · ที่เหลือ: `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
 12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
@@ -1279,7 +1307,8 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 อยู่หลัง nginx / Caddy → ตั้ง `TRUST_PROXY=1` และเปิด port ของ server ให้เฉพาะ proxy (หัวข้อ 1 "เปิดเครือข่ายจริง") · CORS ยังเปิด `*`
 
 ### เมื่อถึงเวลา
-rollback เร็ว · merkle tree จริง (+ `eth_getProof`) · ตัด history เก่า / snapshot sync · P2P · ผู้ผลิตหลายราย / finality · bridge
+rollback เร็ว · P2P · ผู้ผลิตหลายราย / finality · bridge · ตัด body / receipt ของ block เก่า (แบบ EIP-4444)
+(ทำแล้ว ระยะ 4: Merkle trie + `cardianal_getProof` · ตัด history (`HISTORY_KEEP_BLOCKS`) · snapshot + sync จาก snapshot)
 (ทำแล้ว ลบออกจากรายการ 2026-10-24: factory = `cloneProgram` · การอัปเกรดโปรแกรม · มาตรฐานโทเคน / NFT / 1155 · หน้า holders)
 แผนเต็ม: `/mnt/project-files/cardianal_server/dev-plan.md` (ระยะ 1–5) · เทียบ EVM: `gap-vs-evm.md`
 
