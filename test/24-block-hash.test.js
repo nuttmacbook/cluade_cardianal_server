@@ -317,7 +317,7 @@ test("stateRoot = root ของ trie ของ state ทั้งหมดห�
   assert.equal(vm.hashHeader(vm.getBlock(9)), header.hash);   // hash คำนวณกลับจาก field ของ header ได้
 });
 
-test("stateRoot: แก้ state ใน DB ตรง ๆ (ไม่ผ่าน commit) → สร้าง trie ใหม่ได้ root ไม่ตรงกับ header · แก้ node ของ trie → ใช้ต่อไม่ได้", () => {
+test("stateRoot: แก้ state ใน DB ตรง ๆ (ไม่ผ่าน commit) → สร้าง trie ใหม่ได้ root ไม่ตรงกับ header · แก้ node ของ trie → getProof ตรวจเจอ (update ไม่ตรวจ: storage ของเครื่องเอง)", () => {
   const vm = setup();
   let parentHash = null;
   for (let number = 1; number <= 3; number += 1) {
@@ -336,7 +336,6 @@ test("stateRoot: แก้ state ใน DB ตรง ๆ (ไม่ผ่าน 
   const broken = new VM.VirtualMachine(new MemoryDB(vm.db.snapshot()), { recordBlocks: true });
   const nodes = broken.listKeys("trie:", { limit: 1000 }).filter((key) => key !== "trie:");   // ทุก node ยกเว้นราก
   assert.ok(nodes.length > 0);
-  broken.db.writeKeys(nodes.map((dbKey) => ({ type: "put", dbKey, value: `${broken.read(dbKey).slice(0, -2)}${broken.read(dbKey).endsWith("00") ? "01" : "00"}` })));
+  broken.db.writeKeys(nodes.map((dbKey) => { const value = broken.read(dbKey); value[5] ^= 1; return { type: "put", dbKey, value }; }));
   assert.throws(() => broken.getProof(["token:storage:balances:bob"]), /ไม่ตรงกับ hash/);
-  assert.throws(() => broken.commit([{ type: "put", dbKey: "token:storage:balances:bob", value: "1n" }]), /ไม่ตรงกับ hash/);
 });

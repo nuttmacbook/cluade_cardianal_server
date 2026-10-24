@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 868 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 883 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 868 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 883 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -618,6 +618,10 @@ upgradeat:<n>                       ดัชนี: โปรแกรมที
   `writeSnapshot(vm, file)` ไม่หยุดเชน (อ่านทีละชุด · block ที่ปิดระหว่างนั้นอ่านค่า ณ N จาก history) · `SNAPSHOT_EVERY=N` ถ่ายอัตโนมัติ → `GET /snapshot` (manifest) · `GET /snapshot/<N>` (ไฟล์)
   `loadSnapshot(vm, lines, { producers })` (DB ที่ยังไม่มี block): hash ของทุก header คำนวณกลับได้ · ต่อกัน · ผู้ผลิตเซ็น → สร้าง trie จาก state แล้วต้องได้ stateRoot ของ header N (ไม่ตรง = ล้าง state ทิ้ง throw)
   หลังโหลด: `historyfrom` = N + 1 · ไม่มี body ก่อน N · `startSync({ snapshot: true })` = DB ว่าง → โหลด `/snapshot` ของต้นทางก่อนแล้วซิงก์ต่อ · CLI `npm run snapshot -- export|import|verify`
+- **ความเร็ว** (เครื่องทดสอบ · LMDB · keccak เป็น JS ล้วนของ noble ~28µs ต่อ node 500 byte · Node ไม่มี keccak แบบ native)
+  load test 500 tx (close + roots p50 เทียบ main): native 449 vs 242 ms · token 1008 vs 812 ms · mix 1388 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
+  state 1 ล้าน key: `rebuildTrie` 65 วินาที (เรียง key แล้วสร้างทีเดียว `buildTrie`) · block แตะ 4,000 key = trieUpdate ~0.8–1.5 วินาที + commit ~0.45 วินาที · หลักฐาน ~2.6 KB
+  node ใน DB เก็บเป็น byte (LMDB บีบอัดค่า > ~1000 byte ทำให้แบบ hex ช้า) · update ไม่ตรวจ hash ของ node ที่อ่าน (`proof()` ตรวจเสมอ · `new StateTrie({ verify: true })` ถ้าต้องการ)
 
 **ยอดคงเหลือ = received − sended − consumed** (`consumed` = ค่าแก๊สที่จ่ายไป) ไม่มี key ที่เก็บยอดสุทธิ
 ออกแบบให้ทุกค่าเพิ่มทางเดียว เพื่อให้ tx ที่ไม่เกี่ยวกันไม่แย่ง key เดียวกัน
@@ -637,7 +641,7 @@ eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   ดัชนีขอ�
 eventsig:<topic0>:<program>:<name>     topic0 แบบ EVM → { program, name, indexed } (eth_getLogs)
 holding:<addr>:<program>   ดัชนี "address นี้เคยได้/ส่งเหรียญของโปรแกรมนี้" จาก event Transfer (from/to) ของ tx ที่สำเร็จ · ต้อง recordBlocks
 history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before } (pruning ลบของ block ที่เก่ากว่า HISTORY_KEEP_BLOCKS)
-trie:<nibbles>         node ของ Merkle trie ของ state ล่าสุด (RLP hex · path จากราก · "trie:" = ราก) — stateRoot ของ block ล่าสุด
+trie:<nibbles>         node ของ Merkle trie ของ state ล่าสุด (RLP เป็น byte · ของเก่าแบบ hex ก็อ่านได้ · path จากราก · "trie:" = ราก) — stateRoot ของ block ล่าสุด
 0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
 ```
 
@@ -1032,7 +1036,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 95 ไฟล์ · 868 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 98 ไฟล์ · 883 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:

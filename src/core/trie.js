@@ -10,7 +10,7 @@
  *   key ใน trie = keccak256(utf8(dbKey)) ("secure trie" แบบ state ของ Ethereum) · value = utf8(canonicalJson(ค่า))
  *   trie ว่าง = EMPTY_ROOT (0x56e8…b421) เหมือน Ethereum
  *
- * การเก็บ node: ตาม path (nibble จากราก) ไม่ใช่ตาม hash — "trie:<nibbles>" → hex ของ node
+ * การเก็บ node: ตาม path (nibble จากราก) ไม่ใช่ตาม hash — "trie:<nibbles>" → RLP ของ node (Uint8Array · อ่าน hex ก็ได้)
  *   เก็บแค่ trie ล่าสุด (เขียนทับที่เดิม · node ที่หายไปถูกลบ) → พื้นที่ไม่โตตามจำนวน block (แบบ path-based ของ geth)
  *   ตำแหน่งของ node ใน trie ขึ้นกับ key ที่อยู่ใต้มันเท่านั้น: node ที่ย้ายที่ (leaf / extension ที่ถูกแยกหรือรวม) ถูกโหลดระหว่าง update เสมอ
  *   → path ที่โหลดมาแล้วไม่ถูกเขียนใหม่ = ไม่มี node อยู่ตรงนั้นแล้ว → ลบ
@@ -26,7 +26,11 @@ export const trieNodeKey = (path) => `${TRIE_PREFIX}${path}`;
 const EMPTY = new Uint8Array(0);
 const LEAF = 0, EXT = 1, BRANCH = 2;
 const hex0x = (bytes) => `0x${bytesToHex(bytes)}`;
-const fromHex = (value) => hexToBytes(String(value).replace(/^0x/, ""));
+const fromHex = (value) => {
+  if (value instanceof Uint8Array) return Uint8Array.from(value);   // คัดลอก: buffer ที่ DB คืนมาอาจถูกใช้ซ้ำ
+  const text = String(value);
+  return hexToBytes(text.startsWith("0x") ? text.slice(2) : text);
+};
 
 // ---------- RLP (item = Uint8Array | item[] | { raw: Uint8Array } = RLP ที่ encode แล้ว ฝังทั้งก้อน) ----------
 
@@ -174,12 +178,17 @@ export const trieValueOf = (value) => utf8ToBytes(canonicalJson(value));
  */
 export class StateTrie {
   #load;
+  #verify;
   #gone = new Set();   // path ของ node ที่เก็บไว้แล้วถูกแทน / ลบใน update นี้ → ลบถ้าไม่มี node ใหม่เขียนลงที่เดิม
 
-  /** load(path) → hex ของ node ที่เก็บไว้ที่ path นั้น | undefined · keyOf: dbKey → nibble (ค่าเริ่ม = secure) */
-  constructor({ load, keyOf = trieKeyOf } = {}) {
+  /**
+   * load(path) → RLP ของ node (Uint8Array หรือ hex) ที่เก็บไว้ที่ path นั้น | undefined · keyOf: dbKey → nibble (ค่าเริ่ม = secure)
+   * verify: ตรวจ hash ของ node ที่อ่านจาก storage ทุกตัว (update ไม่ตรวจโดยค่าเริ่ม: storage เป็นของเครื่องนี้เอง · keccak เป็นต้นทุนหลัก · proof ตรวจเสมอ)
+   */
+  constructor({ load, keyOf = trieKeyOf, verify = false } = {}) {
     this.#load = load;
     this.keyOf = keyOf;
+    this.#verify = verify;
   }
 
   #fetch(path) {
@@ -190,14 +199,13 @@ export class StateTrie {
     return node;
   }
 
-  /** ลูกที่ยังไม่โหลด → โหลดจาก path ของมัน (ตรวจ hash ให้ตรงกับที่พ่ออ้างไว้) */
-  #resolve(child, path) {
+  /** ลูกที่ยังไม่โหลด → โหลดจาก path ของมัน · verify = ตรวจ hash ให้ตรงกับที่พ่ออ้างไว้ */
+  #resolve(child, path, verify = this.#verify) {
     if (!child?.stored) return child;
     const node = this.#fetch(path);
     if (!node) throw new Error(`trie: ไม่พบ node ที่ path '${path}'`);
-    const hash = keccak_256(node.enc);
-    if (bytesToHex(hash) !== bytesToHex(child.stored)) throw new Error(`trie: node ที่ path '${path}' ไม่ตรงกับ hash ที่พ่ออ้างไว้`);
-    node.hash = hash;
+    if (verify && bytesToHex(keccak_256(node.enc)) !== bytesToHex(child.stored)) throw new Error(`trie: node ที่ path '${path}' ไม่ตรงกับ hash ที่พ่ออ้างไว้`);
+    node.hash = child.stored;
     return node;
   }
 
@@ -334,7 +342,7 @@ export class StateTrie {
     node.hash = undefined;
     node.dirty = false;
     if (node.enc.length >= 32 || path === "") {
-      writes.push({ type: "put", dbKey: trieNodeKey(path), value: bytesToHex(node.enc) });
+      writes.push({ type: "put", dbKey: trieNodeKey(path), value: node.enc });   // byte ดิบ (LMDB เก็บเป็น binary · เล็กกว่า hex ครึ่งหนึ่ง ไม่ต้องบีบอัด)
       written.add(path);
     }
   }
@@ -348,7 +356,7 @@ export class StateTrie {
     if (node) proof.push(hex0x(node.enc));
     while (node) {
       if (node.stored) {
-        node = this.#resolve(node, path);
+        node = this.#resolve(node, path, true);
         proof.push(hex0x(node.enc));
       }
       if (node.kind === LEAF) return { value: node.key === rest ? parseValue(node.value) : undefined, proof };
@@ -366,6 +374,46 @@ export class StateTrie {
     }
     return { value: undefined, proof };
   }
+}
+
+/**
+ * สร้าง trie ทั้งต้นจาก key ที่เรียงแล้ว (ไม่ซ้ำ) ครั้งเดียว — เร็วกว่าใส่ทีละชุดมาก (hash ทุก node ครั้งเดียว · ไม่อ่าน storage)
+ *   items = [{ key: nibble, bytes }] เรียงตาม key · onWrite(path, enc) ถูกเรียกกับทุก node ที่ต้องเก็บ (ลูกก่อนพ่อ) → root (hex)
+ * ผลเหมือน StateTrie.update ทุกไบต์ (ทั้ง root และ node ที่เก็บ) — ใช้ตอนสร้าง trie ใหม่จาก state ทั้งหมด (rebuildTrie / โหลด snapshot)
+ */
+export function buildTrie(items, onWrite) {
+  if (!items.length) return EMPTY_ROOT;
+  const seal = (node, path) => {
+    node.enc = encodeNode(node);
+    node.dirty = false;
+    if (node.enc.length < 32 && path !== "") return node;   // ฝังในพ่อ
+    onWrite(path, node.enc);
+    return { stored: keccak_256(node.enc), enc: node.enc };
+  };
+  const build = (lo, hi, depth, path) => {
+    if (hi - lo === 1) return seal(leafNode(items[lo].key.slice(depth), items[lo].bytes), path);
+    const first = items[lo].key;
+    const last = items[hi - 1].key;
+    let c = depth;
+    while (c < first.length && c < last.length && first[c] === last[c]) c += 1;
+    if (c > depth) return seal(extNode(first.slice(depth, c), branch(lo, hi, c, path + first.slice(depth, c))), path);
+    return branch(lo, hi, depth, path);
+  };
+  const branch = (lo, hi, depth, path) => {
+    const node = branchNode(new Array(16).fill(null), null);
+    let i = lo;
+    if (items[i].key.length === depth) { node.value = items[i].bytes; i += 1; }
+    while (i < hi) {
+      const nibble = items[i].key[depth];
+      let j = i + 1;
+      while (j < hi && items[j].key[depth] === nibble) j += 1;
+      node.children[parseInt(nibble, 16)] = build(i, j, depth + 1, path + nibble);
+      i = j;
+    }
+    return seal(node, path);
+  };
+  const root = build(0, items.length, 0, "");
+  return hex0x(root.stored ?? keccak_256(root.enc));
 }
 
 const parseValue = (bytes) => JSON.parse(new TextDecoder().decode(bytes));

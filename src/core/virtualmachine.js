@@ -8,7 +8,7 @@ import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./s
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from "../crypto/eip712.js";
 import { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson, headerFields } from "./encoding.js";
-import { StateTrie, TRIE_PREFIX, trieNodeKey } from "./trie.js";
+import { StateTrie, buildTrie, trieKeyOf, trieValueOf, TRIE_PREFIX, trieNodeKey } from "./trie.js";
 
 export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson };
 
@@ -1550,27 +1550,36 @@ export class VirtualMachine {
     return { parentRoot, ...trie.update(entries) };
   }
 
-  /** สร้าง trie ใหม่จาก state ทั้งหมดใน DB (ลบ node เดิมก่อน) → { root, keys } · ใช้ตอนย้ายข้อมูล / โหลด snapshot */
+  /**
+   * สร้าง trie ใหม่จาก state ทั้งหมดใน DB (ลบ node เดิมก่อน) → { root, keys } · ใช้ตอนย้ายข้อมูล / โหลด snapshot
+   * อ่าน key ของ state ทั้งหมดมาเรียงในหน่วยความจำ (≈ 150–250 byte ต่อ key) แล้วสร้างทั้งต้นทีเดียว (buildTrie)
+   */
   rebuildTrie({ batch = 5_000 } = {}) {
     for (;;) {
       const keys = this.listKeys(TRIE_PREFIX, { limit: batch });
       if (!keys.length) break;
       this.db.writeKeys(keys.map((dbKey) => ({ type: WRITE.DEL, dbKey })));
     }
-    let count = 0;
+    const items = [];
     for (let start; ;) {
       const keys = this.listKeys("", { start, limit: batch + 1 });
       const state = keys.slice(0, batch).filter(isStateKey);
       if (state.length) {
         const values = this.db.readKeys(state);
-        this.db.writeKeys(this.#trie().update(state.map((dbKey, index) => ({ dbKey, value: values[index] }))).writes);
-        count += state.length;
+        state.forEach((dbKey, index) => items.push({ key: trieKeyOf(dbKey), bytes: trieValueOf(values[index]) }));
       }
       if (keys.length <= batch) break;
       start = keys[batch];
     }
+    items.sort((a, b) => (a.key < b.key ? -1 : 1));
+    let pending = [];
+    const root = buildTrie(items, (path, enc) => {
+      pending.push({ type: WRITE.PUT, dbKey: trieNodeKey(path), value: enc });
+      if (pending.length >= batch) { this.db.writeKeys(pending); pending = []; }
+    });
+    if (pending.length) this.db.writeKeys(pending);
     this.#trieReady = true;
-    return { root: this.#trie().root, keys: count };
+    return { root, keys: items.length };
   }
 
   /**

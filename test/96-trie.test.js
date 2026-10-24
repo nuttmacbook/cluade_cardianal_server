@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { StateTrie, EMPTY_ROOT, verifyProof, TRIE_PREFIX } from "../src/core/trie.js";
+import { StateTrie, EMPTY_ROOT, verifyProof, TRIE_PREFIX, buildTrie, trieKeyOf, trieValueOf } from "../src/core/trie.js";
 
 /*
  * Merkle Patricia Trie (ระยะ 4.3 · src/core/trie.js)
@@ -65,6 +65,12 @@ function randomRounds(seed, rounds, perRound, keySpace, { keyOf, short = false }
     const rebuilt = fresh.update([...live].map(([dbKey, value]) => ({ dbKey, value })));
     assert.equal(root, rebuilt, `root ไม่ตรงที่รอบ ${round}`);
     assert.deepEqual([...inc.store].sort(), [...fresh.store].sort(), `node ในที่เก็บไม่ตรงที่รอบ ${round}`);
+    // สร้างทีเดียวจาก key ที่เรียงแล้ว (rebuildTrie) = root + node เดียวกัน
+    const items = [...live].map(([dbKey, value]) => ({ key: (keyOf ?? trieKeyOf)(dbKey), bytes: trieValueOf(value) }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const built = new Map();
+    assert.equal(buildTrie(items, (path, enc) => built.set(path, enc)), root, `buildTrie ไม่ตรงที่รอบ ${round}`);
+    if (live.size) assert.deepEqual([...built].sort(), [...inc.store].sort(), `node ของ buildTrie ไม่ตรงที่รอบ ${round}`);
   }
   return { inc, live };
 }
@@ -122,7 +128,9 @@ test("หลักฐาน: มีค่า / ไม่มีค่า ตร�
 test("node ในที่เก็บถูกแก้ = update / proof ตรวจเจอ (hash ไม่ตรงกับที่พ่ออ้างไว้)", () => {
   const { inc } = randomRounds(3, 5, 30, 500);
   const path = [...inc.store.keys()].find((p) => p.length === 1);
-  inc.store.set(path, inc.store.get(path).replace(/..$/, (h) => (h === "00" ? "01" : "00")));
+  const node = Uint8Array.from(inc.store.get(path));
+  node[5] ^= 1;   // ข้างใน hash ของลูก / key (โครง RLP ยังถูก)
+  inc.store.set(path, node);
   const keys = [...Array(64).keys()].map((i) => `s:prog${i % 4}:k${i}`);
   assert.throws(() => { for (const dbKey of keys) inc.trie.proof(dbKey); }, /ไม่ตรงกับ hash/);
 });
