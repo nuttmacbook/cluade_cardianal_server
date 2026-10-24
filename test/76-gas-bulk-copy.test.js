@@ -146,9 +146,10 @@ test("เมธอดของ array คิดเท่ากันทุกท�
     toStringImplicit: joined + units(4 * n - 1) - units(2 * n - 1),   // + string ที่ได้จาก a + ''
     template: n + joined + (units(4 * n - 1) - units(2 * n - 1)),       // "".concat(a): เข้า a (n สมาชิก) → join ข้างใน → ออก
     stringCall: joined,
-    stringify: n + units(4 * n + 1) - units(2 * n + 1),                // "[7,7,…]"
+    stringify: 3 * n + units(4 * n + 1) - units(2 * n + 1),            // "[7,7,…]" + 2 หน่วยต่อค่าที่แปลง (เทสต์ 88)
     keys: 2 * n, slice: 2 * n, concat: 4 * n, fill: 2 * n, toSorted: 2 * n, reverse: 2 * n,
-    flat: n, splice: n, fromLength: n,
+    flat: 2 * n,                     // สมาชิกที่ไล่ทุกชั้น (เทสต์ 88) + ผลลัพธ์
+    splice: n, fromLength: n,
   };
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "methods", name, n), expected, name);
 });
@@ -178,7 +179,7 @@ test("string: ต่อด้วย + / += / template · repeat / padEnd / split
     replaceAll: u + 2 * u,
     split: u + n,                    // ผลลัพธ์ = n สมาชิก
     repeatCall: 2 * u,               // "ab" × n = 2n ตัวอักษร คิดก่อนสร้าง
-    parse: 2 * u + 2 * u,            // stringify (เข้า + ออก) + parse (เข้า + ออก)
+    parse: 2 * u + 3 * u,            // stringify (เข้า + ออก) + parse (เข้า + ออก + งานแปลงต่อตัวอักษร เทสต์ 88)
   };
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "text", name, n), expected, name);
 });

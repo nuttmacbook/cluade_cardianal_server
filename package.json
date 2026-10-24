@@ -29,6 +29,8 @@
     "scenario:full": "node scripts/scenario-full.js",
     "load:test": "node scripts/load-test.js",
     "monitor": "node scripts/monitor.js",
+    "fuzz": "node scripts/fuzz-sandbox.js",
+    "bench:gas": "node scripts/bench-gas.js",
     "backup": "node scripts/backup.js"
   },
   "dependencies": {

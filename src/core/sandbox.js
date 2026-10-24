@@ -750,7 +750,8 @@ function prelude(host, opText) {
   function relational(a, b) {
     if (typeof a === "object" || typeof a === "function") a = isObject(a) ? toPrimitive(a, "number") : a;
     if (typeof b === "object" || typeof b === "function") b = isObject(b) ? toPrimitive(b, "number") : b;
-    parseCost(a, b);
+    if (typeof a === "string" && typeof b === "string") chargeTextCompare(a.length < b.length ? a.length : b.length);
+    else parseCost(a, b);
     RELATION[0] = a;
     RELATION[1] = b;
   }
@@ -781,7 +782,10 @@ function prelude(host, opText) {
   }
   /** a == b: ชนิดเดียวกัน = เทียบตรง ๆ · object กับค่าพื้นฐาน → ToPrimitive (default) ตามมาตรฐาน */
   function bigEq(a, b) {
-    if (typeof a === typeof b) return a == b;
+    if (typeof a === typeof b) {
+      if (typeof a === "string" && a.length === b.length) chargeTextCompare(a.length);
+      return a == b;
+    }
     if (isObject(a)) {
       if (b !== null && b !== undefined && !isObject(b)) a = toPrimitive(a, "default");
     } else if (isObject(b) && a !== null && a !== undefined) b = toPrimitive(b, "default");
@@ -789,6 +793,20 @@ function prelude(host, opText) {
     return a == b;
   }
   const bigNe = (a, b) => !bigEq(a, b);
+  /** a === b · a !== b: string ยาวเท่ากัน = engine เทียบทีละตัวอักษร (ความยาวต่างกัน = รู้ทันที) */
+  function strictEq(a, b) {
+    if (typeof a === "string" && typeof b === "string" && a.length === b.length) chargeTextCompare(a.length);
+    return a === b;
+  }
+  const strictNe = (a, b) => !strictEq(a, b);
+  function meterSwitch(value, cases) {
+    if (typeof value === "string" && value.length > CHUNK) chargeUnits((textUnits(value.length) - 1) * cases);
+    return value;
+  }
+  /** เทียบ string: 32 ตัวอักษรแรกรวมในแก๊สของ operator แล้ว ที่เกินคิด 1 หน่วยต่อ 32 ตัวอักษร (โปรแกรมทั่วไปแก๊สเท่าเดิม) */
+  function chargeTextCompare(length) {
+    if (length > CHUNK) chargeUnits(textUnits(length) - 1);
+  }
   /** k in o (o ไม่ใช่ object → TypeError ก่อนแปลง k แบบ engine) */
   function bigIn(key, object) {
     if (!isObject(object)) return key in object;
@@ -959,6 +977,95 @@ function prelude(host, opText) {
         }
       }
     } }.fromEntries],
+    // flat: engine ไล่ array ซ้อนเองทุกชั้น (ผลลัพธ์อาจเล็กแต่งานเท่าจำนวนสมาชิกทุกชั้น) → ทำตามมาตรฐานเอง คิด 1 หน่วยต่อสมาชิกที่ไล่
+    [ArrayProto, { flat(depth) {
+      const source = requireObject(this);
+      const length = toLength(source.length);
+      let limit = 1;
+      if (depth !== undefined) {
+        limit = +depth;   // BigInt → TypeError เหมือน ToIntegerOrInfinity
+        limit = limit !== limit || limit < 0 ? 0 : limit === Infinity ? Infinity : floor(limit);
+      }
+      const out = [];
+      let n = 0;
+      const flatten = (array, arrayLength, level) => {
+        chargeUnits(FLAT_ARRAY_UNITS + arrayLength);   // ต่อ array ที่ไล่ (ค่าเรียก + อ่านความยาว) + ต่อสมาชิก
+        for (let k = 0; k < arrayLength; k++) {
+          if (!(k in array)) continue;
+          const element = array[k];
+          if (level > 0 && isArray(element)) flatten(element, toLength(element.length), level - 1);
+          else defineProperty(out, n++, { value: element, writable: true, enumerable: true, configurable: true });
+        }
+      };
+      flatten(source, length, limit);
+      return out;
+    } }.flat],
+    // JSON.stringify: QuickJS ตรวจการวนด้วยการไล่ stack ของ object ที่ซ้อนอยู่ → งาน ≈ ความลึก² (300 ชั้น ≈ 0.8 ms ต่อครั้ง)
+    //   ใส่ replacer ของ VM: คิด 1 หน่วย + ความลึก ÷ 8 ต่อ object ที่ถูกแปลง (replacer ของโปรแกรมยังถูกเรียกแบบเดิม)
+    //   replacer แบบ array (รายชื่อ property) → แปลงเป็น object ใหม่ที่มีเฉพาะ property ตามลำดับรายชื่อ (ผลเหมือน engine)
+    [JSON, { stringify(value, replacer, space) {
+      const user = typeof replacer === "function" ? replacer : null;
+      let names = null;
+      if (user === null && isArray(replacer)) {
+        names = [];
+        const seen = new SetFn();
+        const length = toLength(replacer.length);
+        for (let k = 0; k < length; k++) {
+          const item = replacer[k];
+          let name;
+          if (typeof item === "string") name = item;
+          else if (typeof item === "number") name = toText(item);
+          else if (isObject(item) && (isStringObject(item) || isNumberObject(item))) name = toText(item);
+          if (name !== undefined && !apply(setHas, seen, [name])) {
+            apply(setAdd, seen, [name]);
+            names[names.length] = name;
+          }
+        }
+      }
+      const depths = new WeakMapFn();
+      const meter = function (key, item) {
+        let result = user === null ? item : apply(user, this, [key, item]);
+        if (result === null || typeof result !== "object") {
+          chargeUnits(2);   // ต่อค่าที่ถูกแปลง (เรียก replacer ของ VM + แปลงค่า)
+        } else {
+          const depth = (isObject(this) ? apply(wmGet, depths, [this]) ?? 0 : 0) + 1;
+          chargeUnits(4 + floor(depth / 8));
+          if (names !== null && !isArray(result) && !isBoxed(result)) {
+            const picked = {};
+            for (let k = 0; k < names.length; k++) {
+              const name = names[k];
+              const field = result[name];
+              if (field !== undefined) defineProperty(picked, name, { value: field, writable: true, enumerable: true, configurable: true });
+            }
+            result = picked;
+          }
+          apply(wmSet, depths, [result, depth]);
+        }
+        return result;
+      };
+      return apply(jsonStringify, JSON, [value, meter, space]);
+    } }.stringify],
+    // JSON.parse: งานต่อตัวอักษรสูงกว่าการคัดลอก → คิดเพิ่ม 1 หน่วยต่อ 32 ตัวอักษรก่อนแปลง (แปลงข้อความครั้งเดียว ส่งต่อให้ engine)
+    [JSON, { parse(text, reviver) {
+      const source = toText(text);
+      chargeUnits(textUnits(source.length));
+      return reviver === undefined ? apply(jsonParse, JSON, [source]) : apply(jsonParse, JSON, [source, reviver]);
+    } }.parse],
+    // normalize: ตารางแปลงของ Unicode ช้ากว่าการคัดลอกราว 10 เท่า → คิดเพิ่ม 8 หน่วยต่อ 32 ตัวอักษร
+    [String.prototype, { normalize(form) {
+      if (this === null || this === undefined) throw new TypeErrorFn("not an object");
+      const self = toText(this);
+      chargeUnits(textUnits(self.length) * 8);
+      return form === undefined ? apply(stringNormalize, self, []) : apply(stringNormalize, self, [form]);
+    } }.normalize],
+    // Map / Set: key ที่เป็น string ต้อง hash ทั้งข้อความทุกครั้ง (20,000 ตัวอักษร ≈ 25 µs ต่อครั้ง) → คิดตามความยาวของ key
+    [MapProto, { get(key) { chargeKey(key, 1); return apply(mapGet, this, [key]); } }.get],
+    [MapProto, { has(key) { chargeKey(key, 1); return apply(mapHas, this, [key]); } }.has],
+    [MapProto, { set(key, value) { chargeKey(key, 2); return apply(mapSet, this, [key, value]); } }.set],
+    [MapProto, { delete(key) { chargeKey(key, 1); return apply(mapDelete, this, [key]); } }.delete],
+    [SetProto, { add(value) { chargeKey(value, 2); return apply(setAddFn, this, [value]); } }.add],
+    [SetProto, { has(value) { chargeKey(value, 1); return apply(setHas, this, [value]); } }.has],
+    [SetProto, { delete(value) { chargeKey(value, 1); return apply(setDeleteFn, this, [value]); } }.delete],
     [Error.prototype, { toString() {
       if (!isObject(this)) throw new TypeErrorFn("not an object");
       let name = this.name;
@@ -982,10 +1089,43 @@ function prelude(host, opText) {
   ];
   const nativeSort = ArrayProto.sort;
   const nativeToSorted = ArrayProto.toSorted;
+  const stringNormalize = String.prototype.normalize;
+  const FLAT_ARRAY_UNITS = 8;
+  const SetFn = Set;
+  const setHas = Set.prototype.has;
+  const setAdd = Set.prototype.add;
+  const setAddFn = Set.prototype.add;
+  const setDeleteFn = Set.prototype.delete;
+  const mapGet = Map.prototype.get;
+  const mapHas = Map.prototype.has;
+  const mapSet = Map.prototype.set;
+  const mapDelete = Map.prototype.delete;
+  /** key ของ Map / Set ที่เป็น string ยาว: 32 ตัวอักษรแรกรวมในแก๊สของการเรียกแล้ว ที่เกินคิด factor หน่วยต่อ 32 ตัวอักษร */
+  function chargeKey(key, factor) {
+    if (typeof key === "string" && key.length > CHUNK) chargeUnits((textUnits(key.length) - 1) * factor);
+  }
+  const stringValueOf = String.prototype.valueOf;
+  const numberValueOf = Number.prototype.valueOf;
+  const booleanValueOf = Boolean.prototype.valueOf;
+  const hasBrand = (getter, value) => {
+    try {
+      apply(getter, value, []);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const isStringObject = (value) => hasBrand(stringValueOf, value);
+  const isNumberObject = (value) => hasBrand(numberValueOf, value);
+  /** String / Number / Boolean / BigInt object: engine แปลงเป็นค่าพื้นฐานเอง ไม่ไล่ property */
+  const isBoxed = (value) => isStringObject(value) || isNumberObject(value) || hasBrand(booleanValueOf, value) || hasBrand(bigintValueOf, value);
   /** ลำดับปริยายของ sort: เทียบแบบ string (คิดค่าแปลง BigInt ทุกครั้งที่ engine จะแปลง) */
   function compareText(x, y) {
     const a = toText(x);
     const b = toText(y);
+    // การเทียบแต่ละครั้งของ sort ปริยาย = 1 หน่วย + ความยาวที่ต้องไล่ (ตัวห่อของ sort คิดแค่ขนาด array ครั้งเดียว ไม่ครอบ n log n ครั้ง)
+    const length = a.length < b.length ? a.length : b.length;
+    chargeUnits(length > CHUNK ? textUnits(length) + 1 : 2);
     return a < b ? -1 : a > b ? 1 : 0;
   }
   for (let i = 0; i < IMPLEMENTED.length; i++) {
@@ -1368,7 +1508,8 @@ function prelude(host, opText) {
       __props: meterProps,
       __spread: spreadValue,
       __add: bigAdd, __sub: bigSub, __mul: bigMul, __div: bigDiv, __mod: bigMod, __pow: bigPow, __shl: bigShl, __shr: bigShr,
-      __lt: bigLt, __gt: bigGt, __le: bigLe, __ge: bigGe, __eq: bigEq, __ne: bigNe, __in: bigIn,
+      __lt: bigLt, __gt: bigGt, __le: bigLe, __ge: bigGe, __eq: bigEq, __ne: bigNe, __in: bigIn, __seq: strictEq, __sne: strictNe,
+      __sw: meterSwitch,
       __key: toKey, __big: bigReturn, __opm: bigCompound,
       map: makeMap,
       Date: BLOCK_DATE,
@@ -1542,16 +1683,71 @@ const engine = (() => {
     rt,
     pool,
     heapStart,
+    topAddress,
     low: view.slice(0, LOW_REGION),
     high: view.slice(heapStart, memoryEnd),
   };
 })();
 
-/** memory ของ QuickJS กลับเป็นตอนเพิ่งสร้าง pool (ห้ามเรียกระหว่างอยู่ใน QuickJS) */
-function restoreSnapshot() {
+/** ภาพ memory ตอนนี้ (ส่วนล่าง + heap ถึงก้อนว่างก้อนสุดท้าย) */
+function captureMemory() {
   const view = new Uint8Array(executorMemory.buffer);
-  view.set(engine.low, 0);
-  view.set(engine.high, engine.heapStart);
+  const memoryEnd = engine.topAddress === null
+    ? executorMemory.buffer.byteLength
+    : new Uint32Array(executorMemory.buffer)[engine.topAddress / 4] + PAGE;
+  return { low: view.slice(0, LOW_REGION), high: view.slice(engine.heapStart, memoryEnd) };
+}
+
+/** memory ของ QuickJS กลับเป็นภาพที่เก็บไว้ (ค่าเริ่ม = ตอนเพิ่งสร้าง pool) — ห้ามเรียกระหว่างอยู่ใน QuickJS */
+function restoreSnapshot(image = engine) {
+  const view = new Uint8Array(executorMemory.buffer);
+  view.set(image.low, 0);
+  view.set(image.high, engine.heapStart);
+}
+
+/**
+ * snapshot "อุ่น" ต่อโปรแกรม: ภาพ memory = snapshot ตั้งต้น + factory ของโปรแกรมที่คอมไพล์แล้วใน context ช่องแรก
+ *   tx ที่โปรแกรมแรกคือ source นี้เริ่มจากภาพนี้แทน → ไม่ต้องคอมไพล์ซ้ำทุก tx (คอมไพล์ ≈ 1/3 ของเวลาของ token transfer)
+ * deterministic: ภาพเป็นผลของ (snapshot ตั้งต้น, source) อย่างเดียว — มีใน cache หรือสร้างใหม่ได้ heap เดียวกันทุกไบต์
+ *   ทุกเครื่องจึงเริ่ม tx จาก heap เดียวกันเสมอ ไม่ว่า cache ของเครื่องจะเคยเห็นโปรแกรมนี้หรือไม่ (เทสต์ 89 คุม)
+ *   source ที่คอมไพล์ไม่ผ่าน = เริ่มจาก snapshot ตั้งต้นแบบเดิม (ก็เป็นผลของ source อย่างเดียวเช่นกัน)
+ * factory เก็บเป็น property ของฟังก์ชัน configure ของช่องแรก (โค้ดของผู้ใช้เข้าไม่ถึง configure)
+ */
+export const WARM_FACTORY_KEY = "\u0000factory";
+const warmImages = new Map();   // source → ภาพ memory | null (คอมไพล์ไม่ผ่าน) · เรียงตามที่ใช้ล่าสุด (LRU)
+export const warmStats = { hits: 0, misses: 0, size: 0, limit: Number(process.env.SANDBOX_WARM_CACHE ?? 32) };
+
+/** ล้างภาพอุ่นทั้งหมด (เทสต์ / เครื่องมือ) — ผลของ tx ไม่เปลี่ยน แค่ต้องสร้างภาพใหม่ */
+export function clearWarmCache() {
+  warmImages.clear();
+  warmStats.size = 0;
+}
+
+function warmImage(source) {
+  // SANDBOX_WARM_CACHE = จำนวนภาพที่จำไว้เท่านั้น (0 = สร้างใหม่ทุก tx) — ภาพที่ใช้เหมือนกันเสมอ จึงตั้งต่างกันข้ามเครื่องได้
+  if (warmImages.has(source)) {
+    const image = warmImages.get(source);
+    warmImages.delete(source);
+    warmImages.set(source, image);
+    warmStats.hits += 1;
+    return image;
+  }
+  warmStats.misses += 1;
+  restoreSnapshot();
+  const { ctx, configure } = engine.pool[0];
+  const result = ctx.evalCode(source, "program");
+  let image = null;
+  if (result.error) {
+    result.error.dispose();
+  } else {
+    ctx.setProp(configure, WARM_FACTORY_KEY, result.value);
+    result.value.dispose();
+    image = captureMemory();
+  }
+  warmImages.set(source, image);
+  while (warmImages.size > Math.max(0, warmStats.limit)) warmImages.delete(warmImages.keys().next().value);
+  warmStats.size = warmImages.size;
+  return image;
 }
 
 /**
@@ -1619,6 +1815,7 @@ export class Sandbox {
   #nextErrorId = 1;
   #stack = [];             // call ที่กำลังรัน (ตัวท้ายคือผู้เรียก API)
   #reserve = 0;
+  #warmSource = null;      // source ที่ factory อยู่ในภาพอุ่นแล้ว (context ช่องแรก)
   outOfMemory = false;
   timedOut = false;
 
@@ -1645,12 +1842,15 @@ export class Sandbox {
   // ---------- heap ----------
 
   /** เริ่ม tx: คืน snapshot → ตั้ง stack → ลูกโป่ง + ที่สำรอง → ล็อก memory */
-  #begin() {
+  #begin(source) {
     if (this.#disposed) throw new Error("sandbox ถูกปิดไปแล้ว");
     if (this.#active) return;
     if (brokenReason) throw new Error(`QuickJS ใช้งานไม่ได้: ${brokenReason}`);
     if (current) throw new Error("sandbox ถูกใช้โดย tx อื่นที่ยังไม่จบ");
-    restoreSnapshot();
+    // โปรแกรมแรกของ tx คอมไพล์ไว้แล้วในภาพอุ่น (ดู warmImage) · ไม่มี = snapshot ตั้งต้น
+    const image = warmImage(source);
+    this.#warmSource = image ? source : null;
+    restoreSnapshot(image ?? engine);
     current = this;
     this.#active = true;
     sandboxStats.active += 1;
@@ -1756,7 +1956,8 @@ export class Sandbox {
       return entry;
     }
     entry.invoke = this.#own(invokeResult.value);
-    const factoryResult = ctx.evalCode(source, "program");
+    const warm = slot === engine.pool[0] && source === this.#warmSource;
+    const factoryResult = warm ? { value: ctx.getProp(slot.configure, WARM_FACTORY_KEY) } : ctx.evalCode(source, "program");
     if (factoryResult.error) {
       entry.error = readError(ctx, factoryResult.error);
       return entry;
@@ -1819,7 +2020,7 @@ export class Sandbox {
    */
   invoke({ programUuid, source, functionName, params, api, blockNumber = null }) {
     try {
-      this.#begin();
+      this.#begin(source);
       return this.#invoke({ programUuid, source, functionName, params, api, blockNumber });
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) brokenReason = error.message;

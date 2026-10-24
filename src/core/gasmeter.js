@@ -25,7 +25,9 @@
  *
  * แก๊สตามงาน CPU ของ BigInt (คิดใน sandbox ดู sandbox.js "BigInt") — เทสต์ 81:
  *   a - b · a * b · a / b · a % b · a ** b · a << b · a >> b → __sub(a, b) … (number ล้วนทำทันที แก๊สเท่าเดิม)
- *   a < b · a > b · a <= b · a >= b · a == b · a != b      → __lt(a, b) …  (BigInt เทียบ string = แปลง string เป็น BigInt)
+ *   a < b · a > b · a <= b · a >= b · a == b · a != b      → __lt(a, b) …  (BigInt เทียบ string = แปลง string เป็น BigInt · string ยาวคิดตามความยาว)
+ *   a === b · a !== b (เมื่อไม่มีข้างไหนเป็นค่าคงที่ / typeof …) → __seq / __sne  (string ยาวเท่ากันคิดตามความยาว)
+ *   switch (x) { … }                          → switch (__sw((x), จำนวน case))  (string ยาวคิดตามความยาว × จำนวน case)
  *   k in o                                                 → __in(k, o)
  *   x op= y (op = + - * / % ** << >>) → x = __op(x, y) ถ้าเป้าหมายเป็นชื่อ / this.p / o.p / o[k] ที่ o, k เป็นชื่อหรือค่าคงที่
  *                                       ที่เหลือ → __opm(o, k, "op", () => (y)) (อ่านค่าเดิมก่อน y ตามมาตรฐาน)
@@ -50,15 +52,22 @@ export const CALL_FN = "__call";
 export const OPERATOR_FNS = {
   "+": "__add", "-": "__sub", "*": "__mul", "/": "__div", "%": "__mod", "**": "__pow", "<<": "__shl", ">>": "__shr",
   "<": "__lt", ">": "__gt", "<=": "__le", ">=": "__ge", "==": "__eq", "!=": "__ne", in: "__in",
+  "===": "__seq", "!==": "__sne",
 };
+/** === / !== เทียบ string ยาวเท่ากันใช้เวลาตามความยาว → ครอบเฉพาะเมื่อทั้งสองข้างอาจเป็น string ยาว (ข้างใดเป็นค่าคงที่ = ถูกอยู่แล้ว) */
+const STRICT = new Set(["===", "!=="]);
+const isCheapOperand = (node) => node.type === "Literal" || (node.type === "TemplateLiteral" && node.expressions.length === 0)
+  || (node.type === "UnaryExpression" && node.operator !== "-" && node.operator !== "+") || (node.type === "Identifier" && node.name === "undefined");
 export const KEY_FN = "__key";
+/** switch (x): เทียบ x กับทุก case ด้วย === → string ยาวคิดตามความยาว × จำนวน case */
+export const SWITCH_FN = "__sw";
 export const BIG_FN = "__big";
 export const OPM_FN = "__opm";
 /** ตัวแปรชั่วคราวที่โค้ดที่ฉีดแล้วใช้ (ประกาศเองต้นโค้ด) */
 const KEY_VAR = "__k";
 const RET_VAR = "__r";
 /** ฟังก์ชันของ VM ที่โค้ดที่ฉีดแล้วเรียก (destructure จาก api ใน factory ของโปรแกรม) */
-export const METER_FNS = [GAS_FN, STR_FN, PROPS_FN, SPREAD_FN, ...new Set(Object.values(OPERATOR_FNS)), KEY_FN, BIG_FN, OPM_FN];
+export const METER_FNS = [GAS_FN, STR_FN, PROPS_FN, SPREAD_FN, ...new Set(Object.values(OPERATOR_FNS)), KEY_FN, BIG_FN, OPM_FN, SWITCH_FN];
 const RESERVED = new Set([...METER_FNS, CALL_FN, KEY_VAR, RET_VAR]);
 /** ขนาด BigInt สูงสุด (bit ของค่าสัมบูรณ์) — เท่าเพดานของ modexp (1024 ไบต์) · sandbox ตรวจผลของทุกการคำนวณด้วยค่าเดียวกัน */
 export const BIGINT_MAX_BITS = 8192;
@@ -74,6 +83,7 @@ export const PLAIN_HELPERS = {
   __add: (a, b) => a + b, __sub: (a, b) => a - b, __mul: (a, b) => a * b, __div: (a, b) => a / b, __mod: (a, b) => a % b,
   __pow: (a, b) => a ** b, __shl: (a, b) => a << b, __shr: (a, b) => a >> b, __lt: (a, b) => a < b, __gt: (a, b) => a > b,
   __le: (a, b) => a <= b, __ge: (a, b) => a >= b, __eq: (a, b) => a == b, __ne: (a, b) => a != b, __in: (k, o) => k in o,
+  __seq: (a, b) => a === b, __sne: (a, b) => a !== b, __sw: (value) => value,
   __opm(o, k, op, rhs) {
     const old = o[k];
     return (o[k] = PLAIN_HELPERS[OPERATOR_FNS[op]](old, rhs()));
@@ -251,9 +261,14 @@ export function instrument(body) {
         + "(ตำแหน่งอื่น เช่น พารามิเตอร์ / for…of / catch / ซ้อนใน pattern คิดแก๊สตามขนาดที่คัดลอกไม่ได้)");
     }
     // BigInt: operator / ชื่อ property / ค่าที่คืน (แยกจากด้านบน — node เดียวโดนได้ทั้งสองแบบ)
-    if (node.type === "BinaryExpression" && OPERATOR_FNS[node.operator] && node.left.type !== "PrivateIdentifier") binary(node, OPERATOR_FNS[node.operator]);
+    if (node.type === "BinaryExpression" && OPERATOR_FNS[node.operator] && node.left.type !== "PrivateIdentifier"
+      && !(STRICT.has(node.operator) && (isCheapOperand(node.left) || isCheapOperand(node.right)))) binary(node, OPERATOR_FNS[node.operator]);
     else if (node.type === "AssignmentExpression" && COMPOUND.has(node.operator)) compound(node);
     else if (node.type === "MemberExpression" && node.computed) key(node.property);
+    else if (node.type === "SwitchStatement") {
+      const cases = node.cases.filter((item) => item.test !== null).length;
+      surround(node.discriminant, `${SWITCH_FN}((`, `), ${cases})`, PRIORITY.op);
+    }
     else if ((node.type === "Property" || node.type === "MethodDefinition" || node.type === "PropertyDefinition") && node.computed) key(node.key);
     else if (node.type === "ReturnStatement" && node.argument) returned(node.argument);
     for (const child of children(node)) visit(child, node);
