@@ -97,7 +97,9 @@ export const mempool = new Mempool(vm, { replacedLog, maxRejectedPerBlock: Numbe
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 // ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
 export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
-export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
+// eth_sendRawTransaction → intake เดียวกับ /sendtx (ประกาศ function ไว้ด้านล่าง ใช้ได้เพราะ hoist)
+export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0),
+  submit: (verified) => intake({ tx: verified.tx, signature: verified.request.signature }, verified) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
 if (genesis) vm.applyGenesis(genesis);
 
 // มีแค่ tx ที่ถูกปฏิเสธ → พักไว้ให้ติดไปกับ block ที่มี tx จริง หรือปิด block เมื่อใบที่รอนานสุดครบ REJECTED_HOLD_MS (0 = ปิดทันที)
@@ -301,22 +303,29 @@ const DYNAMIC = [
   }],
 ];
 
+/**
+ * รับ tx ที่ตรวจลายเซ็นแล้วเข้า mempool (/sendtx และ /evm eth_sendRawTransaction ใช้ร่วมกัน)
+ * ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
+ */
+function intake({ tx, signature, sponsorSignature }, verified) {
+  const check = (item) => {
+    if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
+      const reviewed = reviewProgram(tx.code);
+      if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
+    }
+    return simulate(vm, item);
+  };
+  return mempool.add({ tx, signature, sponsorSignature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้ว → ไม่ recover ซ้ำ
+}
+
 async function handlePost(url, body) {
   if (url === "/sendtx") {
-    const { tx, signature } = body ?? {};
+    const { tx, signature, sponsorSignature } = body ?? {};   // sponsorSignature: ผู้จ่ายแก๊สแทน (tx.sponsor) เซ็น digest เดียวกัน
     let verified;
-    try { verified = await verifyPool.verify({ tx, signature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
+    try { verified = await verifyPool.verify({ tx, signature, sponsorSignature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
 
-    // ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
-    const check = (item) => {
-      if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
-        const reviewed = reviewProgram(tx.code);
-        if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
-      }
-      return simulate(vm, item);
-    };
-    const queued = mempool.add({ tx, signature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้วข้างบน → ไม่ recover ซ้ำ
+    const queued = intake({ tx, signature, sponsorSignature }, verified);
     if (queued.simulation?.issues) return { status: 400, body: { queued: false, error: queued.simulation.error, issues: queued.simulation.issues } };
     if (queued.simulation && !queued.ok) return { status: 400, body: { queued: false, hash: verified.hash, simulation: queued.simulation } };
     if (!queued.ok) return { status: 400, body: { queued: false, ...queued } };
@@ -366,6 +375,13 @@ async function handleEvm(request, response, url) {
   }
   let body;
   try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(response, 200, parseError()); }
+  // ส่ง tx ผ่าน /evm นับโควตาเดียวกับ POST /sendtx (RATE_LIMIT) ไม่ใช่โควตาอ่านของ /evm
+  const sends = (Array.isArray(body) ? body : [body]).filter((item) => item?.method === "eth_sendRawTransaction").length;
+  for (let i = 0; i < sends; i += 1) {
+    if (postLimiter.allow(ip)) continue;
+    response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
+    return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
+  }
   try { return send(response, 200, evmRpc.handle(body)); }
   catch (error) { console.error(error); return send(response, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: error.message } }); }
 }

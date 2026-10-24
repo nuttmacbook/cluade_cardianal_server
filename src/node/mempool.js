@@ -101,8 +101,8 @@ export class Mempool {
    *
    * @returns {{ ok: boolean, hash?: string, sender?: string, reason?: string, expectedNonce?: number, replaced?: string, simulation?: object }}
    */
-  add({ tx, signature }, { now = Date.now(), simulate, verified } = {}) {
-    const result = this.#add({ tx, signature }, { now, simulate, verified });
+  add({ tx, signature, sponsorSignature }, { now = Date.now(), simulate, verified } = {}) {
+    const result = this.#add({ tx, signature, sponsorSignature }, { now, simulate, verified });
     // ลายเซ็นผิด = ไม่มี hash / sender ที่เชื่อได้ · ส่งซ้ำ = hash นี้มีสถานะจริงอยู่แล้ว (รอ / เข้า block / ถูกแทนที่)
     if (!result.ok && result.hash && result.sender && result.reason !== DUPLICATE) {
       this.#reject(tx, { hash: result.hash, sender: result.sender, reason: result.reason, code: result.simulation?.errorCode, stage: "sendtx" });
@@ -110,11 +110,11 @@ export class Mempool {
     return result;
   }
 
-  #add({ tx, signature }, { now, simulate, verified }) {
+  #add({ tx, signature, sponsorSignature }, { now, simulate, verified }) {
     // verified = ผลของ verifyTransaction({ tx, signature }) ที่ผู้เรียกตรวจไว้แล้ว (server ตรวจก่อนแล้ว → ไม่ต้อง recover ลายเซ็นซ้ำ)
     if (!verified) {
       try {
-        verified = verifyTransaction({ tx, signature });
+        verified = verifyTransaction({ tx, signature, sponsorSignature });
       } catch (error) {
         return { ok: false, reason: error.message };
       }

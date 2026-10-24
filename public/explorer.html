@@ -696,6 +696,7 @@ function feeRows(r) {
     r.type === 2 && ["Fee limits", `<span class="tag">EIP-1559</span> <span class="dim">max fee</span> ${r.maxFeePerGas ? `${gwei(r.maxFeePerGas)} gwei` : "base fee + tip"}
       <span class="dim">· max tip</span> ${gwei(r.maxPriorityFeePerGas ?? 0)} gwei`],
     r.burnedFee !== undefined && ["Fee split", feeSplit(r.burnedFee, r.producerFee)],
+    r.sponsor && ["Gas paid by", `${addr(r.sponsor)} <span class="tag">sponsor</span> <span class="dim">· the sender paid no gas</span>`],
   ];
 }
 

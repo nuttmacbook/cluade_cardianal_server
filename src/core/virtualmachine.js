@@ -7,6 +7,9 @@ import { instrument, METER_FNS } from "./gasmeter.js";
 import { Sandbox, SANDBOX_DEFAULTS, SANDBOX_LIMITS, checkGuestSyntax } from "./sandbox.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { eip712Digest, eip712DomainSeparator, hexBytes, recoverAddress } from "../crypto/eip712.js";
+import { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson } from "./encoding.js";
+
+export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson };
 
 /*
  *  const vm = new VirtualMachine(new DB("./data"), { timeoutMs: 1000, maxCallDepth: 8 })  // ดู db.js
@@ -154,7 +157,6 @@ export const BLOCK_NUMBER_WIDTH = 12;
 export const addressFromHash = (hash) => `0x${hash.slice(-40)}`;
 
 /** hash เริ่มต้น: keccak256 แบบเดียวกับ EVM (เปลี่ยนได้ด้วย option hashFunction) */
-export const keccak256Hex = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 const hexToBytesStrict = (hex) => hexToBytes(String(hex).replace(/^0x/, ""));
 /** precompile hash ที่โปรแกรมเรียกได้ (ชื่อ = ชื่อ API = ชื่อในตารางแก๊ส) */
 const DIGESTS = { sha256, ripemd160, blake2b };
@@ -334,7 +336,6 @@ const STATUS = { SUCCESS: "success", THROW: "throw", RUNNING: "running" };
 const STATE = { PENDING: "pending_review", ACTIVE: "active", REJECTED: "rejected", SCHEDULED: "scheduled" };
 const WRITE = { PUT: "put", DEL: "del" };
 
-const HEX_PATTERN = /^0x[0-9a-f]+$/i;
 const METADATA_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
 const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";   // โปรแกรม throw { code: ค่านี้ } = TIMEOUT (แบบเดิมของ node:vm)
 const MAP_PARTS = Symbol("map parts");
@@ -406,19 +407,6 @@ export const pickContext = ({ sender, origin }) => ({ sender, origin });
 
 /** address ของ wallet / program เป็นตัวพิมพ์เล็กเสมอ */
 const isWalletAddress = (value) => typeof value === "string" && /^0x[0-9a-f]{40}$/i.test(value);
-export const normalizeAddress = (value) => (typeof value === "string" ? value.toLowerCase() : value);
-
-/** string รูปแบบ 0x… hex → ตัวพิมพ์เล็ก, string อื่นไม่เปลี่ยน */
-export const normalizeHex = (value) => (typeof value === "string" && HEX_PATTERN.test(value) ? value.toLowerCase() : value);
-
-/** เดินทั้ง object / array: ค่าและชื่อ key ที่เป็น 0x… hex → ตัวพิมพ์เล็ก */
-export function normalizeHexDeep(value) {
-  if (Array.isArray(value)) return value.map(normalizeHexDeep);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [normalizeHex(key), normalizeHexDeep(item)]));
-  }
-  return normalizeHex(value);
-}
 
 export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddress(sender), origin: normalizeAddress(origin) });
 
@@ -631,28 +619,6 @@ export function storageKey(programUuid, key) {
   return joinKey(programUuid, KEY.STORAGE, ...encoded);
 }
 
-/**
- * แปลงข้อมูลเป็น string แบบเดียวกันทุกเครื่อง (เรียงชื่อ key, ไม่มีช่องว่าง)
- * ใช้ทำ hash ของ tx จึงต้องไม่ขึ้นกับลำดับที่ user ใส่ field มา
- */
-export function canonicalJson(value) {
-  if (typeof value === "bigint") return JSON.stringify(`${value}n`);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.keys(value)
-      .sort()
-      .filter((key) => value[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
-    return `{${entries.join(",")}}`;
-  }
-  try {
-    const json = JSON.stringify(value === undefined ? null : value);
-    return json === undefined ? JSON.stringify(String(value)) : json; // function / symbol
-  } catch {
-    return JSON.stringify(String(value)); // bigint ฯลฯ — ค่าจริงจะถูกปฏิเสธตอนตรวจ input อยู่แล้ว
-  }
-}
-
 /** เดา action จากหน้าตาของ request (ใช้เมื่อไม่ได้ระบุมา) */
 export function guessAction(request = {}) {
   if (request.from !== undefined && request.to !== undefined) return "transfer";
@@ -753,7 +719,9 @@ export function checkGasPrice(gasPrice, minimum) {
 }
 
 /** ฟิลด์ค่าแก๊สแบบ EIP-1559 ของ request (ไม่ส่ง = undefined) */
-export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined });
+// sponsor = ผู้จ่ายแก๊สแทน (paymaster) · ไม่ส่ง = ไม่อยู่ใน hash ของ tx (tx เดิมไม่เปลี่ยน)
+export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined,
+  sponsor: request?.sponsor ? normalizeAddress(request.sponsor) : undefined });
 
 /** request นี้ใช้ค่าแก๊สแบบ EIP-1559 (type 2) ไหม */
 export const isFeeMarketRequest = (request) => (request?.maxFeePerGas ?? null) !== null || (request?.maxPriorityFeePerGas ?? null) !== null;
@@ -1967,6 +1935,8 @@ export class VirtualMachine {
       burnedFee: result.burnedFee ?? "0n",
       producerFee: result.producerFee ?? "0n",
       fee: result.fee ?? "0n",
+      ...(request.sponsor ? { sponsor: normalizeAddress(request.sponsor) } : {}),   // ผู้จ่ายค่าแก๊สแทนผู้ส่ง (อยู่ใน hash ของ tx แล้ว)
+      ...(request.evmRaw ? { evmHash: request.digest } : {}),   // มาจาก eth_sendRawTransaction: hash แบบ Ethereum = keccak(raw)
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
       trace: (result.calls ?? []).map((call) => ({
@@ -2651,6 +2621,7 @@ export class VirtualMachine {
       burnedFee: encodeNative(tx.feeBurned),
       producerFee: encodeNative(tx.feeReward),
       ...(tx.fees?.type === 2 ? { feeType: 2, maxFeePerGas: encodeNative(tx.fees.maxFee), maxPriorityFeePerGas: encodeNative(tx.fees.maxPriority) } : {}),
+      ...(tx.payer?.sponsor ? { sponsor: tx.payer.sponsor } : {}),   // ผู้จ่ายค่าแก๊สของใบนี้
     };
   }
 
@@ -2677,7 +2648,7 @@ export class VirtualMachine {
   // ---------- nonce / ค่าแก๊ส ----------
 
   /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
-  preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, value = 0 } = {}) {
+  preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, sponsor, value = 0 } = {}) {
     const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
     // ราคาจริง = min(maxFee, baseFee + priority) · maxFee ต่ำกว่า baseFee ของ block → ไม่รับ (ไม่กิน nonce)
     tx.fees = resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas }, tx.baseFee);
@@ -2689,10 +2660,13 @@ export class VirtualMachine {
 
     const current = tx.current(nonceKey(address)) ?? 0;
     if (this.requireNonce && nonce !== current) fail(ERRORS.invalidNonce, current, nonce);
-    tx.payer = { address, nonce: current };
+    // sponsor: จ่ายแก๊สแทนผู้ส่ง (ผู้ส่งยังใช้ nonce ของตัวเองและจ่าย value เอง) · ตรวจลายเซ็นของ sponsor แล้วตอนรับ tx (verifyTransaction)
+    tx.payer = sponsor && sponsor !== address ? { address, nonce: current, sponsor } : { address, nonce: current };
 
     if (tx.chargeGas) {
-      const available = this.nativeBalance(tx, address) - readNative(value); // เงินที่เหลือหลังแนบ value ไปกับ tx
+      if (tx.payer.sponsor && this.nativeBalance(tx, address) < readNative(value)) fail(ERRORS.nativeInsufficient, address);
+      // เงินที่จ่ายแก๊สได้ = ยอดของผู้จ่าย (หัก value ที่แนบไปกับ tx เมื่อผู้จ่ายคือผู้ส่งเอง)
+      const available = tx.payer.sponsor ? this.nativeBalance(tx, tx.payer.sponsor) : this.nativeBalance(tx, address) - readNative(value);
       if (available < 0n) fail(ERRORS.nativeInsufficient, address);
       tx.gasLimit = tx.gasPrice > 0n ? Math.min(gasUnits(available / tx.gasPrice), requestedLimit) : requestedLimit;
     } else {
@@ -2724,6 +2698,7 @@ export class VirtualMachine {
   /** writes ของ nonce + ค่าแก๊ส (ส่วน base fee เผาตาม burnPercent · tip เข้าผู้ปิด block) */
   buildChargeWrites(tx, balance, raw) {
     const { address, nonce } = tx.payer;
+    const feePayer = tx.payer.sponsor ?? address;
     const due = tx.gasFee();
     const fee = due < balance ? due : balance > 0n ? balance : 0n;
     tx.feeCharged = fee;
@@ -2734,8 +2709,8 @@ export class VirtualMachine {
     // ค่าแก๊สเข้าช่อง consumed ของผู้จ่าย ส่วนที่ไม่ได้เผาทิ้งเข้าช่อง received ของผู้ปิด block
     writes.push({
       type: WRITE.PUT,
-      dbKey: nativeKey(address, NATIVE_FIELD.CONSUMED),
-      value: encodeNative(this.nativeField(tx, address, NATIVE_FIELD.CONSUMED, raw) + fee),
+      dbKey: nativeKey(feePayer, NATIVE_FIELD.CONSUMED),
+      value: encodeNative(this.nativeField(tx, feePayer, NATIVE_FIELD.CONSUMED, raw) + fee),
     });
 
     // EIP-1559: ส่วน base fee (แก๊ส × baseFee) เผา burnPercent % · tip (ส่วนที่เกิน baseFee) เข้าผู้ปิด block ทั้งหมด
@@ -2765,7 +2740,7 @@ export class VirtualMachine {
 
   chargeOnSuccess(tx) {
     if (!tx.payer) return [];
-    const balance = this.nativeBalance(tx, tx.payer.address);
+    const balance = this.nativeBalance(tx, tx.payer.sponsor ?? tx.payer.address);
     if (tx.gasFee() > balance) fail(ERRORS.outOfGas, tx.gasUsed, tx.gasPrice > 0n ? gasUnits(balance / tx.gasPrice) : tx.gasLimit);
     return this.buildChargeWrites(tx, balance, false);
   }
@@ -2774,7 +2749,7 @@ export class VirtualMachine {
     if (!tx.payer) return [];
     try {
       // ค่าใน DB (writes ของ tx ถูกทิ้งไปแล้ว)
-      return this.buildChargeWrites(tx, this.nativeBalance(tx, tx.payer.address, true), true);
+      return this.buildChargeWrites(tx, this.nativeBalance(tx, tx.payer.sponsor ?? tx.payer.address, true), true);
     } catch {
       return []; // DB อ่านไม่ได้ → เก็บค่าแก๊สไม่ได้
     }

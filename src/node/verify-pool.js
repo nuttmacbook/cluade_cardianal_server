@@ -28,9 +28,9 @@ export class VerifyPool {
 
   get size() { return this.#size; }
 
-  verify({ tx, signature } = {}) {
+  verify({ tx, signature, sponsorSignature } = {}) {
     if (this.#size === 0) {
-      try { return Promise.resolve(verifyTransaction({ tx, signature })); }
+      try { return Promise.resolve(verifyTransaction({ tx, signature, sponsorSignature })); }
       catch (error) { return Promise.reject(error); }
     }
     const slot = this.#slot();
@@ -38,7 +38,7 @@ export class VerifyPool {
     return new Promise((resolve, reject) => {
       slot.pending.set(id, { resolve, reject });
       if (slot.pending.size === 1) slot.worker.ref();
-      try { slot.worker.postMessage({ id, tx, signature }); }
+      try { slot.worker.postMessage({ id, tx, signature, sponsorSignature }); }
       catch (error) { this.#settle(slot, id, { error: error.message }); }   // ส่งข้อมูลข้าม thread ไม่ได้ (เช่น function)
     });
   }
@@ -80,8 +80,8 @@ export class VerifyPool {
 }
 
 if (!isMainThread && parentPort) {
-  parentPort.on("message", ({ id, tx, signature }) => {
-    try { parentPort.postMessage({ id, verified: verifyTransaction({ tx, signature }) }); }
+  parentPort.on("message", ({ id, tx, signature, sponsorSignature }) => {
+    try { parentPort.postMessage({ id, verified: verifyTransaction({ tx, signature, sponsorSignature }) }); }
     catch (error) { parentPort.postMessage({ id, error: error.message }); }
   });
 }

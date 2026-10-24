@@ -13,7 +13,7 @@
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes, concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
-import { canonicalJson, normalizeAddress, normalizeHexDeep } from "../core/virtualmachine.js";
+import { canonicalJson, normalizeAddress, normalizeHexDeep } from "../core/encoding.js";
 
 export const DOMAIN_NAME = "ProgramVM";
 export const DOMAIN_VERSION = "1";
@@ -40,6 +40,17 @@ export const TRANSACTION_TYPE_1559 = [
   { name: "maxFeePerGas", type: "uint256" },
   { name: "maxPriorityFeePerGas", type: "uint256" },
 ];
+
+/**
+ * tx ที่มีผู้จ่ายแก๊สแทน (paymaster / fee payer): ต่อฟิลด์ sponsor ท้ายชนิดเดิม (แบบเดิมหรือ 1559)
+ * ผู้ส่งเซ็นรวม sponsor → เปลี่ยนผู้จ่ายไม่ได้ · sponsor เซ็น digest เดียวกัน (sponsorSignature) = ยอมจ่ายค่าแก๊สของใบนี้
+ * ไม่มี sponsor = ฟิลด์ไม่อยู่ในชนิด → digest ของ tx เดิมไม่เปลี่ยน
+ */
+export const SPONSOR_FIELD = { name: "sponsor", type: "address" };
+export const isSponsoredTx = (tx = {}) => tx.sponsor !== undefined && tx.sponsor !== null && tx.sponsor !== "";
+
+/** ชนิดของ Transaction ตามรูปของ tx */
+export const transactionTypeOf = (tx = {}) => [...(isFeeMarketTx(tx) ? TRANSACTION_TYPE_1559 : TRANSACTION_TYPE), ...(isSponsoredTx(tx) ? [SPONSOR_FIELD] : [])];
 
 /** tx นี้ใช้ค่าแก๊สแบบ EIP-1559 ไหม */
 export const isFeeMarketTx = (tx = {}) => (tx.maxFeePerGas ?? null) !== null || (tx.maxPriorityFeePerGas ?? null) !== null;
@@ -104,6 +115,7 @@ export function normalizeTransaction(tx = {}) {
     nonce: tx.nonce ?? 0,
     gasLimit: tx.gasLimit ?? 0,
     ...feeOf(tx),
+    ...(isSponsoredTx(tx) ? { sponsor: normalizeAddress(tx.sponsor) } : {}),
   };
 }
 
@@ -125,7 +137,7 @@ export function buildTypedData(rawTx) {
         { name: "version", type: "string" },
         { name: "chainId", type: "uint256" },
       ],
-      Transaction: isFeeMarketTx(tx) ? TRANSACTION_TYPE_1559 : TRANSACTION_TYPE,
+      Transaction: transactionTypeOf(tx),
     },
     primaryType: "Transaction",
     message: {
@@ -139,6 +151,7 @@ export function buildTypedData(rawTx) {
       nonce: tx.nonce,
       gasLimit: tx.gasLimit,
       ...(isFeeMarketTx(tx) ? { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas } : { gasPrice: tx.gasPrice }),
+      ...(tx.sponsor ? { sponsor: tx.sponsor } : {}),
     },
   };
 }
@@ -212,14 +225,15 @@ export function recoverSigner(tx, signature) {
 // ---------- ใช้งานฝั่ง server ----------
 
 /** แปลง tx ที่เซ็นแล้วเป็น request ของ VM (sender / origin มาจากลายเซ็นเท่านั้น) */
-export function toVmRequest(tx, sender, signature, digest) {
+export function toVmRequest(tx, sender, signature, digest, sponsorSignature) {
   const context = { sender, origin: sender };
   const given = (value) => (parseUint(value) ? value : undefined);   // 0 / "0" = ไม่ได้ระบุ (ใช้ค่าของระบบ)
   // EIP-1559: maxFeePerGas 0 = ไม่ได้ระบุ (VM ใช้ baseFee + priority) · maxPriorityFeePerGas 0 = ไม่ให้ tip (ระบุเสมอ = tx แบบ 1559)
   const fees = isFeeMarketTx(tx)
     ? { maxFeePerGas: given(tx.maxFeePerGas), maxPriorityFeePerGas: String(parseUint(tx.maxPriorityFeePerGas ?? 0) ?? 0n) }
     : { gasPrice: given(tx.gasPrice) };
-  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), ...fees, signature, digest };
+  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), ...fees, signature, digest,
+    ...(tx.sponsor ? { sponsor: tx.sponsor, sponsorSignature } : {}) };   // ผู้จ่ายแก๊สแทน (ไม่มี = request เดิมทุกไบต์)
 
   if (tx.action === "transfer") return { from: sender, to: tx.to, amount: tx.value, ...common, context: undefined };
   if (tx.action === "metadata") return { metadata: tx.input, ...common };
@@ -239,12 +253,21 @@ export const VM_METHOD = { call: "call", deploy: "deploy", transfer: "transfer",
 
 /**
  * ตรวจลายเซ็นแล้วคืน request ที่พร้อมส่งเข้า VM
- * @returns {{ action: string, method: string, sender: string, request: object, hash: string }}
+ * tx ที่มี sponsor ต้องมี sponsorSignature = ลายเซ็นของ sponsor บน digest เดียวกัน (sponsor จ่ายแก๊ส · ผู้ส่งใช้ nonce + จ่าย value เอง)
+ * @returns {{ action: string, method: string, sender: string, request: object, hash: string, sponsor?: string }}
  */
-export function verifyTransaction({ tx, signature } = {}) {
+export function verifyTransaction({ tx, signature, sponsorSignature } = {}) {
   const normalized = normalizeTransaction(tx);
   const sender = recoverSigner(normalized, signature);
   if (normalized.from && sender !== normalized.from) fail(`ลายเซ็นไม่ตรงกับ from: เซ็นโดย ${sender}`);
+  if (normalized.sponsor) {
+    if (normalized.sponsor === sender) fail("sponsor ต้องไม่ใช่ผู้ส่งเอง");
+    if (sponsorSignature === undefined || sponsorSignature === null) fail("tx ที่มี sponsor ต้องมี sponsorSignature");
+    const sponsor = recoverSigner(normalized, sponsorSignature);
+    if (sponsor !== normalized.sponsor) fail(`sponsorSignature ไม่ตรงกับ sponsor: เซ็นโดย ${sponsor}`);
+  } else if (sponsorSignature !== undefined && sponsorSignature !== null) {
+    fail("มี sponsorSignature แต่ tx ไม่ได้ระบุ sponsor");
+  }
 
   const digest = hashTypedData(normalized);
   return {
@@ -252,6 +275,7 @@ export function verifyTransaction({ tx, signature } = {}) {
     method: VM_METHOD[normalized.action],
     sender,
     hash: digest,   // hash ที่ผู้ใช้เซ็น — ค้นใน explorer ได้เช่นกัน (ดู sigtx:<digest>)
-    request: toVmRequest(normalized, sender, signature, digest),
+    request: toVmRequest(normalized, sender, signature, digest, sponsorSignature),
+    ...(normalized.sponsor ? { sponsor: normalized.sponsor } : {}),
   };
 }

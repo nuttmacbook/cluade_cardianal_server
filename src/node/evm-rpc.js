@@ -4,8 +4,10 @@
  *   const rpc = createEvmRpc({ vm, mempool });
  *   rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })   // → { jsonrpc, id, result: "0x1" }
  *
- * อ่านอย่างเดียว: ไม่เขียน DB ไม่แตะ mempool ไม่เปลี่ยนกฎของเชน
- *   - ส่ง tx ผ่าน MetaMask ไม่ได้ (eth_sendRawTransaction) เพราะเชนรับเฉพาะลายเซ็น EIP-712 ของตัวเอง → ตอบ error
+ * อ่านอย่างเดียว: ไม่เขียน DB ไม่แตะ mempool ไม่เปลี่ยนกฎของเชน (ยกเว้น eth_sendRawTransaction ที่ส่งผ่าน submit ของ server)
+ *   - eth_sendRawTransaction (src/node/evm-raw.js): tx แบบ legacy (EIP-155) / type 2 → โอน native · ERC-20 ของ token มาตรฐาน · ฟังก์ชันตาม metadata.abi
+ *     ส่งต่อให้ submit(verified) ของ server (ผ่าน mempool + simulate แบบเดียวกับ /sendtx) · hash = keccak(raw)
+ *   - eth_estimateGas: เรียกโปรแกรม = จำลองด้วย vm.query แล้วเผื่อ 25% (แก๊สของเชน)
  *   - native ของเชนเป็นหน่วยย่อย 18 ทศนิยมแบบ wei อยู่แล้ว → ส่งตรง ๆ (decimals = ทศนิยมที่ต้องเติมเพิ่ม ค่าเริ่มต้น 0)
  *   - token มาตรฐาน (src/standards/token.js) ตอบ eth_call แบบ ERC-20 ได้ (balanceOf / decimals / symbol / name / totalSupply / allowance)
  *   - NFT / multi-token มาตรฐาน (src/standards/nft.js / multitoken.js) emit แบบ indexed → log แบบ ERC-721 (tokenId เป็น topic ที่ 4) / ERC-1155
@@ -28,6 +30,7 @@ import { checkTokenStandard, unescapeCode } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
 import { abiFunctions, decodeInput, encodeOutput, AbiError } from "./evm-abi.js";
+import { decodeRawTransaction, rawToVerified, RawTxError } from "./evm-raw.js";
 
 export const EVM_ERROR = { PARSE: -32700, REQUEST: -32600, METHOD: -32601, PARAMS: -32602, INTERNAL: -32603, SERVER: -32000, LIMIT: -32005 };
 
@@ -40,6 +43,9 @@ const REPLAY_CACHE = 64;              // จำนวน block ที่เก�
 const LOG_RANGE = 1000;               // ช่วง block สูงสุดของ eth_getLogs
 const TRANSFER_GAS = 21_000;   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
 
+const TOKEN_WRITE = {   // ERC-20 ที่กระเป๋าส่งมา (eth_sendRawTransaction) → ฟังก์ชันของ token มาตรฐาน
+  "0xa9059cbb": { method: "transfer", args: 2 }, "0x095ea7b3": { method: "approve", args: 2 }, "0x23b872dd": { method: "transferFrom", args: 3 },
+};
 const SELECTOR = {   // ERC-20 ที่ token มาตรฐานตอบได้
   "0x70a08231": "balanceOf", "0x313ce567": "decimals", "0x95d89b41": "symbol",
   "0x06fdde03": "name", "0x18160ddd": "totalSupply", "0xdd62ed3e": "allowance",
@@ -94,7 +100,7 @@ const needAddress = (value) => (isAddress(value) ? normalizeAddress(value) : fai
 /**
  * @param {{ vm: import("../core/virtualmachine.js").VirtualMachine, mempool?: object, decimals?: number, clientVersion?: string, logRange?: number }} options
  */
-export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE } = {}) {
+export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE, submit = null } = {}) {
   const scale = 10n ** BigInt(decimals);
   const native = (value) => toBig(value) * scale;
   const latest = () => vm.latestBlockNumber() ?? 0;
@@ -253,7 +259,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       return listed ? rejectedTx(listed, header, replayed(header.number).offsets) : null;
     }
     const { header, transactions, offsets } = replayed(found.blockNumber);
-    return { found, receipt: transactions[found.index], block: header, ...offsets[found.index] };
+    const receipt = transactions[found.index];
+    // tx จาก eth_sendRawTransaction: ตอบด้วย hash แบบ Ethereum (keccak(raw)) ที่กระเป๋าถือไว้
+    return { found: receipt?.evmHash ? { ...found, hash: receipt.evmHash } : found, receipt, block: header, ...offsets[found.index] };
   }
   const signatureParts = (signature) => {
     const hex = typeof signature === "string" ? signature.replace(/^0x/, "") : "";
@@ -338,7 +346,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (!data) return null;
     const real = (data.header.txHashes ?? []).map((hash, index) => {
       const receipt = data.transactions[index];
-      const found = { hash, blockNumber: number, index, action: receipt.action, from: receipt.from };
+      const found = { hash: receipt.evmHash ?? hash, blockNumber: number, index, action: receipt.action, from: receipt.from };
       return { found, receipt, block: data.header, ...data.offsets[index] };
     });
     return [...real, ...rejectedIn(data.header).map((entry) => rejectedTx(entry, data.header, data.offsets))];
@@ -653,6 +661,57 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     }
   }
 
+  // ---------- เขียน: eth_sendRawTransaction / eth_estimateGas ----------
+
+  /** calldata ที่กระเป๋าส่งไปโปรแกรม → { method, input }: ERC-20 ของ token มาตรฐานก่อน แล้วจึง metadata.abi */
+  function resolveCall(to, data) {
+    const selector = data.slice(0, 10).toLowerCase();
+    const word = (i) => data.slice(10 + i * 64, 10 + (i + 1) * 64);
+    const address = (i) => `0x${word(i).slice(24)}`;
+    const amount = (i) => `${BigInt(`0x${word(i) || "0"}`)}n`;
+    const write = TOKEN_WRITE[selector];
+    if (write && checkTokenStandard(readAt(null, codeKey(to)) ?? "").ok) {
+      if (data.length !== 10 + write.args * 64) throw new RawTxError(`calldata ของ ${write.method} ยาวไม่ถูกต้อง`);
+      if (write.method === "transfer") return { method: "transfer", input: { to: address(0), amount: amount(1) } };
+      if (write.method === "approve") return { method: "approve", input: { spender: address(0), amount: amount(1) } };
+      return { method: "transferFrom", input: { from: address(0), to: address(1), amount: amount(2) } };
+    }
+    const abi = readAt(null, metadataKey(to, "abi"));
+    const fn = abi ? abiFunctions(abi).get(selector) : undefined;
+    if (!fn) throw new RawTxError(abi ? `ไม่มีฟังก์ชันใน metadata.abi ที่ตรงกับ selector ${selector}` : "โปรแกรมนี้ไม่ได้ประกาศ metadata.abi (กระเป๋า EVM เรียกได้เฉพาะ token มาตรฐาน / โปรแกรมที่มี ABI)");
+    try { return { method: fn.name, input: decodeInput(fn, data) }; }
+    catch (error) { throw error instanceof AbiError ? new RawTxError(`${fn.signature}: ${error.message}`) : error; }
+  }
+
+  function sendRawTransaction(raw) {
+    if (!submit) fail(EVM_ERROR.SERVER, "eth_sendRawTransaction is not enabled on this node");
+    let verified;
+    try {
+      verified = rawToVerified(decodeRawTransaction(raw), { chainId: vm.chainId, isProgram: (address) => isProgramAt(address), resolveCall });
+    } catch (error) {
+      if (error instanceof RawTxError) fail(EVM_ERROR.SERVER, error.message);
+      throw error;
+    }
+    const queued = submit(verified);
+    if (!queued.ok) fail(EVM_ERROR.SERVER, queued.simulation?.error ?? queued.reason ?? queued.error ?? "transaction rejected", queued.simulation ?? undefined);
+    return verified.hash;
+  }
+
+  /** แก๊สของเชน (ไม่ใช่แก๊สของ EVM): โอน native = 21000 แบบที่กระเป๋าคาด · เรียกโปรแกรม = จำลองแล้วเผื่อ 25% */
+  function estimateGas(request = {}) {
+    const to = request.to ? needAddress(request.to) : null;
+    if (!to) fail(EVM_ERROR.SERVER, "deploying EVM bytecode is not supported");
+    if (!isProgramAt(to)) return quantity(TRANSFER_GAS);
+    const data = String(request.data ?? request.input ?? "0x");
+    let call;
+    try { call = resolveCall(to, data); }
+    catch (error) { if (error instanceof RawTxError) fail(EVM_ERROR.SERVER, `execution reverted: ${error.message}`); throw error; }
+    const from = isAddress(request.from) ? normalizeAddress(request.from) : ZERO_ADDRESS;
+    const result = vm.query({ programUuid: to, functionName: call.method, input: call.input, context: { sender: from, origin: from }, value: `${/^0x[0-9a-f]+$/i.test(String(request.value ?? "")) ? BigInt(request.value) : toBig(request.value ?? 0)}n` });
+    if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? call.method}`);
+    return quantity(Math.ceil(Number(result.gasUsed ?? 0) * 1.25) + 1000);
+  }
+
   // ---------- txpool ----------
   const pendingItems = () => mempool?.list?.() ?? [];
   const txpoolContent = () => {
@@ -704,12 +763,8 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     eth_getTransactionReceipt: ([hash]) => transactionReceipt(hash),
     eth_getLogs: ([filter]) => getLogs(filter),
     eth_call: ([request, tag]) => call(request, tag),
-    eth_estimateGas: ([request = {}]) => {
-      if (request.to && isProgramAt(needAddress(request.to))) fail(EVM_ERROR.SERVER, "calling programs from EVM wallets is not supported");
-      return quantity(TRANSFER_GAS);
-    },
-    eth_sendRawTransaction: () => fail(EVM_ERROR.SERVER,
-      "this chain only accepts its own EIP-712 signed transactions — send from the chain's explorer instead"),
+    eth_estimateGas: ([request = {}]) => estimateGas(request),
+    eth_sendRawTransaction: ([raw]) => sendRawTransaction(raw),
     eth_sendTransaction: () => fail(EVM_ERROR.SERVER, "eth_sendTransaction is not supported"),
     debug_traceTransaction: ([hash, options]) => traceTransaction(hash, options),
     debug_traceBlockByNumber: ([tag, options]) => traceBlock(tag, options),
