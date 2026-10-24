@@ -2,7 +2,7 @@
  * จำลองผู้ใช้จริง 200 กระเป๋าบน server ที่รันอยู่ — ส่ง tx ทีละ block ตามจังหวะที่ server ปิด block
  *
  *   # เปิด server (ต้องปิด rate limit ต่อ IP เพราะยิงจากเครื่องเดียว)
- *   RATE_LIMIT=0 BLOCK_MS=3000 npm start
+ *   RATE_LIMIT=0 npm start
  *   # อีก terminal
  *   node scripts/simulate-users.js                     # http://localhost:3000
  *   node scripts/simulate-users.js --spawn             # เปิด server ให้เองแล้วจำลอง (MemoryDB)
@@ -19,7 +19,7 @@
  *   --seed <text>        เปลี่ยนชุดกระเป๋า/การสุ่ม (ค่าเดิม = ได้กระเป๋าชุดเดิมทุกครั้ง)
  *   --funder-key <hex>   กระเป๋าที่มีเงินใน genesis (ค่าเริ่ม: key ทดสอบ Hardhat #1 ตาม genesis.json)
  *   --admin-key <hex>    กระเป๋าที่มีสิทธิ์ init โปรแกรม (ค่าเริ่ม = funder · ต้องอยู่ใน ADMINS ถ้า server ตั้งไว้)
- *   --spawn              เปิด server.js ให้เอง (PORT สุ่ม, RATE_LIMIT=0, BLOCK_MS=3000) · ใส่ --data <dir> ถ้าจะใช้ LMDB
+ *   --spawn              เปิด server.js ให้เอง (PORT สุ่ม, RATE_LIMIT=0, BLOCK_MS=1000) · ใส่ --data <dir> ถ้าจะใช้ LMDB
  *   --out <file>         ที่เก็บรายงาน JSON (ค่าเริ่ม simulate-report.json)
  *
  * ⚠️ สคริปต์นี้เซ็น tx ด้วย private key ในเครื่องเพราะเป็นการทดสอบ — key ถูกสร้างจาก --seed ห้ามใช้กับเงินจริง
@@ -543,7 +543,7 @@ async function startServer() {
   API = `http://127.0.0.1:${port}`;
   child = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url).pathname,
-    env: { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: "3000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) },
+    env: { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), RATE_LIMIT: "0", BLOCK_MS: "1000", ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) },
     stdio: "ignore",
   });
   for (let i = 0; i < 50; i += 1) {

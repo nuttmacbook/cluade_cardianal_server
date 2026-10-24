@@ -37,7 +37,7 @@ const vm = new VirtualMachine(new DB("./data", { mapSize: 100 * 1024 ** 3 }), {
   recordTransactions: true, recordBlocks: true, recordHistory: true,   // ตัวเลขในโปรแกรมเป็น BigInt เสมอ (ไม่มีตัวเลือกแล้ว)
   gas: { call: 100, read: 100, write: 500, byte: 1, event: 200, hash: 100, recover: 3000, code: 10, price: 1 },
   feeRecipient: MINER, burnPercent: 50,
-  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000,
+  maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 1_000_000,   // block 1 วิ (BLOCK_MS 1000)
   maxCodeSize: 64 * 1024, maxKeySize: 1000, maxValueSize: 64 * 1024,
   admins: [ADMIN],
 });

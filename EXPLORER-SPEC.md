@@ -7,7 +7,7 @@
 
 ## 1. ภาพรวมของ chain
 
-- server เดียวเป็นผู้ผลิต block, ปิด block ทุก ~3 วินาที, block ว่างจะไม่ถูกสร้าง
+- server เดียวเป็นผู้ผลิต block, ปิด block ทุก ~1 วินาที, block ว่างจะไม่ถูกสร้าง
 - ทุก tx เซ็นด้วย EIP-712 (secp256k1) เหมือน Ethereum จึงใช้ MetaMask ได้
 - address เป็นตัวพิมพ์เล็กเสมอ รูปแบบ `0x` + 40 hex — **ต้อง lowercase ก่อนค้นเสมอ**
 - โปรแกรม (smart contract) เขียนด้วย JavaScript และมี address แบบเดียวกับ wallet
@@ -134,7 +134,7 @@ POST /query
   "feeRecipient": "0x…", "burnPercent": 100,
   "txCount": 3, "successCount": 2, "failedCount": 1,
   "gasUsed": 4210, "fee": "4210000000000n",
-  "baseFeePerGas": "1000000000n", "gasTarget": 1500000, "burnedFee": "4210000000000n", "producerFee": "0n",
+  "baseFeePerGas": "1000000000n", "gasTarget": 500000, "burnedFee": "4210000000000n", "producerFee": "0n",
   "parentStateRoot": "0x…", "txRoot": "0x…", "stateRoot": "0x…", "writesRoot": "0x…",
   "receiptsRoot": "0x…", "logsBloom": "0x…(512 hex)",
   "txHashes": ["0x…", "0x…", "0x…"],

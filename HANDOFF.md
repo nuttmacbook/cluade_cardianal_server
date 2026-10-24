@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 897 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 899 เคส + `npm run test:e2e` 31 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 897 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 899 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -510,7 +510,7 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
   · ผล: `2n ** 10n ** 9n` หมดแก๊สในครั้งเดียว (~2.4×10¹⁴) ภายใน ~10 ms · ลูป `x.toString()` / `H * H` / `B / H` ของค่า 8192 bit หมดแก๊ส 3M ใน ~0.1 วิ (เดิม timeout)
   · ค่าใช้จ่าย: การเรียกตัวช่วยทำให้ลูปเลขล้วนช้าลง ~2–3 เท่า (ประมาณ 0.5 µs → 1 µs ต่อรอบ) · token transfer ~3.0 → ~3.5 ms (แก๊สเท่าเดิม)
   · QuickJS: `BigInt.asUintN(n, -1n)` คืน `-1n` (บั๊กของ engine — ค่าจริงต้องเป็น 2^n − 1) อย่าพึ่งพาผลของ asUintN กับค่าติดลบ
-เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 3,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
+เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 1,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
 ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
 
@@ -725,7 +725,7 @@ vm[method](request);
 ### อ่าน
 | endpoint | คืน |
 |---|---|
-| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, baseFee, gasTarget, maxBlockGas, burnPercent, burned }` — explorer poll ทุก 3 วิ · `baseFee` = ของ block ถัดไป |
+| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, baseFee, gasTarget, maxBlockGas, burnPercent, burned }` — explorer poll ทุก 2 วิ · `baseFee` = ของ block ถัดไป |
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
@@ -858,7 +858,7 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
   - ≤360px: ชื่อคอลัมน์อยู่บนค่า, ระยะขอบ 8px, ช่องค้นหา/ปุ่ม wallet เต็มบรรทัด
   - ตัวช่วยวัดเอง: เปิดทุกหน้าแล้วหา element ที่เลยขอบ `.panel` โดยไม่มีกรอบเลื่อน (ดูโค้ดในเทสต์ e2e)
 - ทุก address / hash คลิกได้ + มีปุ่มคัดลอก (`⧉`)
-- poll `/genesis` ทุก 3 วินาที อัปเดตเลข block กับขนาดคิวที่หัวเว็บ
+- poll `/genesis` ทุก 2 วินาที อัปเดตเลข block กับขนาดคิวที่หัวเว็บ
 
 ### หน้า address / โปรแกรม — แท็บ
 `tabs(groups)` + `tabState[location.hash]` จำแท็บที่เลือกต่อ URL
@@ -1051,7 +1051,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 100 ไฟล์ · 897 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 101 ไฟล์ · 899 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1101,6 +1101,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `96-trie` | Merkle Patricia Trie ตรงกับ Ethereum (trie ว่าง · doe/dog/dogglesworth · geth TestDelete) · สุ่มใส่ / ลบ 200–300 รอบ = สร้างใหม่ทุกไบต์ ไม่มี node ค้าง (รวม key ที่เป็น prefix กัน / node ฝังในพ่อ / ค่าใน branch) · หลักฐานมี / ไม่มีค่า · แก้ node / root ผิด / node ขาด = ไม่ผ่าน |
 | `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
 | `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
+| `101-block-gas-defer` | แก๊สที่เหลือใน block ไม่พอ → ใบนั้นรอ block ถัดไป (ไม่ถูกปฏิเสธ · ใบ nonce ถัดไปเข้าตาม) · server `mineOnce`: ไม่มีใบที่เข้าได้ + base fee ขั้นต่ำ = ไม่ปิด block ว่าง · `/health` ไม่ขึ้น stalled ระหว่างนั้น |
 | `100-producer-failover` | `producerSchedule` ตรวจรูปแบบ / เรียง / `producersAt` · ไม่อยู่ใน genesis hash · key หลุด: key เดิมผลิตหลัง block N = ปฏิเสธ (block ก่อน N ซิงก์ได้) · `client.verifiedState` รับฟังก์ชันรายชื่อ · key สำรองผลิตต่อได้ + เตือนเมื่อมี key เดียว · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (ยังผลิต = ไม่เริ่ม · ซิงก์ที่ขาด · ติดต่อไม่ได้ = เตือน · ซิงก์ไม่ครบ = ไม่เริ่ม) · server จริงหลายโปรเซส: FOLLOW ซิงก์ + 503 · FAILOVER_FROM ตอนเดิมยังผลิต = exit 1 · เดิมดับ → สำรองผลิตต่อด้วย DATA เดิม · schedule ถอด key → `retired` → key ใหม่ซิงก์แล้วผลิตต่อ |
 | `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
 | `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
@@ -1119,7 +1120,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 `scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (3 วิ) แล้วตรวจว่าทุกใบเข้า block
 
 ```
-RATE_LIMIT=0 BLOCK_MS=3000 npm start          # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว)
+RATE_LIMIT=0 npm start                        # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 1000
 npm run simulate                               # terminal 2 · เปิด explorer ดูไปพร้อมกันได้
 npm run simulate -- --spawn                    # หรือให้สคริปต์เปิด server เอง (ปิดตอนจบ)
 npm run simulate -- --blocks 200 --min 15 --max 25
@@ -1135,7 +1136,7 @@ npm run simulate -- --blocks 200 --min 15 --max 25
 `scripts/scenario.js` + โปรแกรมใน `scripts/scenario-programs.js` (เทสต์ `50-scenario-programs`)
 
 ```
-RATE_LIMIT=0 BLOCK_MS=3000 npm start          # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
+RATE_LIMIT=0 npm start                        # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
 npm run scenario                               # terminal 2 · ค่าเริ่ม 60 block ของการใช้งาน
 npm run scenario -- --spawn --blocks 15        # หรือเปิด server เอง (MemoryDB)
 ```
@@ -1157,7 +1158,7 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 
 ```
 RATE_LIMIT=0 npm start                         # terminal 1 (ใช้ chain เดิมที่มีข้อมูลอยู่แล้วก็ได้ · รันซ้ำได้ เพราะ --tag สุ่มให้ทุกรอบ)
-npm run scenario:full                          # terminal 2 · http://localhost:3000 (~2 นาทีที่ BLOCK_MS 3000)
+npm run scenario:full                          # terminal 2 · http://localhost:3000 (รันจริงล่าสุดที่ BLOCK_MS 3000 ใช้ ~2 นาที)
 npm run scenario:full -- --spawn               # เปิด server เอง: MemoryDB · BLOCK_MS 1000 · UPGRADE_DELAY_BLOCKS 2 (ทดสอบ timelock) · ตรวจ sync ด้วย
 npm run scenario:full -- --spawn --quick       # BLOCK_MS 300 (~15 วินาที) — ตัวที่เทสต์ 74 ใช้
 npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout http://localhost   # server ที่ตั้ง ADMINS / พิมพ์ลิงก์ Blockscout
@@ -1234,7 +1235,7 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
   `verifyTransaction` 27% (secp256k1 `recoverPublicKey` ของ noble ~3.5 ms/ใบ) · sandbox 38% (`evalCode` คอมไพล์ factory ทุก call 17% · `restoreSnapshot` 9% ≈ 0.6 ms ต่อการรัน) · keccak 9% · `Mempool.prune` 2%
 
 **สรุป / ข้อแนะนำ**
-1. **`BLOCK_MS=3000` ปลอดภัยสำหรับการปิด block 500 tx** — แย่สุดที่วัดได้ token 500 ใบ p95 1.9 วิ (ทุก tx เรียก sandbox) · ไม่ควรลด `BLOCK_MS` ต่ำกว่า ~2,000 ถ้ายังให้ 500 tx ต่อ block
+1. (ผลเดิม ก่อนเปลี่ยนเป็น block 1 วิ · ดูค่าเริ่มตอนนี้ด้านล่าง) **`BLOCK_MS=3000` ปลอดภัยสำหรับการปิด block 500 tx** — แย่สุดที่วัดได้ token 500 ใบ p95 1.9 วิ (ทุก tx เรียก sandbox) · ไม่ควรลด `BLOCK_MS` ต่ำกว่า ~2,000 ถ้ายังให้ 500 tx ต่อ block
    ⚠️ เวลาปิดขึ้นกับจำนวนครั้งที่เรียกโปรแกรม: tx ที่ `runProgram` หลายทอดต่อใบ (multicall / router) ทำให้ 500 ใบเกิน 3 วิได้ → ถ้าจะเพิ่ม `maxTransactions` หรือเปิดให้คนนอกใช้ ควรวัดด้วย workload แบบนั้นก่อน
 2. **ที่เต็มก่อนคือการรับ tx ไม่ใช่การปิด block**: รับ 500 token tx ใช้ ~3.8 วิในโปรเซส (~7.5 วิผ่าน HTTP) > 3 วิ ทั้งหมดอยู่ใน thread เดียวกับ miner
    → รับได้จริง ~65 token / ~110 native tx/s ต่อ node (~200–330 tx ต่อ block 3 วิ) · ระหว่างปิด block `/sendtx` ค้าง (p95 ~1 วิ) — ไม่พัง แค่ tx ไหลไป block ถัดไป
@@ -1286,6 +1287,10 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 **คอขวดย้ายแล้ว**: รับ tx ได้ 400–800 req/s เร็วกว่าที่เชนบรรจุได้ = `maxTransactions` 500 ต่อ `BLOCK_MS` 3 วิ ≈ **167 tx/s ต่อเครือข่าย**
 จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS`
 **ค่าเริ่มตอนนี้ (หลังจำลอง 0.25–3 วิ): block 1 วิ · 1M แก๊ส (gasTarget 500k) · 500 tx** — แก๊สต่อวินาทีเท่าเดิม (3M / 3 วิ) · block เต็มแบบ mix ปิด 334 ms (p95 489) · ต่ำกว่า 0.75 วิไม่ได้ความจุเพิ่ม (CPU ต่อ tx คงที่ · block เล็กมากมีต้นทุนคงที่ต่อ block) · ผลวัดเต็มใน block-time-sim.md ของโปรเจกต์
+**ยิงผ่าน HTTP จริงที่ค่าเริ่มนี้** (24 ต.ค. · LMDB · DEV · `load-test --url --txs 500 --blocks 3` · client เครื่องเดียวกัน): token 253–274 req/s (500 ใบเข้า block ใน 2.9–3.3 วิ · ~216 ใบ/block = เต็มแก๊ส 1M) · mix 168–210 req/s (140–189 ใบ/block · 3.2–4.0 วิ) · native 414–553 req/s (1.8–2.0 วิ) · ทุกใบสำเร็จ ไม่มี block ว่าง
+**แก้พร้อมกัน** (เจอตอนยิงจริงที่ 1M แก๊ส · เทสต์ `101-block-gas-defer`):
+  - ใบที่แก๊สที่เหลือใน block ไม่พอ แต่ block ว่างรับได้ → `mempool.take` ปล่อยไว้รอ block ถัดไป (เดิมถูกปฏิเสธ → ใบ nonce ถัดไปของคนเดิมค้างจนหมดอายุ 5 นาที และ miner ปิด block ว่างทุกรอบระหว่างนั้น) · ใบที่ใหญ่เกิน block ว่างยังถูกปฏิเสธ
+  - miner (`mineOnce`) ไม่ปิด block ว่างเมื่อไม่มีใบไหนเข้าได้และ base fee อยู่ที่ขั้นต่ำแล้ว (block ว่างช่วยแค่ลด base fee) · `minerState.idleAt` → `/health` ไม่นับเป็น stalled
 `load-test.js` ยังใช้ maxBlockGas 3M เพื่อวัด block 500 tx ได้ · `scenario:full --spawn` ตั้ง `MAX_BLOCK_GAS=3000000` (กับดัก OUT_OF_MEMORY ใช้ ~1.05M แก๊สใน tx เดียว · server ค่าเริ่ม = ข้ามหัวข้อนั้น) · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
 ยังไม่ได้วัด: โหลดต่อเนื่องนาน ๆ (ยิงเป็นรอบ ≤ 800 ใบ) · client กับ server อยู่เครื่องเดียวกัน
 
