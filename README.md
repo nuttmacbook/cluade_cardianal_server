@@ -4,7 +4,7 @@ VM สำหรับรันโปรแกรม JavaScript บน chain ข�
 
 ```bash
 npm install
-npm test          # 868 เคส
+npm test          # 903 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
@@ -13,7 +13,7 @@ npm run seed      # สร้างข้อมูลตัวอย่างผ
 ```
 
 `server.js` รวมทุกอย่างเข้าด้วยกัน: VM + mempool + autoreview + simulate + ปิด block อัตโนมัติ
-และเสิร์ฟหน้า explorer ที่ `public/explorer.html` ตั้งค่าผ่าน env: `PORT`, `DATA`, `MINER`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`
+และเสิร์ฟหน้า explorer ที่ `public/explorer.html` ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ครบทุกตัวอยู่หัวไฟล์ `server.js`)
 ยอดเงินตั้งต้นอ่านจาก `genesis.json`
 
 ## โครงสร้าง
@@ -41,7 +41,7 @@ client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx 
 docs/                      Blockscout · checklist ลอง MetaMask จริง
 test/                      103 ไฟล์ · 903 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
-CHECKPOINT.md              สถานะปัจจุบัน ค่าตั้งต้นที่แนะนำ และรายการที่ยังไม่ได้ทำ
+CHECKPOINT.md              ภาพ ณ Checkpoint 5 (ข้อมูลล่าสุดอยู่ใน HANDOFF.md)
 ```
 
 ## แต่ละส่วนทำอะไร

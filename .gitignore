@@ -9,3 +9,5 @@ scenario-full-report*.json
 
 # ไฟล์ตั้งค่าเครื่องจริง (มี key) · ตัวอย่างอยู่ใน deploy/*.example
 deploy/*.env
+deploy/test-keys.json
+data-test/
