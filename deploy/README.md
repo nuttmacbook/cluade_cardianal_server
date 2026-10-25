@@ -27,6 +27,31 @@ sudo cp deploy/cardianal.service /etc/systemd/system/ && sudo systemctl enable -
 
 ---
 
+## 0. ลองในเครื่องก่อน (key ทดสอบ · ไม่ใช้กับเชนจริง)
+
+```
+# key 5 ตัว: admin1 admin2 producer spare rich (rich = ได้เหรียญตั้งต้น)
+node -e 'import("./src/crypto/signature.js").then(s=>{const out={};for(const n of ["admin1","admin2","producer","spare","rich"]){const k=s.randomPrivateKey();out[n]={key:k,address:s.addressOf(k)}}console.log(JSON.stringify(out,null,2))})' > deploy/test-keys.json
+
+# genesis จากตัวอย่าง (แทน 0xADDRESS_… ด้วย address ข้างบน)
+node -e 'const fs=require("fs");const k=require("./deploy/test-keys.json");let t=fs.readFileSync("deploy/genesis.mainnet.example.json","utf8").replace("0xADDRESS_ที่ได้เหรียญตั้งต้น",k.rich.address).replace("0xADDRESS_ADMIN_1",k.admin1.address).replace("0xADDRESS_ADMIN_2",k.admin2.address).replace("0xADDRESS_ผู้ผลิตหลัก",k.producer.address).replace("0xADDRESS_ผู้ผลิตสำรอง",k.spare.address);fs.writeFileSync("deploy/genesis.mainnet.json",t)'
+
+# env: key ผู้ผลิต + เก็บข้อมูลที่ ./data-test
+node -e 'const fs=require("fs");const k=require("./deploy/test-keys.json");fs.writeFileSync("deploy/producer.env",fs.readFileSync("deploy/producer.env.example","utf8").replace("0x<key ผู้ผลิตหลัก>",k.producer.key).replace("/var/lib/cardianal","./data-test"))'
+
+node --env-file=deploy/producer.env scripts/preflight.js                    # "ผ่าน · เปิดได้" (เตือน TRUST_PROXY ได้ ไม่เป็นไร)
+EVM_RATE_LIMIT=0 node --env-file=deploy/producer.env server.js              # http://127.0.0.1:3000
+curl 127.0.0.1:3000/genesis                                                 # chainId 272727 · role producer · producers 2
+```
+
+- MetaMask: RPC `http://127.0.0.1:3000/evm` (**http** ไม่ใช่ https · server ไม่มี TLS เอง) · ง่ายสุดกดปุ่ม Add network ในหน้า `http://127.0.0.1:3000/` · import `rich.key` เพื่อโอนทดสอบ
+- `EVM_RATE_LIMIT=0` เฉพาะในเครื่อง: ทุกอย่างมาจาก 127.0.0.1 IP เดียว (MetaMask + Blockscout) เกิน 600/นาทีแล้วได้ 429 → MetaMask ขึ้น "This RPC provider is limiting requests" · เครื่องจริงหลัง nginx นับแยกต่อผู้ใช้ ไม่ต้องตั้ง
+- network เก่าใน MetaMask ที่ chain ID ไม่ใช่ 272727 ใช้ RPC นี้ไม่ได้ ลบแล้วเพิ่มใหม่
+- เริ่มใหม่: หยุด server แล้ว `rm -rf data-test` · `deploy/test-keys.json` และ `data-test/` อยู่ใน .gitignore แล้ว
+- key จริงสร้างบนเครื่องที่ไม่ต่อเน็ต · admin ใช้ hardware wallet
+
+---
+
 ## 1. genesis.mainnet.json (ล็อกถาวร · แก้หลังเปิด = ล้างเชน)
 
 | ค่า | ตั้งเป็น | เหตุผล |

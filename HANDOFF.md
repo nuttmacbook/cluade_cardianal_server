@@ -32,7 +32,7 @@ node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 1000) `MAX_BLOCK_GAS` (1M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 1000) `MAX_BLOCK_GAS` (1M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `EVM_RATE_LIMIT` (request ของ `/evm` ต่อ IP ต่อนาที ค่าเริ่ม 600 · 0 = ไม่จำกัด · ทดสอบในเครื่องที่มี MetaMask + Blockscout ใช้ 0) `EVM_NAME` `EVM_SYMBOL` (ชื่อ / สัญลักษณ์ที่ปุ่ม Add network ส่งให้กระเป๋า) `HOST` (ไม่ตั้ง = ทุก interface · เปิดจริงหลัง nginx ใช้ 127.0.0.1) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง · ไฟล์ตั้งค่าครบชุดสำหรับเปิดจริงอยู่ใน `deploy/` (อ่าน `deploy/README.md`)
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -1120,7 +1120,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ### จำลองผู้ใช้ 200 กระเป๋า (`npm run simulate`)
 
-`scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (3 วิ) แล้วตรวจว่าทุกใบเข้า block
+`scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (`BLOCK_MS` ของ server) แล้วตรวจว่าทุกใบเข้า block
 
 ```
 RATE_LIMIT=0 npm start                        # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 1000
@@ -1322,9 +1322,10 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 8. ~~แท็บ interactions / event ยังไม่มี pagination~~ เสร็จแล้ว: แบบ cursor (Newer / Older) ฝั่ง server `/program/:a/interactions` · `/program/:a/events?cursor=`
 9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers) + ethers ส่งผ่าน `/evm` ได้ (เทสต์ 94)
    แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ: `docs/metamask-checklist.md`
+   ลองในเครื่องด้วย key ทดสอบ: `deploy/README.md` ข้อ 0 (RPC เป็น http · `EVM_RATE_LIMIT=0` กัน 429 เมื่อทุกอย่างมาจาก 127.0.0.1)
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
     ~~คอขวดคือการรับ tx (~65 token / ~110 native tx/s ต่อ node)~~ แก้แล้ว: ตรวจลายเซ็นครั้งเดียว + ใน worker thread · `Mempool.prune` เบาลง · ไม่คำนวณ root ซ้ำ · ภาพอุ่นของ sandbox (เทสต์ 82 / 89 / 90)
-    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ → **เพดานตอนนี้คือ 500 tx ต่อ block 3 วิ ≈ 167 tx/s** (หัวข้อ 10 "load test")
+    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ (ตอนนั้น block 3 วิ) · **ค่าเริ่มตอนนี้ block 1 วิ · 1M แก๊ส → ~216 token tx ต่อ block ≈ 216 tx/s** (หัวข้อ 10 "load test")
     ~~แผนตัด history~~ มีแล้ว: `HISTORY_KEEP_BLOCKS` (ระยะ 4 · หัวข้อ 4 "ระยะ 4") · ที่เหลือ: `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
