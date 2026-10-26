@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 903 เคส + `npm run test:e2e` 31 เคส |
+| เทสต์ | `npm test` → 907 เคส + `npm run test:e2e` 32 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 903 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 907 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -87,7 +87,7 @@ src/node/ratelimit.js           55        rate limit ต่อ key (server ใ�
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
 src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
 server.js                      193        server จริง (node:http) — ตัวที่ใช้งานอยู่
-public/explorer.html           414        explorer ทั้งหมดในไฟล์เดียว
+explorerscan/                  ~2,000     explorer: index.html + theme/ (สี) + ui/ (หน้าตา) + core/ (ระบบ) · ดู explorerscan/README.md
 index.js                         9        จุดเข้าเดียวสำหรับ import เป็น library
 ```
 
@@ -105,11 +105,11 @@ index.js                         9        จุดเข้าเดียว�
 | หน่วยความจำ / stack / การแยกโปรแกรม | `src/core/sandbox.js` (หัวข้อ 4 "Sandbox") |
 | กฎการตรวจโค้ด | `ALLOWED_NODES` / `ALLOWED_MEMBERS` / `BANNED_*` ใน `autoreview.js` |
 | endpoint | `ROUTES` + `DYNAMIC` + `handlePost` ใน `server.js` |
-| หน้าเว็บ | `public/explorer.html` |
+| หน้าเว็บ | `explorerscan/` — สี `theme/colors.css` · หน้าตา `theme/style.css` + `ui/` · ระบบ (อ่านเชน / กระเป๋า / ลายเซ็น) `core/` |
 
 ### ส่วนที่มีสองชุดและต้องระวัง
 
-**canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorer.html` (`canonical`)
+**canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorerscan/core/wallet.js` (`canonical`)
 **ถ้าแก้ตัวใดตัวหนึ่งแล้วไม่แก้อีกตัว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด**
 
 (`src/node/routes.js` ตัวอย่าง Fastify และโฟลเดอร์ `client/` ที่ซ้ำกับ `program-sdk/` ถูกลบไปแล้ว — server จริงคือ `server.js` ตัวเดียว)
@@ -835,10 +835,11 @@ GET  /evm/explorer                                302 → / (URL explorer ที
 
 ---
 
-## 8. Explorer (`public/explorer.html`)
+## 8. Explorer (`explorerscan/`)
 
-ไฟล์เดียว ~900 บรรทัด **ภาษาอังกฤษทั้งหน้า** (เทสต์ e2e ตรวจว่าไม่มีอักษรไทยนอกจากข้อมูลของผู้ใช้) ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
-HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `GET /` ของ `server.js`
+โฟลเดอร์ `explorerscan/` แยกไฟล์ตามหน้าที่ (โครงสร้าง + ส่วนไหนแก้ได้ / ส่วนไหนเป็นระบบ: `explorerscan/README.md`) **ภาษาอังกฤษทั้งหน้า** (เทสต์ e2e ตรวจว่าไม่มีอักษรไทยนอกจากข้อมูลของผู้ใช้) ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
+HTML + CSS + JS ธรรมดา (script ไม่ใช่ module · ลำดับโหลดใน `index.html` สำคัญ) · `server.js` เสิร์ฟที่ `/explorerscan/*` และ `GET /` (index.html + `<base href="/explorerscan/">`) · `EXPLORER_DIR` = ใช้โฟลเดอร์ที่ fork ไปแต่ง · โฮสต์แยกได้ (`config.js` → `api`)
+- ปุ่ม **Add network** (`addNetwork()` ใน `core/wallet.js`) ส่ง `GET /evm` ให้ `wallet_addEthereumChain`
 
 ### โครง
 - routing ด้วย `location.hash` → `render(soft)` แยกไปที่ `home()` / `block(n)` / `tx(h)` / `address(a)`
@@ -850,8 +851,8 @@ HTML + CSS + JS ในไฟล์เดียว เสิร์ฟจาก `G
 - helper เล็ก ๆ: `esc` `cut` `num` `when` `ago` `utc` `age` `copy` `addr` `txLink` `panel` `table` `kv`
 - เวลาแบบ "… ago" ทุกจุดใช้ `age(t)` (หรือ `utc(t)` ต่อท้าย): มีบรรทัดเล็ก `YYYY-MM-DD HH:MM:SS UTC` ใต้ · จอ ≤720px ซ่อนวินาที (`.utc .sec`)
   **`num()` คือตัวแปลง `"123n"` → ตัวเลขอ่านง่าย — ทุกค่าที่มาจากโปรแกรมต้องผ่านตัวนี้**
-- ธีม: ม่วงเข้มแบบ data canvas ธีมเดียว (`color-scheme:dark`) ตามรูปอ้างอิง · `--bg:#0a0616` `--chrome:#07050f` `--panel:#1a0b33` `--accent:#c4b5fd` `--accent-2:#a78bfa` · พื้นหลัง gradient ม่วง #2a0a4a → #6b1a9a + เส้นตาราง · แถบข้างซ้าย (มือถือ = drawer ปุ่ม ☰ `#menu-btn`)
-  แท็บที่เลือก / ปุ่มหลัก = ม่วงทึบ #6d28d9 · การ์ดมีป้ายชื่อเล็กด้านบน · กล่อง JSON / โค้ด / ผลลัพธ์ = `#04050d` · รายละเอียดดู EXPLORER-SPEC.md ข้อ 9
+- ธีม: น้ำเงินคราม / indigo มืดธีมเดียว (`color-scheme:dark`) · ค่าสีทั้งหมดอยู่ใน `explorerscan/theme/colors.css` (`--bg:#060914` `--panel:#0f1530` `--accent:#a5b4fc` `--accent-2:#818cf8` `--violet:#4f52d6`) · พื้นหลัง gradient #17204a → #070a17 + เส้นตารางจาง · แถบข้างซ้าย (มือถือ = drawer ปุ่ม ☰ `#menu-btn`)
+  แท็บที่เลือก / ปุ่มหลัก = `--violet` · การ์ดมีป้ายชื่อเล็กด้านบน · กล่อง JSON / โค้ด / ผลลัพธ์ = `#04050d` · รายละเอียดดู EXPLORER-SPEC.md ข้อ 9
 - responsive รองรับจอกว้าง 180px ขึ้นไป (เทสต์ e2e "responsive" วัด 180/240/360/768/1280 ว่าไม่มีอะไรล้นหรือถูกตัด)
   - `table()` ห่อด้วย `.twrap` (ตารางกว้างกว่าจอ → เลื่อนในกรอบ ไม่ดันทั้งหน้า) และใส่ class `grid`
   - ≤640px: ตาราง `.grid` เป็นการ์ดแถวละใบ · `labelCells()` ใส่ `data-label` จากหัวตาราง + ห่อค่าใน `.cv` (เรียกใน `el()` และ `drawStorage()`)
@@ -1052,7 +1053,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 103 ไฟล์ · 903 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 104 ไฟล์ · 907 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1113,7 +1114,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 `test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
 ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
-`46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorer.html` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
+`46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorerscan/core/wallet.js` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
 
 **ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
 `scripts/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม

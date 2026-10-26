@@ -2,6 +2,7 @@
  * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
  *   PORT=3000 DATA=./data PRODUCER_KEY=0x… ADMINS=0x… node server.js      (ช่วงพัฒนา: DEV=1 node server.js หรือ npm run dev)
  *   HOST=127.0.0.1    ฟังเฉพาะในเครื่อง (อยู่หลัง nginx · คนนอกเข้าพอร์ตตรงไม่ได้) · ไม่ตั้ง = ทุก interface · ตั้งค่าใช้งานจริงดู deploy/README.md
+ *   EXPLORER_DIR=./my-explorer   โฟลเดอร์หน้า explorer ที่ fork ไปแต่งเอง (ค่าเริ่ม explorerscan/ · โครงสร้างดู explorerscan/README.md)
  *   DEV=1             ช่วงพัฒนา: ไม่บังคับ ADMINS / PRODUCER_KEY (ไม่ตั้ง ADMINS = ใครก็อนุมัติ deploy / upgrade ได้)
  *   GENESIS=genesis.json   ไฟล์ genesis · config ในไฟล์ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (src/node/genesis.js) — env ตั้งต่างจาก genesis = ไม่ยอมเริ่ม
  *   PRODUCER_KEY=0x…  key ของผู้ผลิต block (เซ็น hash ของทุก block · node ผู้อ่านตรวจกับ config.producers ใน genesis)
@@ -496,14 +497,40 @@ function handleSnapshot(response, url) {
   return fs.createReadStream(file).pipe(response);
 }
 
+/**
+ * หน้า explorer = ไฟล์ในโฟลเดอร์ explorerscan/ (หรือ EXPLORER_DIR = โฟลเดอร์ที่ fork ไปแต่งเอง) เสิร์ฟที่ /explorerscan/*
+ * "/" เสิร์ฟ index.html เดียวกันโดยเติม <base href="/explorerscan/"> ให้ path แบบ relative ในไฟล์ชี้ถูกที่
+ */
+const EXPLORER_DIR = path.resolve(process.env.EXPLORER_DIR ?? path.join(import.meta.dirname, "explorerscan"));
+const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".ico": "image/x-icon",
+  ".json": "application/json; charset=utf-8", ".woff2": "font/woff2" };
+function serveExplorer(response, file, base = false) {
+  let full;
+  try { full = path.resolve(EXPLORER_DIR, `.${decodeURIComponent(file)}`); } catch { return send(response, 404, { error: "Endpoint not found" }); }
+  const type = STATIC_TYPES[path.extname(full).toLowerCase()];
+  if (!type || !full.startsWith(EXPLORER_DIR + path.sep) || !fs.statSync(full, { throwIfNoEntry: false })?.isFile()) {
+    return send(response, 404, { error: "Endpoint not found" });
+  }
+  let body = fs.readFileSync(full);
+  if (base) body = body.toString("utf8").replace("<head>", '<head><base href="/explorerscan/">');
+  response.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
+  return response.end(body);
+}
+
 export const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   if (url.pathname === "/evm" || url.pathname.startsWith("/evm/")) return handleEvm(request, response, url);
   if (request.method === "GET" && (url.pathname === "/snapshot" || url.pathname.startsWith("/snapshot/"))) return handleSnapshot(response, url);
-  if (request.method === "OPTIONS") return send(response, 204, {});
-  if (url.pathname === "/" || url.pathname === "/explorer") {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    return response.end(fs.readFileSync(path.join(import.meta.dirname, "public/explorer.html")));
+  if (request.method === "OPTIONS") {   // explorer ที่โฮสต์แยกโดเมน (EXPLORER.api) ส่ง POST แบบ JSON → ต้องตอบ preflight
+    response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type" });
+    return response.end();
+  }
+  if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/explorer")) return serveExplorer(response, "/index.html", true);
+  if (request.method === "GET" && url.pathname === "/explorerscan") { response.writeHead(301, { location: "/explorerscan/" }); return response.end(); }
+  if (request.method === "GET" && url.pathname.startsWith("/explorerscan/")) {
+    return serveExplorer(response, url.pathname === "/explorerscan/" ? "/index.html" : url.pathname.slice("/explorerscan".length));
   }
   try {
     let result;

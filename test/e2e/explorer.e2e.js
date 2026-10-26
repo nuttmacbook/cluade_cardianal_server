@@ -51,6 +51,7 @@ before(async () => {
       request: async ({ method, params }) => {
         if (method === "eth_requestAccounts") return [account];
         if (method === "eth_signTypedData_v4") return window.__signTypedData(params[1]);
+        if (method === "wallet_addEthereumChain") { window.__addedChain = params[0]; return null; }
         throw new Error(`ไม่รองรับ ${method}`);
       },
     };
@@ -80,6 +81,17 @@ test("หน้าแรก: ภาพรวม + รายการ block", asy
   assert.equal(await page.locator("#view a", { hasText: /^1$/ }).count(), 1);
   assert.ok(await page.locator("#view .ico.blk").count() >= 1);                  // เลข block มีไอคอนกล่อง
   assert.ok(await page.locator("#view .ico.gas").count() >= 1);                  // ค่าแก๊สมีไอคอนไฟ
+  assert.deepEqual(pageErrors, []);
+});
+
+test("ปุ่ม Add network: ส่งค่าจาก GET /evm ให้ wallet_addEthereumChain (chainId / rpcUrls / explorer ของ node นี้)", async () => {
+  await open("");
+  await page.click("#nbtn");
+  await page.waitForFunction(() => window.__addedChain);
+  const added = await page.evaluate(() => window.__addedChain);
+  const expected = await get("/evm");
+  assert.deepEqual(added, expected);
+  assert.equal(added.rpcUrls[0], `${url}/evm`);
   assert.deepEqual(pageErrors, []);
 });
 

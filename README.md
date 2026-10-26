@@ -4,7 +4,7 @@ VM สำหรับรันโปรแกรม JavaScript บน chain ข�
 
 ```bash
 npm install
-npm test          # 903 เคส
+npm test          # 907 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
@@ -13,7 +13,7 @@ npm run seed      # สร้างข้อมูลตัวอย่างผ
 ```
 
 `server.js` รวมทุกอย่างเข้าด้วยกัน: VM + mempool + autoreview + simulate + ปิด block อัตโนมัติ
-และเสิร์ฟหน้า explorer ที่ `public/explorer.html` ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ครบทุกตัวอยู่หัวไฟล์ `server.js`)
+และเสิร์ฟหน้า explorer จากโฟลเดอร์ `explorerscan/` (แต่งหน้าตาเองได้ ดู `explorerscan/README.md`) ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ครบทุกตัวอยู่หัวไฟล์ `server.js`)
 ยอดเงินตั้งต้นอ่านจาก `genesis.json`
 
 ## โครงสร้าง
@@ -31,7 +31,7 @@ src/
   core/trie.js             Merkle Patricia Trie แบบ Ethereum — stateRoot + หลักฐาน (getProof / verifyProof)
 
 server.js                  server จริง (node:http ไม่มี dependency เพิ่ม)
-public/explorer.html       หน้า explorer ไฟล์เดียว
+explorerscan/              หน้า explorer: theme/ (สี) · ui/ (หน้าตา) · core/ (ระบบ อ่านเชน / กระเป๋า) · README บอกว่าแก้ตรงไหน
 genesis.json               ยอดเงินตั้งต้น (ช่วงพัฒนา · เปิดจริงใช้ deploy/genesis.mainnet.example.json)
 deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
@@ -39,7 +39,7 @@ scripts/                   demo.js, examples.js
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
 docs/                      Blockscout · checklist ลอง MetaMask จริง
-test/                      103 ไฟล์ · 903 เคส
+test/                      104 ไฟล์ · 907 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              ภาพ ณ Checkpoint 5 (ข้อมูลล่าสุดอยู่ใน HANDOFF.md)
 ```
