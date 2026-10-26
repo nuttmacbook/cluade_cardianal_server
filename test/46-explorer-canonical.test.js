@@ -4,14 +4,14 @@ import fs from "node:fs";
 import { canonicalJson } from "../src/core/virtualmachine.js";
 import { buildTypedData } from "../src/crypto/signature.js";
 
-/* explorer.html เขียน canonical JSON ซ้ำอีกชุด — ถ้าผลต่างจาก VM แม้ตัวเดียว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด */
+/* explorer (explorerscan/core/wallet.js) เขียน canonical JSON ซ้ำอีกชุด — ถ้าผลต่างจาก VM แม้ตัวเดียว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด */
 
-const html = fs.readFileSync(new URL("../public/explorer.html", import.meta.url), "utf8");
+const html = fs.readFileSync(new URL("../explorerscan/core/wallet.js", import.meta.url), "utf8");
 
-/** ดึงฟังก์ชันจาก <script> ของ explorer ออกมารันใน Node */
+/** ดึงฟังก์ชันจากไฟล์ของ explorer ออกมารันใน Node */
 function extract(name) {
   const start = html.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `ไม่พบ function ${name} ใน explorer.html`);
+  assert.ok(start >= 0, `ไม่พบ function ${name} ใน explorerscan/core/wallet.js`);
   let depth = 0;
   for (let i = html.indexOf("{", start); i < html.length; i += 1) {
     if (html[i] === "{") depth += 1;

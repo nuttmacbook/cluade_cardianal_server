@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#05060b">
+<title>Program VM Explorer</title>
+<!-- explorerscan/index.html [แก้ได้ · โครงหน้า] ชื่อเว็บ, โลโก้, เมนูบน, เมนูข้าง · โครงสร้างโฟลเดอร์อยู่ใน README.md -->
+<link rel="stylesheet" href="theme/colors.css">
+<link rel="stylesheet" href="theme/style.css">
+</head><body>
+<div class="canvas" aria-hidden="true"><i></i></div>
+<header><div class="bar">
+  <button class="menu" id="menu-btn" title="Menu" aria-label="Menu" onclick="sideMenu()">☰</button>
+  <div class="brand" onclick="go('')"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#bbb6f1"/><stop offset=".5" stop-color="#3d3399"/><stop offset="1" stop-color="#5362d4"/></linearGradient></defs>
+    <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z" fill="none" stroke="url(#lg)" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M16 9.5 21.6 12.75v6.5L16 22.5l-5.6-3.25v-6.5zM16 2.5v7M27.7 22.75 21.6 19.25M4.3 22.75l6.1-3.5" fill="none" stroke="url(#lg)" stroke-width="2" stroke-linejoin="round"/></svg>Program VM<span id="tick"></span></div>
+  <nav class="pills" aria-label="Sections">
+    <a class="pill" data-nav="explore" onclick="go('')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>Explorer</a>
+    <a class="pill" data-nav="programs" onclick="go('#programs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg>Programs<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg></a>
+  </nav>
+  <input id="q" placeholder="Search block / tx / address / name" onkeydown="if(event.key==='Enter')search()">
+  <button class="btn" id="dbtn" onclick="go('#deploy')">Deploy</button>
+  <button class="btn" id="nbtn" title="Add this chain to MetaMask" onclick="addNetwork().catch((e) => alert(e.message))">Add network</button>
+  <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>
+</div></header>
+<div class="shell">
+<aside class="side" id="side" aria-label="Navigation">
+  <details open><summary><h3>Explorer</h3></summary>
+    <a data-nav="home" onclick="sideGo('')"><span class="dot" style="--c:#5362d4">◆</span><span>Overview</span></a>
+    <a data-nav="block" onclick="sideClose();api('/genesis').then((i) => go('#block/' + (i.latest || 1)))"><span class="dot" style="--c:#2563eb">B</span><span>Latest block</span><span class="n" id="side-latest">—</span></a>
+  </details>
+  <details open><summary><h3>Programs</h3></summary>
+    <a data-nav="programs-approved" onclick="sideClose();openPrograms('approved')"><span class="dot" style="--c:#16a34a">✓</span><span>Approved</span><span class="n" id="side-approved">—</span></a>
+    <a data-nav="programs-pending" onclick="sideClose();openPrograms('pending')"><span class="dot" style="--c:#db2777">?</span><span>In review</span><span class="n" id="side-review">—</span></a>
+    <a data-nav="deploy" onclick="sideGo('#deploy')"><span class="dot" style="--c:#4d53d0">+</span><span>New program</span></a>
+  </details>
+  <details open><summary><h3>Wallet</h3></summary>
+    <a data-nav="me" onclick="sideClose();(wallet ? Promise.resolve() : connect(false)).then(() => go('#address/' + wallet)).catch((e) => alert(e.message))"><span class="dot" style="--c:#0d9488">◎</span><span>My address</span></a>
+  </details>
+  <details open><summary><h3>Recent programs</h3></summary><div id="side-programs"><div class="hint">Loading…</div></div></details>
+</aside>
+<div class="scrim" onclick="sideClose()"></div>
+<main id="view"></main>
+</div>
+<div class="toast" id="toast">Copied</div>
+<!-- ลำดับสำคัญ: config → core (ระบบ) → ui (หน้าตา) → router / start · ไฟล์ทั้งหมดเป็น script ธรรมดา ใช้ตัวแปรร่วมกัน ไม่ต้อง build -->
+<script src="config.js"></script>
+<script src="core/format.js"></script>
+<script src="core/chain.js"></script>
+<script src="core/wallet.js"></script>
+<script src="core/interact.js"></script>
+<script src="core/actions.js"></script>
+<script src="ui/components.js"></script>
+<script src="ui/tabs/interact.js"></script>
+<script src="ui/tabs/storage.js"></script>
+<script src="ui/tabs/permit.js"></script>
+<script src="ui/tabs/upgrade.js"></script>
+<script src="ui/tabs/metadata.js"></script>
+<script src="ui/pages/home.js"></script>
+<script src="ui/pages/programs.js"></script>
+<script src="ui/pages/block.js"></script>
+<script src="ui/pages/tx.js"></script>
+<script src="ui/pages/address.js"></script>
+<script src="ui/pages/deploy.js"></script>
+<script src="ui/sidebar.js"></script>
+<script src="core/router.js"></script>
+<script src="core/start.js"></script>
+</body></html>

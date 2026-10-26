@@ -1,0 +1,14 @@
+/* explorerscan/theme/colors.css [แก้ได้ · สี] — สีทั้งหมดของธีม เปลี่ยนธีมแก้ไฟล์นี้ไฟล์เดียวก่อน */
+
+:root{
+  /* indigo night theme: near-black navy chrome · deep blue-indigo canvas with a faint grid · translucent indigo cards
+     (one dark theme for light and dark OS mode) */
+  color-scheme:dark;
+  --bg:#060914;--chrome:#05070f;--panel:#0f1530;--card:rgba(20,28,60,.72);--line:#222c52;--line-2:rgba(129,140,248,.16);
+  --text:#e6e9fb;--dim:#97a0c4;--soft:rgba(99,102,241,.12);--head:rgba(79,90,180,.34);
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#a5b4fc;--accent-2:#818cf8;--prog:#b4a8f5;
+  --violet:#4f52d6;--grad:linear-gradient(135deg,#3b5fd9 0%,#4f52d6 55%,#6a5acd 100%);--radius:10px;
+  --glow:0 0 0 1px rgba(129,140,248,.05),0 12px 32px rgba(2,4,14,.55),0 0 24px rgba(79,82,214,.10);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --top:58px;
+}
