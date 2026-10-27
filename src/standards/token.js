@@ -54,28 +54,10 @@ export const TOKEN_FUNCTIONS = ["name", "ticker", "decimals", "totalSupply", "ba
 export const TOKEN_EVENTS = ["Transfer", "Approval"];
 
 /**
- * โปรแกรม token ตามมาตรฐาน — input ตอน deploy: { name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }
- * supply เป็นหน่วยเล็กสุด (6 decimals + supply 1_000_000_000_000n = 1,000,000 เหรียญ)
+ * ฟังก์ชันของ token ทั้งหมดยกเว้น initialization (ใช้ร่วมกับโปรแกรมอื่นที่เป็น token ด้วย เช่น WCARD ใน system.js)
+ * storage: name / ticker / decimals / totalSupply / owner · balances:<who> · allowance:<owner>:<spender> · nonces:<owner>
  */
-export const TOKEN_PROGRAM = `function program() {
-  function initialization(params) {
-    const owner = params.context.sender
-    writeDB("name", params.input.name)
-    writeDB("ticker", params.input.ticker)
-    writeDB("decimals", params.input.decimals)
-    writeDB("totalSupply", params.input.supply)
-    writeDB("owner", owner)
-    writeDB(map("balances", owner), params.input.supply)
-    if (params.input.namespace) setMetadata("namespace", params.input.namespace)
-    // metadata ของโปรแกรมตั้งได้จากโค้ดเท่านั้น: icon / url / contact / description ส่งมาตอน deploy ได้
-    if (params.input.icon) setMetadata("icon", params.input.icon)
-    if (params.input.url) setMetadata("url", params.input.url)
-    if (params.input.contact) setMetadata("contact", params.input.contact)
-    if (params.input.description) setMetadata("description", params.input.description)
-    emit("Transfer", { from: "${ZERO_ADDRESS}", to: owner, amount: params.input.supply }, { indexed: ["from", "to"] })
-  }
-
-  function name() { return readDB("name") }
+export const TOKEN_CORE = `  function name() { return readDB("name") }
   function ticker() { return readDB("ticker") }
   function decimals() { return readDB("decimals") }
   function totalSupply() { return readDB("totalSupply") }
@@ -155,9 +137,37 @@ export const TOKEN_PROGRAM = `function program() {
     move(params.input.from, params.input.to, params.input.amount)
     return true
   }
+`;
+/** ชื่อฟังก์ชันที่ TOKEN_CORE มี (ใส่ใน return { … } ของโปรแกรม) */
+export const TOKEN_CORE_EXPORTS = "name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom, permit, nonces, permitDomain, DOMAIN_SEPARATOR";
 
-  return { name, ticker, decimals, totalSupply, balanceOf, allowance, transfer, multiTransfer, approve, transferFrom,
-    permit, nonces, permitDomain, DOMAIN_SEPARATOR }
+/**
+ * โปรแกรม token ตามมาตรฐาน — input ตอน deploy: { name, ticker, decimals, supply, owner?, namespace?, icon?, url?, contact?, description? }
+ * owner = ผู้ได้ supply ทั้งหมด (ไม่ส่ง = ผู้ deploy · โรงงานใน src/standards/system.js ส่ง = ผู้สร้าง)
+ * supply เป็นหน่วยเล็กสุด (6 decimals + supply 1_000_000_000_000n = 1,000,000 เหรียญ)
+ */
+export const TOKEN_PROGRAM = `function program() {
+  function initialization(params) {
+    // owner ส่งมาได้ (โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง) · ไม่ส่ง = ผู้ deploy
+    const owner = params.input.owner || params.context.sender
+    if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
+    writeDB("name", params.input.name)
+    writeDB("ticker", params.input.ticker)
+    writeDB("decimals", params.input.decimals)
+    writeDB("totalSupply", params.input.supply)
+    writeDB("owner", owner)
+    writeDB(map("balances", owner), params.input.supply)
+    if (params.input.namespace) setMetadata("namespace", params.input.namespace)
+    // metadata ของโปรแกรมตั้งได้จากโค้ดเท่านั้น: icon / url / contact / description ส่งมาตอน deploy ได้
+    if (params.input.icon) setMetadata("icon", params.input.icon)
+    if (params.input.url) setMetadata("url", params.input.url)
+    if (params.input.contact) setMetadata("contact", params.input.contact)
+    if (params.input.description) setMetadata("description", params.input.description)
+    if (params.input.supply > 0n) emit("Transfer", { from: "${ZERO_ADDRESS}", to: owner, amount: params.input.supply }, { indexed: ["from", "to"] })
+  }
+
+${TOKEN_CORE}
+  return { ${TOKEN_CORE_EXPORTS} }
 }`;
 
 /** โค้ดที่ VM เก็บไว้มี \\n เป็นตัวอักษร (escape แบบ JSON) → คืนเป็นโค้ดปกติ */

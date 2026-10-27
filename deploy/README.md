@@ -121,6 +121,18 @@ URL ที่ได้: RPC `https://chain.example.com/evm` · explorer `https:/
 ตรวจ /health, chainId, explorer, rpcUrl ของปุ่ม Add network เป็น https และพอร์ต 3000 ปิดจากข้างนอก · เก็บ genesis hash ที่พิมพ์ออกมาไว้ประกาศ
 แล้วเพิ่มเชนใน MetaMask จากปุ่มในหน้า explorer · โอน 1 ครั้ง · ดูใน explorer
 
+## 7. โปรแกรมกลาง (หลังเปิดเชน · ทำครั้งเดียว)
+
+Multicall, WCARD (ห่อเหรียญหลัก), Factory (ให้ใครก็สร้าง token / NFT / multisig ได้ทันที) + ต้นแบบ · ใช้**กระเป๋า deployer ใหม่**ที่ไม่เคยส่ง tx (address ของโปรแกรมผูกกับ nonce 0–6 ของกระเป๋านี้)
+```
+node scripts/deploy-system.js --plan --deployer 0x<deployer> --chain-id 272727     # address ล่วงหน้า (ใส่เอกสาร / ประกาศได้เลย)
+# โอนเหรียญให้ deployer ~0.01 แล้ว
+DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://chain.example.com
+```
+- ได้ `deploy/system-programs.json` (address + ชื่อ) · explorer เมนู "System programs" แสดงให้เอง
+- ไม่อยากใช้ key admin บนเครื่องนี้ (admin เป็น hardware wallet): ไม่ต้องส่ง `ADMIN_KEY` แล้วกด Approve ทีละตัวในหน้า Programs ของ explorer ด้วยกระเป๋า admin
+- เหรียญหลักไม่ใช่ CARD: สคริปต์อ่านจาก `EVM_SYMBOL` ของ server (หรือตั้ง `SYMBOL=…`) → ชื่อเป็น `w<symbol>` · แก้ `systemPrograms` ใน `explorerscan/config.js` ให้ตรง
+
 ## เครื่องที่ควรใช้
 
 ผลวัดที่ผ่านมาใช้ 4 vCPU (thread หลักใช้ ~70% ตอนเต็ม 1M แก๊ส/วิ) → **4 vCPU, RAM 8 GB, SSD 200 GB+** เริ่มได้ · ดิสก์โตตามจำนวน tx (~7–9 KB ต่อ tx) ดูจริงหลังเปิด 1–2 สัปดาห์

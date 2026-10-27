@@ -37,8 +37,8 @@ export const MULTITOKEN_INTERFACES = ["0x01ffc9a7", "0xd9b67a26", "0x0e89341c"];
 export const checkMultiTokenStandard = (code) => checkStandard(code, MULTITOKEN_FUNCTIONS, MULTITOKEN_EVENTS);
 
 /**
- * โปรแกรม multi-token ตามมาตรฐาน — input ตอน deploy: { name?, symbol?, uri, namespace?, icon?, url?, contact?, description? }
- * ผู้ deploy = owner (mint / setURI / ตั้ง minter)
+ * โปรแกรม multi-token ตามมาตรฐาน — input ตอน deploy: { name?, symbol?, uri, owner?, namespace?, icon?, url?, contact?, description? }
+ * owner (ไม่ส่ง = ผู้ deploy) (mint / setURI / ตั้ง minter)
  */
 export const MULTITOKEN_PROGRAM = `function program() {
   const ZERO = "${ZERO_ADDRESS}"
@@ -47,7 +47,9 @@ export const MULTITOKEN_PROGRAM = `function program() {
     writeDB("name", params.input.name || "")
     writeDB("symbol", params.input.symbol || "")
     writeDB("uri", params.input.uri || "")
-    writeDB("owner", params.context.sender)
+    const owner = params.input.owner || params.context.sender   // โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง
+    if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
+    writeDB("owner", owner)
     if (params.input.namespace) setMetadata("namespace", params.input.namespace)
     if (params.input.icon) setMetadata("icon", params.input.icon)
     if (params.input.url) setMetadata("url", params.input.url)
