@@ -37,8 +37,8 @@ export const NFT_INTERFACES = ["0x01ffc9a7", "0x80ac58cd", "0x5b5e139f"];
 export const checkNftStandard = (code) => checkStandard(code, NFT_FUNCTIONS, NFT_EVENTS);
 
 /**
- * โปรแกรม NFT ตามมาตรฐาน — input ตอน deploy: { name, symbol, baseURI?, namespace?, icon?, url?, contact?, description? }
- * ผู้ deploy = owner (mint ได้ และตั้ง minter คนอื่นได้)
+ * โปรแกรม NFT ตามมาตรฐาน — input ตอน deploy: { name, symbol, baseURI?, owner?, namespace?, icon?, url?, contact?, description? }
+ * owner (ไม่ส่ง = ผู้ deploy) (mint ได้ และตั้ง minter คนอื่นได้)
  */
 export const NFT_PROGRAM = `function program() {
   const ZERO = "${ZERO_ADDRESS}"
@@ -47,7 +47,9 @@ export const NFT_PROGRAM = `function program() {
     writeDB("name", params.input.name)
     writeDB("symbol", params.input.symbol)
     writeDB("baseURI", params.input.baseURI || "")
-    writeDB("owner", params.context.sender)
+    const owner = params.input.owner || params.context.sender   // โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง
+    if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
+    writeDB("owner", owner)
     writeDB("totalSupply", 0n)
     writeDB("nextTokenId", 1n)
     if (params.input.namespace) setMetadata("namespace", params.input.namespace)

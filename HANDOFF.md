@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 907 เคส + `npm run test:e2e` 32 เคส |
+| เทสต์ | `npm test` → 916 เคส + `npm run test:e2e` 33 เคส |
 
 ---
 
@@ -22,7 +22,7 @@
 
 ```bash
 npm install
-npm test                         # 907 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 916 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
@@ -82,6 +82,8 @@ src/crypto/program-signature.js           ลายเซ็นที่โป�
 src/crypto/eip712.js                      EIP-712 แบบ eth_signTypedData_v4 (= ethers TypedDataEncoder) ไม่พึ่ง VM: eip712Digest / eip712DomainSeparator / recoverAddress
 src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
                                           · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
+                                          · system (WCARD · Multisig · Factory + แผน deploy ชุดโปรแกรมกลาง · หัวข้อ 8 "โปรแกรมกลางของเชน")
+scripts/deploy-system.js                  deploy โปรแกรมกลางทั้งชุดตามลำดับ nonce ของ deployer → deploy/system-programs.json
 src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
@@ -943,7 +945,28 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 | `multitoken.js` | `MULTITOKEN_PROGRAM` · `checkMultiTokenStandard` | ERC-1155: `balanceOf({ account, id })` `balanceOfBatch({ accounts, ids })` `safeTransferFrom({ from, to, id, amount, data? })` `safeBatchTransferFrom({ …, ids, amounts })` (hook `onERC1155Received` / `onERC1155BatchReceived`) `mint` `mintBatch` `burn` `setApprovalForAll` `uri` (template `{id}` หรือ `setURI`) `totalSupply({ id })` · event `TransferSingle {operator,from,to,id,amount}` `TransferBatch {…,ids,amounts}` `ApprovalForAll {account,operator,approved}` `URI {value,id}` · storage `balances:<account>:<id>` |
 | `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · `PERMIT_TYPES` (types ของ ethers / MetaMask) · ดูหัวข้อ "permit (ERC-2612)" ด้านล่าง |
 | `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` เมื่อเจ้าของ (key เดียว) เซ็น **digest 32 byte** นั้นตรง ๆ (`ecrecoverDigest`) · `execute({ target, fn, input, value? })` (เจ้าของสั่งเรียกโปรแกรมอื่น) · `transferOwnership` · รับ NFT / 1155 แบบ safe ได้ |
-| `multicall.js` | `MULTICALL_PROGRAM` | `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
+| `multicall.js` | `MULTICALL_PROGRAM` | (init รับ `namespace` / `icon` / `url` / `contact` / `description` ไม่บังคับ) `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
+
+### โปรแกรมกลางของเชน (`src/standards/system.js` · `scripts/deploy-system.js` · เทสต์ `105-system-programs` + e2e)
+ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 6) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wcard` ได้ · ทั้งชุดไม่มี upgrader
+
+| nonce | ชื่อ | โปรแกรม | สรุป |
+|---|---|---|---|
+| 0 | `multicall` | `MULTICALL_PROGRAM` | ดูตารางข้างบน |
+| 1 | `wcard` | `WCARD_PROGRAM` | token มาตรฐานครบ (`TOKEN_CORE` + permit) · `deposit()` แนบ value ได้ WCARD 1:1 · `depositTo({ to })` · `withdraw({ amount })` / `withdrawTo({ to, amount })` เผาแล้วโอนเหรียญหลักคืน (ลดยอดก่อนโอน) · event `Deposit` `Withdrawal` + `Transfer` จาก / ไป zero · decimals 18 · ชื่อตาม `SYMBOL` (`W<symbol>`) |
+| 2 | `multisig-template` | `MULTISIG_PROGRAM` | m-of-n (1–20 เจ้าของ) ยืนยันด้วย tx ของแต่ละคน: `submit({ target, fn?, input?, value? })` → id (ผู้เสนอยืนยันให้) · `confirm` / `revoke` / `execute({ id })` (นับเฉพาะเจ้าของปัจจุบัน · ทำเครื่องหมาย executed ก่อนเรียกออก) · fn ว่าง = โอนเหรียญหลัก · `addOwner` / `removeOwner` / `changeThreshold` / `approveHash` เรียกได้เฉพาะผ่านรายการของตัวเอง (`sender === ThisAddress()`) · `isValidSignature` = magic เมื่อ hash ถูก `approveHash` (ERC-1271) · ไม่ส่ง owners = ต้นแบบ (ทำอะไรไม่ได้) |
+| 3–5 | `token-template` `nft-template` `multitoken-template` | `TOKEN_PROGRAM` `NFT_PROGRAM` `MULTITOKEN_PROGRAM` | ต้นแบบให้ factory clone · ทั้ง 3 รับ `owner` ใน init ได้แล้ว (ไม่ส่ง = ผู้ deploy เหมือนเดิม · ส่งต้องเป็น address 42 ตัว) · token ที่ supply 0 ไม่ emit Transfer |
+| 6 | `factory` | `FACTORY_PROGRAM` | ใครก็สร้างได้ทันทีไม่ต้องรอ admin (`cloneProgram`): `createToken({ name, ticker, decimals 0–36, supply })` (supply เป็นของผู้เรียก) · `createNft({ name, symbol, baseURI? })` · `createMultiToken({ name?, symbol?, uri? })` (ผู้เรียก = owner) · `createMultisig({ owners, threshold })` · ทุกตัวรับ `salt?` + `namespace` `icon` `url` `contact` `description` · salt จริง = `<ผู้เรียก>:<salt>` (ไม่ส่ง = `#<ลำดับของผู้เรียก>` · salt เองห้ามขึ้นต้น `#`) → `vm.cloneAddressFor(factory, factorySalt(creator, salt), โค้ดต้นแบบ)` · อ่าน `templates` `count` `created({ index })` `createdCount({ creator })` `createdBy({ creator, index })` `kindOf({ address })` · event `Created { kind, address, creator }` |
+
+```
+DEPLOYER_KEY=0x… node scripts/deploy-system.js https://chain.example.com --plan     # ดู address ก่อน (ไม่ส่ง tx)
+node scripts/deploy-system.js --plan --deployer 0x… --chain-id 272727                  # ไม่ต้องมี key / node
+DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js https://chain.example.com # deploy + อนุมัติ → deploy/system-programs.json
+```
+- `systemPrograms({ addressAt, symbol })` = แผน (ลำดับ / ชื่อ / input ของแต่ละตัว · input ของ factory ใส่ address ต้นแบบให้เอง)
+- สคริปต์: ตรวจชื่อว่าง · nonce ที่ใช้ไปแล้วต้องเป็นโปรแกรมตามแผน (ไม่งั้นหยุด) · deployer ต้องมีเงิน · ส่งใบเดิมซ้ำเมื่อ mempool ตอบ "ส่งถี่เกินกำหนด" · รันซ้ำได้ (ข้ามตัวที่มีแล้ว) · ไม่มี `ADMIN_KEY` = ค้างรอ admin กด Approve
+- explorer: หน้า `#system` (เมนูข้าง "System programs") อ่านรายชื่อจาก `EXPLORER.systemPrograms` ใน `explorerscan/config.js` แล้วหา address ด้วย `/name/<ชื่อ>`
+- โค้ดทุกตัวผ่าน `reviewProgram` — autoreview ไม่ให้ใช้ `obj[key]` จึงตั้ง metadata ทีละ field
 
 **permit (ERC-2612 + EIP-712 จริง)** — MetaMask `eth_signTypedData_v4` / ethers `Wallet.signTypedData` เซ็นได้ตรง ๆ (เทสต์ `62-permit-1271` `78-eip712` + e2e)
 ```js
@@ -1053,7 +1076,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 104 ไฟล์ · 907 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 105 ไฟล์ · 916 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1070,6 +1093,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
+| `105-system-programs` | โปรแกรมกลาง: address ตามแผน · ชื่อ · WCARD ฝาก-ถอน 1:1 · factory สร้าง token / NFT / multi-token / multisig (salt, address ล่วงหน้า, ตรวจค่า) · multisig m-of-n, revoke, เปลี่ยนเจ้าของผ่านตัวเอง, approveHash (ERC-1271) |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 | `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
 | `62-permit-1271` | permit (EIP-712): DOMAIN_SEPARATOR / digest = ethers · relayer ส่งแทน · replay · หมดเวลา (วินาที) · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |

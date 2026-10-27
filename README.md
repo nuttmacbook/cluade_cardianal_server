@@ -4,12 +4,13 @@ VM สำหรับรันโปรแกรม JavaScript บน chain ข�
 
 ```bash
 npm install
-npm test          # 907 เคส
+npm test          # 916 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
 npm run dev       # server + explorer ที่ http://localhost:3000 (DEV=1 · เครือข่ายจริงใช้ npm start + ADMINS + PRODUCER_KEY ดู HANDOFF หัวข้อ 1)
 npm run seed      # สร้างข้อมูลตัวอย่างผ่าน HTTP (ต้องรัน server ไว้ก่อน)
+DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # โปรแกรมกลาง: Multicall, WCARD, Multisig, Factory + ต้นแบบ token / NFT (HANDOFF หัวข้อ 8)
 ```
 
 `server.js` รวมทุกอย่างเข้าด้วยกัน: VM + mempool + autoreview + simulate + ปิด block อัตโนมัติ
@@ -35,11 +36,12 @@ explorerscan/              หน้า explorer: theme/ (สี) · ui/ (หน
 genesis.json               ยอดเงินตั้งต้น (ช่วงพัฒนา · เปิดจริงใช้ deploy/genesis.mainnet.example.json)
 deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
-scripts/                   demo.js, examples.js
+scripts/                   demo.js, examples.js, deploy-system.js (โปรแกรมกลางทั้งชุด)
+src/standards/             มาตรฐาน token / NFT / multi-token / กระเป๋า / multicall + system.js (WCARD, Multisig, Factory)
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
 docs/                      Blockscout · checklist ลอง MetaMask จริง
-test/                      104 ไฟล์ · 907 เคส
+test/                      105 ไฟล์ · 916 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              ภาพ ณ Checkpoint 5 (ข้อมูลล่าสุดอยู่ใน HANDOFF.md)
 ```
