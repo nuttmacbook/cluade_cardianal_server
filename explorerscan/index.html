@@ -29,6 +29,7 @@
   <details open><summary><h3>Programs</h3></summary>
     <a data-nav="programs-approved" onclick="sideClose();openPrograms('approved')"><span class="dot" style="--c:#16a34a">✓</span><span>Approved</span><span class="n" id="side-approved">—</span></a>
     <a data-nav="programs-pending" onclick="sideClose();openPrograms('pending')"><span class="dot" style="--c:#db2777">?</span><span>In review</span><span class="n" id="side-review">—</span></a>
+    <a data-nav="system" onclick="sideGo('#system')"><span class="dot" style="--c:#0d9488">★</span><span>System programs</span></a>
     <a data-nav="deploy" onclick="sideGo('#deploy')"><span class="dot" style="--c:#4d53d0">+</span><span>New program</span></a>
   </details>
   <details open><summary><h3>Wallet</h3></summary>
@@ -59,6 +60,7 @@
 <script src="ui/pages/tx.js"></script>
 <script src="ui/pages/address.js"></script>
 <script src="ui/pages/deploy.js"></script>
+<script src="ui/pages/system.js"></script>
 <script src="ui/sidebar.js"></script>
 <script src="core/router.js"></script>
 <script src="core/start.js"></script>

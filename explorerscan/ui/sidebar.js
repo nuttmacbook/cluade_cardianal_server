@@ -10,7 +10,7 @@ const sideGo = (hash) => { sideClose(); go(hash); };
 function markNav() {
   const [kind, value] = location.hash.slice(1).split("/");
   const on = new Set(!kind ? ["explore", "home"] : kind === "programs" ? ["programs", `programs-${tabState["#programs"] ?? "pending"}`]
-    : kind === "deploy" ? ["deploy"] : ["explore"]);
+    : kind === "deploy" ? ["deploy"] : kind === "system" ? ["system"] : ["explore"]);
   if (kind === "block") on.add("block");
   if (kind === "address" && value) { on.add(`a:${value.toLowerCase()}`); if (wallet && value.toLowerCase() === wallet) on.add("me"); }
   for (const node of document.querySelectorAll("[data-nav]")) node.classList.toggle("on", on.has(node.dataset.nav));

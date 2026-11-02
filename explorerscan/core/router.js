@@ -1,5 +1,5 @@
 /* explorerscan/core/router.js [ระบบ · ไม่ต้องแก้]
-   เปลี่ยนหน้า: go() / render() อ่าน location.hash (#block/… #tx/… #address/… #programs #deploy) แล้วเรียกหน้าใน ui/pages/
+   เปลี่ยนหน้า: go() / render() อ่าน location.hash (#block/… #tx/… #address/… #programs #system #deploy) แล้วเรียกหน้าใน ui/pages/
    + ช่องค้นหา · เพิ่มหน้าใหม่ = เพิ่มไฟล์ใน ui/pages/ แล้วเพิ่มบรรทัดใน render() */
 
 const go = (hash) => { location.hash = hash; render(); };
@@ -29,6 +29,7 @@ async function render(soft) {
   else if (kind === "address") await address(value, draw);
   else if (kind === "programs") await programs(draw);
   else if (kind === "deploy") deployPage(draw);
+  else if (kind === "system") await systemPage(draw);
   else await home(draw);
   if (soft && seq === renderSeq) scrollTo(0, y);
 }

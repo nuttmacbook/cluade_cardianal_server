@@ -17,6 +17,15 @@
 export const MULTICALL_FUNCTIONS = ["aggregate", "tryAggregate"];
 
 export const MULTICALL_PROGRAM = `function program() {
+  // ชื่อ / คำอธิบายของโปรแกรม (ไม่บังคับ) เช่น { namespace: "multicall" } ตอน deploy ชุดโปรแกรมกลาง (src/standards/system.js)
+  function initialization(params) {
+    if (typeof params.input.namespace === "string" && params.input.namespace !== "") setMetadata("namespace", params.input.namespace)
+    if (typeof params.input.icon === "string" && params.input.icon !== "") setMetadata("icon", params.input.icon)
+    if (typeof params.input.url === "string" && params.input.url !== "") setMetadata("url", params.input.url)
+    if (typeof params.input.contact === "string" && params.input.contact !== "") setMetadata("contact", params.input.contact)
+    if (typeof params.input.description === "string" && params.input.description !== "") setMetadata("description", params.input.description)
+  }
+
   function callsOf(params) {
     const calls = params.input.calls
     if (!Array.isArray(calls)) throw new Error("calls must be an array of { target, fn, input }")

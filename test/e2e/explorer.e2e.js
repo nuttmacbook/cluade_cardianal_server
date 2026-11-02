@@ -965,3 +965,44 @@ test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / d
   }
   assert.deepEqual(pageErrors, []);
 });
+
+test("โปรแกรมกลาง: scripts/deploy-system.js deploy ครบ 7 ตัวที่ address ตามแผน → หน้า System programs แสดงชื่อ + address", async () => {
+  const sign = await import("../../src/crypto/signature.js");
+  const deployerKey = sign.randomPrivateKey();
+  const deployer = sign.addressOf(deployerKey);
+  const { nonce } = await get(`/nonce/${ME}`);
+  const fund = { chainId: 1, action: "transfer", from: ME, to: deployer, value: "1000000000000000000", gasLimit: 21_000, gasPrice: "1000000000", nonce };
+  const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tx: fund, signature: sign.signTransaction(fund, KEY) }) }).then((r) => r.json());
+  assert.ok(sent.queued, JSON.stringify(sent));
+  for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`))?.blockNumber; i += 1) await wait(200);
+
+  const out = `${ROOT}data-e2e-system.json`;
+  const run = (extra = []) => promisify(execFile)(process.execPath, ["scripts/deploy-system.js", url, "--out", out, ...extra],
+    { cwd: ROOT, env: { ...process.env, DEPLOYER_KEY: deployerKey, ADMIN_KEY: KEY } });
+  try {
+    const plan = (await run(["--plan"])).stdout;
+    await run();
+    const result = JSON.parse(await import("node:fs").then((fs) => fs.readFileSync(out, "utf8")));
+    const programs = Object.values(result.programs);
+    assert.equal(programs.length, 7);
+    for (const p of programs) {
+      assert.equal(p.status, "approved", p.namespace);
+      assert.ok(plan.includes(p.address), `${p.namespace} ตรงกับ --plan`);
+      assert.equal((await get(`/name/${p.namespace}`)).address, p.address);
+    }
+
+    await open("#system");
+    await page.waitForSelector("#view tbody tr");
+    assert.equal(await page.locator("#view tbody tr").count(), 7);
+    assert.doesNotMatch(await view(), /Not deployed yet/);
+    assert.equal(await page.locator("#side [data-nav=system].on").count(), 1);
+    await page.click("#view tbody tr:has-text('Wrapped CARD') a");
+    await page.waitForFunction((address) => location.hash === `#address/${address}`, result.programs.wcard.address);
+    await settle();
+    assert.match(await view(), /wcard/);
+  } finally {
+    await import("node:fs").then((fs) => fs.rmSync(out, { force: true }));
+  }
+  assert.deepEqual(pageErrors, []);
+});
