@@ -133,17 +133,17 @@ DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://cha
 - ไม่อยากใช้ key admin บนเครื่องนี้ (admin เป็น hardware wallet): ไม่ต้องส่ง `ADMIN_KEY` แล้วกด Approve ทีละตัวในหน้า Programs ของ explorer ด้วยกระเป๋า admin
 - เหรียญหลักไม่ใช่ CARD: สคริปต์อ่านจาก `EVM_SYMBOL` ของ server (หรือตั้ง `SYMBOL=…`) → ชื่อเป็น `w<symbol>` · แก้ `systemPrograms` ใน `explorerscan/config.js` ให้ตรง
 
-## 8. ปรับค่าแก๊สกลางทาง (เหรียญหลักแพงขึ้น / ถูกลง)
+## 8. ปรับขั้นต่ำของ gas price กลางทาง (เหรียญหลักแพงขึ้น / ถูกลง)
 
 admin (address ใน `config.admins`) ส่ง tx `setGasConfig` · มีผลตั้งแต่ block ถัดไป · ไม่ต้อง fork / ล้างเชน / restart · เครื่องตามซิงก์ได้เอง
 ```
-node scripts/set-gas.js https://chain.example.com                                   # ดูค่าที่ใช้อยู่
+node scripts/set-gas.js https://chain.example.com                                              # ดูค่าที่ใช้อยู่
 ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --min-base-fee 0.1gwei   # ค่า tx ทุกแบบถูกลง 10 เท่า
 ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --reset                  # กลับไปค่าใน genesis
 ```
-- admin เป็น hardware wallet: เปิด explorer เมนู **Gas settings** → ต่อกระเป๋า admin → แก้ค่า → Send change
-- ลด base fee ขั้นต่ำ = ค่า tx ทุกแบบ (เป็นเหรียญ) ถูกลงตามสัดส่วน · แก๊สต่อ tx และความจุ block เท่าเดิม · base fee ลงหาค่าใหม่ทีละ ≤ 12.5% ต่อ block (1 → 0.1 gwei ราว 18 block)
-- `--gas call=50,write=250` เปลี่ยนราคาต่อหน่วย (ชั่งน้ำหนักระหว่างคำสั่ง) · ลดมากไปแล้ว block รับ tx ได้มากขึ้น = เครื่องทำงานหนักขึ้น (ดู gas-fees.md)
+- admin เป็น hardware wallet: เปิด explorer เมนู **Gas settings** → ต่อกระเป๋า admin → ใส่ค่าใหม่ → Send change
+- ลดขั้นต่ำ = ค่า tx ทุกแบบ (เป็นเหรียญ) ถูกลงตามสัดส่วน · แก๊สต่อ tx และความจุ block เท่าเดิม · base fee ยังขึ้นเองเมื่อ block เต็ม · ลงหาค่าใหม่ทีละ ≤ 12.5% ต่อ block (1 → 0.1 gwei ราว 18 block)
+- ราคาต่อหน่วย (call / write …) ปรับแบบนี้ไม่ได้ ต้องใช้ fork (key admin หลุดก็ทำให้ tx ฟรีไม่ได้)
 
 ## เครื่องที่ควรใช้
 

@@ -1010,17 +1010,16 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
 test("ค่าแก๊ส: หน้า Gas settings แสดงค่าที่ใช้อยู่ · ส่ง setGasConfig จากฟอร์มได้ (เชน DEV ไม่ตั้ง admins → ถูกปฏิเสธพร้อมเหตุผล)", async () => {
   await open("#gas");
   await page.waitForSelector("#gas-form");
-  assert.match(await view(), /Minimum base fee[\s\S]*1 gwei/);
+  assert.match(await view(), /Minimum gas price[\s\S]*1 gwei/);
   assert.match(await view(), /Coin transfer costs[\s\S]*1,300 gas/);
-  assert.equal(await page.locator("#view input[id^=gas-]").count(), 18);   // ขั้นต่ำ + ราคาต่อหน่วย 17 ช่อง
+  assert.equal(await page.locator("#view input").count(), 1);   // ปรับได้แค่ขั้นต่ำ · ราคาต่อหน่วยแสดงอย่างเดียว
+  assert.match(await view(), /changed only by a fork/);
   assert.equal(await page.locator("#side [data-nav=gas].on").count(), 1);
 
   await page.fill("#gas-min", "0.5");
-  await page.fill("#gas-call", "80");
   await page.click("#gas-form button:has-text('Send change')");
   await page.waitForFunction(() => /admins/.test(document.getElementById("gas-out")?.textContent ?? ""), null, { timeout: 30_000 })
     .catch(async (error) => { throw new Error(`${error.message}: ${await page.locator("#gas-out").innerText()}`); });
-  assert.match(await page.locator("#gas-out").innerText(), /admins/);
   // /sendtx ตอบ 400 พร้อมเหตุผล (browser log ไว้ใน console) — ที่เหลือต้องไม่มี error
   assert.deepEqual(pageErrors.filter((message) => !/status of 400/.test(message)), []);
   pageErrors.length = 0;

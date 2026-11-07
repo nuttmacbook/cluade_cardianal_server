@@ -4,8 +4,8 @@ import { VM, MemoryDB, user } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * เจ้าของเชน (admins ใน genesis) ปรับค่าแก๊สกลางทางด้วย tx setGasConfig — ไม่ต้อง fork / ล้างเชน
- *   minBaseFee: base fee ขั้นต่ำ (wei) · gas: ราคาต่อหน่วยใน DEFAULT_GAS · null = กลับไปใช้ค่าเดิม
+ * เจ้าของเชน (admins ใน genesis) ปรับขั้นต่ำของ gas price กลางทางด้วย tx setGasConfig — ไม่ต้อง fork / ล้างเชน
+ *   minBaseFee: base fee ขั้นต่ำ (wei) · null = กลับไปใช้ค่าใน genesis · ราคาต่อหน่วยปรับบนเชนไม่ได้ (fork เท่านั้น)
  *   เขียน gasconfig ใน state → มีผลตั้งแต่ block ถัดไป · replay / sync อ่าน state ก่อน block ได้ผลเดิม
  */
 
@@ -42,7 +42,7 @@ test("setGasConfig minBaseFee: ลดขั้นต่ำ → base fee ลง�
   assert.equal(set.result.minBaseFee, "100000000");
   assert.equal(set.result.effectiveFrom, block.number + 1);
   assert.equal(block.baseFee, GWEI);   // block ที่ตั้งยังใช้ขั้นต่ำเดิม
-  assert.deepEqual(vm.gasConfig(), { minBaseFee: "100000000", gas: {}, block: block.number, by: ADMIN });
+  assert.deepEqual(vm.gasConfig(), { minBaseFee: "100000000", block: block.number, by: ADMIN });
   assert.equal(vm.minBaseFeeNow(), 100_000_000n);
 
   // block ว่าง ๆ ใช้แก๊สต่ำกว่าเป้า → base fee ลง 1/8 ต่อ block (เดิมติดขั้นต่ำ 1 gwei)
@@ -63,29 +63,25 @@ test("setGasConfig minBaseFee: ลดขั้นต่ำ → base fee ลง�
   assert.equal(vm.minBaseFeeNow(), GWEI);
 });
 
-test("setGasConfig gas: เปลี่ยนราคาต่อหน่วยตั้งแต่ block ถัดไป · null = ลบค่าที่ตั้ง · ค่าอื่นคงเดิม", () => {
+test("setGasConfig: ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ · tx อื่นใน block เดียวกันใช้ราคาเดิม", () => {
   const vm = chain();
-  const before = seal(vm, transfer).results[0].gasUsed;
-  assert.equal(before, 1300);
-
-  const { results: [set, sameBlock] } = seal(vm, (b) => [setGas(b, { gas: { call: 50, write: 250 } }), transfer(b)]);
-  assert.equal(set.status, "success", JSON.stringify(set.error));
-  assert.equal(sameBlock.gasUsed, 1300);   // tx ใน block เดียวกันยังใช้ราคาเดิม
-  assert.equal(seal(vm, transfer).results[0].gasUsed, 50 + 2 * 100 + 2 * 250);
-  assert.equal(vm.gasAt().call, 50);
-
-  seal(vm, (b) => setGas(b, { gas: { call: null } }));   // ลบเฉพาะ call · write 250 ยังอยู่
-  assert.deepEqual(vm.gasConfig().gas, { write: 250 });
-  assert.equal(seal(vm, transfer).results[0].gasUsed, 100 + 2 * 100 + 2 * 250);
-  assert.equal(vm.minBaseFeeNow(), GWEI);   // ไม่ได้ส่ง minBaseFee = ไม่เปลี่ยน
+  assert.equal(seal(vm, transfer).results[0].gasUsed, 1300);
+  const refused = seal(vm, (b) => setGas(b, { gas: { call: 0 } })).results[0];
+  assert.notEqual(refused.status, "success");
+  assert.match(refused.error.message, /ปรับบนเชนไม่ได้/);
+  const mixed = seal(vm, (b) => setGas(b, { minBaseFee: 1, gas: { write: 0 } })).results[0];
+  assert.match(mixed.error.message, /ปรับบนเชนไม่ได้/);
+  assert.equal(vm.gasConfig(), null);
+  assert.equal(seal(vm, transfer).results[0].gasUsed, 1300);
+  assert.equal(vm.gasAt().call, 100);
 });
 
 test("setGasConfig: replay block เก่าได้ hash เดิม (อ่าน gasconfig จาก state ก่อน block)", () => {
   const vm = chain();
   seal(vm, transfer);
-  const setAt = seal(vm, (b) => setGas(b, { minBaseFee: "500000000", gas: { read: 10 } })).block.number;
+  const setAt = seal(vm, (b) => setGas(b, { minBaseFee: "500000000" })).block.number;
   for (let i = 0; i < 4; i += 1) seal(vm, transfer);
-  seal(vm, (b) => setGas(b, { gas: { read: null }, minBaseFee: GWEI * 3n }));
+  seal(vm, (b) => setGas(b, { minBaseFee: GWEI * 3n }));
   for (let i = 0; i < 2; i += 1) seal(vm, transfer);
   const latest = vm.latestBlockNumber();
   for (let number = 1; number <= latest; number += 1) {
@@ -110,11 +106,8 @@ test("setGasConfig: เฉพาะ admins · เชนที่ไม่ตั�
   for (const [change, pattern] of [
     [{ minBaseFee: 0 }, /wei ≥ 1/],
     [{ minBaseFee: "-5" }, /wei ≥ 1/],
-    [{ gas: { price: 1 } }, /'price'/],
-    [{ gas: { nope: 1 } }, /'nope'/],
-    [{ gas: { call: 1.5 } }, /จำนวนเต็ม ≥ 0/],
-    [{ gas: [1] }, /gas ต้องเป็น/],
-    [{}, /ไม่มีอะไรให้เปลี่ยน/],
+    [{ minBaseFee: "abc" }, /wei ≥ 1/],
+    [{}, /ต้องส่ง minBaseFee/],
   ]) {
     const result = seal(vm, (b) => setGas(b, change)).results[0];
     assert.notEqual(result.status, "success", JSON.stringify(change));
@@ -126,27 +119,25 @@ test("setGasConfig: เฉพาะ admins · เชนที่ไม่ตั�
 test("setGasConfig: tx ที่เซ็นแล้ว (action setGasConfig) → request ของ VM", () => {
   const key = `0x${"11".repeat(32)}`;
   const admin = sign.addressOf(key);
-  const tx = { chainId: 1, from: admin, to: "", action: "setGasConfig", method: "", input: { minBaseFee: "100000000", gas: { call: 80 } }, value: 0, nonce: 0 };
+  const tx = { chainId: 1, from: admin, to: "", action: "setGasConfig", method: "", input: { minBaseFee: "100000000" }, value: 0, nonce: 0 };
   const verified = sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, key) });
   assert.equal(verified.method, "setGasConfig");
   assert.equal(verified.request.minBaseFee, "100000000");
-  assert.deepEqual(verified.request.gas, { call: 80 });
+  assert.equal(Object.hasOwn(verified.request, "gas"), false);
   assert.equal(verified.request.context.sender, admin);
 
   const vm = chain({ admins: [admin], requireNonce: true });
   const result = seal(vm, (b) => b[verified.method](verified.request)).results[0];
   assert.equal(result.status, "success", JSON.stringify(result.error));
-  assert.equal(vm.gasAt().call, 80);
-  // ส่งแค่ minBaseFee → gas ที่ตั้งไว้ไม่หาย
-  const only = { ...tx, nonce: 1, input: { minBaseFee: "200000000" } };
-  const second = sign.verifyTransaction({ tx: only, signature: sign.signTransaction(only, key) });
-  assert.equal(Object.hasOwn(second.request, "gas"), false);
-  seal(vm, (b) => b[second.method](second.request));
-  assert.deepEqual(vm.gasConfig().gas, { call: 80 });
-  assert.equal(vm.minBaseFeeNow(), 200_000_000n);
+  assert.equal(vm.minBaseFeeNow(), 100_000_000n);
+  // ใส่ gas มาในใบที่เซ็น → VM ปฏิเสธ (ค่าเดิมไม่เปลี่ยน)
+  const withGas = { ...tx, nonce: 1, input: { minBaseFee: "200000000", gas: { call: 0 } } };
+  const second = sign.verifyTransaction({ tx: withGas, signature: sign.signTransaction(withGas, key) });
+  assert.match(seal(vm, (b) => b[second.method](second.request)).results[0].error.message, /ปรับบนเชนไม่ได้/);
+  assert.equal(vm.minBaseFeeNow(), 100_000_000n);
 });
 
-test("setGasConfig: เชนที่ตั้ง admins แล้ว DB พังตอนอ่าน gasconfig → tx ล้มเป็น INTERNAL (ไม่ throw ออกไป)", () => {
+test("setGasConfig: เชนที่ตั้ง admins แล้ว DB พัง → tx ยังล้มเป็น INTERNAL (ไม่ throw ออกไป)", () => {
   const vm = new VM.VirtualMachine({ readKeys: () => { throw new Error("503"); }, writeKeys: () => {} }, { admins: [ADMIN] });
   const res = vm.transfer({ from: ALICE, to: BOB, amount: 1 });
   assert.equal(res.status, "throw");
@@ -155,7 +146,7 @@ test("setGasConfig: เชนที่ตั้ง admins แล้ว DB พั
 
 // ---------- server.js จริง: scripts/set-gas.js → ผู้ผลิตใช้ค่าใหม่ · เครื่องตาม (FOLLOW) ซิงก์แล้วได้ hash เดิม ----------
 
-test("server.js + scripts/set-gas.js: เจ้าของลด base fee ขั้นต่ำกลางทาง · เครื่องตามซิงก์ได้ผลเดิม", { timeout: 90_000 }, async () => {
+test("server.js + scripts/set-gas.js: เจ้าของลดขั้นต่ำของ gas price กลางทาง · เครื่องตามซิงก์ได้ผลเดิม", { timeout: 90_000 }, async () => {
   const { spawn } = await import("node:child_process");
   const fs = await import("node:fs");
   const os = await import("node:os");
@@ -198,13 +189,13 @@ test("server.js + scripts/set-gas.js: เจ้าของลด base fee ข�
     nodes.push(producer);
     assert.equal((await get(`${producer.url}/genesis`)).minBaseFee, "1000000000n");
 
-    const script = run("scripts/set-gas.js", [producer.url, "--min-base-fee", "0.1gwei", "--gas", "call=80"], { ADMIN_KEY: adminKey });
+    const script = run("scripts/set-gas.js", [producer.url, "--min-base-fee", "0.1gwei"], { ADMIN_KEY: adminKey });
     assert.equal(await script.exited, 0, script.output());
     assert.match(script.output(), /✓ อยู่ใน block \d+ · มีผลตั้งแต่ block \d+/);
     const info = await get(`${producer.url}/genesis`);
     assert.equal(info.minBaseFee, "100000000n");
     assert.equal(info.genesisMinBaseFee, "1000000000n");
-    assert.equal(info.gas.call, 80);
+    assert.equal(info.gas.call, 100);   // ราคาต่อหน่วยไม่เปลี่ยน
     assert.equal(info.gasConfig.by, admin.toLowerCase());
 
     // คนที่ไม่ใช่ admin → สคริปต์หยุดก่อนส่ง

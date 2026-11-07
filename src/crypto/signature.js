@@ -244,10 +244,10 @@ export function toVmRequest(tx, sender, signature, digest, sponsorSignature) {
   // โอนสิทธิ์อัปเกรด: input = { upgrader: "0x…" } หรือ { upgrader: null } = สละสิทธิ์
   if (tx.action === "setUpgrader") return { programUuid: tx.to, upgrader: tx.input?.upgrader ?? null, ...common };
   if (tx.action === "initUpgrade" || tx.action === "rejectUpgrade") return { programUuid: tx.to, ...common };
-  // admin ปรับค่าแก๊สของเชน: input = { minBaseFee?: "wei" | null, gas?: { ชื่อ: ค่า | null } } (ไม่มี to)
+  // admin ปรับขั้นต่ำของ gas price: input = { minBaseFee: "wei" | null } (ไม่มี to)
   if (tx.action === "setGasConfig") {
     return { ...(tx.input && Object.hasOwn(tx.input, "minBaseFee") ? { minBaseFee: tx.input.minBaseFee } : {}),
-      ...(tx.input && Object.hasOwn(tx.input, "gas") ? { gas: tx.input.gas } : {}), ...common };
+      ...(tx.input && Object.hasOwn(tx.input, "gas") ? { gas: tx.input.gas } : {}), ...common };   // gas → VM ปฏิเสธพร้อมเหตุผล
   }
   return { programUuid: tx.to, functionName: tx.method, input: tx.input, value: tx.value, ...common };
 }

@@ -39,8 +39,9 @@ export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonic
  *       upgradeDelayBlocks = N > 0 → โค้ดใหม่เริ่มใช้ตอนสร้าง block (ที่อนุมัติ + N) ดู Block.#activateUpgrades
  *  โคลนโปรแกรม (ในโปรแกรม): cloneProgram(template, initInput, { salt, value }) → address ใหม่ (แบบ CREATE2)
  *
- *  ค่าแก๊สที่เจ้าของเชนปรับได้กลางทาง (ไม่ต้อง fork / ล้างเชน · ดู setGasConfig):
- *    vm.setGasConfig({ minBaseFee, gas, context })   admin เซ็น → เขียน gasconfig ใน state · มีผลตั้งแต่ block ถัดไป
+ *  ขั้นต่ำของ gas price ที่เจ้าของเชนปรับได้กลางทาง (ไม่ต้อง fork / ล้างเชน · ดู setGasConfig):
+ *    vm.setGasConfig({ minBaseFee, context })   admin เซ็น → เขียน gasconfig ใน state · มีผลตั้งแต่ block ถัดไป
+ *    ราคาต่อหน่วย (DEFAULT_GAS) เปลี่ยนผ่าน fork เท่านั้น (admin key หลุดก็ทำให้ tx ฟรีไม่ได้)
  *
  *  คืนค่า { status: "success", result, calls, loadValues, afterValues, writes }
  *      หรือ { status: "throw", error: { code, message }, calls }
@@ -544,7 +545,7 @@ export const namespaceKey = (name) => joinKey(KEY.NAMESPACE, name);
 /** การอัปเกรดที่รอรีวิว / อนุมัติแล้วแต่รอ timelock / ดัชนี "block ไหนต้องเปิดใช้โค้ดของใคร" / โค้ดทุกเวอร์ชัน */
 export const pendingUpgradeKey = (programUuid) => joinKey(KEY.PENDING_UPGRADE, programUuid);
 export const scheduledUpgradeKey = (programUuid) => joinKey(KEY.SCHEDULED_UPGRADE, programUuid);
-/** ค่าแก๊สที่ admin ตั้งบนเชน (state key เดียว · อยู่ใน stateRoot / history เหมือน state อื่น) */
+/** ขั้นต่ำของ gas price ที่ admin ตั้งบนเชน (state key เดียว · อยู่ใน stateRoot / history เหมือน state อื่น) */
 export const GAS_CONFIG_KEY = KEY.GAS_CONFIG;
 export const upgradeAtKey = (number) => joinKey(KEY.UPGRADE_AT, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 export const codeVersionKey = (programUuid, version) => joinKey(programUuid, KEY.CODE_VERSION, String(version));
@@ -722,29 +723,17 @@ export function checkProgramUuid(programUuid) {
 }
 
 /**
- * ตรวจคำขอปรับค่าแก๊สของ admin → { minBaseFee: "wei" | null | undefined, gas: { ชื่อ: ค่า | null } }
- *   minBaseFee: undefined = ไม่เปลี่ยน · null = กลับไปใช้ค่าใน genesis · ค่า = wei ต่อแก๊ส ≥ 1
+ * ตรวจคำขอของ admin → { minBaseFee: "wei" | null }
+ *   minBaseFee: null = กลับไปใช้ค่าใน genesis · ค่า = wei ต่อแก๊ส ≥ 1
+ *   ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ (ตั้งเป็น 0 แล้ว tx ฟรี = เครื่องล่ม) → ใช้ fork
  */
 export function checkGasConfigChange({ minBaseFee, gas } = {}) {
-  let fee;
-  if (minBaseFee !== undefined && minBaseFee !== null) {
-    const parsed = parseNative(minBaseFee);
-    if (parsed === null || parsed < 1n) fail(ERRORS.invalidGasConfig, "minBaseFee ต้องเป็นจำนวนเต็ม wei ≥ 1 (เช่น \"100000000\" = 0.1 gwei)");
-    fee = parsed.toString();
-  } else {
-    fee = minBaseFee;
-  }
-  if (gas !== undefined && gas !== null && (typeof gas !== "object" || Array.isArray(gas))) fail(ERRORS.invalidGasConfig, "gas ต้องเป็น { ชื่อค่าแก๊ส: จำนวนเต็ม }");
-  const fields = {};
-  for (const [field, raw] of Object.entries(gas ?? {})) {
-    if (field === "price" || !Object.hasOwn(DEFAULT_GAS, field)) fail(ERRORS.invalidGasConfig, `ไม่มีค่าแก๊สชื่อ '${field}' ที่ปรับได้`);
-    // รับ 50 / 50n / "50" / "50n" (input ของ tx ที่เซ็นแปลงจำนวนเต็มเป็น "50n") → เก็บเป็น number
-    const value = raw === null ? null : typeof raw === "bigint" || (typeof raw === "string" && /^\d+n?$/.test(raw)) ? Number(String(raw).replace(/n$/, "")) : raw;
-    if (value !== null && (!Number.isSafeInteger(value) || value < 0)) fail(ERRORS.invalidGasConfig, `ค่าแก๊ส '${field}' ต้องเป็นจำนวนเต็ม ≥ 0 หรือ null`);
-    fields[field] = value;
-  }
-  if (fee === undefined && !Object.keys(fields).length) fail(ERRORS.invalidGasConfig, "ไม่มีอะไรให้เปลี่ยน (ส่ง minBaseFee และ / หรือ gas)");
-  return { minBaseFee: fee, gas: fields };
+  if (gas !== undefined) fail(ERRORS.invalidGasConfig, "ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ · เปลี่ยนผ่าน fork (FORKS ใน virtualmachine.js)");
+  if (minBaseFee === undefined) fail(ERRORS.invalidGasConfig, "ต้องส่ง minBaseFee (wei ต่อแก๊ส) หรือ null = กลับไปใช้ค่าใน genesis");
+  if (minBaseFee === null) return { minBaseFee: null };
+  const parsed = parseNative(minBaseFee);
+  if (parsed === null || parsed < 1n) fail(ERRORS.invalidGasConfig, "minBaseFee ต้องเป็นจำนวนเต็ม wei ≥ 1 (เช่น \"100000000\" = 0.1 gwei)");
+  return { minBaseFee: parsed.toString() };
 }
 
 export function checkContext(context) {
@@ -1569,13 +1558,11 @@ export class VirtualMachine {
     }
   }
 
-  // ---------- ค่าแก๊สที่ admin ตั้งบนเชน (gasconfig · ดู setGasConfig) ----------
-
-  #gasConfigCache = new Map();   // JSON ของ gasconfig + ชื่อ fork → ตารางแก๊ส
+  // ---------- ขั้นต่ำของ gas price ที่ admin ตั้งบนเชน (gasconfig · ดู setGasConfig) ----------
 
   /**
-   * ค่าที่ admin ตั้งไว้ใน state: { minBaseFee: "wei" | null, gas: { ชื่อ: ค่า }, block, by } หรือ null (ยังไม่เคยตั้ง)
-   *   เชนที่ไม่ตั้ง admins ตั้งค่านี้ไม่ได้เลย → ไม่ต้องอ่าน DB (request อ่านเฉพาะ key ที่ใช้จริงเหมือนเดิม)
+   * ค่าที่ admin ตั้งไว้ใน state: { minBaseFee: "wei" | null, block, by } หรือ null (ยังไม่เคยตั้ง)
+   *   เชนที่ไม่ตั้ง admins ตั้งค่านี้ไม่ได้เลย → ไม่ต้องอ่าน DB
    */
   gasConfig(read = (dbKey) => this.read(dbKey)) {
     if (!this.admins) return null;
@@ -1583,7 +1570,7 @@ export class VirtualMachine {
     return value && typeof value === "object" ? value : null;
   }
 
-  /** base fee ขั้นต่ำที่ใช้อยู่ = ค่าที่ admin ตั้ง (ถ้ามี) ไม่งั้นค่าจาก genesis (minBaseFee ของ VM) */
+  /** base fee ขั้นต่ำ (= ขั้นต่ำของ gas price) ที่ใช้อยู่ = ค่าที่ admin ตั้ง (ถ้ามี) ไม่งั้นค่าจาก genesis (minBaseFee ของ VM) */
   minBaseFeeNow(read) {
     const configured = parseNative(this.gasConfig(read)?.minBaseFee ?? null);
     return configured ?? this.minBaseFee;
@@ -1642,25 +1629,8 @@ export class VirtualMachine {
     return this.#forks.map(({ name, block, rule }) => ({ name, block, active: next >= block, description: rule.description ?? null }));
   }
 
-  /**
-   * ตารางแก๊สที่ใช้ใน block นั้น = ค่าตั้งต้นของ VM → แทนด้วย fork ที่เปิดแล้วตามลำดับ → แทนด้วยค่าที่ admin ตั้งบนเชน (gasconfig)
-   *   read = อ่าน state ก่อน block นั้น (Block ส่ง read ของ block ก่อนหน้ามา · ไม่ส่ง = DB ล่าสุด = กติกาของ block ถัดไป)
-   */
-  gasAt(blockNumber = null, read) {
-    const base = this.#forkGasAt(blockNumber);
-    const override = this.gasConfig(read)?.gas;
-    if (!override || !Object.keys(override).length) return base;
-    const id = `${JSON.stringify(override)}|${Object.keys(base).length}|${base === this.gas ? "" : JSON.stringify(base)}`;
-    let table = this.#gasConfigCache.get(id);
-    if (!table) {
-      if (this.#gasConfigCache.size > 64) this.#gasConfigCache.clear();
-      table = Object.freeze({ ...base, ...override });
-      this.#gasConfigCache.set(id, table);
-    }
-    return table;
-  }
-
-  #forkGasAt(blockNumber) {
+  /** ตารางแก๊สที่ใช้ใน block นั้น = ค่าตั้งต้นของ VM แล้วแทนด้วย fork ที่เปิดแล้วตามลำดับ */
+  gasAt(blockNumber = null) {
     if (!this.#forks.length) return this.gas;   // ไม่มี fork = ไม่ต้องอ่านเลข block จาก DB
     const number = this.#effectiveBlock(blockNumber);
     const active = this.#forks.filter((fork) => number >= fork.block && fork.rule.gas);
@@ -1948,13 +1918,13 @@ export class VirtualMachine {
   }
 
   /**
-   * admin ปรับค่าแก๊สของเชนกลางทาง (ไม่ต้อง fork / ล้างเชน)
-   *   minBaseFee: base fee ขั้นต่ำ (wei ต่อแก๊ส ≥ 1) · null = กลับไปใช้ค่าใน genesis · ไม่ส่ง = ไม่เปลี่ยน
-   *     ค่า tx ทุกแบบ (CARD) = แก๊ส × base fee → ลด minBaseFee = ลดค่า tx ทุกแบบตามสัดส่วน โดยจำนวนแก๊สต่อ tx / ความจุ block เท่าเดิม
-   *     base fee ปัจจุบันลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block (EIP-1559) · ขึ้น = ใช้ขั้นต่ำใหม่ทันทีที่ block ถัดไป
-   *   gas: { ชื่อค่าแก๊ส: จำนวนเต็ม ≥ 0 | null } ราคาต่อหน่วยใน DEFAULT_GAS (ยกเว้น price) · null = ลบค่าที่ตั้งไว้ (กลับไปใช้ค่าตั้งต้น / fork)
-   *   เขียน gasconfig ใน state (อยู่ใน stateRoot / history) · มีผลตั้งแต่ block ถัดไป (tx ใน block เดียวกันยังใช้กติกาเดิม)
-   *   → ทุกเครื่องที่ sync / replay ได้ผลเดิม เพราะอ่านจาก state ก่อน block เหมือนกัน
+   * admin ปรับขั้นต่ำของ gas price กลางทาง (ไม่ต้อง fork / ล้างเชน)
+   *   minBaseFee: wei ต่อแก๊ส ≥ 1 · null = กลับไปใช้ค่าใน genesis
+   *     ค่า tx ทุกแบบ (เหรียญ) = แก๊ส × base fee → ลดขั้นต่ำ = ค่า tx ถูกลงตามสัดส่วน โดยแก๊สต่อ tx / ความจุ block เท่าเดิม
+   *     base fee ยังขึ้นลงตามความเต็มของ block (EIP-1559) · ลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
+   *   ราคาต่อหน่วย (DEFAULT_GAS) ปรับที่นี่ไม่ได้ → fork เท่านั้น (key admin หลุดก็ทำให้ tx ฟรีไม่ได้)
+   *   เขียน gasconfig ใน state (อยู่ใน stateRoot / history) · มีผลตั้งแต่ block ถัดไป: Block อ่านจาก state ก่อน block
+   *   → ทุกเครื่องที่ sync / replay ได้ผลเดิม
    *   ต้องตั้ง admins (genesis config.admins) และผู้เซ็นต้องอยู่ในรายชื่อ · เชนที่ไม่ตั้ง admins (DEV) ปรับไม่ได้
    */
   setGasConfig({ minBaseFee, gas, context, nonce, gasLimit, gasPrice } = {}, options) {
@@ -1970,21 +1940,10 @@ export class VirtualMachine {
       this.seedRandom(tx, arguments[0], "setGasConfig");
       tx.useGas(tx.gas.call + tx.gas.write);
 
-      const previous = tx.current(GAS_CONFIG_KEY);
-      const next = {
-        minBaseFee: previous?.minBaseFee ?? null,
-        gas: { ...(previous?.gas ?? {}) },
-      };
-      if (change.minBaseFee !== undefined) next.minBaseFee = change.minBaseFee;
-      for (const [field, value] of Object.entries(change.gas)) {
-        if (value === null) delete next.gas[field];
-        else next.gas[field] = value;
-      }
-      const sorted = Object.fromEntries(Object.entries(next.gas).sort(([a], [b]) => (a < b ? -1 : 1)));
-      const effectiveFrom = tx.blockNumber === null || tx.blockNumber === undefined ? null : tx.blockNumber + 1;
-      const value = { minBaseFee: next.minBaseFee, gas: sorted, block: tx.blockNumber ?? null, by: sender };
+      const value = { minBaseFee: change.minBaseFee, block: tx.blockNumber ?? null, by: sender };
       tx.put(GAS_CONFIG_KEY, value);
-      return { ...value, effectiveFrom, minBaseFeeEffective: encodeNative(next.minBaseFee === null ? this.minBaseFee : parseNative(next.minBaseFee)) };
+      const effectiveFrom = tx.blockNumber === null || tx.blockNumber === undefined ? null : tx.blockNumber + 1;
+      return { ...value, effectiveFrom, minBaseFeeEffective: encodeNative(change.minBaseFee === null ? this.minBaseFee : parseNative(change.minBaseFee)) };
     }, options);
   }
 
@@ -2165,8 +2124,7 @@ export class VirtualMachine {
     }
     if (action === "setGasConfig") {
       return { ...base, from: normalizeAddress(request.context?.sender) ?? null,
-        minBaseFee: request.minBaseFee === undefined ? "unchanged" : request.minBaseFee === null ? null : String(request.minBaseFee),
-        gas: request.gas ?? {}, ...fee };
+        minBaseFee: request.minBaseFee === undefined ? "unchanged" : request.minBaseFee === null ? null : String(request.minBaseFee), ...fee };
     }
     const signer = normalizeAddress(request.context?.sender) ?? null;
     if (signer) return { ...base, from: signer, to: normalizeAddress(request.programUuid) ?? null, ...fee };
@@ -2877,24 +2835,7 @@ export class VirtualMachine {
 
   /** options: { read, timestamp } */
   createTransaction({ read = (dbKey) => this.read(dbKey), timestamp, blockNumber = null, feeRecipient = this.feeRecipient, burnPercent = this.burnPercent, baseFee,
-    timeoutMs = this.timeoutMs, gas = null } = {}) {
-    // ตารางแก๊สอ่าน gasconfig จาก DB → DB พังตรงนี้ให้ tx ล้มเป็น INTERNAL เหมือนอ่าน key อื่นไม่ได้ (ไม่ throw ออกไปหาผู้เรียก)
-    let table = gas;
-    let setupError = null;
-    if (!table) {
-      try {
-        table = this.gasAt(blockNumber, read);
-      } catch (error) {
-        table = this.#forkGasAt(blockNumber);
-        setupError = VMError.from(ERRORS.dbReadFailed, error instanceof Error ? error.message : String(error));
-      }
-    }
-    const tx = this.#newTransaction({ read, timestamp, blockNumber, feeRecipient, burnPercent, baseFee, timeoutMs, gas: table });
-    if (setupError) tx.fatal = setupError;
-    return tx;
-  }
-
-  #newTransaction({ read, timestamp, blockNumber, feeRecipient, burnPercent, baseFee, timeoutMs, gas }) {
+    timeoutMs = this.timeoutMs } = {}) {
     return new Transaction({
       read,
       timestamp,
@@ -2903,7 +2844,7 @@ export class VirtualMachine {
       timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
-      gas,   // ตามกติกาของ block ที่ tx อยู่ (fork + gasconfig) · Block ส่งตารางที่อ่านจาก state ก่อน block มาเอง
+      gas: this.gasAt(blockNumber),   // ตามกติกาของ block ที่ tx อยู่ (fork)
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
       burnPercent: checkBurnPercent(burnPercent),
@@ -2925,7 +2866,6 @@ export class VirtualMachine {
 
   #runAction(tx, action) {
     try {
-      if (tx.fatal) throw tx.fatal;   // เตรียม tx ไม่สำเร็จ (อ่าน gasconfig จาก DB ไม่ได้)
       const result = action(tx);
       const charge = this.chargeOnSuccess(tx); // โปรแกรมโอน native ออกจนจ่ายค่าแก๊สไม่ไหว → OUT_OF_GAS
       const record = this.transactionRecordWrites(tx, { status: STATUS.SUCCESS });
@@ -3645,7 +3585,6 @@ export class Block {
   #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
   #producer;            // address ผู้ผลิต (อยู่ใน hash) · null = block แบบเดิม
   #producerSignature;   // ลายเซ็นของผู้ผลิตบน hash ของ block (ส่งมา = sync / replay · ไม่ส่ง = เซ็นด้วย vm.producer ตอนต้องใช้)
-  #gas;                 // ตารางแก๊สของ block นี้ (fork + gasconfig อ่านจาก state ก่อน block)
   #timeoutMs;           // เวลาต่อ tx (null = vm.timeoutMs) — replay / sync ใช้ vm.replayTimeoutMs
 
   constructor(vm, {
@@ -3699,10 +3638,8 @@ export class Block {
     this.#trustedStateRoot = stateRoot;
     // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
     // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
-    // ค่าแก๊สที่ admin ตั้งบนเชน (gasconfig) อ่านจาก state ก่อน block (read ของผู้เรียก) ครั้งเดียว
-    //   → tx setGasConfig ใน block นี้มีผลตั้งแต่ block ถัดไป · replay อ่านจาก state ณ block ก่อนหน้า ได้ผลเดิม
+    // ขั้นต่ำที่ admin ตั้ง (gasconfig) อ่านจาก state ก่อน block (read ของผู้เรียก) → setGasConfig ใน block นี้มีผลตั้งแต่ block ถัดไป
     this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous, read);
-    this.#gas = vm.gasAt(this.#number, read);
     if (this.#number !== null) this.#activateUpgrades();
   }
 
@@ -3723,7 +3660,6 @@ export class Block {
         feeRecipient: this.#feeRecipient,
         burnPercent: this.#burnPercent,
         baseFee: this.#baseFee,
-        gas: this.#gas,
       });
       if (result.status === STATUS.SUCCESS) {
         for (const write of result.writes ?? []) this.#state.set(write.dbKey, copyValue(write));
@@ -3803,11 +3739,6 @@ export class Block {
 
   setGasConfig(request) {
     return this.#execute("setGasConfig", request);
-  }
-
-  /** ตารางแก๊สที่ tx ใน block นี้ใช้ (fork + gasconfig ณ ก่อน block) */
-  get gas() {
-    return this.#gas;
   }
 
   initUpgrade(request) {
@@ -4319,7 +4250,6 @@ export class Block {
       feeRecipient: this.#feeRecipient,
       burnPercent: this.#burnPercent,
       baseFee: this.#baseFee,
-      gas: this.#gas,
       ...(this.#timeoutMs === null ? {} : { timeoutMs: this.#timeoutMs }),
     });
     if (result.accepted === false) {

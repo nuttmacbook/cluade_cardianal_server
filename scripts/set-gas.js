@@ -1,16 +1,14 @@
 /**
- * เจ้าของเชน (key ที่อยู่ใน admins ของ genesis) ปรับค่าแก๊สกลางทาง — ไม่ต้อง fork / ล้างเชน / restart · มีผลตั้งแต่ block ถัดไป
+ * เจ้าของเชน (key ที่อยู่ใน admins ของ genesis) ปรับขั้นต่ำของ gas price กลางทาง — ไม่ต้อง fork / ล้างเชน / restart · มีผลตั้งแต่ block ถัดไป
  *
  *   ดูค่าปัจจุบัน:          node scripts/set-gas.js http://localhost:3000
- *   ลด base fee ขั้นต่ำ:     ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 0.1gwei
- *   เปลี่ยนราคาต่อหน่วย:     ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --gas call=50,write=250
- *   กลับไปใช้ค่าเดิม:        ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --reset              (ทั้ง base fee และราคาต่อหน่วย)
- *                           --reset-min-base-fee  /  --reset-gas call,write   (เฉพาะบางค่า)
+ *   ลดขั้นต่ำ:              ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 0.1gwei
+ *   กลับไปใช้ค่าใน genesis:  ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --reset
  *
  *   --min-base-fee  หน่วย wei ต่อแก๊ส: 100000000 · 0.1gwei · 1gwei   (≥ 1 wei)
  *     ค่า tx ทุกแบบ = แก๊ส × base fee → ลดขั้นต่ำ = ค่า tx ถูกลงตามสัดส่วน โดยแก๊สต่อ tx / ความจุ block เท่าเดิม
- *     base fee ที่ใช้อยู่ลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
- *   --gas           ชื่อ=จำนวนเต็ม ≥ 0 คั่นด้วย , (ชื่อตาม DEFAULT_GAS ใน src/core/virtualmachine.js ยกเว้น price)
+ *     base fee ยังขึ้นลงตามความเต็มของ block · ลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
+ *   ราคาต่อหน่วย (call / write …) ปรับที่นี่ไม่ได้ → fork (FORKS ใน src/core/virtualmachine.js)
  */
 import * as sign from "../src/crypto/signature.js";
 
@@ -51,12 +49,9 @@ export function parseWei(text) {
 function show(info) {
   const config = info.gasConfig;
   console.log(`เชน ${info.chainId} · block ล่าสุด ${info.latest ?? 0}`);
-  console.log(`  base fee ขั้นต่ำ   ${gweiText(info.minBaseFee ?? info.gasPrice)}${config?.minBaseFee ? `  (admin ตั้ง · genesis ${gweiText(info.genesisMinBaseFee)})` : "  (จาก genesis)"}`);
+  console.log(`  ขั้นต่ำของ gas price ${gweiText(info.minBaseFee ?? info.gasPrice)}${config?.minBaseFee ? `  (admin ตั้ง · genesis ${gweiText(info.genesisMinBaseFee)})` : "  (จาก genesis)"}`);
   console.log(`  base fee ถัดไป    ${gweiText(info.baseFee)}`);
   const gas = info.gas ?? {};
-  const set = config?.gas ?? {};
-  console.log(`  ราคาต่อหน่วย      ${Object.entries(gas).filter(([name]) => name !== "price").map(([name, value]) => `${name}=${value}${Object.hasOwn(set, name) ? "*" : ""}`).join(" ")}`);
-  if (Object.keys(set).length) console.log("                    (* = admin ตั้ง)");
   const transfer = big(gas.call) + 2n * big(gas.read) + 2n * big(gas.write);
   console.log(`  โอนเหรียญหลัก     ${transfer} แก๊ส × ${gweiText(info.baseFee)} = ${Number(transfer * big(info.baseFee)) / 1e18} เหรียญ`);
   if (config) console.log(`  แก้ล่าสุด         block ${config.block} โดย ${config.by}`);
@@ -65,18 +60,10 @@ function show(info) {
 const info = await get("/genesis");
 show(info);
 
+if (flag("--gas")) die("ราคาต่อหน่วย (call / write …) ปรับบนเชนไม่ได้ · ใช้ fork");
 const input = {};
 if (option("--min-base-fee") !== undefined) input.minBaseFee = parseWei(option("--min-base-fee"));
-if (flag("--reset") || flag("--reset-min-base-fee")) input.minBaseFee = null;
-const gas = {};
-for (const pair of (option("--gas") ?? "").split(",").filter(Boolean)) {
-  const [name, value] = pair.split("=").map((part) => part.trim());
-  if (!/^\d+$/.test(value ?? "")) die(`--gas ${pair}: ต้องเป็น ชื่อ=จำนวนเต็ม`);
-  gas[name] = Number(value);
-}
-const resetNames = flag("--reset") ? Object.keys(info.gasConfig?.gas ?? {}) : (option("--reset-gas") ?? "").split(",").filter(Boolean);
-for (const name of resetNames) gas[name.trim()] = null;
-if (Object.keys(gas).length) input.gas = gas;
+if (flag("--reset")) input.minBaseFee = null;
 if (!Object.keys(input).length) process.exit(0);   // ดูอย่างเดียว
 
 if (!ADMIN_KEY) die("ต้องตั้ง ADMIN_KEY (key ที่อยู่ใน admins ของ genesis)");
