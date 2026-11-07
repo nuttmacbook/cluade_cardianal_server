@@ -166,7 +166,7 @@ export function mineOnce(now = Date.now()) {
     const block = vm.createBlock({ timestamp: now, feeRecipient: MINER });
     const included = mempool.take(block);
     // ไม่มีอะไรเข้า block (ใบที่รอติด nonce ที่ขาด ฯลฯ) และ base fee ลงถึงขั้นต่ำแล้ว → ไม่ปิด block ว่าง (block ว่างช่วยแค่ลด base fee)
-    if (included.length === 0 && block.rejectedTransactions().length === 0 && BigInt(String(block.baseFee ?? vm.minBaseFee).replace(/n$/, "")) <= vm.minBaseFee) {
+    if (included.length === 0 && block.rejectedTransactions().length === 0 && BigInt(String(block.baseFee ?? vm.minBaseFee).replace(/n$/, "")) <= vm.minBaseFeeNow()) {
       minerState.idleAt = now;   // miner ยังทำงาน แค่ไม่มีใบที่เข้า block ได้ (/health ไม่นับเป็น stalled)
       return null;
     }
@@ -258,7 +258,9 @@ const ROUTES = {
     return body.ok ? body : { status: 503, body };
   },
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
-    gasPrice: vm.gas.price, decimals: 18,   // base fee ต่ำสุด (wei) · native มี 18 ทศนิยม
+    gasPrice: vm.minBaseFeeNow(), decimals: 18,   // base fee ต่ำสุดที่ใช้อยู่ (wei · ค่าใน genesis หรือที่ admin ตั้งด้วย setGasConfig) · native มี 18 ทศนิยม
+    minBaseFee: vm.minBaseFeeNow(), genesisMinBaseFee: vm.minBaseFee,
+    gasConfig: vm.gasConfig(), gas: vm.gasAt(), admins: settings.admins,   // ค่าที่ admin ตั้งบนเชน (null = ยังไม่เคยตั้ง) · ตารางราคาต่อหน่วยของ block ถัดไป
     baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance,
     forks: vm.forkSchedule(),   // [{ name, block, active, description }] กติกาใหม่ตั้งแต่ block ที่กำหนด

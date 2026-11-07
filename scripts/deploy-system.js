@@ -47,7 +47,8 @@ if (flag("--plan")) process.exit(0);
 if (!DEPLOYER_KEY) die("ต้องตั้ง DEPLOYER_KEY เพื่อ deploy จริง");
 
 const { baseFee } = await get("/genesis");
-const gasPrice = String([BigInt(String(baseFee ?? 0).replace(/n$/, "")) * 2n, 10n ** 9n].reduce((a, b) => (a > b ? a : b)));
+// 2 เท่าของ base fee ถัดไป (เผื่อขึ้นระหว่างรอ) · ไม่มีค่า = 1 gwei · ไม่ล็อกขั้นต่ำ 1 gwei (admin ลด base fee ด้วย setGasConfig ได้)
+const gasPrice = String(baseFee === undefined || baseFee === null ? 10n ** 9n : BigInt(String(baseFee).replace(/n$/, "")) * 2n);
 
 async function send(key, fields) {
   const from = sign.addressOf(key);

@@ -25,6 +25,7 @@
   <details open><summary><h3>Explorer</h3></summary>
     <a data-nav="home" onclick="sideGo('')"><span class="dot" style="--c:#5362d4">◆</span><span>Overview</span></a>
     <a data-nav="block" onclick="sideClose();api('/genesis').then((i) => go('#block/' + (i.latest || 1)))"><span class="dot" style="--c:#2563eb">B</span><span>Latest block</span><span class="n" id="side-latest">—</span></a>
+    <a data-nav="gas" onclick="sideGo('#gas')"><span class="dot" style="--c:#d97706">⛽</span><span>Gas settings</span></a>
   </details>
   <details open><summary><h3>Programs</h3></summary>
     <a data-nav="programs-approved" onclick="sideClose();openPrograms('approved')"><span class="dot" style="--c:#16a34a">✓</span><span>Approved</span><span class="n" id="side-approved">—</span></a>
@@ -61,6 +62,7 @@
 <script src="ui/pages/address.js"></script>
 <script src="ui/pages/deploy.js"></script>
 <script src="ui/pages/system.js"></script>
+<script src="ui/pages/gas.js"></script>
 <script src="ui/sidebar.js"></script>
 <script src="core/router.js"></script>
 <script src="core/start.js"></script>

@@ -36,7 +36,7 @@ explorerscan/              หน้า explorer: theme/ (สี) · ui/ (หน
 genesis.json               ยอดเงินตั้งต้น (ช่วงพัฒนา · เปิดจริงใช้ deploy/genesis.mainnet.example.json)
 deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
-scripts/                   demo.js, examples.js, deploy-system.js (โปรแกรมกลางทั้งชุด)
+scripts/                   demo.js, examples.js, deploy-system.js (โปรแกรมกลางทั้งชุด), set-gas.js (เจ้าของปรับขั้นต่ำของ gas price กลางทาง)
 src/standards/             มาตรฐาน token / NFT / multi-token / กระเป๋า / multicall + system.js (WCARD, Multisig, Factory)
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
