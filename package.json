@@ -24,6 +24,7 @@
     "dev": "DEV=1 node server.js",
     "seed": "node scripts/seed.js",
     "deploy:system": "node scripts/deploy-system.js",
+    "gas:set": "node scripts/set-gas.js",
     "demo:market": "node scripts/demo-market.js",
     "demo:chain": "node scripts/demo-chain.js",
     "simulate": "node scripts/simulate-users.js",

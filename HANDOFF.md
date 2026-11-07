@@ -84,6 +84,7 @@ src/standards/                            โปรแกรมมาตรฐ�
                                           · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
                                           · system (WCARD · Multisig · Factory + แผน deploy ชุดโปรแกรมกลาง · หัวข้อ 8 "โปรแกรมกลางของเชน")
 scripts/deploy-system.js                  deploy โปรแกรมกลางทั้งชุดตามลำดับ nonce ของ deployer → deploy/system-programs.json
+scripts/set-gas.js                        admin ปรับ base fee ขั้นต่ำ / ราคาต่อหน่วยกลางทาง (tx setGasConfig · มีผล block ถัดไป)
 src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
 src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
 src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
@@ -465,6 +466,12 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
   `forks` ไม่อยู่ใน genesis hash (`vm.hashGenesis`) → เพิ่มตารางทีหลังได้ · ชื่อที่โค้ดไม่รู้จัก = VM ไม่ยอมสร้าง (node ต้องอัปเดตโปรแกรมก่อน) · `/genesis` บอก `forks`
   กติกา: `FORKS.<ชื่อ> = { description, gas: { ค่าแก๊สใหม่ } }` (ยกเว้น `price`) → `vm.gasAt(blockNumber)` · กติกาแบบอื่นเช็ค `vm.forkActive(ชื่อ, blockNumber)` ตรงจุดที่เปลี่ยน
   block ก่อนหน้าใช้กติกาเดิม → `replayBlock` / sync / `rebuildFrom` ได้ผลเดิม · node ที่ตั้งตารางต่างกัน = hash ไม่ตรงตั้งแต่ block นั้น · ตอนนี้ `FORKS` ว่าง (ยังไม่มี fork จริง)
+**เจ้าของปรับค่าแก๊สกลางทาง** (tx `setGasConfig` · `scripts/set-gas.js` · explorer เมนู "Gas settings" · เทสต์ `106-gas-config` + e2e): ไม่ต้อง fork / ล้างเชน / restart
+  ผู้เซ็นต้องอยู่ใน `admins` ของ genesis (เชนที่ไม่ตั้ง admins = ปรับไม่ได้) · input `{ minBaseFee?: "wei" | null, gas?: { ชื่อ: จำนวนเต็ม ≥ 0 | null } }` (null = กลับไปค่าเดิม · ไม่ส่ง = ไม่เปลี่ยน · `price` ปรับไม่ได้)
+  เขียน state key `gasconfig` (อยู่ใน stateRoot / history / snapshot) → **มีผลตั้งแต่ block ถัดไป**: `Block` อ่าน gasconfig จาก state ก่อน block ครั้งเดียว (`block.gas` · base fee ขั้นต่ำ)
+  · replay อ่าน `stateAt(n − 1)` ได้ผลเดิม · เครื่องตามซิงก์แล้วได้ hash เดิม · `vm.gasAt(n, read)` = DEFAULT_GAS → fork → gasconfig · `vm.minBaseFeeNow()` = ขั้นต่ำที่ใช้อยู่
+  ลด `minBaseFee` = ค่า tx ทุกแบบถูกลงตามสัดส่วน (แก๊สต่อ tx / ความจุ block เท่าเดิม) · base fee ลงหาขั้นต่ำใหม่ทีละ ≤ 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
+  VM ที่ไม่ตั้ง admins ไม่อ่าน key นี้เลย (request อ่านเฉพาะ key ที่ใช้) · `/genesis` บอก `minBaseFee` `genesisMinBaseFee` `gasConfig` `gas` `admins` (`gasPrice` = ขั้นต่ำที่ใช้อยู่)
 **แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
 (n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง)
 · ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้

@@ -63,7 +63,7 @@ curl 127.0.0.1:3000/genesis                                                 # ch
 | `blockMs` | 1000 | ตามที่ตกลง |
 | `maxBlockGas` | 1000000 | ~216 tx token / block · ปิด block ~0.3 วิ |
 | `gasTarget` | 500000 | ใช้เกินครึ่ง base fee ขึ้น |
-| `minBaseFee` | "1000000000" (1 gwei) | ราคาแก๊สต่ำสุด |
+| `minBaseFee` | "1000000000" (1 gwei) | ราคาแก๊สต่ำสุดตอนเริ่ม · **ปรับทีหลังได้โดยไม่ล้างเชน** (หัวข้อ 8) |
 | `burnPercent` | 100 | base fee เผาทิ้งทั้งหมด ผู้ผลิตได้แค่ tip · ถ้าอยากให้ผู้ผลิตได้ค่าแก๊สด้วยให้ลดลง |
 | `upgradeDelayBlocks` | 3600 | อนุมัติอัปเกรดแล้วต้องรอ 1 ชม. ผู้ใช้มีเวลาเห็นก่อนโค้ดใหม่ใช้จริง |
 | `memoryLimitMb` / `stackLimitKb` | 32 / 256 | ค่าเดิมที่ทดสอบแล้ว |
@@ -132,6 +132,18 @@ DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://cha
 - ได้ `deploy/system-programs.json` (address + ชื่อ) · explorer เมนู "System programs" แสดงให้เอง
 - ไม่อยากใช้ key admin บนเครื่องนี้ (admin เป็น hardware wallet): ไม่ต้องส่ง `ADMIN_KEY` แล้วกด Approve ทีละตัวในหน้า Programs ของ explorer ด้วยกระเป๋า admin
 - เหรียญหลักไม่ใช่ CARD: สคริปต์อ่านจาก `EVM_SYMBOL` ของ server (หรือตั้ง `SYMBOL=…`) → ชื่อเป็น `w<symbol>` · แก้ `systemPrograms` ใน `explorerscan/config.js` ให้ตรง
+
+## 8. ปรับค่าแก๊สกลางทาง (เหรียญหลักแพงขึ้น / ถูกลง)
+
+admin (address ใน `config.admins`) ส่ง tx `setGasConfig` · มีผลตั้งแต่ block ถัดไป · ไม่ต้อง fork / ล้างเชน / restart · เครื่องตามซิงก์ได้เอง
+```
+node scripts/set-gas.js https://chain.example.com                                   # ดูค่าที่ใช้อยู่
+ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --min-base-fee 0.1gwei   # ค่า tx ทุกแบบถูกลง 10 เท่า
+ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --reset                  # กลับไปค่าใน genesis
+```
+- admin เป็น hardware wallet: เปิด explorer เมนู **Gas settings** → ต่อกระเป๋า admin → แก้ค่า → Send change
+- ลด base fee ขั้นต่ำ = ค่า tx ทุกแบบ (เป็นเหรียญ) ถูกลงตามสัดส่วน · แก๊สต่อ tx และความจุ block เท่าเดิม · base fee ลงหาค่าใหม่ทีละ ≤ 12.5% ต่อ block (1 → 0.1 gwei ราว 18 block)
+- `--gas call=50,write=250` เปลี่ยนราคาต่อหน่วย (ชั่งน้ำหนักระหว่างคำสั่ง) · ลดมากไปแล้ว block รับ tx ได้มากขึ้น = เครื่องทำงานหนักขึ้น (ดู gas-fees.md)
 
 ## เครื่องที่ควรใช้
 

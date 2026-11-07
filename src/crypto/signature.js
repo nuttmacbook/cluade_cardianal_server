@@ -56,7 +56,7 @@ export const transactionTypeOf = (tx = {}) => [...(isFeeMarketTx(tx) ? TRANSACTI
 export const isFeeMarketTx = (tx = {}) => (tx.maxFeePerGas ?? null) !== null || (tx.maxPriorityFeePerGas ?? null) !== null;
 
 const ACTIONS = new Set(["call", "deploy", "transfer", "metadata", "init", "reject",
-  "upgrade", "setUpgrader", "initUpgrade", "rejectUpgrade"]);
+  "upgrade", "setUpgrader", "initUpgrade", "rejectUpgrade", "setGasConfig"]);
 const HASH_LENGTH = 32;
 const SIGNATURE_LENGTH = 65;
 
@@ -244,12 +244,17 @@ export function toVmRequest(tx, sender, signature, digest, sponsorSignature) {
   // โอนสิทธิ์อัปเกรด: input = { upgrader: "0x…" } หรือ { upgrader: null } = สละสิทธิ์
   if (tx.action === "setUpgrader") return { programUuid: tx.to, upgrader: tx.input?.upgrader ?? null, ...common };
   if (tx.action === "initUpgrade" || tx.action === "rejectUpgrade") return { programUuid: tx.to, ...common };
+  // admin ปรับค่าแก๊สของเชน: input = { minBaseFee?: "wei" | null, gas?: { ชื่อ: ค่า | null } } (ไม่มี to)
+  if (tx.action === "setGasConfig") {
+    return { ...(tx.input && Object.hasOwn(tx.input, "minBaseFee") ? { minBaseFee: tx.input.minBaseFee } : {}),
+      ...(tx.input && Object.hasOwn(tx.input, "gas") ? { gas: tx.input.gas } : {}), ...common };
+  }
   return { programUuid: tx.to, functionName: tx.method, input: tx.input, value: tx.value, ...common };
 }
 
 /** ชื่อเมธอดของ VM ที่ใช้กับแต่ละ action */
 export const VM_METHOD = { call: "call", deploy: "deploy", transfer: "transfer", metadata: "setMetadata", init: "init", reject: "reject",
-  upgrade: "upgrade", setUpgrader: "setUpgrader", initUpgrade: "initUpgrade", rejectUpgrade: "rejectUpgrade" };
+  upgrade: "upgrade", setUpgrader: "setUpgrader", initUpgrade: "initUpgrade", rejectUpgrade: "rejectUpgrade", setGasConfig: "setGasConfig" };
 
 /**
  * ตรวจลายเซ็นแล้วคืน request ที่พร้อมส่งเข้า VM

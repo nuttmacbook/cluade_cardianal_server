@@ -102,7 +102,7 @@ async function decorate(root = document) {
 
 const txRow = (t, columns) => `<tr>${columns.map((c) => `<td>${c}</td>`).join("")}</tr>`;
 // readable labels for program upgrade / clone actions (other actions show their raw name)
-const ACTION_LABELS = { upgrade: "Upgrade", setUpgrader: "Set upgrader", initUpgrade: "Approve upgrade", rejectUpgrade: "Reject upgrade", create: "Create" };
+const ACTION_LABELS = { upgrade: "Upgrade", setUpgrader: "Set upgrader", initUpgrade: "Approve upgrade", rejectUpgrade: "Reject upgrade", setGasConfig: "Set gas", create: "Create" };
 const actionTag = (a) => `<span class="tag">${esc(ACTION_LABELS[a] ?? a)}</span>`;
 
 /** pager below a list · handler is a call with $ for the page number, e.g. "setPage('in',$)" */
