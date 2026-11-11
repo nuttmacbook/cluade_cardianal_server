@@ -225,7 +225,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       parentHash: header.parentHash ?? (number === 1 ? vm.genesisHash() : ZERO_HASH),
       nonce: "0x0000000000000000", sha3Uncles: EMPTY_UNCLES, logsBloom: bloom,
       transactionsRoot: header.txRoot ?? ZERO_HASH, stateRoot: header.stateRoot ?? ZERO_HASH, receiptsRoot: header.receiptsRoot ?? ZERO_HASH,
-      baseFeePerGas: quantity(native(header.baseFeePerGas ?? vm.minBaseFee ?? vm.gas.price)),
+      baseFeePerGas: quantity(native(header.baseFeePerGas ?? vm.minBaseFeeNow())),
       miner: header.feeRecipient ?? ZERO_ADDRESS, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x",
       size: quantity(1000 + hashes.length * 32), gasLimit: quantity(vm.maxBlockGas ?? BLOCK_GAS_LIMIT), gasUsed: quantity(header.gasUsed ?? 0),
       timestamp: quantity(Math.floor((header.timestamp ?? 0) / 1000)), mixHash: ZERO_HASH,
@@ -561,7 +561,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const rewards = [];
     for (let n = start; n <= end && count > 0; n += 1) {
       const header = headerAt(n);
-      baseFees.push(quantity(native(header?.baseFeePerGas ?? vm.minBaseFee)));
+      baseFees.push(quantity(native(header?.baseFeePerGas ?? vm.minBaseFeeNow())));
       ratios.push(Number(header?.gasUsed ?? 0) / gasLimitOf());
       if (!wanted) continue;
       const tips = tipsOf(header);
@@ -578,7 +578,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       }));
     }
     // ช่องสุดท้าย = base fee ของ block ถัดจาก newest
-    if (count > 0) baseFees.push(quantity(native(end >= latest() ? vm.currentBaseFee() : headerAt(end + 1)?.baseFeePerGas ?? vm.minBaseFee)));
+    if (count > 0) baseFees.push(quantity(native(end >= latest() ? vm.currentBaseFee() : headerAt(end + 1)?.baseFeePerGas ?? vm.minBaseFeeNow())));
     return { oldestBlock: quantity(count > 0 ? start : end), baseFeePerGas: baseFees, gasUsedRatio: ratios, ...(wanted ? { reward: rewards } : {}) };
   }
 
