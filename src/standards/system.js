@@ -13,24 +13,11 @@
  *   ทั้งชุดไม่มี upgrader (แก้ไม่ได้) · ต้นแบบที่ deploy ตรงไม่มีเจ้าของ (ใช้เป็นแม่แบบอย่างเดียว)
  */
 import { MULTICALL_PROGRAM } from "./multicall.js";
+import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 import { TOKEN_PROGRAM, TOKEN_CORE, TOKEN_CORE_EXPORTS, ZERO_ADDRESS } from "./token.js";
 import { NFT_PROGRAM } from "./nft.js";
 import { MULTITOKEN_PROGRAM } from "./multitoken.js";
 import { ERC1271_MAGIC_VALUE, ERC1271_INVALID_VALUE, ERC721_RECEIVED, ERC1155_RECEIVED, ERC1155_BATCH_RECEIVED } from "./wallet.js";
-
-/** ตั้ง metadata ของโปรแกรมจาก input ตอน initialization (ตั้งได้จากโค้ดเท่านั้น) */
-const SET_METADATA = `function setProgramMetadata(input) {
-    if (typeof input.namespace === "string" && input.namespace !== "") setMetadata("namespace", input.namespace)
-    if (typeof input.icon === "string" && input.icon !== "") setMetadata("icon", input.icon)
-    if (typeof input.url === "string" && input.url !== "") setMetadata("url", input.url)
-    if (typeof input.contact === "string" && input.contact !== "") setMetadata("contact", input.contact)
-    if (typeof input.description === "string" && input.description !== "") setMetadata("description", input.description)
-  }`;
-
-const CHECK_ADDRESS = `function checkAddress(address, label) {
-    if (typeof address !== "string" || address.length !== 42 || !address.startsWith("0x")) throw new Error(label + " must be an address")
-    return address.toLowerCase()
-  }`;
 
 /**
  * WCARD — เหรียญหลักแบบ token (มาตรฐาน token ครบ + permit) · ฝาก 1 CARD ได้ 1 WCARD ถอนคืนได้ทุกเมื่อ
