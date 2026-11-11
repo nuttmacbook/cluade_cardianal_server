@@ -55,6 +55,7 @@ import { createEvmRpc, parseError } from "./src/node/evm-rpc.js";
 import { VerifyPool, DEFAULT_VERIFY_WORKERS } from "./src/node/verify-pool.js";
 import { attachEvmWebSocket } from "./src/node/evm-ws.js";
 import { clientIp } from "./src/node/client-ip.js";
+import { withSystemAbi } from "./src/standards/system-abi.js";
 import { createSnapshotter } from "./src/node/snapshot.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
@@ -305,14 +306,14 @@ const DYNAMIC = [
   [/^\/address\/([^/]+)$/, (m, query) => ({
     address: lower(m[1]), native: vm.nativeBalanceOf(m[1]),
     nonce: vm.checkTransaction({ from: m[1], nonce: -1 }).expectedNonce,
-    metadata: vm.getMetadata(m[1]), isProgram: vm.read(`${lower(m[1])}:this`) !== undefined,
+    metadata: withSystemAbi(vm.getMetadata(m[1]), (dbKey) => vm.read(dbKey), m[1]), isProgram: vm.read(`${lower(m[1])}:this`) !== undefined,
     transactions: vm.listTransactionsOf(m[1], { limit: limitOf(query) }),
     incoming: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
   })],
   [/^\/program\/([^/]+)$/, (m, query) => {
     const code = vm.read(`${lower(m[1])}:code`);
     if (!code) return { status: 404, body: { error: "Program not found (it may not be initialized yet)" } };
-    return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: vm.getMetadata(m[1]),
+    return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: withSystemAbi(vm.getMetadata(m[1]), (dbKey) => vm.read(dbKey), m[1]),   // โปรแกรมแถม: abi จากโค้ด
       // อัปเกรด: รอรีวิว / อนุมัติแล้วรอ timelock (ไม่มี = null)
       pendingUpgrade: vm.read(`pending-upgrade:${lower(m[1])}`) ?? null, scheduledUpgrade: vm.read(`scheduled-upgrade:${lower(m[1])}`) ?? null,
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),

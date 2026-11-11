@@ -11,6 +11,7 @@ import { storageKey, map, toEvmAbi } from "../core/virtualmachine.js";
 import { checkTokenStandard } from "../standards/token.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
+import { resolveAbi } from "../standards/system-abi.js";
 
 const SEP = ":";
 export const SCAN_LIMIT = 20_000;   // ไล่ key ไม่เกินเท่านี้ต่อครั้ง (เกินแล้วตอบ truncated: true)
@@ -368,7 +369,7 @@ const eventKeyOf = (event) => `event${SEP}${event.program}${SEP}${event.name}${S
 /** ABI ของโปรแกรม (metadata.abi) → { address, abi, evmAbi } · ไม่ได้ประกาศ → abi: null */
 export function programAbi(vm, program) {
   const address = lower(program);
-  const abi = vm.read(`${address}${SEP}metadata${SEP}abi`) ?? null;
+  const abi = resolveAbi((dbKey) => vm.read(dbKey), address);   // ประกาศเอง ?? โปรแกรมแถม (src/standards/system-abi.js)
   return { address, abi, evmAbi: abi ? toEvmAbi(abi) : null };
 }
 
