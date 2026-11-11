@@ -188,7 +188,8 @@ export function rawToVerified(decoded, { chainId, isProgram, resolveCall }) {
   const fees = decoded.type === 2
     ? { maxFeePerGas: decoded.fees.maxFeePerGas > 0n ? String(decoded.fees.maxFeePerGas) : undefined, maxPriorityFeePerGas: String(decoded.fees.maxPriorityFeePerGas) }
     : { gasPrice: decoded.fees.gasPrice > 0n ? String(decoded.fees.gasPrice) : undefined };
-  const common = { nonce: decoded.nonce, gasLimit: decoded.gasLimit || undefined, ...fees, signature: decoded.signature, digest: decoded.hash, evmRaw: decoded.raw };
+  const common = { nonce: decoded.nonce, gasLimit: decoded.gasLimit || undefined, ...fees, signature: decoded.signature, digest: decoded.hash, evmRaw: decoded.raw,
+    signedOnChainId: Number(decoded.chainId) };   // tx แบบ EVM: กระเป๋าต้องเปิดเชนนี้อยู่ (chainId อยู่ใน tx เอง)
   const value = `${decoded.value}n`;
   const sender = decoded.sender;
   const tx = { chainId: Number(decoded.chainId), from: sender, to: decoded.to, value, nonce: decoded.nonce, gasLimit: decoded.gasLimit, evmRaw: decoded.raw };

@@ -9,17 +9,28 @@
  *   - ผู้ใช้เห็นเป็นฟิลด์ (action / from / to / method / value / nonce) ไม่ใช่ hash เปล่า ๆ
  *   - context.sender ที่ส่งเข้า VM มาจากลายเซ็นเสมอ ไม่ใช่สิ่งที่ user พิมพ์มา
  *   - origin = sender เสมอสำหรับ tx ของ user (การส่งต่อ origin เป็นหน้าที่ของ runProgram)
+ *   - เซ็นได้จากกระเป๋าที่เปิดเชน EVM ไหนก็ได้ (ไม่ต้อง add เชนนี้): domain ไม่มี chainId (MetaMask บังคับให้ chainId ของ domain
+ *     ตรงกับเชนที่เปิดอยู่) · chainId ของเชนนี้อยู่ใน message แทน → node ตรวจว่าตรงกับเชนตัวเอง (mempool) = กัน replay ข้ามเชน
+ *     ลายเซ็นข้อความ EIP-712 ไม่ใช่ tx ของ EVM → เอาไปส่งบนเชนอื่นไม่ได้
+ *   - signedOnChainId = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (หน้าเว็บใส่เองจาก eth_chainId · อยู่ในลายเซ็น แต่ไม่ใช่หลักฐาน) → explorer แสดงไว้ดู
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes, concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { canonicalJson, normalizeAddress, normalizeHexDeep } from "../core/encoding.js";
 
-export const DOMAIN_NAME = "ProgramVM";
-export const DOMAIN_VERSION = "1";
+export const DOMAIN_NAME = "Bluewolfchain";
+export const DOMAIN_VERSION = "2";
+/** domain ไม่มี chainId (เซ็นได้จากทุกเชน) · chainId อยู่ใน message */
+export const DOMAIN_TYPE = [
+  { name: "name", type: "string" },
+  { name: "version", type: "string" },
+];
 
-/** ฟิลด์ที่ถูกเซ็น (ลำดับสำคัญ ห้ามสลับ) */
-export const TRANSACTION_TYPE = [
+/** ฟิลด์ที่ถูกเซ็น (ลำดับสำคัญ ห้ามสลับ) · signedOnChainId ต่อท้ายทุกชนิด (ก่อน sponsor) */
+const SIGNED_ON_FIELD = { name: "signedOnChainId", type: "uint256" };
+const BASE_FIELDS = [
+  { name: "chainId", type: "uint256" },
   { name: "action", type: "string" },
   { name: "from", type: "address" },
   { name: "to", type: "string" },
@@ -30,15 +41,17 @@ export const TRANSACTION_TYPE = [
   { name: "gasLimit", type: "uint256" },
   { name: "gasPrice", type: "uint256" },
 ];
+export const TRANSACTION_TYPE = [...BASE_FIELDS, SIGNED_ON_FIELD];
 
 /**
  * tx แบบ EIP-1559 (มี maxFeePerGas หรือ maxPriorityFeePerGas): แทน gasPrice ด้วยสองฟิลด์นี้
  * ชื่อชนิดยังเป็น "Transaction" แต่ฟิลด์ต่างกัน → digest ไม่ชนกับแบบเดิม · tx แบบเดิมเซ็น / ตรวจได้เหมือนเดิมทุกไบต์
  */
 export const TRANSACTION_TYPE_1559 = [
-  ...TRANSACTION_TYPE.filter((field) => field.name !== "gasPrice"),
+  ...BASE_FIELDS.filter((field) => field.name !== "gasPrice"),
   { name: "maxFeePerGas", type: "uint256" },
   { name: "maxPriorityFeePerGas", type: "uint256" },
+  SIGNED_ON_FIELD,
 ];
 
 /**
@@ -101,8 +114,13 @@ export function normalizeTransaction(tx = {}) {
   const action = tx.action ?? "call";
   if (!ACTIONS.has(action)) fail(`action ไม่ถูกต้อง: ${action}`);
 
+  const chainId = tx.chainId ?? 1;
+  if (parseUint(chainId) === null) fail("chainId ต้องเป็นจำนวนเต็มไม่ติดลบ");
+  const signedOnChainId = tx.signedOnChainId ?? chainId;   // ไม่ส่ง = เซ็นบนเชนนี้ (สคริปต์ / SDK)
+  if (parseUint(signedOnChainId) === null) fail("signedOnChainId ต้องเป็นจำนวนเต็มไม่ติดลบ");
   return {
-    chainId: tx.chainId ?? 1,
+    chainId: Number(parseUint(chainId)),
+    signedOnChainId: Number(parseUint(signedOnChainId)),
     action,
     from: normalizeAddress(tx.from ?? ""),
     to: normalizeAddress(tx.to ?? ""),
@@ -130,17 +148,14 @@ function feeOf(tx) {
 export function buildTypedData(rawTx) {
   const tx = normalizeTransaction(rawTx);
   return {
-    domain: { name: DOMAIN_NAME, version: DOMAIN_VERSION, chainId: tx.chainId },
+    domain: { name: DOMAIN_NAME, version: DOMAIN_VERSION },
     types: {
-      EIP712Domain: [
-        { name: "name", type: "string" },
-        { name: "version", type: "string" },
-        { name: "chainId", type: "uint256" },
-      ],
+      EIP712Domain: DOMAIN_TYPE,
       Transaction: transactionTypeOf(tx),
     },
     primaryType: "Transaction",
     message: {
+      chainId: tx.chainId,
       action: tx.action,
       from: tx.from,
       to: tx.to,
@@ -151,6 +166,7 @@ export function buildTypedData(rawTx) {
       nonce: tx.nonce,
       gasLimit: tx.gasLimit,
       ...(isFeeMarketTx(tx) ? { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas } : { gasPrice: tx.gasPrice }),
+      signedOnChainId: tx.signedOnChainId,
       ...(tx.sponsor ? { sponsor: tx.sponsor } : {}),
     },
   };
@@ -173,7 +189,6 @@ export function hashTypedData(rawTx) {
     typeHashOf("EIP712Domain", types.EIP712Domain),
     encodeString(domain.name),
     encodeString(domain.version),
-    encodeUint(domain.chainId),
   ));
   const structHash = keccak(concatBytes(
     typeHashOf("Transaction", types.Transaction),
@@ -232,7 +247,7 @@ export function toVmRequest(tx, sender, signature, digest, sponsorSignature) {
   const fees = isFeeMarketTx(tx)
     ? { maxFeePerGas: given(tx.maxFeePerGas), maxPriorityFeePerGas: String(parseUint(tx.maxPriorityFeePerGas ?? 0) ?? 0n) }
     : { gasPrice: given(tx.gasPrice) };
-  const common = { context, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), ...fees, signature, digest,
+  const common = { context, signedOnChainId: tx.signedOnChainId, nonce: tx.nonce, gasLimit: given(tx.gasLimit) === undefined ? undefined : Number(parseUint(tx.gasLimit)), ...fees, signature, digest,
     ...(tx.sponsor ? { sponsor: tx.sponsor, sponsorSignature } : {}) };   // ผู้จ่ายแก๊สแทน (ไม่มี = request เดิมทุกไบต์)
 
   if (tx.action === "transfer") return { from: sender, to: tx.to, amount: tx.value, ...common, context: undefined };
@@ -278,6 +293,7 @@ export function verifyTransaction({ tx, signature, sponsorSignature } = {}) {
   return {
     action: normalized.action,
     method: VM_METHOD[normalized.action],
+    chainId: normalized.chainId,   // mempool ตรวจว่าตรงกับเชนนี้ (กัน replay ข้ามเชน)
     sender,
     hash: digest,   // hash ที่ผู้ใช้เซ็น — ค้นใน explorer ได้เช่นกัน (ดู sigtx:<digest>)
     request: toVmRequest(normalized, sender, signature, digest, sponsorSignature),

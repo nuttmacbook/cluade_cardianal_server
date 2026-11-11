@@ -3,15 +3,20 @@
    ⚠️ canonical() / signingInput() ต้องตรงกับ VM ทุกไบต์ (เทสต์ 46 คุม) แก้ผิด = ลายเซ็นจากหน้าเว็บใช้ไม่ได้ทั้งหมด */
 
 // ---------- wallet ----------
-const DOMAIN_TYPE = [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }];
-const TX_TYPE = [
-  { name: "action", type: "string" }, { name: "from", type: "address" }, { name: "to", type: "string" },
+// no chainId in the domain → the wallet signs whatever chain it has open (no need to add this chain) · chainId sits in the message
+// and the node rejects a different one (no replay across chains) · must match signature.js (DOMAIN_TYPE / TRANSACTION_TYPE)
+const DOMAIN = { name: "Bluewolfchain", version: "2" };
+const DOMAIN_TYPE = [{ name: "name", type: "string" }, { name: "version", type: "string" }];
+const SIGNED_ON = { name: "signedOnChainId", type: "uint256" };   // the chain the wallet had open (shown on the tx page)
+const BASE_TYPE = [
+  { name: "chainId", type: "uint256" }, { name: "action", type: "string" }, { name: "from", type: "address" }, { name: "to", type: "string" },
   { name: "method", type: "string" }, { name: "input", type: "string" }, { name: "value", type: "uint256" },
   { name: "nonce", type: "uint256" }, { name: "gasLimit", type: "uint256" }, { name: "gasPrice", type: "uint256" },
 ];
+const TX_TYPE = [...BASE_TYPE, SIGNED_ON];
 // EIP-1559: same fields without gasPrice, plus maxFeePerGas / maxPriorityFeePerGas (TRANSACTION_TYPE_1559 in signature.js)
-const TX_TYPE_1559 = [...TX_TYPE.filter((f) => f.name !== "gasPrice"),
-  { name: "maxFeePerGas", type: "uint256" }, { name: "maxPriorityFeePerGas", type: "uint256" }];
+const TX_TYPE_1559 = [...BASE_TYPE.filter((f) => f.name !== "gasPrice"),
+  { name: "maxFeePerGas", type: "uint256" }, { name: "maxPriorityFeePerGas", type: "uint256" }, SIGNED_ON];
 let wallet = null;
 
 /** canonical JSON, same as the VM (sorted keys, bigint as "123n") */
@@ -48,26 +53,71 @@ async function addNetwork() {
   await window.ethereum.request({ method: "wallet_addEthereumChain", params: [await api("/evm")] });
 }
 
-/** sign and send to the chain — returns the /sendtx response */
-async function sendTx(fields) {
+/** chain the wallet has open right now (any EVM chain works · recorded as signedOnChainId) */
+async function walletChainId() {
+  try { return Number(BigInt(await window.ethereum.request({ method: "eth_chainId" }))); } catch { return null; }
+}
+
+/**
+ * balance + fee before signing — the wallet cannot show them while it is on another chain (it asks that chain's node, not this one)
+ *   call: gas from POST /query + the per-tx base · transfer: per-tx base + 1 call + 2 reads / writes · other actions: the gas limit (upper bound)
+ *   → { balance, gas, fee, maxFee, exact } (wei / gas as BigInt) · throws when the balance cannot cover value + fee
+ */
+async function estimateCost(tx, info) {
+  const prices = info.gas ?? {};
+  const base = toBig(info.baseFee ?? info.gasPrice ?? 1);
+  const balance = toBig((await api(`/address/${wallet}?limit=1`).catch(() => ({}))).native?.balance);
+  let gas = null;
+  if (tx.action === "call") {
+    const res = await api("/query", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ programUuid: tx.to, functionName: tx.method, input: tx.input, value: tx.value, context: { sender: wallet, origin: wallet } }) }).catch(() => null);
+    if (res?.status === "success" && res.gasUsed !== undefined) gas = BigInt(res.gasUsed) + toBig(prices.tx ?? 0);
+  } else if (tx.action === "transfer") {
+    gas = toBig(prices.tx ?? 0) + toBig(prices.call) + 2n * toBig(prices.read) + 2n * toBig(prices.write);
+  }
+  const limit = BigInt(tx.gasLimit);
+  const exact = gas !== null;
+  if (!exact || gas > limit) gas = limit;
+  const fee = gas * base;
+  const maxFee = limit * toBig(tx.maxFeePerGas ?? tx.gasPrice ?? base);
+  const value = toBig(tx.value);
+  if (balance < value + fee) throw new Error(`Not enough ${info.symbol}: balance ${coin(balance)} · needs ≈ ${coin(value + fee)} (value + fee)`);
+  return { balance, gas, fee, maxFee, exact };
+}
+let nativeSymbol = null;   // from GET /evm (EVM_SYMBOL of the node) · read once
+async function coinSymbol() {
+  nativeSymbol ??= (await api("/evm").catch(() => null))?.nativeCurrency?.symbol ?? "BWSC";
+  return nativeSymbol;
+}
+
+/** sign and send to the chain — returns the /sendtx response · onCost(text) shows balance + fee before the wallet pops up */
+async function sendTx(fields, { onCost } = {}) {
   if (!wallet) await connect(false);
   const info = await api("/genesis");
+  const signedOn = await walletChainId();
   const { nonce } = await api(`/nonce/${wallet}`);
   // EIP-1559: pay at most 2 × the next base fee (room for it to rise while waiting) · no tip — the price is base fee only
   const baseFee = toBig(info.baseFee ?? info.gasPrice ?? 1);
-  const tx = { chainId: info.chainId, action: "call", from: wallet, to: "", method: "", input: {},
+  const tx = { chainId: info.chainId, signedOnChainId: signedOn ?? info.chainId, action: "call", from: wallet, to: "", method: "", input: {},
     value: "0", nonce, gasLimit: 500000,
     ...(fields.gasPrice === undefined ? { maxFeePerGas: String(baseFee * 2n), maxPriorityFeePerGas: "0" } : {}), ...fields };   // wei per gas
 
   const legacy = tx.maxFeePerGas === undefined;   // a caller passing gasPrice signs the legacy type
-  const message = { action: tx.action, from: tx.from, to: tx.to, method: tx.method,
+  const symbol = await coinSymbol();
+  const cost = await estimateCost(tx, { ...info, symbol });
+  const text = `Balance ${coin(cost.balance)} ${symbol} · fee ${cost.exact ? "≈" : "at most"} ${coin(cost.fee)} ${symbol} (max ${coin(cost.maxFee)})`
+    + ` · signing on chain ${tx.signedOnChainId}${tx.signedOnChainId === info.chainId ? " (this chain)" : ""} — confirm in your wallet`;
+  (onCost ?? (typeof busy === "function" ? busy : () => {}))(text);
+
+  const message = { chainId: tx.chainId, action: tx.action, from: tx.from, to: tx.to, method: tx.method,
     input: signingInput(tx),
     value: tx.value, nonce: tx.nonce, gasLimit: tx.gasLimit,
-    ...(legacy ? { gasPrice: tx.gasPrice } : { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas }) };
+    ...(legacy ? { gasPrice: tx.gasPrice } : { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas }),
+    signedOnChainId: tx.signedOnChainId };
 
   const signature = await window.ethereum.request({
     method: "eth_signTypedData_v4",
-    params: [wallet, JSON.stringify({ domain: { name: "ProgramVM", version: "1", chainId: tx.chainId },
+    params: [wallet, JSON.stringify({ domain: DOMAIN,
       types: { EIP712Domain: DOMAIN_TYPE, Transaction: legacy ? TX_TYPE : TX_TYPE_1559 }, primaryType: "Transaction", message })],
   });
 

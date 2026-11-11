@@ -19,7 +19,7 @@ const wallet = new Wallet(KEY);
 const ME = wallet.address.toLowerCase();
 const BOB = "0xFABB0ac9d68B0B445fB7357272Ff202C5651694a";                          // ตัวพิมพ์ผสมแบบ checksum
 
-let server, browser, page, url;
+let server, browser, page, url, CHAIN_ID;   // CHAIN_ID = chainId ของเชนที่ทดสอบ (tx ที่เซ็นต้องตรง ไม่งั้น node ปฏิเสธ)
 const pageErrors = [];
 
 const freePort = () => new Promise((resolve) => {
@@ -37,6 +37,7 @@ before(async () => {
     await wait(100);
   }
   // ข้อมูลตั้งต้น: โทเคน "mytoken" + tx ทุกประเภท
+  CHAIN_ID = (await (await fetch(`${url}/genesis`)).json()).chainId;
   await promisify(execFile)(process.execPath, ["scripts/seed.js", url], { cwd: ROOT });
 
   browser = await chromium.launch();
@@ -50,7 +51,15 @@ before(async () => {
     window.ethereum = {
       request: async ({ method, params }) => {
         if (method === "eth_requestAccounts") return [account];
-        if (method === "eth_signTypedData_v4") return window.__signTypedData(params[1]);
+        // แบบ MetaMask: เปิดเชนอื่นอยู่ (ค่าเริ่ม BSC 0x38 = ยังไม่ได้ add เชนนี้) · chainId ใน domain ต้องตรงกับเชนที่เปิดอยู่
+        if (method === "eth_chainId") return window.__walletChain ?? "0x38";
+        if (method === "eth_signTypedData_v4") {
+          const domainChain = JSON.parse(params[1]).domain?.chainId;
+          if (domainChain !== undefined && BigInt(domainChain) !== BigInt(window.__walletChain ?? "0x38")) {
+            throw new Error(`Provided chainId "${domainChain}" must match the active chainId "${BigInt(window.__walletChain ?? "0x38")}"`);
+          }
+          return window.__signTypedData(params[1]);
+        }
         if (method === "wallet_addEthereumChain") { window.__addedChain = params[0]; return null; }
         throw new Error(`ไม่รองรับ ${method}`);
       },
@@ -281,7 +290,7 @@ test("Interact: สร้างช่องกรอกจาก params.input �
   assert.deepEqual(pageErrors, []);
 });
 
-test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้าเว็บผ่าน /sendtx และเข้า block (address ใน input เป็นตัวพิมพ์ผสม)", async () => {
+test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC อยู่ (ไม่ได้ add เชนนี้) ก็เซ็นได้ · เห็นยอด + ค่าแก๊สก่อนเซ็น · หน้า tx แสดง Signed on (address ใน input เป็นตัวพิมพ์ผสม)", async () => {
   const { address } = await get("/name/mytoken");
   const before = (await get(`/program/${address}/storage?prefix=balances&limit=200`)).items;
   const bobBefore = before.find((s) => s.key[1] === BOB.toLowerCase())?.value ?? "0n";
@@ -291,6 +300,11 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   await page.selectOption("#fn", "transfer");
   await page.click(".ix-head .seg button[data-mode=json]");                         // แบบ JSON เดิมยังใช้ได้
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "7n" }));
+  // หยุด wallet ไว้ก่อนเซ็น → ดูข้อความยอด + ค่าแก๊สที่ขึ้นก่อนหน้าต่างของกระเป๋า
+  await page.evaluate(() => {
+    const sign = window.__signTypedData;
+    window.__signTypedData = async (json) => { window.__costText = document.querySelector("#out .ix-status")?.innerText; return sign(json); };
+  });
   await page.click("text=Send transaction");
   // อยู่หน้าเดิม: รอเข้า block แล้วโชวค่าที่ return (transfer คืน true) + ข้อมูลเต็มแบบพับ
   await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
@@ -299,12 +313,15 @@ test("ส่ง tx ผ่าน wallet: ลายเซ็นจากหน้�
   const receipt = JSON.parse(await page.locator("#out details.ix-full pre").textContent());
   assert.equal(receipt.from, ME);
   assert.equal(receipt.method, "transfer");
+  assert.equal(receipt.signedOnChainId, 56);
+  assert.match(await page.evaluate(() => window.__costText), /Balance [\d.,]+ BWSC · fee ≈ [\d.,]+ BWSC \(max [\d.,]+\) · signing on chain 56 — confirm in your wallet/);
 
   await page.click("#out .ix-link");                                                 // ลิงก์ไปหน้า tx
   await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
   await page.waitForFunction(() => document.getElementById("view").innerText.includes("Success"));
   assert.match(await view(), /transfer/);
   assert.match(await page.locator("#view tr", { hasText: /^Return value/ }).innerText(), /true/);
+  assert.match(await page.locator("#view tr", { hasText: /^Signed on/ }).innerText(), /BNB Smart Chain\s+chain id 56/);
 
   const after = (await get(`/program/${address}/storage?prefix=balances&limit=200`)).items;
   const bobAfter = after.find((s) => s.key[1] === BOB.toLowerCase()).value;
@@ -318,6 +335,8 @@ test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 �
     body: JSON.stringify({ programUuid: address, functionName, input }) }).then((r) => r.json());
   const nonceBefore = BigInt((await query("nonces", { owner: ME })).result.replace(/n$/, ""));
 
+  // permit ของ token (EIP-2612) มี chainId ใน domain ตามมาตรฐาน → MetaMask ต้องเปิดเชนนี้อยู่
+  await page.evaluate((id) => { window.__walletChain = `0x${id.toString(16)}`; }, (await get("/genesis")).chainId);
   await open(`#address/${address}`);
   await tab("Permit");
   assert.match(await view(), /Domain: name My Token · version 1/);
@@ -349,6 +368,7 @@ test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 �
   assert.match(await page.locator("#permit-allowance").textContent(), /Allowance now 2500000/);
   assert.equal((await query("allowance", { owner: ME, spender: BOB.toLowerCase() })).result, "2500000n");
   assert.equal((await query("nonces", { owner: ME })).result, `${nonceBefore + 1n}n`);
+  await page.evaluate(() => { delete window.__walletChain; });
   assert.deepEqual(pageErrors, []);
 });
 
@@ -623,7 +643,7 @@ test("/evm สำหรับ Blockscout: ยอดย้อนหลังต�
 test("โปรแกรม: หน้าแรกบอกจำนวนที่อนุมัติแล้ว / รออนุมัติ · กดแล้วเห็นรายการแต่ละแบบ", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { nonce } = await get(`/nonce/${ME}`);
-  const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce,
+  const tx = { chainId: CHAIN_ID, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce,
     action: "deploy", code: "function program() { function ping(params) { return 1; } return { ping }; }" };
   const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
@@ -656,7 +676,7 @@ test("NFT: หน้าโปรแกรมบอก Collection (ERC-721) · �
   const { NFT_PROGRAM } = await import("../../src/standards/nft.js");
   const send = async (fields) => {
     const { nonce } = await get(`/nonce/${ME}`);
-    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, gasPrice: "1000000000", nonce, ...fields };
+    const tx = { chainId: CHAIN_ID, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, gasPrice: "1000000000", nonce, ...fields };
     const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
     assert.ok(sent.queued, JSON.stringify(sent));
@@ -765,7 +785,7 @@ test("แถบ Upgrade: สละสิทธิ์ต้องกดสอง�
   const sign = await import("../../src/crypto/signature.js");
   const send = async (fields) => {
     const { nonce } = await get(`/nonce/${ME}`);
-    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce, ...fields };
+    const tx = { chainId: CHAIN_ID, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce, ...fields };
     const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
     assert.ok(sent.queued, JSON.stringify(sent));
@@ -801,7 +821,7 @@ test("แบ่งหน้า Calls / Events ของโปรแกรม: Ol
     const { nonce } = await get(`/nonce/${ME}`);
     let last;
     for (let i = 0; i < batch; i += 1) {
-      const tx = { chainId: 1, action: "call", from: ME, to: token, method: "transfer", input: { to: BOB.toLowerCase(), amount: "1n" }, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce: nonce + i };
+      const tx = { chainId: CHAIN_ID, action: "call", from: ME, to: token, method: "transfer", input: { to: BOB.toLowerCase(), amount: "1n" }, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce: nonce + i };
       last = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
       assert.ok(last.queued, JSON.stringify(last));
@@ -839,7 +859,7 @@ test("แบ่งหน้า Calls / Events ของโปรแกรม: Ol
 test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejected + เหตุผล · block มีรายการ Rejected · กระเป๋ามีแถบ Rejected · ทั้งหมดเป็นภาษาอังกฤษยกเว้นเหตุผลจาก server", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { nonce } = await get(`/nonce/${ME}`);
-  const tx = { chainId: 1, action: "transfer", from: ME, to: BOB.toLowerCase(), method: "", input: {}, value: 1, gasLimit: 0, gasPrice: "1000000000", nonce: nonce + 5 };
+  const tx = { chainId: CHAIN_ID, action: "transfer", from: ME, to: BOB.toLowerCase(), method: "", input: {}, value: 1, gasLimit: 0, gasPrice: "1000000000", nonce: nonce + 5 };
   const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
   assert.equal(sent.queued, false);
@@ -885,7 +905,7 @@ test("EIP-1559 + ABI: block บอก base fee / fee split · tx จากหน
   const send = async (fields) => {
     const { nonce } = await get(`/nonce/${ME}`);
     const { baseFee } = await get("/genesis");
-    const tx = { chainId: 1, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, nonce,
+    const tx = { chainId: CHAIN_ID, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 2_000_000, nonce,
       maxFeePerGas: String(BigInt(String(baseFee).replace(/n$/, "")) * 2n), maxPriorityFeePerGas: "0", ...fields };
     const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ tx, signature: sign.signTransaction(tx, KEY) }) }).then((r) => r.json());
@@ -971,7 +991,7 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
   const deployerKey = sign.randomPrivateKey();
   const deployer = sign.addressOf(deployerKey);
   const { nonce } = await get(`/nonce/${ME}`);
-  const fund = { chainId: 1, action: "transfer", from: ME, to: deployer, value: "1000000000000000000", gasLimit: 21_000, gasPrice: "1000000000", nonce };
+  const fund = { chainId: CHAIN_ID, action: "transfer", from: ME, to: deployer, value: "1000000000000000000", gasLimit: 21_000, gasPrice: "1000000000", nonce };
   const sent = await fetch(`${url}/sendtx`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ tx: fund, signature: sign.signTransaction(fund, KEY) }) }).then((r) => r.json());
   assert.ok(sent.queued, JSON.stringify(sent));

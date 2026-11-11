@@ -2232,6 +2232,8 @@ export class VirtualMachine {
       burnedFee: result.burnedFee ?? "0n",
       producerFee: result.producerFee ?? "0n",
       fee: result.fee ?? "0n",
+      // เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (อยู่ในลายเซ็น · หน้าเว็บใส่เอง ไม่ใช่หลักฐาน) · ไม่มี = tx ของระบบ / เก่ากว่า
+      ...(request.signedOnChainId === undefined || request.signedOnChainId === null ? {} : { signedOnChainId: Number(request.signedOnChainId) }),
       ...(request.sponsor ? { sponsor: normalizeAddress(request.sponsor) } : {}),   // ผู้จ่ายค่าแก๊สแทนผู้ส่ง (อยู่ใน hash ของ tx แล้ว)
       ...(request.evmRaw ? { evmHash: request.digest } : {}),   // มาจาก eth_sendRawTransaction: hash แบบ Ethereum = keccak(raw)
       nonce: pick(KEY.NONCE)[0]?.value ?? null,

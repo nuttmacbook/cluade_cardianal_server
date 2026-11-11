@@ -102,6 +102,14 @@ function pickCall(i) {
   decorate(box);
 }
 
+/** chain the wallet had open when it signed (the signing page puts it in the signed message · a label, not proof) */
+const KNOWN_CHAINS = { 1: "Ethereum", 10: "OP Mainnet", 56: "BNB Smart Chain", 97: "BNB Smart Chain Testnet", 137: "Polygon",
+  250: "Fantom", 8453: "Base", 42161: "Arbitrum One", 43114: "Avalanche C-Chain", 59144: "Linea", 11155111: "Sepolia" };
+function signedOn(id, thisChain) {
+  const name = Number(id) === Number(thisChain) ? "this chain" : KNOWN_CHAINS[id];
+  return `${name ? `<b>${esc(name)}</b> ` : ""}<span class="dim mono">chain id ${esc(id)}</span>`;
+}
+
 async function tx(hash, draw = el) {
   // where the tx is first: in a block, waiting in the mempool, replaced (same nonce, higher gas price) or rejected (never ran)
   const queued = await api(`/tx/${hash}`).catch(() => null);
@@ -128,6 +136,7 @@ async function tx(hash, draw = el) {
     if (d.metadata?.namespace) names[a] = d.metadata.namespace;
     if (d.metadata?.abi) abis[a] = d.metadata.abi;
   }).catch(() => {})));
+  const thisChain = r.signedOnChainId === undefined || r.signedOnChainId === null ? null : (await api("/genesis").catch(() => ({}))).chainId;
   draw(panel("Transaction", kv([
       ["Status", state(r.status) + (r.error ? ` <span class="bad">${esc(r.error.message ?? r.error)}</span>` : "")],
       ["Tx hash", full(r.hash)],
@@ -139,6 +148,7 @@ async function tx(hash, draw = el) {
       r.method && ["Method", `<span class="mono">${esc(r.method)}</span>`],
       ["Value", `<span class="mono">${coin(r.value ?? 0)}</span>`],
       ["Nonce", r.nonce ?? "—"],
+      r.signedOnChainId !== undefined && r.signedOnChainId !== null && ["Signed on", signedOn(r.signedOnChainId, thisChain)],
       ["Gas", `${gas(r.gasUsed)} <span class="dim">× ${r.gasPrice ? `${gwei(r.gasPrice)} gwei` : "min price"} = ${coin(r.fee)}</span>`],
       ...feeRows(r),
       ["Block", blockNo(r.blockNumber)],

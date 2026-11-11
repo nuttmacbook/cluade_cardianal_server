@@ -4,6 +4,9 @@
 // ---------- permit tab of a token (ERC-2612): the owner signs EIP-712 typed data with eth_signTypedData_v4 ----------
 //   domain { name: name(), version: "1", chainId, verifyingContract: token } · Permit(owner, spender, value, nonce, deadline)
 //   deadline = unix seconds (EIP-2612) · tokens deployed before EIP-712 (JSON digest) have no eip712Digest in their code → no tab
+// EIP-2612 domain of the token (chainId + verifyingContract, as the standard says) · the wallet must have this chain open to sign it
+const PERMIT_DOMAIN_TYPE = [{ name: "name", type: "string" }, { name: "version", type: "string" },
+  { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }];
 const PERMIT_TYPE = [{ name: "owner", type: "address" }, { name: "spender", type: "address" }, { name: "value", type: "uint256" },
   { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" }];
 const hasEip712Permit = (program) => Boolean(program.token) && callableOf(program.code).includes("permit")
@@ -66,7 +69,7 @@ async function signPermitData(program) {
     body: JSON.stringify({ programUuid: program, functionName: "nonces", input: { owner: wallet } }) });
   if (nonce.status !== "success") throw new Error(errorText(nonce.error) ?? "Could not read nonces");
   const typed = {
-    types: { EIP712Domain: [...DOMAIN_TYPE, { name: "verifyingContract", type: "address" }], Permit: PERMIT_TYPE },
+    types: { EIP712Domain: PERMIT_DOMAIN_TYPE, Permit: PERMIT_TYPE },
     primaryType: "Permit",
     domain: { name: token.name, version: "1", chainId: info.chainId, verifyingContract: program },
     message: { owner: wallet, spender: spender.toLowerCase(), value: value.toString(), nonce: toBig(nonce.result).toString(), deadline },
