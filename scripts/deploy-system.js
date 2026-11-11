@@ -104,7 +104,7 @@ for (const item of plan) {
 }
 const native = (await get(`/address/${deployer}`)).native?.balance;
 if (firstNonce < plan.length && (native === undefined || BigInt(String(native).replace(/n$/, "")) === 0n)) {
-  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ครบ 14 ตัวใช้ราว 112 ${symbol} ที่ base fee 10,000 gwei · สคริปต์ตั้งราคา 2 เท่า · แนะนำโอน ~130 ${symbol})`);
+  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ครบ 14 ตัวใช้ราว 120 ${symbol} ที่ base fee 10,000 gwei · สคริปต์ตั้งราคา 2 เท่า · แนะนำโอน ~130 ${symbol})`);
 }
 
 for (const item of plan.filter((p) => p.nonce >= firstNonce)) {

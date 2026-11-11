@@ -44,6 +44,8 @@ import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 
 /** จำนวนรายการสูงสุดของ fillOrders ต่อ tx (~50k แก๊สต่อรายการ → 20 รายการ ≈ 1M ต่ำกว่า block 5M) */
 export const LIMIT_ORDER_MAX_BATCH = 20;
+/** เพดานของ sellAmount / buyAmount (ไม่ถึง 2^128) */
+export const LIMIT_ORDER_MAX_AMOUNT = 1n << 128n;
 /** bestOrders ตรวจ order ที่เปิดอยู่ได้ไม่เกินเท่านี้ต่อครั้ง */
 export const LIMIT_ORDER_BEST_SCAN = 100;
 /** limit สูงสุดของการแบ่งหน้า (ordersOf / ordersForPair / bestOrders) */
@@ -53,6 +55,8 @@ export const LIMIT_ORDER_FUNCTIONS = ["placeOrder", "fillOrder", "fillOrders", "
 export const LIMIT_ORDER_EVENTS = ["OrderPlaced", "OrderFilled", "OrderCancelled"];
 
 export const LIMIT_ORDER_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const MAX_BATCH = ${LIMIT_ORDER_MAX_BATCH}
   const BEST_SCAN = ${LIMIT_ORDER_BEST_SCAN}n
   const MAX_PAGE = ${LIMIT_ORDER_MAX_PAGE}n
@@ -74,6 +78,8 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
   function nowSeconds(params) { return params.block.timestamp / 1000n }
   function checkAmount(value, label) {
     if (typeof value !== "bigint" || value <= 0n) throw new Error(label + " must be a bigint greater than 0")
+    // เพดาน 2^128: ตัวเลขใหญ่เกินทำให้การเทียบราคา (คูณไขว้) ใน bestOrders เกินขนาด BigInt ของ sandbox → ทั้งคู่เทรดอ่านไม่ได้
+    if (value >= ${LIMIT_ORDER_MAX_AMOUNT}n) throw new Error(label + " is too large (max 2^128 - 1)")
     return value
   }
   function checkToken(address, label) {
@@ -155,6 +161,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     if (typeof expiresAt !== "bigint" || expiresAt < 0n) throw new Error("expiresAt must be a non-negative bigint (unix seconds)")
     const now = nowSeconds(params)
     if (expiresAt !== 0n && expiresAt <= now) throw new Error("expiresAt must be in the future (unix seconds)")
+    if (expiresAt >= 100000000000n) throw new Error("expiresAt looks like milliseconds: use unix seconds")
     const allowPartial = input.allowPartial === undefined || input.allowPartial === null ? true : input.allowPartial
     if (typeof allowPartial !== "boolean") throw new Error("allowPartial must be a boolean")
 
@@ -283,11 +290,11 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
   }
 
   // ---------- อ่าน ----------
-  function getOrder(params) {
+  function getOrder(params) { rejectValue(params);
     const id = params.input.orderId
     return view(id, checkId(id), nowSeconds(params))
   }
-  function orderCount() { return readDB("count") || 0n }
+  function orderCount(params) { rejectValue(params); return readDB("count") || 0n }
   function listIds(params, countKey, itemKey, page) {
     const total = readDB(countKey) || 0n
     const now = nowSeconds(params)
@@ -298,11 +305,11 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     }
     return { total: total, orders: orders }
   }
-  function ordersOf(params) {
+  function ordersOf(params) { rejectValue(params);
     const maker = checkAddress(params.input.maker, "maker")
     return listIds(params, map("makerCount", maker), (i) => map("makerOrders", maker, i), pageOf(params.input))
   }
-  function ordersForPair(params) {
+  function ordersForPair(params) { rejectValue(params);
     const sellToken = checkAddress(params.input.sellToken, "sellToken")
     const buyToken = checkAddress(params.input.buyToken, "buyToken")
     const page = pageOf(params.input)
@@ -315,7 +322,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     const right = b.buyAmount * a.sellAmount
     return left < right || (left === right && a.orderId < b.orderId)
   }
-  function bestOrders(params) {
+  function bestOrders(params) { rejectValue(params);
     const sellToken = checkAddress(params.input.sellToken, "sellToken")
     const buyToken = checkAddress(params.input.buyToken, "buyToken")
     const page = pageOf(params.input)
@@ -340,7 +347,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     }
     return { totalOpen: totalOpen, scanned: scanned, truncated: page.start + scanned < totalOpen, orders: best }
   }
-  function quoteFill(params) {
+  function quoteFill(params) { rejectValue(params);
     const id = params.input.orderId
     const take = params.input.sellAmountToTake
     const order = checkId(id)

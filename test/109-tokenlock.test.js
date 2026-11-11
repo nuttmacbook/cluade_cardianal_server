@@ -84,8 +84,8 @@ function setup() {
     ok(b.deploy({ programUuid, code, context: { sender, origin: sender }, initInput }));
     ok(b.init({ programUuid }));
   });
-  const send = (who, programUuid, functionName, input = {}) => block((b) =>
-    b.call({ programUuid, functionName, input, context: { sender: who, origin: who }, gasLimit: 4_000_000 }));
+  const send = (who, programUuid, functionName, input = {}, extra = {}) => block((b) =>
+    b.call({ programUuid, functionName, input, context: { sender: who, origin: who }, gasLimit: 4_000_000, ...extra }));
   const fail = (re, ...args) => {
     const res = send(...args);
     assert.equal(res.status, "throw", `expected throw for ${args[2]} ${JSON.stringify(args[3])}`);
@@ -376,4 +376,35 @@ test("อ่านแบบแบ่งหน้า: start / limit · limit ส�
   console.log("gas locksOf(50):", full.gasUsed);
   assert.ok(full.gasUsed < 1_000_000);
   assert.equal(t.vm.query({ programUuid: LOCKER, functionName: "getLock", input: { id: "56n" } }).status, "throw");
+});
+
+test("ห้ามแนบ native value: lock / lockCount ล้ม · โปรแกรมไม่ถือเหรียญหลัก", () => {
+  const t = setup();
+  t.vm.db.load({ [VM.nativeKey(ALICE, "received")]: `${1000n * COIN}n` });
+  const nat = (who) => BigInt(t.vm.nativeBalanceOf(who).balance);
+  t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "100n" }));
+  const a0 = nat(ALICE);
+  const r1 = t.send(ALICE, LOCKER, "lock", { token: TOKEN, amount: "100n", unlockAt: `${T0 + DAY}n` }, { value: `${5n * COIN}` });
+  assert.equal(r1.status, "throw");
+  assert.match(r1.error.message, /this function does not accept native value/);
+  const r2 = t.send(ALICE, LOCKER, "lockCount", {}, { value: `${COIN}` });
+  assert.equal(r2.status, "throw");
+  assert.match(r2.error.message, /this function does not accept native value/);
+  assert.equal(nat(LOCKER), 0n);
+  assert.equal(nat(ALICE), a0);
+  assert.equal(t.q(LOCKER, "lockCount"), "0n");
+  assert.equal(t.bal(TOKEN, LOCKER), 0n);
+});
+
+test("ล็อกที่สละสิทธิ์: withdrawable = 0 แม้พ้นเวลา · unlock ยังล้ม", () => {
+  const t = setup();
+  t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "100n" }));
+  t.ok(t.send(ALICE, LOCKER, "lock", { token: TOKEN, amount: "100n", unlockAt: `${T0 + DAY}n` }));
+  t.ok(t.send(ALICE, LOCKER, "renounceLockOwnership", { id: "0n" }));
+  t.at(T0 + 2 * DAY);
+  assert.equal(t.q(LOCKER, "getLock", { id: "0n" }).withdrawable, "0n");
+  assert.equal(t.q(LOCKER, "withdrawableOf", { id: "0n" }), "0n");
+  assert.equal(t.q(LOCKER, "locksForToken", { token: TOKEN })[0].withdrawable, "0n");
+  t.fail(/renounced/, ALICE, LOCKER, "unlock", { id: "0n" });
+  assert.equal(t.bal(TOKEN, LOCKER), 100n);
 });
