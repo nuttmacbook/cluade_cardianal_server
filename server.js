@@ -477,7 +477,7 @@ async function handleEvm(request, response, url) {
     response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
     return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
   }
-  try { return send(response, 200, evmRpc.handle(body)); }
+  try { return send(response, 200, evmRpc.handle(body, { client: ip })); }
   catch (error) { console.error(error); return send(response, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: error.message } }); }
 }
 

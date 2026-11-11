@@ -120,7 +120,7 @@ test("evm: ไม่ได้ต่อ submit = ส่ง tx ไม่ได้ 
   assert.equal(send.id, 9);
   assert.equal(send.error.code, EVM_ERROR.SERVER);
   assert.match(send.error.message, /not enabled/);
-  assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_newFilter", params: [] }).error.code, EVM_ERROR.METHOD);
+  assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_getStorageAt", params: [] }).error.code, EVM_ERROR.METHOD);
   assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: ["nope"] }).error.code, EVM_ERROR.PARAMS);
   assert.equal(rpc.handle({ id: 1 }).error.code, EVM_ERROR.REQUEST);
   const batch = rpc.handle([{ jsonrpc: "2.0", id: 1, method: "eth_chainId" }, { jsonrpc: "2.0", id: 2, method: "nope" }]);

@@ -6,6 +6,7 @@
  * อ่านอย่างเดียวเหมือน POST /evm: ทุก method อื่นส่งต่อให้ rpc.handle
  *   - eth_subscribe("newHeads")            → header ของทุก block ใหม่
  *   - eth_subscribe("logs", { address, topics }) → log ของ block ใหม่ที่ตรงเงื่อนไข
+ *   - eth_subscribe("newPendingTransactions"[, true]) → hash ของ tx ที่เพิ่งเข้า mempool ทันที (true = ทั้งใบแบบ eth_getTransactionByHash)
  *   - eth_unsubscribe(id)
  * ไม่ใช้ไลบรารีนอก: handshake + frame ตาม RFC 6455 (เฉพาะ text / ping / close ไม่รับ frame แตกส่วน)
  * block ใหม่ตรวจจาก vm.latestBlockNumber() ทุก pollMs เฉพาะตอนที่มีคน subscribe อยู่ (ไม่แตะตัวสร้าง block)
@@ -69,6 +70,17 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
 
   const subscribed = () => [...clients].some((client) => client.subscriptions.size > 0);
   const call = (method, params) => rpc.handle({ jsonrpc: "2.0", id: 0, method, params }).result;
+  // tx เข้า mempool → ส่งทันที (ไม่ต้องรอ poll) · กรองตอนส่ง: ไม่มีใคร subscribe = ไม่ทำอะไร
+  const stopPending = rpc.onPendingTransaction?.((hash) => {
+    let full;
+    for (const client of clients) {
+      for (const [id, { kind, filter }] of client.subscriptions) {
+        if (kind !== "newPendingTransactions") continue;
+        if (filter === true) full ??= call("eth_getTransactionByHash", [hash]);
+        client.notify(id, filter === true ? full ?? hash : hash);
+      }
+    }
+  });
 
   function poll() {
     const latest = vm.latestBlockNumber() ?? 0;
@@ -77,6 +89,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
       let head = null;
       for (const client of clients) {
         for (const [id, { kind, filter }] of client.subscriptions) {
+          if (kind === "newPendingTransactions") continue;
           if (kind === "newHeads") {
             head ??= (({ transactions, uncles, totalDifficulty, size, ...header }) => header)(call("eth_getBlockByNumber", [quantity, false]));
             client.notify(id, head);
@@ -100,7 +113,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
     const id = message?.id ?? null;
     if (message?.method === "eth_subscribe") {
       const [kind, filter = {}] = Array.isArray(message.params) ? message.params : [];
-      if (kind !== "newHeads" && kind !== "logs") {
+      if (kind !== "newHeads" && kind !== "logs" && kind !== "newPendingTransactions") {
         return { jsonrpc: "2.0", id, error: { code: EVM_ERROR.PARAMS, message: `unsupported subscription: ${kind}` } };
       }
       if (kind === "logs") {   // ตรวจ filter ก่อน (address ผิด → error ทันที)
@@ -109,13 +122,13 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
       }
       const subscription = `0x${crypto.randomBytes(16).toString("hex")}`;
       client.subscriptions.set(subscription, { kind, filter });
-      startPolling();
+      if (kind !== "newPendingTransactions") startPolling();
       return { jsonrpc: "2.0", id, result: subscription };
     }
     if (message?.method === "eth_unsubscribe") {
       return { jsonrpc: "2.0", id, result: client.subscriptions.delete(message.params?.[0]) };
     }
-    return rpc.handle(message);
+    return rpc.handle(message, { client: client.ip });
   }
 
   server.on("upgrade", (request, socket) => {
@@ -130,6 +143,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
 
     const ip = clientIp(request);
     const client = {
+      ip,
       subscriptions: new Map(),
       send: (value) => { if (!socket.destroyed) socket.write(frame(OP.TEXT, Buffer.from(JSON.stringify(value)))); },
       notify: (subscription, result) => client.send({ jsonrpc: "2.0", method: "eth_subscription", params: { subscription, result } }),
@@ -165,5 +179,5 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
     socket.on("error", () => clients.delete(client));
   });
 
-  return { clients, poll, close: () => { clearInterval(timer); timer = null; for (const c of clients) c.subscriptions.clear(); } };
+  return { clients, poll, close: () => { clearInterval(timer); timer = null; stopPending?.(); for (const c of clients) c.subscriptions.clear(); } };
 }

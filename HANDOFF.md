@@ -840,7 +840,14 @@ GET  /evm/explorer                                302 → / (URL explorer ที
   แปลง: ไม่ใช่โปรแกรม + data ว่าง → `transfer` · token มาตรฐาน + `transfer` / `approve` / `transferFrom` แบบ ERC-20 → ฟังก์ชันของ token · อื่น ๆ → ฟังก์ชันตาม `metadata.abi` (เขียนได้)
   request เก็บ `digest = keccak(raw)` + `evmRaw` (raw ทั้งใบอยู่ใน block body ตรวจซ้ำได้) · `/tx/:hash` · receipt · getTransactionByHash ตอบด้วย hash ของ Ethereum (`evmHash` ใน receipt) · nonce ตัวนับเดียวกับ tx แบบ EIP-712
 - `eth_estimateGas`: โอน native = 21000 (ที่กระเป๋าคาด · จ่ายตามที่ใช้จริง) · เรียกโปรแกรม = จำลองด้วย `vm.query` × 1.25 + 1000 · ล้ม = `execution reverted`
-- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `eth_newFilter` ฯลฯ, `trace_*`, `eth_call` กับโปรแกรมที่ไม่มี ABI และไม่ใช่มาตรฐาน, `balanceOfBatch` ผ่าน eth_call · รายการ tx ใน block แบบไม่ full ของใบจากกระเป๋ายังเป็น hash ภายใน
+- **filter ผ่าน HTTP** (เทสต์ `115-evm-filters-simulate` · `116-ethers-filters` ใช้ ethers `contract.on` / `provider.on("pending")` จริง):
+  `eth_newFilter` / `eth_newBlockFilter` / `eth_newPendingTransactionFilter` → `eth_getFilterChanges` (ของใหม่ตั้งแต่ครั้งก่อน) · `eth_getFilterLogs` · `eth_uninstallFilter`
+  เก็บในหน่วยความจำ (restart = หาย → `filter not found`) · ไม่ถูกเรียก 5 นาที = ลบ · สูงสุด 10,000 ตัวต่อ node / 100 ตัวต่อ IP · log filter ไล่ทีละไม่เกิน 1,000 block ต่อครั้ง
+  pending ได้ hash จาก `mempool.onAdded` (ค้างได้ 10,000 ใบ) · ws: `eth_subscribe("newPendingTransactions"[, true])` ส่งทันทีที่เข้าคิว
+- `eth_createAccessList` → `accessList: []` + `gasUsed` = `eth_estimateGas` (เชนไม่มี access list)
+- `eth_simulateV1`: blockStateCalls 1 ชุด · call ต่อกันบน block จำลองถัดไป (ไม่ commit) → status / returnData / gasUsed / logs ต่อ call
+  ไม่รับ stateOverrides / blockOverrides / block เก่า · หักค่าแก๊สเหมือน tx จริง · hash ของ block / tx จำลอง = 0x00…
+- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `trace_*`, `eth_call` กับโปรแกรมที่ไม่มี ABI และไม่ใช่มาตรฐาน, `balanceOfBatch` ผ่าน eth_call · รายการ tx ใน block แบบไม่ full ของใบจากกระเป๋ายังเป็น hash ภายใน
 - chainId มาจาก `CHAIN_ID` ของเชน (`genesis.json` ในrepo = 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet) · ลองกับ MetaMask จริง: `docs/metamask-checklist.md` (genesis แยก chainId 7777)
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`

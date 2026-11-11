@@ -53,6 +53,7 @@ export class Mempool {
   #byNonce = new Map();            // "sender:nonce" → hash ของใบที่รออยู่ (หาใบที่จะถูกแทนที่)
   #replaced = new Map();           // hash เดิม → { replacedBy, at } จำไว้ ttlMs ให้ GET /tx/:hash ตอบได้
   #rejections = new Map();         // hash → entry ของ tx ที่ถูกปฏิเสธ รอใส่ลง block ถัดไป (ตามลำดับที่เกิด)
+  #listeners = new Set();          // ฟังก์ชันที่รอรับ hash ของใบที่เพิ่งเข้าคิว (/evm newPendingTransactions)
 
   constructor(vm, options = {}) {
     this.#vm = vm;
@@ -107,7 +108,18 @@ export class Mempool {
     if (!result.ok && result.hash && result.sender && result.reason !== DUPLICATE) {
       this.#reject(tx, { hash: result.hash, sender: result.sender, reason: result.reason, code: result.simulation?.errorCode, stage: "sendtx" });
     }
+    if (result.ok) {
+      for (const listener of this.#listeners) {
+        try { listener(result.hash); } catch (error) { console.error(error); }   // ผู้ฟังพังต้องไม่ทำให้รับ tx ไม่ได้
+      }
+    }
     return result;
+  }
+
+  /** เรียก listener(hash) ทุกครั้งที่มีใบเข้าคิว (รวมใบที่แทนที่ใบเดิม) · คืนฟังก์ชันเลิกฟัง */
+  onAdded(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   #add({ tx, signature, sponsorSignature }, { now, simulate, verified }) {

@@ -25,7 +25,17 @@
  *   - eth_call ของโปรแกรมอื่นที่ประกาศ metadata.abi: ถอด / เข้ารหัสตาม ABI ของ Solidity (src/node/evm-abi.js) → dApp ใช้ ethers / viem อ่านได้ตรง ๆ
  *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
  *   - debug_trace* (callTracer) แปลงจาก trace + nativeChanges ของการ replay block · ผล replay เก็บ cache ไว้ต่อ block
+ *   - filter แบบ HTTP (ethers contract.on ผ่าน JsonRpcProvider ใช้ชุดนี้): eth_newFilter / eth_newBlockFilter / eth_newPendingTransactionFilter
+ *       → eth_getFilterChanges (ของใหม่ตั้งแต่ครั้งก่อน) · eth_getFilterLogs · eth_uninstallFilter
+ *       เก็บในหน่วยความจำของ node (restart = หาย → "filter not found" ให้ dApp สร้างใหม่) · ไม่ถูกเรียกเกิน filterTtlMs = ลบ (แบบ geth)
+ *       จำกัด maxFilters ทั้ง node และ maxFiltersPerClient ต่อ IP · log filter ไล่ทีละไม่เกิน logRange block ต่อครั้ง
+ *       pending filter ได้ hash จาก mempool.onAdded · เก็บค้างได้ไม่เกิน PENDING_BUFFER ใบ (เกินทิ้งใบเก่า)
+ *   - eth_createAccessList: เชนไม่มี access list → accessList ว่าง + gasUsed เท่ากับ eth_estimateGas
+ *   - eth_simulateV1: รันหลาย call ต่อกันบน block จำลองถัดไป (ไม่ commit) · คืน status / returnData / gasUsed / logs ต่อ call
+ *       รองรับ blockStateCalls 1 ชุด · ไม่รับ stateOverrides / blockOverrides · หักค่าแก๊สเหมือน tx จริง (ผู้ส่งต้องมียอดพอ)
+ *       nonce เติมให้ตามลำดับใน block จำลอง · traceTransfers ไม่สร้าง log ของการโอน native
  */
+import crypto from "node:crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataKey, eventLog, logsBloom, bloomContains, toEvmAbi, decodeDbKey,
@@ -45,7 +55,12 @@ const EMPTY_UNCLES = "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd
 const BLOCK_GAS_LIMIT = 30_000_000;   // ใช้เมื่อเชนไม่ได้ตั้ง maxBlockGas
 const REPLAY_CACHE = 64;              // จำนวน block ที่เก็บผล replay ไว้
 const LOG_RANGE = 1000;               // ช่วง block สูงสุดของ eth_getLogs
-const TRANSFER_GAS = 21_000;   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
+const TRANSFER_GAS = 21_000;
+const FILTER_TTL_MS = 5 * 60_000;     // filter ที่ไม่ถูกเรียกนานเท่านี้ถูกลบ (เท่า geth)
+const MAX_FILTERS = 10_000;           // filter ทั้ง node
+const MAX_FILTERS_PER_CLIENT = 100;   // filter ต่อ IP
+const PENDING_BUFFER = 10_000;        // hash ที่ pending filter เก็บค้างได้
+const SIMULATE_MAX_CALLS = 100;       // call ต่อ eth_simulateV1   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
 
 const TOKEN_WRITE = {   // ERC-20 ที่กระเป๋าส่งมา (eth_sendRawTransaction) → ฟังก์ชันของ token มาตรฐาน
   "0xa9059cbb": { method: "transfer", args: 2 }, "0x095ea7b3": { method: "approve", args: 2 }, "0x23b872dd": { method: "transferFrom", args: 3 },
@@ -104,7 +119,8 @@ const needAddress = (value) => (isAddress(value) ? normalizeAddress(value) : fai
 /**
  * @param {{ vm: import("../core/virtualmachine.js").VirtualMachine, mempool?: object, decimals?: number, clientVersion?: string, logRange?: number }} options
  */
-export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE, submit = null } = {}) {
+export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion = "cardianal/evm-adapter", logRange = LOG_RANGE, submit = null,
+  filterTtlMs = FILTER_TTL_MS, maxFilters = MAX_FILTERS, maxFiltersPerClient = MAX_FILTERS_PER_CLIENT, now = () => Date.now() } = {}) {
   const scale = 10n ** BigInt(decimals);
   const native = (value) => toBig(value) * scale;
   const latest = () => vm.latestBlockNumber() ?? 0;
@@ -676,14 +692,14 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const write = TOKEN_WRITE[selector];
     if (write && checkTokenStandard(readAt(null, codeKey(to)) ?? "").ok) {
       if (data.length !== 10 + write.args * 64) throw new RawTxError(`calldata ของ ${write.method} ยาวไม่ถูกต้อง`);
-      if (write.method === "transfer") return { method: "transfer", input: { to: address(0), amount: amount(1) } };
-      if (write.method === "approve") return { method: "approve", input: { spender: address(0), amount: amount(1) } };
-      return { method: "transferFrom", input: { from: address(0), to: address(1), amount: amount(2) } };
+      if (write.method === "transfer") return { method: "transfer", input: { to: address(0), amount: amount(1) }, token: true };
+      if (write.method === "approve") return { method: "approve", input: { spender: address(0), amount: amount(1) }, token: true };
+      return { method: "transferFrom", input: { from: address(0), to: address(1), amount: amount(2) }, token: true };
     }
     const abi = readAt(null, metadataKey(to, "abi"));
     const fn = abi ? abiFunctions(abi).get(selector) : undefined;
     if (!fn) throw new RawTxError(abi ? `ไม่มีฟังก์ชันใน metadata.abi ที่ตรงกับ selector ${selector}` : "โปรแกรมนี้ไม่ได้ประกาศ metadata.abi (กระเป๋า EVM เรียกได้เฉพาะ token มาตรฐาน / โปรแกรมที่มี ABI)");
-    try { return { method: fn.name, input: decodeInput(fn, data) }; }
+    try { return { method: fn.name, input: decodeInput(fn, data), fn }; }
     catch (error) { throw error instanceof AbiError ? new RawTxError(`${fn.signature}: ${error.message}`) : error; }
   }
 
@@ -715,6 +731,140 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? call.method}`);
     // vm.query ไม่ใช่ tx ของ user → ไม่มีค่าพื้นฐานต่อ tx (gas.tx) · บวกเองตามตารางของ block ถัดไป
     return quantity(Math.ceil(Number(result.gasUsed ?? 0) * 1.25) + 1000 + (vm.gasAt?.().tx ?? 0));
+  }
+
+
+  // ---------- filter แบบ HTTP ----------
+  const filters = new Map();   // id → { kind: "logs" | "blocks" | "pending", client, touched, last, criteria?, hashes? }
+  const exactBlock = (tag) => (tag === "earliest" ? 0 : typeof tag === "string" && /^0x[0-9a-fA-F]+$/.test(tag) ? Number.parseInt(tag, 16) : null);
+  function pruneFilters() {
+    const cutoff = now() - filterTtlMs;
+    for (const [id, filter] of filters) if (filter.touched < cutoff) filters.delete(id);
+  }
+  function installFilter(kind, fields, client) {
+    pruneFilters();
+    if (filters.size >= maxFilters) fail(EVM_ERROR.LIMIT, "too many filters on this node, try again later");
+    if (client !== undefined && client !== null) {
+      let count = 0;
+      for (const filter of filters.values()) if (filter.client === client) count += 1;
+      if (count >= maxFiltersPerClient) fail(EVM_ERROR.LIMIT, `too many filters (max ${maxFiltersPerClient} per client): call eth_uninstallFilter on unused ones`);
+    }
+    const id = `0x${crypto.randomBytes(16).toString("hex")}`;
+    filters.set(id, { kind, client: client ?? null, touched: now(), ...fields });
+    return id;
+  }
+  function filterOf(id) {
+    pruneFilters();
+    const filter = typeof id === "string" ? filters.get(id.toLowerCase()) : undefined;
+    if (!filter) fail(EVM_ERROR.SERVER, "filter not found");
+    filter.touched = now();
+    return filter;
+  }
+  function newFilter(criteria = {}, client) {
+    if (!criteria || typeof criteria !== "object" || Array.isArray(criteria)) fail(EVM_ERROR.PARAMS, "filter must be an object");
+    if (criteria.blockHash !== undefined) fail(EVM_ERROR.PARAMS, "blockHash is not supported in eth_newFilter (use eth_getLogs)");
+    const { address, topics } = criteria;
+    getLogs({ address, topics, fromBlock: "latest", toBlock: "latest" });   // address / topics ผิด → error ตอนสร้างเลย
+    const from = exactBlock(criteria.fromBlock);
+    // ของใหม่ = block หลังจากที่สร้าง filter (หรือตั้งแต่ fromBlock ถ้าอยู่ในอนาคต) · ของเก่าดูด้วย eth_getFilterLogs
+    const last = Math.max(latest(), from === null ? 0 : from - 1);
+    return installFilter("logs", { last, criteria: { address, topics, fromBlock: criteria.fromBlock, toBlock: criteria.toBlock } }, client);
+  }
+  function filterChanges(id) {
+    const filter = filterOf(id);
+    if (filter.kind === "pending") return filter.hashes.splice(0);
+    const head = latest();
+    const end = filter.kind === "logs" ? Math.min(head, exactBlock(filter.criteria.toBlock) ?? head) : head;
+    const start = filter.last + 1;
+    if (start > end) { filter.last = Math.max(filter.last, Math.min(head, end)); return []; }
+    const stop = Math.min(end, start + logRange - 1);   // ตามไม่ทันเกิน logRange → ส่งทีละช่วง ครั้งถัดไปได้ต่อ
+    filter.last = stop;
+    if (filter.kind === "blocks") return Array.from({ length: stop - start + 1 }, (_, i) => headerAt(start + i)?.hash).filter(Boolean);
+    const { address, topics } = filter.criteria;
+    return getLogs({ address, topics, fromBlock: quantity(start), toBlock: quantity(stop) });
+  }
+  function filterLogs(id) {
+    const filter = filterOf(id);
+    if (filter.kind !== "logs") fail(EVM_ERROR.SERVER, "filter not found");
+    return getLogs(filter.criteria);
+  }
+  const pendingListeners = new Set();
+  mempool?.onAdded?.((hash) => {
+    for (const filter of filters.values()) {
+      if (filter.kind !== "pending") continue;
+      filter.hashes.push(hash);
+      if (filter.hashes.length > PENDING_BUFFER) filter.hashes.splice(0, filter.hashes.length - PENDING_BUFFER);
+    }
+    for (const listener of pendingListeners) {
+      try { listener(hash); } catch (error) { console.error(error); }
+    }
+  });
+
+  // ---------- eth_simulateV1 ----------
+  const valueOf = (value) => (value === undefined || value === null ? 0n
+    : typeof value === "string" && /^0x[0-9a-fA-F]+$/.test(value) ? BigInt(value) : toBig(value));
+  const feeOf = (field) => (field === undefined || field === null ? undefined : String(valueOf(field)));
+  function simulateCall(preview, request, index) {
+    const from = isAddress(request?.from) ? normalizeAddress(request.from) : ZERO_ADDRESS;
+    const to = request?.to === undefined || request?.to === null ? null : needAddress(request.to);
+    if (to === null) return { error: "deploying EVM bytecode is not supported" };
+    const data = String(request.data ?? request.input ?? "0x");
+    const program = isProgramAt(to);
+    if (!program && data !== "0x") return { error: "data sent to an address that is not a program" };
+    if (program && data === "0x") return { error: "program has no plain receive function (call a function from metadata.abi)" };
+    const fees = request.maxFeePerGas !== undefined || request.maxPriorityFeePerGas !== undefined
+      ? { maxFeePerGas: feeOf(request.maxFeePerGas), maxPriorityFeePerGas: feeOf(request.maxPriorityFeePerGas) ?? "0" }
+      : { gasPrice: feeOf(request.gasPrice) };
+    const gasLimit = request.gas === undefined ? undefined : Number(valueOf(request.gas)) || undefined;
+    const value = `${valueOf(request.value)}n`;
+    const nonce = preview.checkTransaction({ from, nonce: -1 }).expectedNonce ?? 0;
+    const common = { nonce, gasLimit, ...fees };
+    if (!program) return { result: preview.transfer({ from, to, amount: value, ...common }) };
+    let resolved;
+    try { resolved = resolveCall(to, data); }
+    catch (error) { if (error instanceof RawTxError) return { error: error.message }; throw error; }
+    const result = preview.call({ programUuid: to, functionName: resolved.method, input: resolved.input, value, context: { sender: from, origin: from }, ...common });
+    return { result, resolved, index };
+  }
+  function simulateV1(payload, tag) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.blockStateCalls)) fail(EVM_ERROR.PARAMS, "blockStateCalls must be an array");
+    if (tag !== undefined && tag !== "latest" && tag !== "pending" && blockNumberOf(tag) !== latest()) fail(EVM_ERROR.PARAMS, "eth_simulateV1 runs on the latest block only");
+    if (payload.blockStateCalls.length !== 1) fail(EVM_ERROR.PARAMS, "only 1 blockStateCalls entry is supported");
+    const [{ calls = [], stateOverrides, blockOverrides } = {}] = payload.blockStateCalls;
+    if (stateOverrides && Object.keys(stateOverrides).length) fail(EVM_ERROR.PARAMS, "stateOverrides is not supported");
+    if (blockOverrides && Object.keys(blockOverrides).length) fail(EVM_ERROR.PARAMS, "blockOverrides is not supported");
+    if (!Array.isArray(calls) || calls.length > SIMULATE_MAX_CALLS) fail(EVM_ERROR.PARAMS, `calls must be an array of at most ${SIMULATE_MAX_CALLS}`);
+    const parent = headerAt(latest());
+    const number = latest() + 1;
+    const timestamp = Math.max(now(), (parent?.timestamp ?? 0) + 1);
+    const preview = vm.createBlock({ timestamp, feeRecipient: ZERO_ADDRESS, number, checkChain: false, recordBlocks: false, recordHistory: false });
+    const blockHash = ZERO_HASH;   // block จำลองไม่มี hash จริง
+    let logIndex = 0;
+    let gasUsed = 0;
+    const results = calls.map((request, index) => {
+      const ran = simulateCall(preview, request ?? {}, index);
+      const base = { blockHash, blockNumber: quantity(number), transactionHash: ZERO_HASH, transactionIndex: quantity(index) };
+      if (ran.error) return { status: "0x0", returnData: "0x", gasUsed: "0x0", logs: [], error: { code: EVM_ERROR.SERVER, message: ran.error } };
+      const { result, resolved } = ran;
+      gasUsed += Number(result.gasUsed ?? 0);
+      if (result.status !== "success") {
+        return { status: "0x0", returnData: "0x", gasUsed: quantity(result.gasUsed ?? 0), logs: [],
+          error: { code: 3, message: `execution reverted: ${result.error?.message ?? result.status}` } };
+      }
+      const logs = (result.events ?? []).map((event) => formatLog(event, logIndex++, base));
+      let returnData = "0x";
+      if (resolved?.token) returnData = `0x${word(1)}`;   // ERC-20 transfer / approve / transferFrom → true
+      else if (resolved?.fn?.outputs?.length) {
+        try { returnData = encodeOutput(resolved.fn, result.result); } catch (error) { if (!(error instanceof AbiError)) throw error; }
+      }
+      return { status: "0x1", returnData, gasUsed: quantity(result.gasUsed ?? 0), logs };
+    });
+    return [{
+      number: quantity(number), hash: blockHash, parentHash: parent?.hash ?? ZERO_HASH,
+      timestamp: quantity(Math.floor(timestamp / 1000)), gasLimit: quantity(gasLimitOf()), gasUsed: quantity(gasUsed),
+      baseFeePerGas: quantity(native(preview.baseFee)), miner: ZERO_ADDRESS, logsBloom: bloomOf(results.flatMap((r) => r.logs)),
+      transactions: [], uncles: [], calls: results,
+    }];
   }
 
   // ---------- txpool ----------
@@ -789,9 +939,17 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     txpool_content: () => txpoolContent(),
     txpool_inspect: () => txpoolInspect(),
     txpool_status: () => ({ pending: quantity(pendingItems().length), queued: "0x0" }),
+    eth_newFilter: ([criteria], client) => newFilter(criteria, client),
+    eth_newBlockFilter: (_, client) => installFilter("blocks", { last: latest() }, client),
+    eth_newPendingTransactionFilter: (_, client) => installFilter("pending", { hashes: [] }, client),
+    eth_getFilterChanges: ([id]) => filterChanges(id),
+    eth_getFilterLogs: ([id]) => filterLogs(id),
+    eth_uninstallFilter: ([id]) => typeof id === "string" && filters.delete(id.toLowerCase()),
+    eth_createAccessList: ([request = {}]) => ({ accessList: [], gasUsed: estimateGas(request) }),
+    eth_simulateV1: ([payload, tag]) => simulateV1(payload, tag),
   };
 
-  function one(message) {
+  function one(message, client) {
     const id = message?.id ?? null;
     try {
       if (!message || typeof message !== "object" || Array.isArray(message) || typeof message.method !== "string") {
@@ -801,7 +959,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       if (!method) fail(EVM_ERROR.METHOD, `method not supported: ${message.method}`);
       const params = message.params === undefined ? [] : message.params;
       if (!Array.isArray(params)) fail(EVM_ERROR.PARAMS, "params must be an array");
-      return { jsonrpc: "2.0", id, result: method(params) ?? null };
+      return { jsonrpc: "2.0", id, result: method(params, client) ?? null };
     } catch (error) {
       const known = error instanceof RpcError;
       return { jsonrpc: "2.0", id, error: { code: known ? error.code : EVM_ERROR.INTERNAL, message: error.message,
@@ -811,14 +969,21 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
 
   return {
     methods: Object.keys(METHODS),
-    /** รับ body ที่ parse แล้ว (object หรือ batch array) → คำตอบ JSON-RPC */
-    handle(body) {
+    /** รับ body ที่ parse แล้ว (object หรือ batch array) → คำตอบ JSON-RPC · client = IP ของผู้เรียก (นับโควตา filter) */
+    handle(body, { client } = {}) {
       if (Array.isArray(body)) {
         if (body.length === 0) return { jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.REQUEST, message: "empty batch" } };
-        return body.map(one);
+        return body.map((message) => one(message, client));
       }
-      return one(body);
+      return one(body, client);
     },
+    /** listener(hash) ทุกครั้งที่มี tx เข้า mempool (ws newPendingTransactions) · คืนฟังก์ชันเลิกฟัง */
+    onPendingTransaction(listener) {
+      pendingListeners.add(listener);
+      return () => pendingListeners.delete(listener);
+    },
+    /** จำนวน filter ที่ยังไม่หมดอายุ */
+    filterCount() { pruneFilters(); return filters.size; },
     /** ค่าที่ใส่ใน wallet_addEthereumChain ได้ทันที */
     chainParams({ rpcUrl, explorerUrl, name = "Bluewolfchain", symbol = "BWSC" } = {}) {
       return {
