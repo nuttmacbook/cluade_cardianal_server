@@ -50,7 +50,7 @@ function setup() {
   const plan = systemPrograms({ addressAt: (n) => vm.programAddressFor(DEPLOYER, n) });
   for (const item of plan) {
     block((b) => {
-      ok(b.deploy({ code: item.code, context: { sender: DEPLOYER, origin: DEPLOYER }, initInput: item.input, nonce: nextNonce(DEPLOYER), gasLimit: 1_000_000 }));
+      ok(b.deploy({ code: item.code, context: { sender: DEPLOYER, origin: DEPLOYER }, initInput: item.input, nonce: nextNonce(DEPLOYER), gasLimit: 5_000_000 }));
       ok(b.init({ programUuid: item.address }));
     });
   }
@@ -60,8 +60,9 @@ function setup() {
 
 test("system: deploy ตามลำดับ nonce → address ตรงแผน · มีชื่อ · อนุมัติแล้ว · ไม่มี upgrader", () => {
   const t = setup();
-  assert.deepEqual(t.plan.map((item) => item.key), ["multicall", "wcard", "multisigTemplate", "tokenTemplate", "nftTemplate", "multiTokenTemplate", "factory"]);
-  assert.deepEqual(t.plan.map((item) => item.nonce), [0, 1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(t.plan.map((item) => item.key), ["multicall", "wcard", "multisigTemplate", "tokenTemplate", "nftTemplate", "multiTokenTemplate", "factory",
+    "multisender", "tokenLock", "dexPairTemplate", "dex", "staking", "limitOrder", "nftMarket"]);
+  assert.deepEqual(t.plan.map((item) => item.nonce), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   const approved = approvedProgramAddresses(t.vm);
   for (const item of t.plan) {
     assert.equal(item.address, t.vm.programAddressFor(DEPLOYER, item.nonce));
@@ -70,7 +71,11 @@ test("system: deploy ตามลำดับ nonce → address ตรงแผ�
     assert.equal(t.vm.getMetadata(item.address).upgrader, undefined, `${item.key} แก้ไม่ได้`);
   }
   assert.deepEqual(t.plan.map((item) => item.namespace),
-    ["multicall", "wbwsc", "multisig-template", "token-template", "nft-template", "multitoken-template", "factory"]);
+    ["multicall", "wbwsc", "multisig-template", "token-template", "nft-template", "multitoken-template", "factory",
+      "multisender", "token-lock", "dex-pair-template", "dex", "staking", "limit-order", "nft-market"]);
+  // dex ผูกกับต้นแบบคู่เทรด + WBWSC ของชุดเดียวกัน
+  assert.equal(t.query(t.at.dex, "pairTemplate"), t.at.dexPairTemplate);
+  assert.equal(t.query(t.at.dex, "wrapped"), t.at.wcard);
   assert.deepEqual(t.query(t.at.factory, "templates"),
     { token: t.at.tokenTemplate, nft: t.at.nftTemplate, multiToken: t.at.multiTokenTemplate, multisig: t.at.multisigTemplate });
   // ต้นแบบ token ไม่มี supply (ไม่มี event Transfer ตอนสร้าง)
@@ -264,4 +269,23 @@ test("multisig: ค่าเริ่มต้นผิด → สร้าง�
   }
   assert.deepEqual(t.query(t.at.multisigTemplate, "owners"), []);
   assert.equal(t.send(DEPLOYER, t.at.multisigTemplate, "submit", { target: ALICE, value: "1n" }).status, "throw");
+});
+
+test("system: โปรแกรมแถมใช้ร่วมกันได้ · token จาก factory → ใส่สภาพคล่องกับ BWSC ที่ dex → swap · ล็อก LP ที่ token-lock", () => {
+  const t = setup();
+  const token = t.ok(t.send(ALICE, t.at.factory, "createToken", { name: "Alpha", ticker: "ALP", decimals: "18n", supply: `${1000n * COIN}n` })).result;
+  const deadline = `${BigInt(T) / 1000n + 3600n}n`;
+  t.ok(t.send(ALICE, token, "approve", { spender: t.at.dex, amount: `${1000n * COIN}n` }));
+  t.ok(t.send(ALICE, t.at.dex, "addLiquidityNative", { token, amountTokenDesired: `${100n * COIN}n`, amountTokenMin: "0n", amountNativeMin: "0n", to: ALICE, deadline },
+    { value: `${10n * COIN}n` }));
+  const pair = t.query(t.at.dex, "getPair", { tokenA: token, tokenB: t.at.wcard });
+  assert.match(pair, /^0x[0-9a-f]{40}$/);
+  const swap = t.ok(t.send(BOB, t.at.dex, "swapExactNativeForTokens", { amountOutMin: "1n", path: [t.at.wcard, token], to: BOB, deadline }, { value: `${COIN}n` }));
+  assert.ok(BigInt(String(t.query(token, "balanceOf", { who: BOB })).replace(/n$/, "")) > 0n, JSON.stringify(swap.result));
+  // ล็อก LP ครึ่งหนึ่งไว้ที่ token-lock
+  const lp = BigInt(String(t.query(pair, "balanceOf", { who: ALICE })).replace(/n$/, ""));
+  t.ok(t.send(ALICE, pair, "approve", { spender: t.at.tokenLock, amount: `${lp}n` }));
+  const unlock = `${BigInt(T) / 1000n + 86_400n}n`;
+  t.ok(t.send(ALICE, t.at.tokenLock, "lock", { token: pair, amount: `${lp / 2n}n`, unlockAt: unlock }));
+  assert.equal(t.query(pair, "balanceOf", { who: t.at.tokenLock }), `${lp / 2n}n`);
 });

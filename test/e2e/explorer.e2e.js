@@ -966,7 +966,7 @@ test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / d
   assert.deepEqual(pageErrors, []);
 });
 
-test("โปรแกรมกลาง: scripts/deploy-system.js deploy ครบ 7 ตัวที่ address ตามแผน → หน้า System programs แสดงชื่อ + address", async () => {
+test("โปรแกรมกลาง: scripts/deploy-system.js deploy ครบ 14 ตัวที่ address ตามแผน → หน้า System programs แสดงชื่อ + address", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const deployerKey = sign.randomPrivateKey();
   const deployer = sign.addressOf(deployerKey);
@@ -985,7 +985,7 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
     await run();
     const result = JSON.parse(await import("node:fs").then((fs) => fs.readFileSync(out, "utf8")));
     const programs = Object.values(result.programs);
-    assert.equal(programs.length, 7);
+    assert.equal(programs.length, 14);
     for (const p of programs) {
       assert.equal(p.status, "approved", p.namespace);
       assert.ok(plan.includes(p.address), `${p.namespace} ตรงกับ --plan`);
@@ -994,7 +994,7 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
 
     await open("#system");
     await page.waitForSelector("#view tbody tr");
-    assert.equal(await page.locator("#view tbody tr").count(), 7);
+    assert.equal(await page.locator("#view tbody tr").count(), 14);
     assert.doesNotMatch(await view(), /Not deployed yet/);
     assert.equal(await page.locator("#side [data-nav=system].on").count(), 1);
     await page.click("#view tbody tr:has-text('Wrapped BWSC') a");

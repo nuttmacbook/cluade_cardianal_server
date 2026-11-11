@@ -19,5 +19,12 @@ const EXPLORER = {
     { name: "token-template", title: "Token template", about: "Standard token with permit · create one with factory.createToken" },
     { name: "nft-template", title: "NFT template", about: "Standard NFT collection · create one with factory.createNft" },
     { name: "multitoken-template", title: "Multi-token template", about: "Standard multi-token (ERC-1155 style) · create one with factory.createMultiToken" },
+    { name: "multisender", title: "Multisender", about: "Send the native coin / tokens / NFTs / multi-tokens to up to 100 addresses in one tx" },
+    { name: "token-lock", title: "Token lock", about: "Lock tokens or LP until a date, with optional vesting (like PinkLock)" },
+    { name: "dex", title: "DEX", about: "Swap tokens and the native coin, add liquidity (Uniswap V2 style · 0.3% fee to liquidity providers)" },
+    { name: "dex-pair-template", title: "DEX pair template", about: "Template for trading pairs · the dex creates pairs from it" },
+    { name: "staking", title: "Staking", about: "Flexible staking pools: stake and withdraw any time, rewards stream per second" },
+    { name: "limit-order", title: "Limit order", about: "Place token ↔ token orders at your price · anyone can fill them" },
+    { name: "nft-market", title: "NFT market", about: "Buy and sell NFTs and multi-tokens · make and accept offers" },
   ],
 };
