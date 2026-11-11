@@ -104,7 +104,7 @@ for (const item of plan) {
 }
 const native = (await get(`/address/${deployer}`)).native?.balance;
 if (firstNonce < plan.length && (native === undefined || BigInt(String(native).replace(/n$/, "")) === 0n)) {
-  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ใช้ราว 30 ${symbol} ที่ราคาแก๊ส 10,000 gwei)`);
+  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ใช้ราว 35 ${symbol} ที่ราคาแก๊ส 10,000 gwei)`);
 }
 
 for (const item of plan.filter((p) => p.nonce >= firstNonce)) {

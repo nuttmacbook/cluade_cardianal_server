@@ -22,7 +22,7 @@ cp deploy/genesis.mainnet.example.json deploy/genesis.mainnet.json   # แก้
 cp deploy/producer.env.example deploy/producer.env && chmod 600 deploy/producer.env   # ใส่ key
 node --env-file=deploy/producer.env scripts/preflight.js            # ต้องขึ้น "ผ่าน"
 sudo cp deploy/cardianal.service /etc/systemd/system/ && sudo systemctl enable --now cardianal
-./deploy/check.sh https://chain.example.com 272727
+./deploy/check.sh https://chain.example.com 41234
 ```
 
 ---
@@ -46,7 +46,7 @@ curl 127.0.0.1:3000/genesis                                                 # ch
 
 - MetaMask: RPC `http://127.0.0.1:3000/evm` (**http** ไม่ใช่ https · server ไม่มี TLS เอง) · ง่ายสุดกดปุ่ม Add network ในหน้า `http://127.0.0.1:3000/` · import `rich.key` เพื่อโอนทดสอบ
 - `EVM_RATE_LIMIT=0` เฉพาะในเครื่อง: ทุกอย่างมาจาก 127.0.0.1 IP เดียว (MetaMask + Blockscout) เกิน 600/นาทีแล้วได้ 429 → MetaMask ขึ้น "This RPC provider is limiting requests" · เครื่องจริงหลัง nginx นับแยกต่อผู้ใช้ ไม่ต้องตั้ง
-- network เก่าใน MetaMask ที่ chain ID ไม่ใช่ 272727 ใช้ RPC นี้ไม่ได้ ลบแล้วเพิ่มใหม่
+- network เก่าใน MetaMask ที่ chain ID ไม่ใช่ 41234 ใช้ RPC นี้ไม่ได้ ลบแล้วเพิ่มใหม่
 - เริ่มใหม่: หยุด server แล้ว `rm -rf data-test` · `deploy/test-keys.json` และ `data-test/` อยู่ใน .gitignore แล้ว
 - key จริงสร้างบนเครื่องที่ไม่ต่อเน็ต · admin ใช้ hardware wallet
 
@@ -62,7 +62,7 @@ curl 127.0.0.1:3000/genesis                                                 # ch
 | `config.producers` | key หลัก + key สำรอง | **แม้มีเครื่องเดียวก็ใส่ key สำรอง** key หลักหาย = ใช้ key สำรองผลิตต่อได้ ไม่ต้องล้างเชน |
 | `blockMs` | 2000 | block ทุก 2 วิ · block เต็มใช้ CPU ราว 20–30% ของเวลา (multicall เต็ม block ~65%) |
 | `maxBlockGas` | 5000000 | ~200 tx token / block · batch โอน token ได้ ~735 รายการต่อ tx (`gasTarget` 2500000) |
-| `gasTarget` | 500000 | ใช้เกินครึ่ง base fee ขึ้น |
+| `gasTarget` | 2500000 | ใช้เกินครึ่ง base fee ขึ้น |
 | `minBaseFee` | "10000000000000" (10,000 gwei · โอนเหรียญหลัก ~0.173 BWSC) | ราคาแก๊สต่ำสุดตอนเริ่ม · **ปรับทีหลังได้โดยไม่ล้างเชน** (หัวข้อ 8) |
 | `burnPercent` | 100 | base fee เผาทิ้งทั้งหมด ผู้ผลิตได้แค่ tip · ถ้าอยากให้ผู้ผลิตได้ค่าแก๊สด้วยให้ลดลง |
 | `upgradeDelayBlocks` | 3600 | อนุมัติอัปเกรดแล้วต้องรอ 1 ชม. ผู้ใช้มีเวลาเห็นก่อนโค้ดใหม่ใช้จริง |
@@ -116,17 +116,17 @@ URL ที่ได้: RPC `https://chain.example.com/evm` · explorer `https:/
 ## 6. ตรวจก่อนประกาศ
 
 ```
-./deploy/check.sh https://chain.example.com 272727
+./deploy/check.sh https://chain.example.com 41234
 ```
 ตรวจ /health, chainId, explorer, rpcUrl ของปุ่ม Add network เป็น https และพอร์ต 3000 ปิดจากข้างนอก · เก็บ genesis hash ที่พิมพ์ออกมาไว้ประกาศ
 แล้วเพิ่มเชนใน MetaMask จากปุ่มในหน้า explorer · โอน 1 ครั้ง · ดูใน explorer
 
 ## 7. โปรแกรมกลาง (หลังเปิดเชน · ทำครั้งเดียว)
 
-Multicall, WCARD (ห่อเหรียญหลัก), Factory (ให้ใครก็สร้าง token / NFT / multisig ได้ทันที) + ต้นแบบ · ใช้**กระเป๋า deployer ใหม่**ที่ไม่เคยส่ง tx (address ของโปรแกรมผูกกับ nonce 0–6 ของกระเป๋านี้)
+Multicall, WBWSC (ห่อเหรียญหลัก), Factory (ให้ใครก็สร้าง token / NFT / multisig ได้ทันที) + ต้นแบบ · ใช้**กระเป๋า deployer ใหม่**ที่ไม่เคยส่ง tx (address ของโปรแกรมผูกกับ nonce 0–6 ของกระเป๋านี้)
 ```
-node scripts/deploy-system.js --plan --deployer 0x<deployer> --chain-id 272727     # address ล่วงหน้า (ใส่เอกสาร / ประกาศได้เลย)
-# โอนเหรียญให้ deployer ~0.01 แล้ว
+node scripts/deploy-system.js --plan --deployer 0x<deployer> --chain-id 41234     # address ล่วงหน้า (ใส่เอกสาร / ประกาศได้เลย)
+# โอนเหรียญให้ deployer ~50 BWSC แล้ว (deploy ครบ 7 ตัวใช้จริง ~33 BWSC ที่ 10,000 gwei)
 DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://chain.example.com
 ```
 - ได้ `deploy/system-programs.json` (address + ชื่อ) · explorer เมนู "System programs" แสดงให้เอง
