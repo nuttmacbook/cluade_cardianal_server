@@ -1,14 +1,14 @@
 /* explorerscan/theme/colors.css [แก้ได้ · สี] — สีทั้งหมดของธีม เปลี่ยนธีมแก้ไฟล์นี้ไฟล์เดียวก่อน */
 
 :root{
-  /* indigo night theme: near-black navy chrome · deep blue-indigo canvas with a faint grid · translucent indigo cards
-     (one dark theme for light and dark OS mode) */
+  /* Bluewolfchain night theme: near-black navy chrome · deep blue canvas fading to violet with a faint grid · translucent blue cards
+     blue leads (buttons, links, active tabs) · violet only in gradients and program names (one dark theme for light and dark OS mode) */
   color-scheme:dark;
-  --bg:#060914;--chrome:#05070f;--panel:#0f1530;--card:rgba(20,28,60,.72);--line:#222c52;--line-2:rgba(129,140,248,.16);
-  --text:#e6e9fb;--dim:#97a0c4;--soft:rgba(99,102,241,.12);--head:rgba(79,90,180,.34);
-  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#a5b4fc;--accent-2:#818cf8;--prog:#b4a8f5;
-  --violet:#4f52d6;--grad:linear-gradient(135deg,#3b5fd9 0%,#4f52d6 55%,#6a5acd 100%);--radius:10px;
-  --glow:0 0 0 1px rgba(129,140,248,.05),0 12px 32px rgba(2,4,14,.55),0 0 24px rgba(79,82,214,.10);
+  --bg:#050a18;--chrome:#040811;--panel:#0b1634;--card:rgba(14,30,70,.72);--line:#1c2d5c;--line-2:rgba(96,150,250,.17);
+  --text:#e5ecfd;--dim:#94a5cc;--soft:rgba(59,130,246,.12);--head:rgba(40,86,200,.34);
+  --ok:#4ade80;--ok-bg:#0c2420;--bad:#fb7185;--bad-bg:#2a1124;--warn:#fb923c;--accent:#8cbcff;--accent-2:#4f8dff;--prog:#b3a4f7;
+  --violet:#2563eb;--grad:linear-gradient(135deg,#1e6ef5 0%,#3657e0 55%,#6a4fd9 100%);--radius:10px;
+  --glow:0 0 0 1px rgba(96,150,250,.06),0 12px 32px rgba(2,5,16,.55),0 0 24px rgba(37,99,235,.12);
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --top:58px;
 }

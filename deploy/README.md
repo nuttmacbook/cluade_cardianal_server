@@ -41,7 +41,7 @@ node -e 'const fs=require("fs");const k=require("./deploy/test-keys.json");fs.wr
 
 node --env-file=deploy/producer.env scripts/preflight.js                    # "ผ่าน · เปิดได้" (เตือน TRUST_PROXY ได้ ไม่เป็นไร)
 EVM_RATE_LIMIT=0 node --env-file=deploy/producer.env server.js              # http://127.0.0.1:3000
-curl 127.0.0.1:3000/genesis                                                 # chainId 272727 · role producer · producers 2
+curl 127.0.0.1:3000/genesis                                                 # chainId 41234 · role producer · producers 2
 ```
 
 - MetaMask: RPC `http://127.0.0.1:3000/evm` (**http** ไม่ใช่ https · server ไม่มี TLS เอง) · ง่ายสุดกดปุ่ม Add network ในหน้า `http://127.0.0.1:3000/` · import `rich.key` เพื่อโอนทดสอบ
@@ -56,14 +56,14 @@ curl 127.0.0.1:3000/genesis                                                 # ch
 
 | ค่า | ตั้งเป็น | เหตุผล |
 |---|---|---|
-| `chainId` | 272727 (หรือเลขที่เช็คแล้วว่าว่าง) | ต้องไม่ซ้ำเชนอื่น กัน tx ข้ามเชน |
+| `chainId` | 41234 (Bluewolfchain) | ต้องไม่ซ้ำเชนอื่น กัน tx ข้ามเชน |
 | `balances` | address ของคุณ → ยอดตั้งต้น (wei + `n`) | เหรียญทั้งหมดที่มีตอนเริ่ม · ไม่มีการขุดเหรียญเพิ่ม |
 | `config.admins` | 2 address (hardware wallet) | อนุมัติ deploy / upgrade โปรแกรม · มี 2 เผื่อหายหนึ่ง |
 | `config.producers` | key หลัก + key สำรอง | **แม้มีเครื่องเดียวก็ใส่ key สำรอง** key หลักหาย = ใช้ key สำรองผลิตต่อได้ ไม่ต้องล้างเชน |
-| `blockMs` | 1000 | ตามที่ตกลง |
-| `maxBlockGas` | 1000000 | ~216 tx token / block · ปิด block ~0.3 วิ |
+| `blockMs` | 2000 | block ทุก 2 วิ · block เต็มใช้ CPU ราว 20–30% ของเวลา (multicall เต็ม block ~65%) |
+| `maxBlockGas` | 5000000 | ~200 tx token / block · batch โอน token ได้ ~735 รายการต่อ tx (`gasTarget` 2500000) |
 | `gasTarget` | 500000 | ใช้เกินครึ่ง base fee ขึ้น |
-| `minBaseFee` | "1000000000" (1 gwei) | ราคาแก๊สต่ำสุดตอนเริ่ม · **ปรับทีหลังได้โดยไม่ล้างเชน** (หัวข้อ 8) |
+| `minBaseFee` | "10000000000000" (10,000 gwei · โอนเหรียญหลัก ~0.173 BWSC) | ราคาแก๊สต่ำสุดตอนเริ่ม · **ปรับทีหลังได้โดยไม่ล้างเชน** (หัวข้อ 8) |
 | `burnPercent` | 100 | base fee เผาทิ้งทั้งหมด ผู้ผลิตได้แค่ tip · ถ้าอยากให้ผู้ผลิตได้ค่าแก๊สด้วยให้ลดลง |
 | `upgradeDelayBlocks` | 3600 | อนุมัติอัปเกรดแล้วต้องรอ 1 ชม. ผู้ใช้มีเวลาเห็นก่อนโค้ดใหม่ใช้จริง |
 | `memoryLimitMb` / `stackLimitKb` | 32 / 256 | ค่าเดิมที่ทดสอบแล้ว |
@@ -78,8 +78,8 @@ PORT=3000
 PRODUCER_KEY=0x<key หลัก>
 TRUST_PROXY=1
 SNAPSHOT_EVERY=3600
-EVM_NAME=Cardianal
-EVM_SYMBOL=CARD
+EVM_NAME=Bluewolfchain
+EVM_SYMBOL=BWSC
 ```
 
 | ค่า | ทำไม |
@@ -131,7 +131,7 @@ DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://cha
 ```
 - ได้ `deploy/system-programs.json` (address + ชื่อ) · explorer เมนู "System programs" แสดงให้เอง
 - ไม่อยากใช้ key admin บนเครื่องนี้ (admin เป็น hardware wallet): ไม่ต้องส่ง `ADMIN_KEY` แล้วกด Approve ทีละตัวในหน้า Programs ของ explorer ด้วยกระเป๋า admin
-- เหรียญหลักไม่ใช่ CARD: สคริปต์อ่านจาก `EVM_SYMBOL` ของ server (หรือตั้ง `SYMBOL=…`) → ชื่อเป็น `w<symbol>` · แก้ `systemPrograms` ใน `explorerscan/config.js` ให้ตรง
+- เหรียญหลักไม่ใช่ BWSC: สคริปต์อ่านจาก `EVM_SYMBOL` ของ server (หรือตั้ง `SYMBOL=…`) → ชื่อเป็น `w<symbol>` · แก้ `systemPrograms` ใน `explorerscan/config.js` ให้ตรง
 
 ## 8. ปรับขั้นต่ำของ gas price กลางทาง (เหรียญหลักแพงขึ้น / ถูกลง)
 

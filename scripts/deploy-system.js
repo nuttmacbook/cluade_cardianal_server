@@ -36,7 +36,7 @@ const die = (message) => {
 
 const deployer = (option("--deployer") ?? (DEPLOYER_KEY ? sign.addressOf(DEPLOYER_KEY) : die("ต้องตั้ง DEPLOYER_KEY (หรือ --deployer 0x… กับ --plan)"))).toLowerCase();
 const chainId = offline ? Number(option("--chain-id")) : (await get("/genesis")).chainId;
-const symbol = process.env.SYMBOL ?? (offline ? "CARD" : (await get("/evm").catch(() => null))?.nativeCurrency?.symbol ?? "CARD");
+const symbol = process.env.SYMBOL ?? (offline ? "BWSC" : (await get("/evm").catch(() => null))?.nativeCurrency?.symbol ?? "BWSC");
 const predictor = new VirtualMachine(new MemoryDB(), { chainId });
 const plan = systemPrograms({ addressAt: (nonce) => predictor.programAddressFor(deployer, nonce), symbol });
 
@@ -104,7 +104,7 @@ for (const item of plan) {
 }
 const native = (await get(`/address/${deployer}`)).native?.balance;
 if (firstNonce < plan.length && (native === undefined || BigInt(String(native).replace(/n$/, "")) === 0n)) {
-  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ใช้ราว 0.0005 ${symbol} ที่ราคาแก๊ส 1 gwei)`);
+  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ใช้ราว 30 ${symbol} ที่ราคาแก๊ส 10,000 gwei)`);
 }
 
 for (const item of plan.filter((p) => p.nonce >= firstNonce)) {

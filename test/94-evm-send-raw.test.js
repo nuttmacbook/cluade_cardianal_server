@@ -27,6 +27,7 @@ const COUNTER = `function program() {
 }`;
 
 test("ethers ส่ง tx ผ่าน /evm: native / ERC-20 / metadata.abi · receipt หาได้ด้วย hash ของ ethers", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -82,12 +83,13 @@ test("ethers ส่ง tx ผ่าน /evm: native / ERC-20 / metadata.abi · r
 });
 
 test("eth_sendRawTransaction ปฏิเสธ: ไม่มี chainId · chainId ผิด · deploy bytecode · type 1 · RLP เสีย", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { evmRpc, vm } = await import("../server.js");
   const wallet = new Wallet(FUNDER_KEY);
   const send = async (raw) => evmRpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] }).error?.message;
   const base = { to: BOB, value: 1n, nonce: 999, gasLimit: 21_000n };
   assert.match(await send(await wallet.signTransaction({ ...base, type: 0, gasPrice: 1n })), /ไม่มี chainId/);
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /chainId ของ tx \(5\) ไม่ตรงกับเชน \(1\)/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /chainId ของ tx \(5\) ไม่ตรงกับเชน \(41234\)/);
   assert.match(await send(await wallet.signTransaction({ ...base, to: null, data: "0x6000", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /deploy bytecode/);
   assert.match(await send(await wallet.signTransaction({ ...base, type: 1, chainId: BigInt(vm.chainId), gasPrice: 1n })), /ไม่รองรับ tx type 1/);
   assert.match(await send(await wallet.signTransaction({ ...base, data: "0x1234", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /ไม่ใช่โปรแกรม/);

@@ -196,6 +196,7 @@ export const DEFAULT_GAS = {
   builtin: 1,  // ต่อหน่วยข้อมูลที่ถูกคัดลอก / สร้าง: 1 สมาชิก (array / property / Set / Map / argument) หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
                //   เมธอดในตัว (join, split, slice, JSON.stringify …) · spread [...a] f(...a) { ...o } · a + b ที่ได้ string · template
                //   ArrayBuffer / typed array / RegExp ตามขนาด · input / ผลของ runProgram (ดู sandbox.js "แก๊สตามขนาดข้อมูล")
+  tx: 0,       // ค่าพื้นฐานต่อ tx ของ user (หักตอนเริ่ม tx ทุกแบบ · ราว EIP intrinsic gas) · 0 = ไม่คิด · fork "bluewolf" ตั้ง 15,000
   price: 1,    // native ต่อ 1 gas
 };
 
@@ -210,7 +211,15 @@ export const DEFAULT_GAS = {
  *     gas: แทนค่าใน DEFAULT_GAS ตั้งแต่ block นั้น (ยกเว้น price — ราคาขั้นต่ำอยู่ใน genesis.config.minBaseFee)
  *     กติกาแบบอื่น (field ใหม่ใน header, คำสั่งใหม่) → เช็ค vm.forkActive("<ชื่อ>", blockNumber) ในจุดที่เปลี่ยน
  */
-export const FORKS = {};
+export const FORKS = {
+  // Bluewolfchain: ราคาต่อหน่วย = 2.5 เท่าของภาระเครื่องจริง (วัด 11 พ.ย. 2026 · CPU 1 ms = 2,000 แก๊ส · DB 1 byte = 2 แก๊ส)
+  //   ใช้คู่กับ block 5M แก๊ส · block ทุก 2 วินาที · min gas price 10,000 gwei → โอนเหรียญหลัก ~17,300 แก๊ส
+  //   genesis.json: "forks": { "bluewolf": 0 } = ใช้ตั้งแต่ block แรก · ค่าที่ไม่ได้วัด (hash, recover, env …) ใช้ค่าเดิม
+  bluewolf: {
+    description: "Bluewolfchain gas: unit prices at 2.5x the measured machine load + 15,000 base gas per transaction",
+    gas: { call: 1750, read: 150, write: 125, stateKey: 1125, byte: 10, event: 1250, topic: 940, code: 33, node: 3, builtin: 3, tx: 15000 },
+  },
+};
 
 export const ERROR_CODE = {
   INVALID_REQUEST: "INVALID_REQUEST",
@@ -2950,6 +2959,7 @@ export class VirtualMachine {
     tx.gasPrice = tx.fees.price;
     if (!this.requireNonce && !this.chargeGas && !this.recordTransactions) {
       tx.gasLimit = requestedLimit;
+      if (tx.gas.tx) tx.useGas(tx.gas.tx);   // ค่าพื้นฐานต่อ tx (fork bluewolf)
       return;
     }
 
@@ -2967,6 +2977,7 @@ export class VirtualMachine {
     } else {
       tx.gasLimit = requestedLimit;
     }
+    if (tx.gas.tx) tx.useGas(tx.gas.tx);   // ค่าพื้นฐานต่อ tx (fork bluewolf)
   }
 
   /** จำ request ไว้เพื่อเขียนรายการ tx (เรียกหลัง preparePayer) */

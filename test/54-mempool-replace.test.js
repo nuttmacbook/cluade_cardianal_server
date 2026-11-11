@@ -170,6 +170,7 @@ let server, vm, mempool, url;
 
 before(async () => {
   let miner;
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   ({ server, vm, mempool, miner } = await import("../server.js"));
   clearInterval(miner);                                           // ไม่ให้ปิด block ระหว่างเทสต์
   vm.db.load({ [`${alice}:native:received`]: "1000000000000000000n" });

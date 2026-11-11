@@ -19,6 +19,7 @@ process.env.SNAPSHOT_EVERY = "2";
 process.env.SNAPSHOT_DIR = dir;
 
 test("server: /proof ตรวจเองได้ · /evm cardianal_getProof · /snapshot → node ใหม่เริ่มจาก snapshot แล้วซิงก์ต่อ", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { server, vm, miner, mempool, snapshots, genesis } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -73,7 +74,7 @@ test("server: /proof ตรวจเองได้ · /evm cardianal_getProof �
     await mine();
 
     const reader = new VM.VirtualMachine(new MemoryDB(), { chainId: vm.chainId, requireNonce: true, chargeGas: true, deriveProgramAddress: true,
-      recordTransactions: true, recordBlocks: true, recordHistory: true, minBaseFee: vm.minBaseFee, gasTarget: vm.gasTarget, gas: vm.gas });
+      recordTransactions: true, recordBlocks: true, recordHistory: true, minBaseFee: vm.minBaseFee, gasTarget: vm.gasTarget, gas: vm.gas, forks: genesis?.forks ?? {} });
     const loaded = await new Promise((resolve, reject) => {
       const stop = startSync(reader, { url, genesis, intervalMs: 20, snapshot: true,
         onSnapshot: (manifest) => resolve(manifest), onError: (error) => { stop(); reject(error); } });

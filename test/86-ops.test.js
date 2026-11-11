@@ -19,6 +19,7 @@ const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b
 const T = Date.parse("2026-01-01T00:00:00Z");
 
 test("/health: ปกติ = 200 · มี tx รอแต่ไม่มี block ใหม่ = stalled · ปิด block ล้มเหลว = 503 · monitor อ่านได้", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { server, vm, miner, mempool, health, minerState, STALL_MS } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

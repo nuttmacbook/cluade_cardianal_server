@@ -100,6 +100,7 @@ let server, vm, url;
 before(async () => {
   process.env.TIMEOUT_MS = "1000";   // ลูป 3M แก๊สใน QuickJS ใช้ ~100ms (ช้ากว่านั้นเมื่อเครื่องโหลดหนัก) ต้องหมดแก๊สก่อนหมดเวลา
   process.env.RATE_LIMIT = "4";
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   ({ server, vm } = await import("../server.js"));
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "loop", code: LOOP, context: { sender: alice, origin: alice } }).writes);

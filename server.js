@@ -10,17 +10,17 @@
  *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
  *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
  *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
- *   GAS_PRICE=1000000000   base fee ต่ำสุด (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 1 gwei) — EIP-1559: base fee ของแต่ละ block ไม่ต่ำกว่านี้
- *   BLOCK_MS=1000          เวลาต่อ block (ms) · ปิด block เฉพาะตอนมี tx รอ
- *   MAX_BLOCK_GAS=1000000  แก๊สรวมสูงสุดต่อ block (genesis config ล็อกได้) · MAX_TX_GAS=<MAX_BLOCK_GAS> แก๊สสูงสุดต่อ tx · MAX_TX_PER_BLOCK=500
- *   GAS_TARGET=500000      แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
+ *   GAS_PRICE=10000000000000 base fee ต่ำสุด (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 10,000 gwei) — EIP-1559: base fee ของแต่ละ block ไม่ต่ำกว่านี้
+ *   BLOCK_MS=2000          เวลาต่อ block (ms) · ปิด block เฉพาะตอนมี tx รอ
+ *   MAX_BLOCK_GAS=5000000  แก๊สรวมสูงสุดต่อ block (genesis config ล็อกได้) · MAX_TX_GAS=<MAX_BLOCK_GAS> แก๊สสูงสุดต่อ tx · MAX_TX_PER_BLOCK=500
+ *   GAS_TARGET=2500000     แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
  *   BASE_FEE_DENOMINATOR=8 base fee เปลี่ยนได้ไม่เกิน 1/ค่านี้ ต่อ block (8 = 12.5% แบบ Ethereum)
  *   BURN_PERCENT=100       ส่วนของ base fee ที่เผาทิ้ง (tip เข้าผู้ปิด block เสมอ) — ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   TRUST_PROXY=0     จำนวนชั้นของ reverse proxy ข้างหน้า (nginx / Caddy = 1) → rate limit ใช้ IP จาก X-Forwarded-For (src/node/client-ip.js)
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
- *   EVM_NAME=Cardianal EVM_SYMBOL=CARD   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
+ *   EVM_NAME=Bluewolfchain EVM_SYMBOL=BWSC   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
  *   UPGRADE_DELAY_BLOCKS=0   timelock ของการอัปเกรดโปรแกรม: โค้ดใหม่เริ่มใช้ที่ block (ที่อนุมัติ + N) · 0 = ทันที
  *   REJECTED_PER_BLOCK=1000  tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแต่ไม่ได้รัน) ที่บันทึกลง block ได้ต่อ block (ที่เกินยกไป block ถัดไป)
  *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
@@ -85,7 +85,7 @@ const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
 // sandbox ของโปรแกรม (ดู src/core/sandbox.js): ทุกเครื่องในเครือข่ายต้องตั้งค่าเดียวกัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
 const MEMORY_LIMIT_MB = settings.memoryLimitMb;
 const STACK_LIMIT_KB = settings.stackLimitKb;
-const GAS_PRICE = settings.minBaseFee;   // wei ต่อแก๊ส (1 gwei)
+const GAS_PRICE = settings.minBaseFee;   // wei ต่อแก๊ส (ค่าเริ่มต้น 10,000 gwei)
 // ตรวจโค้ดอัตโนมัติ (src/core/autoreview.js) ตอน /sendtx deploy / upgrade · AUTO_REVIEW=0 = ปิด (sandbox + แก๊สยังคุมอยู่)
 export const AUTO_REVIEW = !["0", "false", "off", "no"].includes(String(process.env.AUTO_REVIEW ?? "1").toLowerCase());
 
@@ -101,7 +101,7 @@ export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA,
   baseFeeChangeDenominator: settings.baseFeeDenominator,
   producer,
   memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
-  gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำ 1 gwei แบบ ETH
+  gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำจาก genesis (ค่าเริ่มต้น 10,000 gwei)
   // block 1 วิ · 1M แก๊ส · 500 tx (ผลวัด: block-time-sim.md) — เพดาน tx ต่อ block / แก๊สต่อ tx ไม่ใช่ค่าที่ node อื่นตรวจ ตั้งต่างกันได้
   maxTransactions: MAX_TX_PER_BLOCK, maxTransactionsPerSender: 16, maxBlockGas: settings.maxBlockGas, maxTxGas: MAX_TX_GAS,
   admins: settings.admins,
@@ -458,7 +458,7 @@ async function handleEvm(request, response, url) {
   if (request.method === "GET") {
     const origin = `${request.headers["x-forwarded-proto"] ?? "http"}://${request.headers.host ?? "localhost"}`;
     return send(response, 200, evmRpc.chainParams({ rpcUrl: `${origin}/evm`, explorerUrl: `${origin}/evm/explorer`,
-      name: process.env.EVM_NAME ?? "Cardianal", symbol: process.env.EVM_SYMBOL ?? "CARD" }));
+      name: process.env.EVM_NAME ?? "Bluewolfchain", symbol: process.env.EVM_SYMBOL ?? "BWSC" }));
   }
   if (request.method !== "POST") return send(response, 405, { error: "Use POST for JSON-RPC" });
   const chunks = [];

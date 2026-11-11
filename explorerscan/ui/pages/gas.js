@@ -3,7 +3,7 @@
 
 // ---------- chain gas settings: what a transaction costs now, and the admin form for the minimum gas price ----------
 const GAS_FIELDS = [
-  ["call", "Program call"], ["read", "DB read"], ["write", "DB write"], ["stateKey", "New state key (per tx)"], ["byte", "Byte read / written"],
+  ["tx", "Base per transaction"], ["call", "Program call"], ["read", "DB read"], ["write", "DB write"], ["stateKey", "New state key (per tx)"], ["byte", "Byte read / written"],
   ["event", "Event"], ["topic", "Indexed field (topic)"], ["code", "Code byte (deploy)"], ["node", "Code step"], ["builtin", "Data copied"],
   ["hash", "keccak256"], ["recover", "ecrecover"], ["sha256", "sha256"], ["ripemd160", "ripemd160"], ["blake2b", "blake2b"], ["modexp", "modexp"], ["env", "Chain info read"],
 ];
@@ -19,7 +19,7 @@ async function gasPage(draw = el) {
   const info = await api("/genesis");
   const prices = info.gas ?? {};
   const changed = info.gasConfig && info.gasConfig.minBaseFee !== null && info.gasConfig.minBaseFee !== undefined;
-  const transfer = toBig(prices.call) + 2n * toBig(prices.read) + 2n * toBig(prices.write);
+  const transfer = toBig(prices.tx ?? 0) + toBig(prices.call) + 2n * toBig(prices.read) + 2n * toBig(prices.write);   // ค่าพื้นฐานต่อ tx + เรียก 1 + อ่าน / เขียนยอด 2 ฝั่ง
   const rows = GAS_FIELDS.map(([field, label]) => `<tr><td><b>${esc(label)}</b><div class="dim">${esc(field)}</div></td><td>${num(prices[field] ?? 0)}</td></tr>`);
   draw(panel("Gas settings", kv([
     ["Minimum gas price", `<b>${gwei(info.minBaseFee)} gwei</b>${changed ? ` <span class="tag">set by admin · genesis ${gwei(info.genesisMinBaseFee)} gwei</span>` : ' <span class="dim">(from genesis)</span>'}`],

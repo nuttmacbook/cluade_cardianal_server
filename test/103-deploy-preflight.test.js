@@ -37,12 +37,12 @@ test("preflight: ไฟล์ตัวอย่างที่ยังไม่
   const dev = preflight({ GENESIS: "genesis.json" });
   assert.equal(dev.status, 1);
   assert.match(dev.stdout, /ไม่มี config/);
-  assert.match(dev.stdout, /chainId = 1 ชนกับ Ethereum/);
+  assert.doesNotMatch(dev.stdout, /chainId = 1 ชนกับ Ethereum/);   // genesis.json ของ repo ใช้ chainId 41234 (Bluewolfchain)
 
   const { genesis, key } = filled();
   const ok = preflight({ GENESIS: genesis, PRODUCER_KEY: key, DATA: "/tmp/x", HOST: "127.0.0.1", TRUST_PROXY: "1" });
   assert.equal(ok.status, 0, ok.stdout);
-  assert.match(ok.stdout, /chainId 272727 · block 1000 ms · maxBlockGas 1000000 · gasTarget 500000 · upgradeDelayBlocks 3600/);
+  assert.match(ok.stdout, /chainId 41234 · block 2000 ms · maxBlockGas 5000000 · gasTarget 2500000 · upgradeDelayBlocks 3600/);
   assert.doesNotMatch(ok.stdout, /เตือน/);
   assert.equal(preflight({ GENESIS: genesis, PRODUCER_KEY: key, DEV: "1" }).status, 1);   // DEV ห้ามใช้กับเชนจริง
   const loose = preflight({ GENESIS: genesis, PRODUCER_KEY: key });

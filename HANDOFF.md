@@ -41,6 +41,7 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
 
 ### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
+- **Bluewolfchain (BWSC)**: ค่าตั้งต้นของ server = chainId 41234 · 10,000 gwei · block 2 วิ · block 5M แก๊ส · `genesis.json` เปิด fork `bluewolf` ตั้งแต่ block 0 (ราคาต่อหน่วย ×2.5 ของภาระเครื่องจริง + `gas.tx` 15,000 ต่อ tx · โอนเหรียญหลัก 17,300 แก๊ส) · ชื่อใน /evm = Bluewolfchain / BWSC · ห่อเหรียญ = WBWSC (`wbwsc`) · เทสต์ที่เปิด server ตั้ง `GAS_PRICE=1 gwei` เพื่อใช้ตัวเลขช่วงพัฒนา
 - **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `maxBlockGas` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
   `genesis.forks` = ตาราง fork `{ ชื่อ: block }` (ไม่อยู่ใน genesis hash · เพิ่มทีหลังได้ · ดูหัวข้อค่าแก๊ส "fork ตาม block height")
   `genesis.producerSchedule` = `[{ fromBlock, producers }]` เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (ไม่อยู่ใน genesis hash · ดู "ผู้ผลิตเสีย / key หาย / key หลุด" ข้างล่าง)
@@ -210,7 +211,7 @@ const address = cloneProgram(template, initInput, { salt, value })   // ใน�
 - เก็บลง DB เป็น string `"123n"` แปลงกลับเป็น BigInt อัตโนมัติตอนอ่าน
 - ค่าที่ออกไปทาง JSON ของ API ก็เป็น `"123n"` → **ฝั่ง client ห้ามใช้ `Number()`** ใช้ `BigInt(v.slice(0,-1))`
 - ยอด native เป็น BigInt หน่วย wei (18 ทศนิยม, 1 เหรียญ = 10^18) เก็บใน DB / receipt / tx record เป็น `"123n"`
-  `value` / `gasPrice` ที่ส่งเข้ามารับได้ทั้ง number, BigInt, `"123"` และ `"123n"` · ราคาแก๊สเริ่มต้น 1 gwei (`GAS_PRICE`)
+  `value` / `gasPrice` ที่ส่งเข้ามารับได้ทั้ง number, BigInt, `"123"` และ `"123n"` · ราคาแก๊สเริ่มต้นของ server 10,000 gwei (`GAS_PRICE`)
 - ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
   (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
 
@@ -528,8 +529,8 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
 
 | ค่า (option ของ VM · env ของ server) | ค่าเริ่มต้น | ความหมาย |
 |---|---|---|
-| `minBaseFee` · `GAS_PRICE` | `gas.price` (server 1 gwei) | base fee ต่ำสุด (และ base fee ของ block แรก) |
-| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
+| `minBaseFee` · `GAS_PRICE` | `gas.price` (server 10,000 gwei) | base fee ต่ำสุด (และ base fee ของ block แรก) |
+| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 2,500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
 | `baseFeeChangeDenominator` · `BASE_FEE_DENOMINATOR` | 8 | เปลี่ยนได้ไม่เกิน 1/8 = 12.5% ต่อ block |
 | `burnPercent` · `BURN_PERCENT` | 100 | % ของ**ส่วน base fee** ที่เผา (เดิม server ใช้ 50 ของค่าแก๊สทั้งหมด) |
 

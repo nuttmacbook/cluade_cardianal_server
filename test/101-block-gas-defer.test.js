@@ -60,6 +60,8 @@ test("แก๊สที่เหลือใน block ไม่พอ → ใ�
 });
 
 test("server: ใบที่รอติด nonce ขาด → ไม่ปิด block ว่าง · /health ไม่ขึ้น stalled ", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.MAX_BLOCK_GAS ??= "1000000";   // ตัวเลขในเทสต์อิง block 1M (ค่าตั้งต้นของเชน 5M)
   const { vm, miner, mempool, mineOnce, health, minerState, STALL_MS, server } = await import("../server.js");
   clearInterval(miner);
   try {

@@ -174,7 +174,7 @@ test("server.js + scripts/set-gas.js: เจ้าของลดขั้นต
   };
   const startNode = async (env) => {
     const port = await freePort();
-    const node = run("server.js", [], { PORT: String(port), BLOCK_MS: "100", VERIFY_WORKERS: "0", GENESIS: genesisFile, RATE_LIMIT: "0", ...env });
+    const node = run("server.js", [], { PORT: String(port), BLOCK_MS: "100", VERIFY_WORKERS: "0", GENESIS: genesisFile, RATE_LIMIT: "0", GAS_PRICE: "1000000000", ...env });
     const until = Date.now() + 20_000;
     while (!node.output().includes("chain ทำงานที่")) {
       if (Date.now() > until) throw new Error(node.output());

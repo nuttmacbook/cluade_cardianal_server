@@ -70,14 +70,14 @@ test("system: deploy ตามลำดับ nonce → address ตรงแผ�
     assert.equal(t.vm.getMetadata(item.address).upgrader, undefined, `${item.key} แก้ไม่ได้`);
   }
   assert.deepEqual(t.plan.map((item) => item.namespace),
-    ["multicall", "wcard", "multisig-template", "token-template", "nft-template", "multitoken-template", "factory"]);
+    ["multicall", "wbwsc", "multisig-template", "token-template", "nft-template", "multitoken-template", "factory"]);
   assert.deepEqual(t.query(t.at.factory, "templates"),
     { token: t.at.tokenTemplate, nft: t.at.nftTemplate, multiToken: t.at.multiTokenTemplate, multisig: t.at.multisigTemplate });
   // ต้นแบบ token ไม่มี supply (ไม่มี event Transfer ตอนสร้าง)
   assert.equal(t.query(t.at.tokenTemplate, "totalSupply"), "0n");
   // Multicall อ่านหลายค่าในครั้งเดียว
   assert.deepEqual(t.query(t.at.multicall, "aggregate", { readonly: true, calls: [
-    { target: t.at.wcard, fn: "ticker" }, { target: t.at.factory, fn: "count" }] }), ["WCARD", "0n"]);
+    { target: t.at.wcard, fn: "ticker" }, { target: t.at.factory, fn: "count" }] }), ["WBWSC", "0n"]);
 });
 
 test("system: สัญลักษณ์เหรียญหลักเปลี่ยนได้ → ชื่อ WCARD ตาม (เช่น WBNB / wbnb)", () => {
