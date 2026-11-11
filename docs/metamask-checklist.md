@@ -10,7 +10,7 @@
 
 ```bash
 DATA=./data-metamask npm run dev      # ไม่ตั้ง DATA = เก็บในหน่วยความจำ (ปิดแล้วหาย)
-node scripts/seed.js http://localhost:3000                          # อีกหน้าต่าง: สร้าง token MTK (namespace mytoken) + tx ตัวอย่าง
+node dev/seed.js http://localhost:3000                          # อีกหน้าต่าง: สร้าง token MTK (namespace mytoken) + tx ตัวอย่าง
 ```
 
 - บัญชีทดสอบที่มีเหรียญ: private key `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (address `0x7099…79c8` = บัญชีที่ 1 ของ Hardhat ซึ่งเป็น key สาธารณะ **ห้ามใช้กับเงินจริง**)

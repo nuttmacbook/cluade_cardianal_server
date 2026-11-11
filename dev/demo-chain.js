@@ -1,4 +1,4 @@
-/** สร้างข้อมูลจริงหลากหลายแบบบน chain: node scripts/demo-chain.js [url] */
+/** สร้างข้อมูลจริงหลากหลายแบบบน chain: node dev/demo-chain.js [url] */
 import * as sign from "../src/crypto/signature.js";
 
 // native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei

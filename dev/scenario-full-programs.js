@@ -1,5 +1,5 @@
 /**
- * โปรแกรมตัวอย่างของ scripts/scenario-full.js — ทุกตัวประกาศ metadata.abi (explorer สร้างฟอร์ม Interact / ถอด event ได้สวย)
+ * โปรแกรมตัวอย่างของ dev/scenario-full.js — ทุกตัวประกาศ metadata.abi (explorer สร้างฟอร์ม Interact / ถอด event ได้สวย)
  * และตั้ง namespace + description ตอน initialization (ชื่ออ่านง่ายทั้งใน explorer ของเรา และ Blockscout ผ่าน /evm)
  *
  *   COUNTER_V1 / COUNTER_V2  ตัวนับที่อัปเกรดได้ (upgrader ตั้งตอน deploy) · V2 เพิ่ม decrement + migrate(bonus, tag)

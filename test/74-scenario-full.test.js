@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 /*
- * scripts/scenario-full.js --spawn --quick: เปิด server.js จริง (MemoryDB · BLOCK_MS 300 · UPGRADE_DELAY_BLOCKS 2)
+ * dev/scenario-full.js --spawn --quick: เปิด server.js จริง (MemoryDB · BLOCK_MS 300 · UPGRADE_DELAY_BLOCKS 2)
  * แล้วไล่ทุกฟังก์ชันของเชน (token / NFT / multi-token / ERC-1271 / multicall / upgrade / clone / API / แก๊ส / /evm / REST / sync)
  * ต้องจบด้วย exit code 0 และรายงานไม่มีข้อที่ไม่ผ่าน
  */
@@ -18,7 +18,7 @@ test("scenario-full --spawn --quick: ทุกข้อผ่าน (exit 0)", {
   const out = path.join(dir, "report.json");
   const env = { ...process.env };
   for (const name of ["BLOCK_MS", "UPGRADE_DELAY_BLOCKS", "DATA", "PORT", "ADMINS", "GAS_TARGET", "GAS_PRICE"]) delete env[name];
-  const child = spawn(process.execPath, ["scripts/scenario-full.js", "--spawn", "--quick", "--tag", `test-${process.pid}`, "--out", out], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["dev/scenario-full.js", "--spawn", "--quick", "--tag", `test-${process.pid}`, "--out", out], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
   child.stderr.on("data", (chunk) => { output += chunk; });

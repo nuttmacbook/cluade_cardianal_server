@@ -14,7 +14,7 @@
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
 | โค้ดทั้งหมด | ~16,600 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,300) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 1028 เคส + `npm run test:e2e` 34 เคส |
+| เทสต์ | `npm test` → 1045 เคส + `npm run test:e2e` 34 เคส |
 
 ---
 
@@ -22,15 +22,15 @@
 
 ```bash
 npm install
-npm test                         # 1028 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 1045 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
-node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
-node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
+node dev/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
+node dev/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
 ```
 ⚠️ `demo-market` / `demo-chain` ตั้งราคาแก๊ส 1 gwei แต่ขั้นต่ำของเชนตอนนี้ 10,000 gwei → เปิด server ด้วย `GAS_PRICE=1000000000 npm run dev` (`seed.js` อ่านราคาจาก `/genesis` เอง)
 
-สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
+สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node dev/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
 env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 2000) `MAX_BLOCK_GAS` (5M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` (41234) `GAS_PRICE` (base fee ต่ำสุด ค่าเริ่ม 10,000 gwei) `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `EVM_RATE_LIMIT` (request ของ `/evm` ต่อ IP ต่อนาที ค่าเริ่ม 600 · 0 = ไม่จำกัด · ทดสอบในเครื่องที่มี MetaMask + Blockscout ใช้ 0) `EVM_MAX_BATCH` (คำขอต่อ batch ของ `/evm` ค่าเริ่ม 1000 · batch นับ `EVM_RATE_LIMIT` ทุกตัว) `MAX_BODY_BYTES` (body ของ POST ค่าเริ่ม 1 MB · เกิน = 413) `EVM_NAME` `EVM_SYMBOL` (ชื่อ / สัญลักษณ์ที่ปุ่ม Add network ส่งให้กระเป๋า) `HOST` (ไม่ตั้ง = ทุก interface · เปิดจริงหลัง nginx ใช้ 127.0.0.1) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ที่เหลืออยู่หัวไฟล์ `server.js` + `GENESIS_SETTINGS` ใน `src/node/genesis.js` (`CHAIN_ID` `PRODUCERS` ไม่อยู่หัว server.js)
@@ -39,7 +39,7 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
 
-สคริปต์อื่น: `scripts/demo.js` (สนามทดลองใน process เดียว), `scripts/examples.js` (ตัวอย่าง request ทุกประเภท), `scripts/demo-chain.js`
+สคริปต์อื่น: `dev/demo.js` (สนามทดลองใน process เดียว), `dev/examples.js` (ตัวอย่าง request ทุกประเภท), `dev/demo-chain.js`
 
 ### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
 - **Bluewolfchain (BWSC)**: ค่าตั้งต้นของ server = chainId 41234 · 10,000 gwei · block 2 วิ · block 5M แก๊ส · `genesis.json` เปิด fork `bluewolf` ตั้งแต่ block 0 (ราคาต่อหน่วย ×2.5 ของภาระเครื่องจริง + `gas.tx` 15,000 ต่อ tx · โอนเหรียญหลัก 17,300 แก๊ส) · ชื่อใน /evm = Bluewolfchain / BWSC · ห่อเหรียญ = WBWSC (`wbwsc`) · เทสต์ที่เปิด server ตั้ง `GAS_PRICE=1 gwei` เพื่อใช้ตัวเลขช่วงพัฒนา
@@ -95,7 +95,12 @@ src/node/sync.js               129        node ผู้อ่าน: ดึง 
 server.js                      590        server จริง (node:http) — ตัวที่ใช้งานอยู่
 explorerscan/                  ~2,300     explorer: index.html + theme/ (สี) + ui/ (หน้าตา) + core/ (ระบบ) · ดู explorerscan/README.md
 index.js                        12        จุดเข้าเดียวสำหรับ import เป็น library
+scripts/                                  คำสั่งดูแลเชนจริง: preflight · deploy-system · set-gas · backup · snapshot · monitor
+dev/                                      ทดสอบเท่านั้น (ลบได้): demo · seed · scenario · simulate · load-test · bench · fuzz · evm-proxy · ดู dev/README.md
+test/                                     เทสต์ (ลบได้ เชนไม่ได้ใช้) · genesis.json ที่ root = genesis ช่วงพัฒนา ห้ามใช้เปิดเชนจริง
 ```
+
+แบ่ง 3 กลุ่ม (ตาราง README หัวข้อ "โครงสร้าง"): ใช้กับเชนจริง = server.js · src/ · explorerscan/ · deploy/ · scripts/ · เครื่องมือนักพัฒนา = client-sdk/ · program-sdk/ · docs/ · ทดสอบเท่านั้น = test/ · dev/ · genesis.json
 
 ทิศทางการพึ่งพาเป็นทางเดียวเสมอ **`node` → `crypto` → `core` → `storage`**
 `core` ไม่รู้จักลายเซ็น / HTTP / คิว · `storage` ไม่รู้ความหมายของ key — อย่าทำให้ทิศทางนี้พัง
@@ -344,7 +349,7 @@ stack ล้นเป็น `InternalError` ในฝั่งโปรแกร
 ตัวแปร server: `MEMORY_LIMIT_MB=32` `STACK_LIMIT_KB=256` (`TIMEOUT_MS` ยังเป็นด่านสุดท้ายของเวลา) · option `wallClock: true` ใส่ `performance.now()` จริงให้โปรแกรม — ใช้ในเทสต์เท่านั้น
 
 **บันทึกแผน / ทางที่ยังเปิดอยู่**
-- ความเร็ว: token transfer ~1.4 ms/tx (V8 เดิม ~0.6) ส่วนใหญ่คือคอมไพล์ factory ของโปรแกรมใหม่ทุก tx (~0.4 ms) + ตัวแปลภาษาของ QuickJS · งานคำนวณล้วนช้ากว่า V8 ~4–5 เท่า (~50 M gas/s) · วัดซ้ำด้วย `node scripts/bench-vm.js`
+- ความเร็ว: token transfer ~1.4 ms/tx (V8 เดิม ~0.6) ส่วนใหญ่คือคอมไพล์ factory ของโปรแกรมใหม่ทุก tx (~0.4 ms) + ตัวแปลภาษาของ QuickJS · งานคำนวณล้วนช้ากว่า V8 ~4–5 เท่า (~50 M gas/s) · วัดซ้ำด้วย `node dev/bench-vm.js`
 - ทางเร่งที่คิดไว้แต่ยังไม่ทำ: เก็บ context ที่คอมไพล์โปรแกรมยอดนิยมไว้แล้วใน snapshot — **ต้องระวัง** snapshot จะต่างกันตามประวัติของแต่ละ node → heap ต้น tx ไม่เหมือนกัน → จุดที่หน่วยความจำเกินอาจต่างกัน ต้องทำให้ชุดโปรแกรมใน snapshot เป็นส่วนหนึ่งของ state ของ chain ก่อน
 - bytecode ของ QuickJS ข้าม runtime / snapshot ไม่ได้ใน quickjs-emscripten (ไม่มี API อ่าน / เขียน bytecode) จึง cache เป็นซอร์สที่ฉีดตัวนับแล้วแทน
 - ถ้าจะใช้ memory limit ของ QuickJS เองในอนาคต ต้องเป็น build ที่มี `malloc_usable_size`
@@ -858,7 +863,7 @@ GET  /evm/explorer                                302 → / (URL explorer ที
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
   · Blockscout 9.x ต้องเพิ่ม `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm ไม่อ่าน gzip) · ขั้นตอนเต็ม + เปิด-ปิด + แก้ปัญหา: `docs/blockscout.md`
-  · ตัวดักดูคำขอที่เข้า /evm: `node scripts/evm-proxy.mjs` (:3001 → :3000/evm)
+  · ตัวดักดูคำขอที่เข้า /evm: `node dev/evm-proxy.mjs` (:3001 → :3000/evm)
 
 ---
 
@@ -1108,7 +1113,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 116 ไฟล์ · 1028 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 118 ไฟล์ · 1045 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1144,14 +1149,14 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp ปิดแล้ว / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
 | `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
 | `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
-| `80-load-test` | `scripts/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
+| `80-load-test` | `dev/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
 | `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
 | `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
 | `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
 | `85-genesis-producer` | `resolveSettings`: genesis ก่อน env · env ต่าง = error · ไม่มี config = ใช้ env · `startupProblems` (ADMINS / PRODUCER_KEY / producer นอกรายชื่อ · DEV ข้าม) · `server.js` จริงไม่ยอมเริ่ม · producer อยู่ใน hash + ลายเซ็นกู้ได้ · sync ปฏิเสธผู้ผลิตนอกรายชื่อ / ลายเซ็นปลอม / ไม่มีลายเซ็น / ไม่มีผู้ผลิต · replay / rebuild ได้ hash + ลายเซ็นเดิมแม้ไม่มี key · `replayTimeoutMs`: ผู้อ่านที่ timeout สั้นยังได้ hash ตรง |
 | `86-ops` | `/health` ปกติ 200 · stalled · ปิด block ล้มเหลว = 503 · `scripts/monitor.js` check (รวมติดต่อไม่ได้) · `scripts/backup.js` สำรองขณะ DB เปิด / manifest / ตรวจสาย block / keep · verify เจอ manifest ไม่ตรง + header หาย · restore ลงโฟลเดอร์ว่าง / ต้อง `--force` |
 | `87-sandbox-fuzz` | `fuzzOnce` / `fuzzDecoder` / `runFuzz` (seed คงที่ 150 รอบ): ไม่มี INTERNAL · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · ตัวสุ่มซ้ำได้ตาม seed |
-| `88-gas-cpu` | `scripts/bench-gas.js` (`npm run bench:gas`): ns ต่อแก๊สของ ~85 งาน เทียบลูปเลข · งานที่เคยถูกเกิน 8 เท่า (string ยาว `<` / `===` / switch, Map / Set key ยาว, JSON.stringify ซ้อนลึก, sort, flat, normalize) ราคาใหม่ · แก๊สเท่ากันทุก VM · ผล JS เหมือนเดิม |
+| `88-gas-cpu` | `dev/bench-gas.js` (`npm run bench:gas`): ns ต่อแก๊สของ ~85 งาน เทียบลูปเลข · งานที่เคยถูกเกิน 8 เท่า (string ยาว `<` / `===` / switch, Map / Set key ยาว, JSON.stringify ซ้อนลึก, sort, flat, normalize) ราคาใหม่ · แก๊สเท่ากันทุก VM · ผล JS เหมือนเดิม |
 | `89-warm-sandbox` | ภาพอุ่นมี / ไม่มีใน cache / ปิด cache: ผลทุก tx เหมือนกันทุกไบต์ (รวมจุด OUT_OF_MEMORY) · global ไม่ค้าง · โปรแกรมที่สองของ tx ปกติ · LRU มีเพดาน |
 | `90-verify-pool` | worker ให้ผลเหมือน `verifyTransaction` ทุกไบต์ · error เดิม · ข้อมูลส่งข้าม thread ไม่ได้ = reject ไม่ค้าง · size 0 = thread หลัก · ปิดแล้วเรียกต่อได้ · 200 ใบพร้อมกัน thread หลักไม่ถูกบล็อก |
 | `91-evm-abi-call` | `eth_call` ตาม `metadata.abi`: ethers เข้ารหัส / ถอดได้ทุกชนิด · ตาม block · from = context.sender · selector ไม่ตรง / throw / calldata สั้น / JSON เสีย = reverted · codec ตรงกับ ethers |
@@ -1177,13 +1182,13 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 `46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorerscan/core/wallet.js` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
 
 **ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
-`scripts/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
+`dev/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
 
 ### จำลองผู้ใช้ 200 กระเป๋า (`npm run simulate`)
 
 ⚠️ `simulate` / `scenario` / `scenario:full` ตั้งราคาแก๊ส 1–20 gwei และงบแก๊สตาม `DEFAULT_GAS` → server ที่เปิดเองต้องใช้ `GAS_PRICE=1000000000` + genesis ที่ไม่มี `"forks"` (`genesis-nofork.json` = `genesis.json` ที่ลบ `forks`: `node -e 'const g=require("./genesis.json");delete g.forks;require("fs").writeFileSync("genesis-nofork.json",JSON.stringify(g))'`) · ค่าเริ่มของเชน (10,000 gwei + fork `bluewolf`) = tx ถูกปฏิเสธ / งบไม่พอ · `scenario:full --spawn` ตั้งให้เอง · `--spawn` ของ `simulate` / `scenario` ส่ง env ต่อให้ server
 
-`scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (`BLOCK_MS` ของ server) แล้วตรวจว่าทุกใบเข้า block
+`dev/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (`BLOCK_MS` ของ server) แล้วตรวจว่าทุกใบเข้า block
 
 ```
 RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 2000
@@ -1199,7 +1204,7 @@ npm run simulate -- --blocks 200 --min 15 --max 25
 
 ### scenario 1000 กระเป๋า · 10 tx ต่อ block (`npm run scenario`)
 
-`scripts/scenario.js` + โปรแกรมใน `scripts/scenario-programs.js` (เทสต์ `50-scenario-programs`)
+`dev/scenario.js` + โปรแกรมใน `dev/scenario-programs.js` (เทสต์ `50-scenario-programs`)
 
 ```
 RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
@@ -1219,7 +1224,7 @@ GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn --b
 
 ### scenario ครบทุกฟังก์ชัน (`npm run scenario:full`) — เทสต์ `74-scenario-full`
 
-`scripts/scenario-full.js` + โปรแกรมตัวอย่างใน `scripts/scenario-full-programs.js` (ทุกตัวมี `metadata.abi` + namespace → แสดงสวยทั้ง explorer และ Blockscout)
+`dev/scenario-full.js` + โปรแกรมตัวอย่างใน `dev/scenario-full-programs.js` (ทุกตัวมี `metadata.abi` + namespace → แสดงสวยทั้ง explorer และ Blockscout)
 ส่ง tx จริงทีละชุดแล้ว**ตรวจผลบนเชนทุกข้อ** (~300 ข้อ พิมพ์ ✅ / ❌ ทีละหัวข้อ · ล้มข้อเดียว = exit 1 · รายงาน `scenario-full-report.json`)
 
 ```
@@ -1254,7 +1259,7 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
 
 ### load test — ปิด block ใช้เวลาเท่าไหร่ (`npm run load:test`) — เทสต์ `80-load-test`
 
-`scripts/load-test.js` วัดเวลาปิด block ภายใต้โหลด **ในโปรเซสเดียว ไม่ผ่าน HTTP** ด้วยของจริงทั้งชุด: `VirtualMachine` (option เดียวกับ `server.js`: 500 tx / 16 ต่อ sender / maxBlockGas และ maxTxGas 3M / EIP-1559 / history)
+`dev/load-test.js` วัดเวลาปิด block ภายใต้โหลด **ในโปรเซสเดียว ไม่ผ่าน HTTP** ด้วยของจริงทั้งชุด: `VirtualMachine` (option เดียวกับ `server.js`: 500 tx / 16 ต่อ sender / maxBlockGas และ maxTxGas 3M / EIP-1559 / history)
 + `DB` (LMDB ในโฟลเดอร์ชั่วคราวบนดิสก์จริง) เทียบ `MemoryDB` + `Mempool` + `simulate` (+ `reviewProgram` ตอน deploy) = `/sendtx` ลบ HTTP
 ผู้ส่งเป็นกระเป๋าจาก genesis คนละใบ (1 ใบต่อกระเป๋าต่อ block → ไม่ติดเพดาน 16) · เซ็น tx ก่อน block (ฝั่ง client ไม่จับเวลา) แล้วแต่ละ block ทำแบบ miner ของ server: `mempool.add` ทีละใบ → `createBlock` → `mempool.take` → `commit`
 
@@ -1297,7 +1302,7 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 - end-to-end `--url` (server LMDB `BLOCK_MS=3000` · client อยู่เครื่องเดียวกัน · concurrency 16):
   token 250 ใบ/รอบ → **62–70 req/s** · `/sendtx` p50 ~160 ms p95 0.8–1.1 วิ · 250 ใบกระจายลง 2 block (~200 + ~50)
   native 500 ใบ/รอบ → **~113 req/s** · p50 ~118 ms p95 ~260 ms · 500 ใบลง 2 block
-- profile (`node --cpu-prof scripts/load-test.js --db lmdb --workload token --txs 500 …`, CPU 33 วิ):
+- profile (`node --cpu-prof dev/load-test.js --db lmdb --workload token --txs 500 …`, CPU 33 วิ):
   `verifyTransaction` 27% (secp256k1 `recoverPublicKey` ของ noble ~3.5 ms/ใบ) · sandbox 38% (`evalCode` คอมไพล์ factory ทุก call 17% · `restoreSnapshot` 9% ≈ 0.6 ms ต่อการรัน) · keccak 9% · `Mempool.prune` 2%
 
 **สรุป / ข้อแนะนำ**

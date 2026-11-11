@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runFuzz, fuzzOnce, fuzzDecoder, random, guestProgram } from "../scripts/fuzz-sandbox.js";
+import { runFuzz, fuzzOnce, fuzzDecoder, random, guestProgram } from "../dev/fuzz-sandbox.js";
 
 /*
- * ระยะ 2.1: fuzz เขตแดน sandbox ↔ host (scripts/fuzz-sandbox.js · รันยาวด้วย npm run fuzz -- --iterations 20000)
+ * ระยะ 2.1: fuzz เขตแดน sandbox ↔ host (dev/fuzz-sandbox.js · รันยาวด้วย npm run fuzz -- --iterations 20000)
  *   ค่าแปลก (วน / getter / Proxy / toJSON / prototype / Symbol / ซ้อนลึก / ใหญ่) เข้า API ทุกตัว + คืนจากฟังก์ชัน + input จาก host
  *   ต้องไม่ INTERNAL · ไม่ throw ถึงผู้เรียก · deterministic · host ไม่ถูกแตะ · sandbox ใช้ต่อได้
  * seed คงที่ → CI ได้ชุดเดิมทุกครั้ง

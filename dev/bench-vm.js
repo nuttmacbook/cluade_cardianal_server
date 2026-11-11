@@ -1,8 +1,8 @@
 /**
  * วัดความเร็วของ VM แบบไม่ผ่าน server
  *
- *   node scripts/bench-vm.js            # 1,000 token transfer ผ่าน vm.call + โปรแกรมที่คำนวณหนัก
- *   node scripts/bench-vm.js --n 5000   # จำนวน transfer
+ *   node dev/bench-vm.js            # 1,000 token transfer ผ่าน vm.call + โปรแกรมที่คำนวณหนัก
+ *   node dev/bench-vm.js --n 5000   # จำนวน transfer
  *
  * รายงาน: เวลาเฉลี่ยต่อ tx, แก๊สเฉลี่ยต่อ tx, จำนวน tx ที่ต้องใช้เติม block 3,000,000 gas และเวลาที่ใช้
  */

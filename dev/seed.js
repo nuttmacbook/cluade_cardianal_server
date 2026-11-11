@@ -1,4 +1,4 @@
-/** สร้างข้อมูลตัวอย่างบน server ที่รันอยู่: node scripts/seed.js [http://localhost:3000] */
+/** สร้างข้อมูลตัวอย่างบน server ที่รันอยู่: node dev/seed.js [http://localhost:3000] */
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 

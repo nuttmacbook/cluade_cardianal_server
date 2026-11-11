@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
-import { MULTISEND_PROGRAM, CHAIN_PROGRAM, ROUTER_PROGRAM } from "../scripts/scenario-programs.js";
+import { MULTISEND_PROGRAM, CHAIN_PROGRAM, ROUTER_PROGRAM } from "../dev/scenario-programs.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* โปรแกรมของ scripts/scenario.js: แจก native หลายกระเป๋า · เรียกต่อกัน 6 ทอด · ส่งต่อ token + native หลายทอด */
+/* โปรแกรมของ dev/scenario.js: แจก native หลายกระเป๋า · เรียกต่อกัน 6 ทอด · ส่งต่อ token + native หลายทอด */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
 const USER = "0x00000000000000000000000000000000000000b2";
