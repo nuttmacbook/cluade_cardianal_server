@@ -699,10 +699,13 @@ const { action, method, sender, hash, request } = verifyTransaction({ tx, signat
 vm[method](request);
 ```
 
-- domain `{ name: "ProgramVM", version: "1", chainId }`
-- field ที่เซ็น **ลำดับห้ามสลับ**: `action, from, to, method, input, value, nonce, gasLimit, gasPrice`
-  · tx แบบ EIP-1559 (มี `maxFeePerGas` หรือ `maxPriorityFeePerGas`) ใช้ `TRANSACTION_TYPE_1559` = ชุดเดิมที่ตัด `gasPrice` แล้วต่อท้าย `maxFeePerGas, maxPriorityFeePerGas`
-    → tx แบบเดิมได้ digest เดิมทุกไบต์ · ส่ง gasPrice (≠ 0) คู่กับสอง field ใหม่ = ปฏิเสธ · `maxFeePerGas: 0` = ไม่ระบุ
+- domain `{ name: "Bluewolfchain", version: "2" }` (**ไม่มี chainId** → MetaMask เซ็นให้ได้ไม่ว่ากระเป๋าเปิดเชนไหนอยู่ ไม่ต้อง add เชนนี้ · MetaMask บังคับให้ chainId ของ domain ตรงกับเชนที่เปิดอยู่)
+- field ที่เซ็น **ลำดับห้ามสลับ**: `chainId, action, from, to, method, input, value, nonce, gasLimit, gasPrice, signedOnChainId`
+  · `chainId` = เชนนี้ (41234) → **mempool ปฏิเสธ chainId ที่ไม่ตรง** (`chainId ของ tx (X) ไม่ตรงกับเชน (Y)`) = กัน replay ข้ามเชน · ลายเซ็นข้อความ EIP-712 ไม่ใช่ tx ของ EVM จึงเอาไปส่งบนเชนอื่นไม่ได้
+  · `signedOnChainId` = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (explorer ใส่จาก `eth_chainId` · ไม่ส่ง = chainId) → receipt มี `signedOnChainId` · หน้า tx แสดง "Signed on" · เป็นค่าที่หน้าเว็บใส่เอง ไม่ใช่หลักฐาน · tx จาก `eth_sendRawTransaction` = chainId ของ tx
+  · tx แบบ EIP-1559 (มี `maxFeePerGas` หรือ `maxPriorityFeePerGas`) ใช้ `TRANSACTION_TYPE_1559` = ชุดเดิมที่ตัด `gasPrice` แล้วต่อ `maxFeePerGas, maxPriorityFeePerGas` (ก่อน `signedOnChainId`)
+  · explorer แสดงยอด + ค่าแก๊สโดยประมาณก่อนเปิดหน้าต่างกระเป๋า (`estimateCost` ใน `explorerscan/core/wallet.js`: call = แก๊สจาก `/query` + `gas.tx`) เพราะกระเป๋าที่เปิดเชนอื่นไม่รู้ยอด BWSC · ยอดไม่พอ = ไม่เรียกกระเป๋า
+  · permit ของ token (EIP-2612) ยังมี chainId ใน domain ตามมาตรฐาน → ต้องเปิดเชนนี้ในกระเป๋าตอนเซ็น permit · ส่ง gasPrice (≠ 0) คู่กับสอง field ใหม่ = ปฏิเสธ · `maxFeePerGas: 0` = ไม่ระบุ
 - `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
 - `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade`
   → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata` · ที่เหลือชื่อเดียวกัน)

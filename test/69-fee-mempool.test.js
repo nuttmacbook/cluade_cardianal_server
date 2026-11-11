@@ -40,12 +40,12 @@ test("ลายเซ็น: tx แบบ 1559 ใช้ชนิด Transaction
   const typed = transferTx(alice, 0, { maxFeePerGas: "2000", maxPriorityFeePerGas: "3" });
   const legacyData = sign.buildTypedData(legacy);
   const typedData = sign.buildTypedData(typed);
-  assert.deepEqual(legacyData.types.Transaction.map((f) => f.name).slice(-2), ["gasLimit", "gasPrice"]);
-  assert.deepEqual(typedData.types.Transaction.map((f) => f.name).slice(-3), ["gasLimit", "maxFeePerGas", "maxPriorityFeePerGas"]);
+  assert.deepEqual(legacyData.types.Transaction.map((f) => f.name).slice(-3), ["gasLimit", "gasPrice", "signedOnChainId"]);
+  assert.deepEqual(typedData.types.Transaction.map((f) => f.name).slice(-4), ["gasLimit", "maxFeePerGas", "maxPriorityFeePerGas", "signedOnChainId"]);
   assert.equal(typedData.message.gasPrice, undefined);
   assert.notEqual(sign.hashTypedData(legacy), sign.hashTypedData(typed));
   // digest แบบเดิมคำนวณจากชนิดเดิมทุกไบต์ (เทียบกับการคำนวณด้วยมือผ่าน TRANSACTION_TYPE)
-  assert.equal(sign.TRANSACTION_TYPE.at(-1).name, "gasPrice");
+  assert.equal(sign.TRANSACTION_TYPE.at(-2).name, "gasPrice");
 
   const verified = sign.verifyTransaction(signed(typed, KEYS[0]));
   assert.equal(verified.sender, alice);

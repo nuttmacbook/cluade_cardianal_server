@@ -93,8 +93,9 @@ test("แก้ tx หลังเซ็น → ethers ก็กู้ได้�
 
 test("สิ่งที่ผู้ใช้เห็นใน MetaMask", () => {
   const typed = sign.buildTypedData(TX);
-  assert.deepEqual(typed.domain, { name: "ProgramVM", version: "1", chainId: 1 });
+  assert.deepEqual(typed.domain, { name: "Bluewolfchain", version: "2" });
   assert.deepEqual(typed.message, {
+    chainId: 1,
     action: "call",
     from: TX.from,
     to: TX.to,
@@ -104,5 +105,6 @@ test("สิ่งที่ผู้ใช้เห็นใน MetaMask", () =>
     nonce: 3,
     gasLimit: 50000,
     gasPrice: 0,
+    signedOnChainId: 1,
   });
 });

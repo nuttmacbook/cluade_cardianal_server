@@ -27,7 +27,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function send(user, fields, { expectFail = false } = {}) {
   const { nonce } = await get(`/nonce/${user.address}`);
-  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 800_000, gasPrice: gwei(1), nonce, ...fields };
+  const tx = { chainId: (await get("/genesis")).chainId, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 800_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, user.key) });
   const label = `${user.name.padEnd(5)} ${(fields.method || fields.action).padEnd(12)}`;
   if (result.queued) { console.log(`${label} ✓`); return result.hash; }

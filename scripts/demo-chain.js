@@ -58,7 +58,7 @@ const SHOP = `function program() {
 
 async function send(user, fields) {
   const { nonce } = await get(`/nonce/${user.address}`);
-  const tx = { chainId: 1, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
+  const tx = { chainId: (await get("/genesis")).chainId, from: user.address, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, user.key) });
   console.log(`${(fields.method || fields.action).padEnd(10)} ${user.address.slice(0, 8)} →`, result.queued ? "ok" : (result.simulation?.error ?? result.error ?? "").slice(0, 50));
   return result.hash;

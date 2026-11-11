@@ -73,12 +73,15 @@ test("hash: tx เดิมได้ digest เดิม, เปลี่ยน�
 
 test("typed data: โครงสร้าง EIP-712 ที่ wallet จะแสดงให้ผู้ใช้ดู", () => {
   const typed = sign.buildTypedData(transferTx(3));
-  assert.deepEqual(typed.domain, { name: "ProgramVM", version: "1", chainId: 1 });
+  // domain ไม่มี chainId → MetaMask เซ็นให้ได้ไม่ว่าจะเปิดเชนไหนอยู่ · chainId อยู่ใน message
+  assert.deepEqual(typed.domain, { name: "Bluewolfchain", version: "2" });
+  assert.deepEqual(typed.types.EIP712Domain.map((field) => field.name), ["name", "version"]);
   assert.equal(typed.primaryType, "Transaction");
-  assert.deepEqual(typed.types.Transaction.map((field) => field.name), ["action", "from", "to", "method", "input", "value", "nonce", "gasLimit", "gasPrice"]);
+  assert.deepEqual(typed.types.Transaction.map((field) => field.name),
+    ["chainId", "action", "from", "to", "method", "input", "value", "nonce", "gasLimit", "gasPrice", "signedOnChainId"]);
   assert.deepEqual(
     { ...typed.message, input: JSON.parse(typed.message.input) },
-    { action: "call", from: alice, to: "token", method: "transfer", input: { code: null, input: { to: bob, amount: 30 } }, value: 0, nonce: 3, gasLimit: 0, gasPrice: 0 },
+    { chainId: 1, action: "call", from: alice, to: "token", method: "transfer", input: { code: null, input: { to: bob, amount: 30 } }, value: 0, nonce: 3, gasLimit: 0, gasPrice: 0, signedOnChainId: 1 },
   );
 });
 
@@ -98,6 +101,18 @@ test("verify: tx ที่เซ็นในอีก chain ใช้ที่�
   const signature = sign.signTransaction(tx, ALICE_KEY);
   assert.equal(sign.verifyTransaction({ tx, signature }).sender, alice);              // ถูกต้องใน chain ของมันเอง
   assert.throws(() => sign.verifyTransaction({ tx: { ...tx, chainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.equal(sign.verifyTransaction({ tx, signature }).chainId, 999);   // mempool เทียบกับ chainId ของเชน (เทสต์ 114)
+});
+
+test("signedOnChainId: อยู่ในลายเซ็น (แก้ทีหลังไม่ได้) · ไม่ส่ง = chainId · ไม่ใช่ตัวเลข = ปฏิเสธ", () => {
+  const onBsc = transferTx(0, { signedOnChainId: 56 });
+  const signature = sign.signTransaction(onBsc, ALICE_KEY);
+  const verified = sign.verifyTransaction({ tx: onBsc, signature });
+  assert.equal(verified.sender, alice);
+  assert.equal(verified.request.signedOnChainId, 56);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...onBsc, signedOnChainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.equal(sign.buildTypedData(transferTx(0)).message.signedOnChainId, 1);
+  assert.throws(() => sign.buildTypedData(transferTx(0, { signedOnChainId: "bsc" })), /signedOnChainId/);
 });
 
 // ---------------------------------------------------------------------------

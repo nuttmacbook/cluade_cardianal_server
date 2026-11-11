@@ -120,6 +120,10 @@ export class Mempool {
       }
     }
     const { sender, hash, method, request } = verified;
+    // ลายเซ็นของเชนอื่น (chainId ใน message ไม่ตรง) = replay ข้ามเชน → ปฏิเสธก่อนแตะ state
+    if (verified.chainId !== undefined && Number(verified.chainId) !== Number(this.#vm.chainId)) {
+      return { ok: false, reason: `chainId ของ tx (${verified.chainId}) ไม่ตรงกับเชน (${this.#vm.chainId})` };
+    }
 
     this.#pruneRecent(now);
     if (this.#isSeen(hash, now)) return { ok: false, hash, sender, reason: DUPLICATE };
