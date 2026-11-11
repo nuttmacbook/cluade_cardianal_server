@@ -123,10 +123,10 @@ URL ที่ได้: RPC `https://chain.example.com/evm` · explorer `https:/
 
 ## 7. โปรแกรมกลาง (หลังเปิดเชน · ทำครั้งเดียว)
 
-Multicall, WBWSC (ห่อเหรียญหลัก), Factory (ให้ใครก็สร้าง token / NFT / multisig ได้ทันที) + ต้นแบบ · ใช้**กระเป๋า deployer ใหม่**ที่ไม่เคยส่ง tx (address ของโปรแกรมผูกกับ nonce 0–6 ของกระเป๋านี้)
+14 ตัว: Multicall, WBWSC (ห่อเหรียญหลัก), Factory (ให้ใครก็สร้าง token / NFT / multisig ได้ทันที) + ต้นแบบ 4 ตัว, Multisender, Token lock, DEX + ต้นแบบคู่เทรด, Staking, Limit order, NFT market · ใช้**กระเป๋า deployer ใหม่**ที่ไม่เคยส่ง tx (address ของโปรแกรมผูกกับ nonce 0–13 ของกระเป๋านี้)
 ```
 node scripts/deploy-system.js --plan --deployer 0x<deployer> --chain-id 41234     # address ล่วงหน้า (ใส่เอกสาร / ประกาศได้เลย)
-# โอนเหรียญให้ deployer ~50 BWSC แล้ว (deploy ครบ 7 ตัวใช้จริง ~33 BWSC ที่ 10,000 gwei)
+# โอนเหรียญให้ deployer ~130 BWSC แล้ว (deploy ครบ 14 ตัวใช้ ~5.6M แก๊ส · สคริปต์จ่าย 2 เท่าของ base fee 10,000 gwei ≈ 112 BWSC)
 DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://chain.example.com
 ```
 - ได้ `deploy/system-programs.json` (address + ชื่อ) · explorer เมนู "System programs" แสดงให้เอง

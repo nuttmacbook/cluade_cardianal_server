@@ -53,7 +53,7 @@ const gasPrice = String(baseFee === undefined || baseFee === null ? 10n ** 9n : 
 async function send(key, fields) {
   const from = sign.addressOf(key);
   const { nonce } = await get(`/nonce/${from}`);
-  const tx = { chainId, from, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice, nonce, ...fields };
+  const tx = { chainId, from, to: "", method: "", input: {}, value: 0, gasLimit: 1_500_000, gasPrice, nonce, ...fields };
   const body = { tx, signature: sign.signTransaction(tx, key) };
   let result = await post("/sendtx", body);
   // mempool จำกัดจำนวน tx ต่อผู้ส่งต่อช่วงเวลา (ส่งถี่เกินกำหนด) → รอแล้วส่งใบเดิมซ้ำ
@@ -104,7 +104,7 @@ for (const item of plan) {
 }
 const native = (await get(`/address/${deployer}`)).native?.balance;
 if (firstNonce < plan.length && (native === undefined || BigInt(String(native).replace(/n$/, "")) === 0n)) {
-  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ใช้ราว 35 ${symbol} ที่ราคาแก๊ส 10,000 gwei)`);
+  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ครบ 14 ตัวใช้ราว 112 ${symbol} ที่ base fee 10,000 gwei · สคริปต์ตั้งราคา 2 เท่า · แนะนำโอน ~130 ${symbol})`);
 }
 
 for (const item of plan.filter((p) => p.nonce >= firstNonce)) {

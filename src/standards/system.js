@@ -9,28 +9,28 @@
  *     4 nft-template         NFT_PROGRAM       ต้นแบบ NFT
  *     5 multitoken-template  MULTITOKEN_PROGRAM ต้นแบบ multi-token
  *     6 factory              FACTORY_PROGRAM   ใครก็สร้าง token / NFT / multi-token / multisig ของตัวเองได้ทันที (cloneProgram · ไม่ต้องรอ admin)
+ *     7 multisender          MULTISENDER_PROGRAM (multisender.js) โอนเหรียญ / token / NFT / multi-token ให้หลายคนใน tx เดียว
+ *     8 token-lock           TOKEN_LOCK_PROGRAM  (tokenlock.js)   ล็อก token / LP ตามเวลา + vesting (แบบ PinkLock)
+ *     9 dex-pair-template    DEX_PAIR_PROGRAM    (dex.js)         ต้นแบบคู่เทรด (router clone ให้เอง)
+ *    10 dex                  DEX_PROGRAM         (dex.js)         factory + router แบบ Uniswap V2 (ค่าธรรมเนียม 0.3% ให้ผู้ใส่สภาพคล่อง)
+ *    11 staking              STAKING_PROGRAM     (staking.js)     pool stake แบบถอนได้ทุกเมื่อ รางวัลต่อวินาที
+ *    12 limit-order          LIMIT_ORDER_PROGRAM (limitorder.js)  order book แบบตั้งราคา token ↔ token
+ *    13 nft-market           NFT_MARKET_PROGRAM  (nftmarket.js)   ตลาด NFT / multi-token (ขาย + offer · ค่าธรรมเนียมเริ่ม 0)
  *   ชื่อ (namespace) ข้างหน้าตั้งตอน initialization → explorer แสดงชื่อ · ค้น /name/wcard ได้
  *   ทั้งชุดไม่มี upgrader (แก้ไม่ได้) · ต้นแบบที่ deploy ตรงไม่มีเจ้าของ (ใช้เป็นแม่แบบอย่างเดียว)
  */
 import { MULTICALL_PROGRAM } from "./multicall.js";
+import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 import { TOKEN_PROGRAM, TOKEN_CORE, TOKEN_CORE_EXPORTS, ZERO_ADDRESS } from "./token.js";
 import { NFT_PROGRAM } from "./nft.js";
 import { MULTITOKEN_PROGRAM } from "./multitoken.js";
+import { MULTISENDER_PROGRAM } from "./multisender.js";
+import { TOKEN_LOCK_PROGRAM } from "./tokenlock.js";
+import { DEX_PAIR_PROGRAM, DEX_PROGRAM } from "./dex.js";
+import { STAKING_PROGRAM } from "./staking.js";
+import { LIMIT_ORDER_PROGRAM } from "./limitorder.js";
+import { NFT_MARKET_PROGRAM } from "./nftmarket.js";
 import { ERC1271_MAGIC_VALUE, ERC1271_INVALID_VALUE, ERC721_RECEIVED, ERC1155_RECEIVED, ERC1155_BATCH_RECEIVED } from "./wallet.js";
-
-/** ตั้ง metadata ของโปรแกรมจาก input ตอน initialization (ตั้งได้จากโค้ดเท่านั้น) */
-const SET_METADATA = `function setProgramMetadata(input) {
-    if (typeof input.namespace === "string" && input.namespace !== "") setMetadata("namespace", input.namespace)
-    if (typeof input.icon === "string" && input.icon !== "") setMetadata("icon", input.icon)
-    if (typeof input.url === "string" && input.url !== "") setMetadata("url", input.url)
-    if (typeof input.contact === "string" && input.contact !== "") setMetadata("contact", input.contact)
-    if (typeof input.description === "string" && input.description !== "") setMetadata("description", input.description)
-  }`;
-
-const CHECK_ADDRESS = `function checkAddress(address, label) {
-    if (typeof address !== "string" || address.length !== 42 || !address.startsWith("0x")) throw new Error(label + " must be an address")
-    return address.toLowerCase()
-  }`;
 
 /**
  * WCARD — เหรียญหลักแบบ token (มาตรฐาน token ครบ + permit) · ฝาก 1 CARD ได้ 1 WCARD ถอนคืนได้ทุกเมื่อ
@@ -412,10 +412,25 @@ export function systemPrograms({ addressAt, symbol = "BWSC" }) {
     { key: "multiTokenTemplate", title: "Multi-token template", code: MULTITOKEN_PROGRAM,
       input: { name: "Multi-token template", symbol: "TEMPLATE", uri: "", ...meta("multitoken-template", "ต้นแบบ multi-token · สร้างของตัวเองที่ factory.createMultiToken") } },
     { key: "factory", title: "Factory", code: FACTORY_PROGRAM, input: meta("factory", "สร้าง token / NFT / multi-token / multisig ของตัวเองได้ทันที") },
+    { key: "multisender", title: "Multisender", code: MULTISENDER_PROGRAM,
+      input: meta("multisender", `โอน ${symbol} / token / NFT / multi-token ให้หลายคนใน tx เดียว (สูงสุด 100 รายการ)`) },
+    { key: "tokenLock", title: "Token lock", code: TOKEN_LOCK_PROGRAM,
+      input: meta("token-lock", "ล็อก token / LP ตามเวลา + vesting (แบบ PinkLock)") },
+    { key: "dexPairTemplate", title: "DEX pair template", code: DEX_PAIR_PROGRAM,
+      input: meta("dex-pair-template", "ต้นแบบคู่เทรดของ dex · router สร้างคู่ใหม่ให้เอง") },
+    { key: "dex", title: "DEX", code: DEX_PROGRAM,
+      input: meta("dex", `แลก token / ${symbol} และใส่สภาพคล่อง (แบบ Uniswap V2 · ค่าธรรมเนียม 0.3% ให้ผู้ใส่สภาพคล่อง)`) },
+    { key: "staking", title: "Staking", code: STAKING_PROGRAM,
+      input: meta("staking", "pool stake แบบถอนได้ทุกเมื่อ · รางวัลไหลต่อวินาที") },
+    { key: "limitOrder", title: "Limit order", code: LIMIT_ORDER_PROGRAM,
+      input: meta("limit-order", "ตั้งราคาซื้อขาย token ↔ token · ใครก็เติม order ได้") },
+    { key: "nftMarket", title: "NFT market", code: NFT_MARKET_PROGRAM,
+      input: meta("nft-market", "ซื้อขาย NFT / multi-token · ยื่น offer ได้") },
   ].map((item, nonce) => ({ ...item, nonce, address: addressAt(nonce).toLowerCase(), namespace: item.input.namespace }));
   const at = Object.fromEntries(list.map((item) => [item.key, item.address]));
   list.find((item) => item.key === "factory").input.templates = {
     token: at.tokenTemplate, nft: at.nftTemplate, multiToken: at.multiTokenTemplate, multisig: at.multisigTemplate,
   };
+  Object.assign(list.find((item) => item.key === "dex").input, { pairTemplate: at.dexPairTemplate, wrapped: at.wcard });
   return list;
 }
