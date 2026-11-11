@@ -2,11 +2,11 @@
  * deploy ชุดโปรแกรมกลาง (src/standards/system.js) ตามลำดับ nonce ของกระเป๋า deployer → address รู้ล่วงหน้า
  *
  *   ดู address ก่อน (ไม่ส่ง tx):   DEPLOYER_KEY=0x… node scripts/deploy-system.js http://localhost:3000 --plan
- *                                  (หรือ --deployer 0x… --chain-id 272727 โดยไม่ต้องมี key / ไม่ต้องต่อ node)
+ *                                  (หรือ --deployer 0x… --chain-id 41234 โดยไม่ต้องมี key / ไม่ต้องต่อ node)
  *   deploy จริง:                  DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js http://localhost:3000
  *     DEPLOYER_KEY  กระเป๋าใหม่ที่ไม่เคยส่ง tx (nonce 0) ต้องมีเงินพอจ่ายแก๊ส · ใช้ deploy ชุดนี้อย่างเดียว
  *     ADMIN_KEY     (ไม่บังคับ) key ที่อยู่ใน ADMINS → อนุมัติให้ทันที · ไม่ส่ง = ค้างรอ admin อนุมัติเอง (หน้า Programs ของ explorer)
- *     SYMBOL        สัญลักษณ์เหรียญหลัก (ไม่ส่ง = nativeCurrency.symbol จาก GET /evm → EVM_SYMBOL ของ server) → WCARD / WBNB …
+ *     SYMBOL        สัญลักษณ์เหรียญหลัก (ไม่ส่ง = nativeCurrency.symbol จาก GET /evm → EVM_SYMBOL ของ server) → WBWSC / WBNB …
  *     --out <ไฟล์>  ที่เขียนผล (ค่าเริ่ม deploy/system-programs.json)
  *   รันซ้ำได้: ข้ามตัวที่ deploy / อนุมัติแล้ว · ถ้า nonce ของ deployer ถูกใช้กับอย่างอื่นไป address จะไม่ตรงแผน → หยุด
  */

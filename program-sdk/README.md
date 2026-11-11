@@ -123,6 +123,8 @@ const price = runProgram(oracle, "price", {}, { readonly: true });
 
 ### ค่าแก๊สของ API เหล่านี้
 
+ตัวเลขในหน้านี้ = ค่าเริ่ม (`DEFAULT_GAS`) · Bluewolfchain เปิด fork `bluewolf` ตั้งแต่ block 0 → call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 + 15,000 ต่อ tx (ค่าอื่นเท่าเดิม) · ค่าที่เชนใช้จริงดู `GET /genesis` → `gas`
+
 | API | แก๊ส |
 |---|---|
 | `ChainId` / `Coinbase` / `BlockGasLimit` / `GasPrice` / `BaseFee` / `GasLeft` | 10 (`env`) |
@@ -329,7 +331,7 @@ import { TOKEN_PROGRAM, PERMIT_TYPES } from "programvm/standards/token.js";
 import { signPermit, permitTypedData } from "programvm/program-signature.js";
 
 // token ต้องอยู่ที่ address จริง (0x + 40 hex) เพราะเป็น verifyingContract ของ domain
-const fields = { name: "Thai Baht Coin", chainId: 1 /* ChainId() ของเชน */, verifyingContract: tokenAddress, owner, spender,
+const fields = { name: "Thai Baht Coin", chainId: 41234 /* ChainId() ของเชน */, verifyingContract: tokenAddress, owner, spender,
   value: 500n, nonce: 0n /* nonces({ owner }) */, deadline: BigInt(Math.floor(Date.now() / 1000) + 600) /* unix วินาที */ };
 const signature = signPermit(fields, ownerKey);   // = ethers wallet.signTypedData(domain, PERMIT_TYPES, message) = MetaMask
 // MetaMask: ethereum.request({ method: "eth_signTypedData_v4", params: [owner, JSON.stringify(permitTypedData(fields))] })
@@ -365,9 +367,9 @@ const code = `function program() {
 import program from "./hello-world/hello.program.js";
 const code = String(program);    // ← สิ่งที่ส่งไปคือ string นี้
 
-const tx = { chainId: 1, action: "deploy", from: me, to: "", method: "",
+const tx = { chainId: 41234, action: "deploy", from: me, to: "", method: "",
              input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000,
-             maxFeePerGas: "2000000000", maxPriorityFeePerGas: "0" };   // EIP-1559: จ่ายไม่เกิน 2 gwei · ไม่ให้ tip (แบบเดิม gasPrice ก็ยังใช้ได้)
+             maxFeePerGas: "20000000000000", maxPriorityFeePerGas: "0" };   // EIP-1559: จ่ายไม่เกิน 20,000 gwei (2 เท่าของขั้นต่ำ 10,000 gwei) · ไม่ให้ tip (แบบเดิม gasPrice ก็ยังใช้ได้)
 await fetch("/sendtx", { method: "POST", body: JSON.stringify({ tx, signature: signTransaction(tx, key) }) });
 ```
 

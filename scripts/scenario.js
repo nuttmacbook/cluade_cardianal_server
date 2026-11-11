@@ -1,9 +1,9 @@
 /**
  * ชุดทดสอบใหญ่บน server ที่รันอยู่: 1000 กระเป๋า · 10 tx ต่อ block · โปรแกรมเรียกกันซับซ้อน
  *
- *   RATE_LIMIT=0 npm start          # server (ยิงจากเครื่องเดียว จึงต้องปิด rate limit ต่อ IP)
+ *   RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # server (ยิงจากเครื่องเดียว จึงต้องปิด rate limit ต่อ IP · ราคา / งบแก๊สอิง 1 gwei + DEFAULT_GAS · ดู HANDOFF.md ข้อ 10)
  *   npm run scenario                               # อีก terminal · http://localhost:3000
- *   npm run scenario -- --spawn                    # เปิด server ให้เอง (MemoryDB, PORT สุ่ม)
+ *   GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn   # เปิด server ให้เอง (MemoryDB, PORT สุ่ม · env ส่งต่อให้ server)
  *
  * ขั้นตอน
  *   (ทุก block หยิบงานที่พร้อมให้ครบ 10 ใบ: งานตั้งต้นก่อน แล้วเติมด้วยงานของกระเป๋าที่ได้เหรียญแล้ว)

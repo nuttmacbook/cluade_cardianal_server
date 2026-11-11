@@ -138,11 +138,11 @@ DEPLOYER_KEY=0x… ADMIN_KEY=0x<admin> node scripts/deploy-system.js https://cha
 admin (address ใน `config.admins`) ส่ง tx `setGasConfig` · มีผลตั้งแต่ block ถัดไป · ไม่ต้อง fork / ล้างเชน / restart · เครื่องตามซิงก์ได้เอง
 ```
 node scripts/set-gas.js https://chain.example.com                                              # ดูค่าที่ใช้อยู่
-ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --min-base-fee 0.1gwei   # ค่า tx ทุกแบบถูกลง 10 เท่า
+ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --min-base-fee 1000gwei  # ค่า tx ทุกแบบถูกลง 10 เท่า (จาก 10,000 gwei)
 ADMIN_KEY=0x<admin> node scripts/set-gas.js https://chain.example.com --reset                  # กลับไปค่าใน genesis
 ```
 - admin เป็น hardware wallet: เปิด explorer เมนู **Gas settings** → ต่อกระเป๋า admin → ใส่ค่าใหม่ → Send change
-- ลดขั้นต่ำ = ค่า tx ทุกแบบ (เป็นเหรียญ) ถูกลงตามสัดส่วน · แก๊สต่อ tx และความจุ block เท่าเดิม · base fee ยังขึ้นเองเมื่อ block เต็ม · ลงหาค่าใหม่ทีละ ≤ 12.5% ต่อ block (1 → 0.1 gwei ราว 18 block)
+- ลดขั้นต่ำ = ค่า tx ทุกแบบ (เป็นเหรียญ) ถูกลงตามสัดส่วน · แก๊สต่อ tx และความจุ block เท่าเดิม · base fee ยังขึ้นเองเมื่อ block เต็ม · ลงหาค่าใหม่ทีละ ≤ 12.5% ต่อ block (10,000 → 1,000 gwei ราว 18 block)
 - ราคาต่อหน่วย (call / write …) ปรับแบบนี้ไม่ได้ ต้องใช้ fork (key admin หลุดก็ทำให้ tx ฟรีไม่ได้)
 
 ## เครื่องที่ควรใช้

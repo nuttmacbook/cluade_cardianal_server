@@ -4,18 +4,19 @@ VM สำหรับรันโปรแกรม JavaScript บน chain ข�
 
 ```bash
 npm install
-npm test          # 916 เคส
+npm test          # 1028 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
 npm run dev       # server + explorer ที่ http://localhost:3000 (DEV=1 · เครือข่ายจริงใช้ npm start + ADMINS + PRODUCER_KEY ดู HANDOFF หัวข้อ 1)
 npm run seed      # สร้างข้อมูลตัวอย่างผ่าน HTTP (ต้องรัน server ไว้ก่อน)
-DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # โปรแกรมกลาง: Multicall, WCARD, Multisig, Factory + ต้นแบบ token / NFT (HANDOFF หัวข้อ 8)
+DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # โปรแกรมกลาง 14 ตัว: Multicall, WBWSC, Multisig, Factory + ต้นแบบ token / NFT, Multisender, Token lock, DEX, Staking, Limit order, NFT market (HANDOFF หัวข้อ 8)
 ```
 
 `server.js` รวมทุกอย่างเข้าด้วยกัน: VM + mempool + autoreview + simulate + ปิด block อัตโนมัติ
-และเสิร์ฟหน้า explorer จากโฟลเดอร์ `explorerscan/` (แต่งหน้าตาเองได้ ดู `explorerscan/README.md`) ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ครบทุกตัวอยู่หัวไฟล์ `server.js`)
+และเสิร์ฟหน้า explorer จากโฟลเดอร์ `explorerscan/` (แต่งหน้าตาเองได้ ดู `explorerscan/README.md`) ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ส่วนใหญ่อยู่หัวไฟล์ `server.js` · ค่าที่ genesis ล็อกได้ เช่น `CHAIN_ID` `GAS_PRICE` `PRODUCERS` อยู่ใน `GENESIS_SETTINGS` ของ `src/node/genesis.js`)
 ยอดเงินตั้งต้นอ่านจาก `genesis.json`
+ค่าเริ่ม = Bluewolfchain (BWSC) · chainId 41234 · block 2 วิ · 5M แก๊ส · ขั้นต่ำ 10,000 gwei · `genesis.json` เปิด fork `bluewolf` ตั้งแต่ block 0
 
 ## โครงสร้าง
 
@@ -26,7 +27,7 @@ src/
   storage/db.js            DB (LMDB) และ MemoryDB — readKeys / writeKeys / listKeys
   crypto/signature.js      EIP-712 บน secp256k1 — เซ็นและตรวจลายเซ็น
   node/
-    mempool.js             คิว tx: rate limit, TTL, กัน tx ซ้ำ, เรียงตาม gasPrice
+    mempool.js             คิว tx: rate limit, TTL, กัน tx ซ้ำ, เรียงตาม tip (EIP-1559)
     sync.js                node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash (เริ่มจาก snapshot ได้)
     snapshot.js            snapshot ของ state ณ block N (export / โหลดแบบตรวจกับ stateRoot)
   core/trie.js             Merkle Patricia Trie แบบ Ethereum — stateRoot + หลักฐาน (getProof / verifyProof)
@@ -37,11 +38,11 @@ genesis.json               ยอดเงินตั้งต้น (ช่ว
 deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
 index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
 scripts/                   demo.js, examples.js, deploy-system.js (โปรแกรมกลางทั้งชุด), set-gas.js (เจ้าของปรับขั้นต่ำของ gas price กลางทาง)
-src/standards/             มาตรฐาน token / NFT / multi-token / กระเป๋า / multicall + system.js (WCARD, Multisig, Factory)
+src/standards/             มาตรฐาน token / NFT / multi-token / กระเป๋า / multicall + system.js (WBWSC, Multisig, Factory) + multisender / tokenlock / dex / staking / limitorder / nftmarket
 program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
 docs/                      Blockscout · checklist ลอง MetaMask จริง
-test/                      105 ไฟล์ · 916 เคส
+test/                      116 ไฟล์ · 1028 เคส
 HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
 CHECKPOINT.md              ภาพ ณ Checkpoint 5 (ข้อมูลล่าสุดอยู่ใน HANDOFF.md)
 ```
@@ -75,6 +76,6 @@ mempool.take(block);
 block.commit();
 ```
 
-ดูค่าตั้งต้นที่แนะนำทั้งหมดใน `CHECKPOINT.md` และวิธีเขียนโปรแกรมใน `program-sdk/README.md`
+ค่าที่ server ใช้จริงอยู่หัวไฟล์ `server.js` + `src/node/genesis.js` (เปิดเชนจริง: `deploy/README.md`) และวิธีเขียนโปรแกรมใน `program-sdk/README.md`
 
 ดูเชนผ่าน Blockscout (ต่อเข้า `/evm`): `docs/blockscout.md`

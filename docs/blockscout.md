@@ -15,8 +15,8 @@ Blockscout ต่อเข้ากับ `/evm` ของเชน (ตัว�
 DEV=1 EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
 ```
 - `EVM_RATE_LIMIT=0` สำคัญ: indexer ยิงถี่มาก ถ้าเปิด limit ไว้ 600/นาที จะโดน 429
-- อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node scripts/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario`)
-- จด `CHAIN_ID` ของเชนไว้ (ค่าเริ่มต้น 1) ต้องใส่ให้ตรงกันใน Blockscout
+- อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node scripts/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario` — ต้องเปิดเชนด้วย `GAS_PRICE=1000000000` + genesis ที่ไม่มี `forks` ดู `HANDOFF.md` หัวข้อ 10)
+- จด chainId ของเชนไว้ (ค่าเริ่มต้น + `genesis.json` = 41234) ต้องใส่ให้ตรงกันใน Blockscout
 
 เช็กว่า `/evm` ตอบ:
 ```bash
@@ -38,9 +38,9 @@ ETHEREUM_JSONRPC_VARIANT=geth
 ETHEREUM_JSONRPC_HTTP_URL=http://host.docker.internal:3000/evm
 ETHEREUM_JSONRPC_TRACE_URL=http://host.docker.internal:3000/evm
 ETHEREUM_JSONRPC_WS_URL=ws://host.docker.internal:3000/evm
-CHAIN_ID=1                                   # ให้ตรงกับ CHAIN_ID ของเชน
-COIN=CARD
-COIN_NAME=Cardianal
+CHAIN_ID=41234                               # ให้ตรงกับ chainId ของเชน
+COIN=BWSC
+COIN_NAME=Bluewolfchain
 INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer   # ค่าเริ่มต้นก็เป็นค่านี้อยู่แล้ว
 INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true    # ใช้ trace_block ซึ่ง /evm ไม่มี
 ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false   # Blockscout 9.x บีบ gzip คำขอ debug_* / eth_getBlockReceipts แต่ /evm อ่าน gzip ไม่ได้
@@ -51,11 +51,11 @@ ECTO_USE_SSL=false                           # image 9.0.x ใช้ตัวแ
 
 ## 4. ตั้งค่าหน้าเว็บ: `envs/common-frontend.env`
 ```
-NEXT_PUBLIC_NETWORK_NAME=Cardianal
-NEXT_PUBLIC_NETWORK_SHORT_NAME=Cardianal
-NEXT_PUBLIC_NETWORK_ID=1                     # = CHAIN_ID
-NEXT_PUBLIC_NETWORK_CURRENCY_NAME=Cardianal
-NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=CARD
+NEXT_PUBLIC_NETWORK_NAME=Bluewolfchain
+NEXT_PUBLIC_NETWORK_SHORT_NAME=Bluewolfchain
+NEXT_PUBLIC_NETWORK_ID=41234                 # = CHAIN_ID
+NEXT_PUBLIC_NETWORK_CURRENCY_NAME=Bluewolfchain
+NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=BWSC
 NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # เชนเก็บ native เป็น wei 18 ทศนิยม
 NEXT_PUBLIC_NETWORK_RPC_URL=http://localhost:3000/evm   # ไม่มีในไฟล์ → เพิ่มเป็นบรรทัดใหม่ (ใช้กับปุ่ม Add to MetaMask · ไม่ใส่ก็ได้)
 NEXT_PUBLIC_IS_TESTNET=false                 # ไฟล์ตั้งไว้ true → หน้าเว็บขึ้นป้าย Testnet
