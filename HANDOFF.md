@@ -5,16 +5,16 @@
 > **สรุป 30 วินาที**
 > blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
 > VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
-> มี server จริง (node:http) + explorer ไฟล์เดียว + ชุด SDK สำหรับคนเขียนโปรแกรม
+> มี server จริง (node:http) + explorer (`explorerscan/`) + ชุด SDK สำหรับคนเขียนโปรแกรม
 > **มีแก๊สนับขั้น + sandbox จริงแล้ว (QuickJS ใน WebAssembly — หัวข้อ 4 "Sandbox")** · ก่อนเปิดให้คนนอก deploy ดูหัวข้อ 11
 
 | | |
 |---|---|
 | ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
 | dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
-| โค้ดทั้งหมด | ~12,300 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,000) |
+| โค้ดทั้งหมด | ~16,600 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,300) |
 | ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 916 เคส + `npm run test:e2e` 33 เคส |
+| เทสต์ | `npm test` → 1028 เคส + `npm run test:e2e` 34 เคส |
 
 ---
 
@@ -22,17 +22,18 @@
 
 ```bash
 npm install
-npm test                         # 916 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 1028 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
 
 npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
 node scripts/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
 node scripts/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
 ```
+⚠️ `demo-market` / `demo-chain` ตั้งราคาแก๊ส 1 gwei แต่ขั้นต่ำของเชนตอนนี้ 10,000 gwei → เปิด server ด้วย `GAS_PRICE=1000000000 npm run dev` (`seed.js` อ่านราคาจาก `/genesis` เอง)
 
 สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node scripts/seed.js http://localhost:3100`)
 `npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 1000) `MAX_BLOCK_GAS` (1M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `EVM_RATE_LIMIT` (request ของ `/evm` ต่อ IP ต่อนาที ค่าเริ่ม 600 · 0 = ไม่จำกัด · ทดสอบในเครื่องที่มี MetaMask + Blockscout ใช้ 0) `EVM_NAME` `EVM_SYMBOL` (ชื่อ / สัญลักษณ์ที่ปุ่ม Add network ส่งให้กระเป๋า) `HOST` (ไม่ตั้ง = ทุก interface · เปิดจริงหลัง nginx ใช้ 127.0.0.1) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ครบทุกตัวอยู่หัวไฟล์ `server.js`
+env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 2000) `MAX_BLOCK_GAS` (5M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` (41234) `GAS_PRICE` (base fee ต่ำสุด ค่าเริ่ม 10,000 gwei) `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `EVM_RATE_LIMIT` (request ของ `/evm` ต่อ IP ต่อนาที ค่าเริ่ม 600 · 0 = ไม่จำกัด · ทดสอบในเครื่องที่มี MetaMask + Blockscout ใช้ 0) `EVM_NAME` `EVM_SYMBOL` (ชื่อ / สัญลักษณ์ที่ปุ่ม Add network ส่งให้กระเป๋า) `HOST` (ไม่ตั้ง = ทุก interface · เปิดจริงหลัง nginx ใช้ 127.0.0.1) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ที่เหลืออยู่หัวไฟล์ `server.js` + `GENESIS_SETTINGS` ใน `src/node/genesis.js` (`CHAIN_ID` `PRODUCERS` ไม่อยู่หัว server.js)
 `npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง · ไฟล์ตั้งค่าครบชุดสำหรับเปิดจริงอยู่ใน `deploy/` (อ่าน `deploy/README.md`)
 ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
 ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
@@ -74,25 +75,26 @@ env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMI
 ## 2. แผนผังไฟล์ — แก้อะไรต้องไปไฟล์ไหน
 
 ```
-src/core/virtualmachine.js   2,521 บรรทัด  ตรรกะทั้งหมดของ chain (ดูหัวข้อ 4)
-src/core/sandbox.js            935        sandbox ของโปรแกรม: QuickJS (WebAssembly) + snapshot ต่อ tx + ตัวแปลงค่าข้ามเขตแดน
-src/core/autoreview.js         201        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
-src/storage/db.js              212        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
-src/crypto/signature.js        214        EIP-712 + secp256k1
+src/core/virtualmachine.js   4,293 บรรทัด  ตรรกะทั้งหมดของ chain (ดูหัวข้อ 4)
+src/core/sandbox.js          2,159        sandbox ของโปรแกรม: QuickJS (WebAssembly) + snapshot ต่อ tx + ตัวแปลงค่าข้ามเขตแดน
+src/core/autoreview.js         204        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
+src/storage/db.js              242        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
+src/crypto/signature.js        302        EIP-712 + secp256k1 (domain ไม่มี chainId · หัวข้อ 6)
 src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจ: signPermit (EIP-712 / ERC-2612) / signWalletHash / signTypedDataDigest / signProgramMessage
 src/crypto/eip712.js                      EIP-712 แบบ eth_signTypedData_v4 (= ethers TypedDataEncoder) ไม่พึ่ง VM: eip712Digest / eip712DomainSeparator / recoverAddress
 src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
                                           · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
-                                          · system (WCARD · Multisig · Factory + แผน deploy ชุดโปรแกรมกลาง · หัวข้อ 8 "โปรแกรมกลางของเชน")
+                                          · system (WBWSC · Multisig · Factory + แผน deploy ชุดโปรแกรมกลาง · หัวข้อ 8 "โปรแกรมกลางของเชน")
+                                          · multisender · tokenlock · dex · staking · limitorder · nftmarket (โปรแกรมกลางอีก 6 ตัว · หัวข้อ 8)
 scripts/deploy-system.js                  deploy โปรแกรมกลางทั้งชุดตามลำดับ nonce ของ deployer → deploy/system-programs.json
 scripts/set-gas.js                        admin ปรับขั้นต่ำของ gas price กลางทาง (tx setGasConfig · มีผล block ถัดไป)
-src/node/mempool.js            230        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
-src/node/ratelimit.js           55        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
-src/node/simulate.js            49        ลองรัน tx ก่อนรับเข้าคิว
-src/node/sync.js                89        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
-server.js                      193        server จริง (node:http) — ตัวที่ใช้งานอยู่
-explorerscan/                  ~2,000     explorer: index.html + theme/ (สี) + ui/ (หน้าตา) + core/ (ระบบ) · ดู explorerscan/README.md
-index.js                         9        จุดเข้าเดียวสำหรับ import เป็น library
+src/node/mempool.js            415        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
+src/node/ratelimit.js           54        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
+src/node/simulate.js            52        ลองรัน tx ก่อนรับเข้าคิว
+src/node/sync.js               129        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
+server.js                      590        server จริง (node:http) — ตัวที่ใช้งานอยู่
+explorerscan/                  ~2,300     explorer: index.html + theme/ (สี) + ui/ (หน้าตา) + core/ (ระบบ) · ดู explorerscan/README.md
+index.js                        12        จุดเข้าเดียวสำหรับ import เป็น library
 ```
 
 ทิศทางการพึ่งพาเป็นทางเดียวเสมอ **`node` → `crypto` → `core` → `storage`**
@@ -358,7 +360,7 @@ POST /sendtx
       reviewProgram(code)       เฉพาะ action deploy
       simulate(vm, verified)    รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400
                                 ครั้งที่ simulate ไม่ผ่านก็ถูกนับใน rate limit ต่อ address
-  ⏱ ทุก BLOCK_MS (1 วินาที)
+  ⏱ ทุก BLOCK_MS (ค่าเริ่ม 2 วินาที)
   → vm.createBlock() → mempool.take(block) → block.commit()
 ```
 
@@ -458,15 +460,16 @@ vm.stateRoot() / vm.getProof([dbKey]) / vm.rebuildTrie() / vm.pruneHistory({ kee
 ### ค่าแก๊ส
 
 ```
-call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · price 1
+call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · tx 0 · price 1
 ```
+(= `DEFAULT_GAS` · Bluewolfchain เปิด fork `bluewolf` ตั้งแต่ block 0: call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 · tx 15000 · ที่เหลือเท่าเดิม · ค่าที่ใช้จริง `GET /genesis` → `gas`)
 `emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
 **`stateKey`** = ต่อ key ของ state ที่ tx เขียน / ลบครั้งแรก (`writeDB` / `deleteDB` · key เดิมซ้ำใน tx ไม่คิดซ้ำ · `tx.stateKeys`) — ค่าอัปเดต Merkle trie + history ตอนปิด block
   ไม่มีตัวนี้ block 3M gas ที่อัด key ใหม่ล้วน (5,450 key) ปิด 1.9–2.5 วิ ที่ state 1 ล้าน key · มีแล้ว ≤ ~1,950 key ปิด 0.74–0.86 วิ (`test/99`) · token transfer +2,000 (2 key) · native transfer ไม่เปลี่ยน
 **fork ตาม block height** (`FORKS` ใน virtualmachine.js · `genesis.json` `"forks": { "<ชื่อ>": <block> }` · เทสต์ `99-trie-gas-forks`): เปลี่ยนกติกาตั้งแต่ block ที่กำหนดโดยไม่ล้างเชน
   `forks` ไม่อยู่ใน genesis hash (`vm.hashGenesis`) → เพิ่มตารางทีหลังได้ · ชื่อที่โค้ดไม่รู้จัก = VM ไม่ยอมสร้าง (node ต้องอัปเดตโปรแกรมก่อน) · `/genesis` บอก `forks`
   กติกา: `FORKS.<ชื่อ> = { description, gas: { ค่าแก๊สใหม่ } }` (ยกเว้น `price`) → `vm.gasAt(blockNumber)` · กติกาแบบอื่นเช็ค `vm.forkActive(ชื่อ, blockNumber)` ตรงจุดที่เปลี่ยน
-  block ก่อนหน้าใช้กติกาเดิม → `replayBlock` / sync / `rebuildFrom` ได้ผลเดิม · node ที่ตั้งตารางต่างกัน = hash ไม่ตรงตั้งแต่ block นั้น · ตอนนี้ `FORKS` ว่าง (ยังไม่มี fork จริง)
+  block ก่อนหน้าใช้กติกาเดิม → `replayBlock` / sync / `rebuildFrom` ได้ผลเดิม · node ที่ตั้งตารางต่างกัน = hash ไม่ตรงตั้งแต่ block นั้น · ตอนนี้ `FORKS` มี `bluewolf` (ราคาแก๊สของ Bluewolfchain · `genesis.json` / `deploy/genesis.mainnet.example.json` เปิดตั้งแต่ block 0)
 **เจ้าของปรับขั้นต่ำของ gas price กลางทาง** (tx `setGasConfig` · `scripts/set-gas.js` · explorer เมนู "Gas settings" · เทสต์ `106-gas-config` + e2e): ไม่ต้อง fork / ล้างเชน / restart
   ผู้เซ็นต้องอยู่ใน `admins` ของ genesis (เชนที่ไม่ตั้ง admins = ปรับไม่ได้) · input `{ minBaseFee: "wei" ≥ 1 | null }` (null = กลับไปค่าใน genesis)
   **ราคาต่อหน่วย (DEFAULT_GAS) ปรับบนเชนไม่ได้** ส่ง `gas` มา = ปฏิเสธ → ใช้ fork เท่านั้น (key admin หลุดก็ตั้งเป็น 0 ให้ tx ฟรีไม่ได้)
@@ -521,7 +524,7 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
   · ผล: `2n ** 10n ** 9n` หมดแก๊สในครั้งเดียว (~2.4×10¹⁴) ภายใน ~10 ms · ลูป `x.toString()` / `H * H` / `B / H` ของค่า 8192 bit หมดแก๊ส 3M ใน ~0.1 วิ (เดิม timeout)
   · ค่าใช้จ่าย: การเรียกตัวช่วยทำให้ลูปเลขล้วนช้าลง ~2–3 เท่า (ประมาณ 0.5 µs → 1 µs ต่อรอบ) · token transfer ~3.0 → ~3.5 ms (แก๊สเท่าเดิม)
   · QuickJS: `BigInt.asUintN(n, -1n)` คืน `-1n` (บั๊กของ engine — ค่าจริงต้องเป็น 2^n − 1) อย่าพึ่งพาผลของ asUintN กับค่าติดลบ
-เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server 1,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
+เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server = `MAX_BLOCK_GAS` 5,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
 ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
 ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
 
@@ -692,8 +695,8 @@ trie:<nibbles>         node ของ Merkle trie ของ state ล่าส�
 ```js
 import { signTransaction, verifyTransaction, buildTypedData, hashTypedData, addressOf } from "programvm/signature.js";
 
-const tx = { chainId: 1, action: "call", from, to: program, method: "transfer",
-             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: "1000000000" };   // 1 gwei
+const tx = { chainId: 41234, action: "call", from, to: program, method: "transfer",
+             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: "20000000000000" };   // 20,000 gwei (ขั้นต่ำของเชน 10,000 gwei)
 const signature = signTransaction(tx, privateKey);       // ฝั่ง wallet
 const { action, method, sender, hash, request } = verifyTransaction({ tx, signature });  // ฝั่ง server
 vm[method](request);
@@ -707,7 +710,7 @@ vm[method](request);
   · explorer แสดงยอด + ค่าแก๊สโดยประมาณก่อนเปิดหน้าต่างกระเป๋า (`estimateCost` ใน `explorerscan/core/wallet.js`: call = แก๊สจาก `/query` + `gas.tx`) เพราะกระเป๋าที่เปิดเชนอื่นไม่รู้ยอด BWSC · ยอดไม่พอ = ไม่เรียกกระเป๋า
   · permit ของ token (EIP-2612) ยังมี chainId ใน domain ตามมาตรฐาน → ต้องเปิดเชนนี้ในกระเป๋าตอนเซ็น permit · ส่ง gasPrice (≠ 0) คู่กับสอง field ใหม่ = ปฏิเสธ · `maxFeePerGas: 0` = ไม่ระบุ
 - `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
-- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade`
+- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade` `setGasConfig` (admin · หัวข้อ 4 "ค่าแก๊ส")
   → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata` · ที่เหลือชื่อเดียวกัน)
   - `upgrade`: `to` = โปรแกรม · `code` = โค้ดใหม่ · `input` = migrateInput · `setUpgrader`: `input = { upgrader: "0x…" | null }`
   - `deploy` มี field `upgrader` เพิ่มได้ → ถูกยุบเข้า string ที่เซ็นเป็น `canonicalJson({ input, code, upgrader })`
@@ -739,7 +742,7 @@ vm[method](request);
 ### อ่าน
 | endpoint | คืน |
 |---|---|
-| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, baseFee, gasTarget, maxBlockGas, burnPercent, burned }` — explorer poll ทุก 2 วิ · `baseFee` = ของ block ถัดไป |
+| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, decimals, minBaseFee, genesisMinBaseFee, gasConfig, gas, admins, baseFee, gasTarget, maxBlockGas, burnPercent, burned, forks, producer, role, producers, baseProducers, producerSchedule }` — explorer poll ทุก 2 วิ · `baseFee` = ของ block ถัดไป |
 | `GET /blocks?before&limit` | header ย้อนหลัง |
 | `GET /block/latest` | header ล่าสุด |
 | `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
@@ -760,7 +763,7 @@ vm[method](request);
 | `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
 | `GET /proof?key=<dbKey>&key=…` | หลักฐาน Merkle ของ key ใน state ล่าสุด `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (1–100 key) · ตรวจด้วย `verifyProof` / `client.verifiedState` |
 | `GET /snapshot` · `GET /snapshot/:n` | manifest ของ snapshot ล่าสุด `{ number, hash, stateRoot, size, file }` · ไฟล์ gzip (ต้องตั้ง `SNAPSHOT_EVERY` · ไม่มี = 404) |
-| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, historyFrom, pending, rejectedPending, producer, miner, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
+| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
 | `GET /events?program&name&limit` | event |
 | `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
 | `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
@@ -805,7 +808,7 @@ POST /query    { programUuid, functionName, input, context?, value? }
 อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem / Blockscout ต่อได้) · เขียนได้ทางเดียว: `eth_sendRawTransaction` ผ่าน intake เดียวกับ `/sendtx` (`submit` ของ server)
 ```
 POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP · 0 = ไม่จำกัด สำหรับ indexer)
-ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
+ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs" | "newPendingTransactions") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
 GET  /evm                      ค่าสำหรับ wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
 GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (EIP-3091 · block รับทั้งเลขและ hash · ลิงก์ "ดูใน explorer" ของกระเป๋า)
 GET  /evm/explorer                                302 → / (URL explorer ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง)
@@ -814,7 +817,8 @@ GET  /evm/explorer                                302 → / (URL explorer ที
   `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi` `cardianal_getProof` (`eth_getProof` = error ชี้ไปตัวนี้)
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
   `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 + โปรแกรมที่มี `metadata.abi`) `eth_estimateGas` `eth_sendRawTransaction`
-  `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status` ฯลฯ
+  `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status`
+  `eth_newFilter` `eth_newBlockFilter` `eth_newPendingTransactionFilter` `eth_getFilterChanges` `eth_getFilterLogs` `eth_uninstallFilter` `eth_createAccessList` `eth_simulateV1` (ดูข้างล่าง) ฯลฯ · รายชื่อครบ = `METHODS` ใน `evm-rpc.js`
 - **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
   (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
 - ผล `vm.replayBlock` เก็บ cache 64 block (key = เลข + hash) → receipt ทุกใบ / `logIndex` (นับต่อเนื่องทั้ง block) / `cumulativeGasUsed` ได้จาก replay ครั้งเดียว
@@ -839,16 +843,16 @@ GET  /evm/explorer                                302 → / (URL explorer ที
   รับ legacy ที่มี chainId (EIP-155) และ type 2 (accessList ว่าง) · ไม่รับ: ไม่มี chainId · chainId ไม่ตรง · type 1 / 3 / 4 · deploy bytecode (`to` ว่าง) · data ไปที่ address ที่ไม่ใช่โปรแกรม · s สูง (EIP-2)
   แปลง: ไม่ใช่โปรแกรม + data ว่าง → `transfer` · token มาตรฐาน + `transfer` / `approve` / `transferFrom` แบบ ERC-20 → ฟังก์ชันของ token · อื่น ๆ → ฟังก์ชันตาม `metadata.abi` (เขียนได้)
   request เก็บ `digest = keccak(raw)` + `evmRaw` (raw ทั้งใบอยู่ใน block body ตรวจซ้ำได้) · `/tx/:hash` · receipt · getTransactionByHash ตอบด้วย hash ของ Ethereum (`evmHash` ใน receipt) · nonce ตัวนับเดียวกับ tx แบบ EIP-712
-- `eth_estimateGas`: โอน native = 21000 (ที่กระเป๋าคาด · จ่ายตามที่ใช้จริง) · เรียกโปรแกรม = จำลองด้วย `vm.query` × 1.25 + 1000 · ล้ม = `execution reverted`
+- `eth_estimateGas`: โอน native = 21000 (ที่กระเป๋าคาด · จ่ายตามที่ใช้จริง · fork `bluewolf` ใช้จริง 17,300) · เรียกโปรแกรม = จำลองด้วย `vm.query` × 1.25 + 1000 + `gas.tx` · ล้ม = `execution reverted`
 - **filter ผ่าน HTTP** (เทสต์ `115-evm-filters-simulate` · `116-ethers-filters` ใช้ ethers `contract.on` / `provider.on("pending")` จริง):
   `eth_newFilter` / `eth_newBlockFilter` / `eth_newPendingTransactionFilter` → `eth_getFilterChanges` (ของใหม่ตั้งแต่ครั้งก่อน) · `eth_getFilterLogs` · `eth_uninstallFilter`
   เก็บในหน่วยความจำ (restart = หาย → `filter not found`) · ไม่ถูกเรียก 5 นาที = ลบ · สูงสุด 10,000 ตัวต่อ node / 100 ตัวต่อ IP · log filter ไล่ทีละไม่เกิน 1,000 block ต่อครั้ง
   pending ได้ hash จาก `mempool.onAdded` (ค้างได้ 10,000 ใบ) · ws: `eth_subscribe("newPendingTransactions"[, true])` ส่งทันทีที่เข้าคิว
 - `eth_createAccessList` → `accessList: []` + `gasUsed` = `eth_estimateGas` (เชนไม่มี access list)
-- `eth_simulateV1`: blockStateCalls 1 ชุด · call ต่อกันบน block จำลองถัดไป (ไม่ commit) → status / returnData / gasUsed / logs ต่อ call
+- `eth_simulateV1`: blockStateCalls 1 ชุด (≤ 100 call) · call ต่อกันบน block จำลองถัดไป (ไม่ commit) → status / returnData / gasUsed / logs ต่อ call
   ไม่รับ stateOverrides / blockOverrides / block เก่า · หักค่าแก๊สเหมือน tx จริง · hash ของ block / tx จำลอง = 0x00…
 - ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `trace_*`, `eth_call` กับโปรแกรมที่ไม่มี ABI และไม่ใช่มาตรฐาน, `balanceOfBatch` ผ่าน eth_call · รายการ tx ใน block แบบไม่ full ของใบจากกระเป๋ายังเป็น hash ภายใน
-- chainId มาจาก `CHAIN_ID` ของเชน (`genesis.json` ในrepo = 1 = Ethereum mainnet → MetaMask จะมองว่าซ้ำกับ mainnet) · ลองกับ MetaMask จริง: `docs/metamask-checklist.md` (genesis แยก chainId 7777)
+- chainId มาจาก genesis / `CHAIN_ID` ของเชน (ค่าเริ่ม + `genesis.json` ในrepo = 41234) · ลองกับ MetaMask จริง: `docs/metamask-checklist.md`
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
   · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
   · Blockscout 9.x ต้องเพิ่ม `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm ไม่อ่าน gzip) · ขั้นตอนเต็ม + เปิด-ปิด + แก้ปัญหา: `docs/blockscout.md`
@@ -967,12 +971,12 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 | `multicall.js` | `MULTICALL_PROGRAM` | (init รับ `namespace` / `icon` / `url` / `contact` / `description` ไม่บังคับ) `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
 
 ### โปรแกรมกลางของเชน (`src/standards/system.js` · `scripts/deploy-system.js` · เทสต์ `105-system-programs` + e2e)
-ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 13 · ครบ 14 ตัวใช้ ~6M แก๊ส · deploy tx ตั้ง gasLimit 1.5M) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wcard` ได้ · ทั้งชุดไม่มี upgrader
+ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 13 · ครบ 14 ตัวใช้ ~6M แก๊ส · deploy tx ตั้ง gasLimit 1.5M) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wbwsc` ได้ · ทั้งชุดไม่มี upgrader
 
 | nonce | ชื่อ | โปรแกรม | สรุป |
 |---|---|---|---|
 | 0 | `multicall` | `MULTICALL_PROGRAM` | ดูตารางข้างบน |
-| 1 | `wcard` | `WCARD_PROGRAM` | token มาตรฐานครบ (`TOKEN_CORE` + permit) · `deposit()` แนบ value ได้ WCARD 1:1 · `depositTo({ to })` · `withdraw({ amount })` / `withdrawTo({ to, amount })` เผาแล้วโอนเหรียญหลักคืน (ลดยอดก่อนโอน) · event `Deposit` `Withdrawal` + `Transfer` จาก / ไป zero · decimals 18 · ชื่อตาม `SYMBOL` (`W<symbol>`) |
+| 1 | `wbwsc` (`w<symbol>`) | `WCARD_PROGRAM` | token มาตรฐานครบ (`TOKEN_CORE` + permit) · `deposit()` แนบ value ได้ WBWSC 1:1 · `depositTo({ to })` · `withdraw({ amount })` / `withdrawTo({ to, amount })` เผาแล้วโอนเหรียญหลักคืน (ลดยอดก่อนโอน) · event `Deposit` `Withdrawal` + `Transfer` จาก / ไป zero · decimals 18 · ชื่อตาม `SYMBOL` (`W<symbol>`) |
 | 2 | `multisig-template` | `MULTISIG_PROGRAM` | m-of-n (1–20 เจ้าของ) ยืนยันด้วย tx ของแต่ละคน: `submit({ target, fn?, input?, value? })` → id (ผู้เสนอยืนยันให้) · `confirm` / `revoke` / `execute({ id })` (นับเฉพาะเจ้าของปัจจุบัน · ทำเครื่องหมาย executed ก่อนเรียกออก) · fn ว่าง = โอนเหรียญหลัก · `addOwner` / `removeOwner` / `changeThreshold` / `approveHash` เรียกได้เฉพาะผ่านรายการของตัวเอง (`sender === ThisAddress()`) · `isValidSignature` = magic เมื่อ hash ถูก `approveHash` (ERC-1271) · ไม่ส่ง owners = ต้นแบบ (ทำอะไรไม่ได้) |
 | 3–5 | `token-template` `nft-template` `multitoken-template` | `TOKEN_PROGRAM` `NFT_PROGRAM` `MULTITOKEN_PROGRAM` | ต้นแบบให้ factory clone · ทั้ง 3 รับ `owner` ใน init ได้แล้ว (ไม่ส่ง = ผู้ deploy เหมือนเดิม · ส่งต้องเป็น address 42 ตัว) · token ที่ supply 0 ไม่ emit Transfer |
 | 6 | `factory` | `FACTORY_PROGRAM` | ใครก็สร้างได้ทันทีไม่ต้องรอ admin (`cloneProgram`): `createToken({ name, ticker, decimals 0–36, supply })` (supply เป็นของผู้เรียก) · `createNft({ name, symbol, baseURI? })` · `createMultiToken({ name?, symbol?, uri? })` (ผู้เรียก = owner) · `createMultisig({ owners, threshold })` · ทุกตัวรับ `salt?` + `namespace` `icon` `url` `contact` `description` · salt จริง = `<ผู้เรียก>:<salt>` (ไม่ส่ง = `#<ลำดับของผู้เรียก>` · salt เองห้ามขึ้นต้น `#`) → `vm.cloneAddressFor(factory, factorySalt(creator, salt), โค้ดต้นแบบ)` · อ่าน `templates` `count` `created({ index })` `createdCount({ creator })` `createdBy({ creator, index })` `kindOf({ address })` · event `Created { kind, address, creator }` |
@@ -986,7 +990,7 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 
 ```
 DEPLOYER_KEY=0x… node scripts/deploy-system.js https://chain.example.com --plan     # ดู address ก่อน (ไม่ส่ง tx)
-node scripts/deploy-system.js --plan --deployer 0x… --chain-id 272727                  # ไม่ต้องมี key / node
+node scripts/deploy-system.js --plan --deployer 0x… --chain-id 41234                   # ไม่ต้องมี key / node
 DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js https://chain.example.com # deploy + อนุมัติ → deploy/system-programs.json
 ```
 - `systemPrograms({ addressAt, symbol })` = แผน (ลำดับ / ชื่อ / input ของแต่ละตัว · input ของ factory ใส่ address ต้นแบบให้เอง)
@@ -1102,7 +1106,7 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ## 10. เทสต์
 
-`test/` 105 ไฟล์ · 916 เคส · `node --test` ล้วน ไม่มี framework
+`test/` 116 ไฟล์ · 1028 เคส · `node --test` ล้วน ไม่มี framework
 `test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
 
 ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
@@ -1119,7 +1123,9 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 | `43-autoreview` | กฎทุกข้อของตัวตรวจ |
 | `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
 | `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
-| `105-system-programs` | โปรแกรมกลาง: address ตามแผน · ชื่อ · WCARD ฝาก-ถอน 1:1 · factory สร้าง token / NFT / multi-token / multisig (salt, address ล่วงหน้า, ตรวจค่า) · multisig m-of-n, revoke, เปลี่ยนเจ้าของผ่านตัวเอง, approveHash (ERC-1271) |
+| `105-system-programs` | โปรแกรมกลาง: address ตามแผน · ชื่อ · WBWSC (`WCARD_PROGRAM`) ฝาก-ถอน 1:1 · factory สร้าง token / NFT / multi-token / multisig (salt, address ล่วงหน้า, ตรวจค่า) · multisig m-of-n, revoke, เปลี่ยนเจ้าของผ่านตัวเอง, approveHash (ERC-1271) |
+| `107-bluewolfchain` | ค่าตั้งต้นของเชน (chainId 41234 · 10,000 gwei · block 2 วิ · 5M แก๊ส) + `genesis.json` / genesis ตัวอย่างเปิด fork `bluewolf` · ราคาต่อหน่วยของ fork · โอนเหรียญหลัก 17,300 แก๊ส · ชื่อ Bluewolfchain / BWSC / WBWSC |
+| `114-sign-any-chain` | domain ไม่มี chainId: เซ็นตอนกระเป๋าเปิดเชนอื่นได้ · receipt มี `signedOnChainId` · ไม่ส่ง = เชนนี้ · chainId ใน message ไม่ตรง → mempool ปฏิเสธ (กัน replay ข้ามเชน) · ตรงกับ ethers |
 | `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
 | `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
 | `62-permit-1271` | permit (EIP-712): DOMAIN_SEPARATOR / digest = ethers · relayer ส่งแทน · replay · หมดเวลา (วินาที) · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |
@@ -1171,12 +1177,14 @@ autoreview จึงเป็นชั้นที่สอง (กันโค�
 
 ### จำลองผู้ใช้ 200 กระเป๋า (`npm run simulate`)
 
+⚠️ `simulate` / `scenario` / `scenario:full` ตั้งราคาแก๊ส 1–20 gwei และงบแก๊สตาม `DEFAULT_GAS` → server ที่เปิดเองต้องใช้ `GAS_PRICE=1000000000` + genesis ที่ไม่มี `"forks"` (`genesis-nofork.json` = `genesis.json` ที่ลบ `forks`: `node -e 'const g=require("./genesis.json");delete g.forks;require("fs").writeFileSync("genesis-nofork.json",JSON.stringify(g))'`) · ค่าเริ่มของเชน (10,000 gwei + fork `bluewolf`) = tx ถูกปฏิเสธ / งบไม่พอ · `scenario:full --spawn` ตั้งให้เอง · `--spawn` ของ `simulate` / `scenario` ส่ง env ต่อให้ server
+
 `scripts/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (`BLOCK_MS` ของ server) แล้วตรวจว่าทุกใบเข้า block
 
 ```
-RATE_LIMIT=0 npm start                        # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 1000
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 2000
 npm run simulate                               # terminal 2 · เปิด explorer ดูไปพร้อมกันได้
-npm run simulate -- --spawn                    # หรือให้สคริปต์เปิด server เอง (ปิดตอนจบ)
+GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run simulate -- --spawn   # หรือให้สคริปต์เปิด server เอง (ปิดตอนจบ · BLOCK_MS 1000)
 npm run simulate -- --blocks 200 --min 15 --max 25
 ```
 
@@ -1190,9 +1198,9 @@ npm run simulate -- --blocks 200 --min 15 --max 25
 `scripts/scenario.js` + โปรแกรมใน `scripts/scenario-programs.js` (เทสต์ `50-scenario-programs`)
 
 ```
-RATE_LIMIT=0 npm start                        # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
 npm run scenario                               # terminal 2 · ค่าเริ่ม 60 block ของการใช้งาน
-npm run scenario -- --spawn --blocks 15        # หรือเปิด server เอง (MemoryDB)
+GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn --blocks 15   # หรือเปิด server เอง (MemoryDB)
 ```
 
 - ทุก block หยิบงานที่ "พร้อม" (ของที่ต้องใช้เข้า block แล้ว) ให้ครบ `--per-block` (10) ใบ: งานตั้งต้นก่อน แล้วเติมด้วยงานของกระเป๋าที่ได้เหรียญแล้ว
@@ -1211,9 +1219,9 @@ npm run scenario -- --spawn --blocks 15        # หรือเปิด server
 ส่ง tx จริงทีละชุดแล้ว**ตรวจผลบนเชนทุกข้อ** (~300 ข้อ พิมพ์ ✅ / ❌ ทีละหัวข้อ · ล้มข้อเดียว = exit 1 · รายงาน `scenario-full-report.json`)
 
 ```
-RATE_LIMIT=0 npm start                         # terminal 1 (ใช้ chain เดิมที่มีข้อมูลอยู่แล้วก็ได้ · รันซ้ำได้ เพราะ --tag สุ่มให้ทุกรอบ)
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 (เปิด fork bluewolf = ข้อแก๊สล้ม · ใช้ chain เดิมที่มีข้อมูลอยู่แล้วก็ได้ · รันซ้ำได้ เพราะ --tag สุ่มให้ทุกรอบ)
 npm run scenario:full                          # terminal 2 · http://localhost:3000 (รันจริงล่าสุดที่ BLOCK_MS 3000 ใช้ ~2 นาที)
-npm run scenario:full -- --spawn               # เปิด server เอง: MemoryDB · BLOCK_MS 1000 · UPGRADE_DELAY_BLOCKS 2 (ทดสอบ timelock) · ตรวจ sync ด้วย
+npm run scenario:full -- --spawn               # เปิด server เอง: MemoryDB · BLOCK_MS 1000 · GAS_PRICE 1 gwei · genesis ไม่มี forks · MAX_BLOCK_GAS 3M · UPGRADE_DELAY_BLOCKS 2 (ทดสอบ timelock) · ตรวจ sync ด้วย
 npm run scenario:full -- --spawn --quick       # BLOCK_MS 300 (~15 วินาที) — ตัวที่เทสต์ 74 ใช้
 npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout http://localhost   # server ที่ตั้ง ADMINS / พิมพ์ลิงก์ Blockscout
 ```
@@ -1231,7 +1239,7 @@ npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout h
   (hash ที่พิมพ์คือ VM hash = hash ที่ Blockscout เห็น · `/sendtx` คืน digest ที่ผู้ใช้เซ็น — explorer ของเราค้นได้ทั้งสอง)
 - **ดูใน Blockscout**: ชี้ Blockscout ไปที่ `/evm` ของ server ตัวเดียวกัน — `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL=ETHEREUM_JSONRPC_TRACE_URL=http://<host>:3000/evm`
   · `ETHEREUM_JSONRPC_WS_URL=ws://<host>:3000/evm` · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · ฝั่งเชน `EVM_RATE_LIMIT=0` (ขั้นตอนเต็มใน `docs/blockscout.md`)
-  `--spawn` ใช้ port สุ่มและ MemoryDB → ถ้าจะดูใน Blockscout ให้เปิด server เอง (`RATE_LIMIT=0 EVM_RATE_LIMIT=0 npm start`) แล้วรันแบบไม่มี `--spawn`
+  `--spawn` ใช้ port สุ่มและ MemoryDB → ถ้าจะดูใน Blockscout ให้เปิด server เอง (`RATE_LIMIT=0 EVM_RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev`) แล้วรันแบบไม่มี `--spawn`
 - ข้าม: `TIMEOUT_MS` (แก๊ส 3M หมดก่อนเสมอ ~60 ms · เทสต์ 08 / 58 คุม timeout อยู่แล้ว)
 - พบระหว่างทำ (แก้แล้ว · เทสต์ `75-simulate-block-number`): `simulate` ใช้ `number: null` → `BlockNumber()` เป็น null ตอน /sendtx
   โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธทั้งที่ใน block รันได้ → ตอนนี้จำลองเป็น block ถัดไปเสมอ (ไม่ commit / ไม่จองเลข)
@@ -1251,7 +1259,7 @@ npm run load:test                                       # ชุดเต็ม:
 npm run load:test -- --quick                            # ชุดเล็ก ~5 วินาที (ตัวที่เทสต์ 80 ใช้)
 npm run load:test -- --db lmdb --workload token --txs 500 --blocks 30 --out load.json   # เลือกเอง + รายงาน JSON ทุก block
 npm run load:test -- --data-dir /var/data/tmp --keep    # วาง LMDB บนดิสก์ที่จะใช้จริง · เก็บโฟลเดอร์ไว้ดู
-RATE_LIMIT=0 DATA=./data npm start                      # end-to-end: terminal 1
+RATE_LIMIT=0 DATA=./data npm run dev                    # end-to-end: terminal 1
 npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --blocks 4   # terminal 2 · ยิง /sendtx จริง (ตรวจลายเซ็น + simulate + HTTP)
 ```
 
@@ -1340,12 +1348,12 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
 
 **คอขวดย้ายแล้ว**: รับ tx ได้ 400–800 req/s เร็วกว่าที่เชนบรรจุได้ = `maxTransactions` 500 ต่อ `BLOCK_MS` 3 วิ ≈ **167 tx/s ต่อเครือข่าย**
 จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS`
-**ค่าเริ่มตอนนี้ (หลังจำลอง 0.25–3 วิ): block 1 วิ · 1M แก๊ส (gasTarget 500k) · 500 tx** — แก๊สต่อวินาทีเท่าเดิม (3M / 3 วิ) · block เต็มแบบ mix ปิด 334 ms (p95 489) · ต่ำกว่า 0.75 วิไม่ได้ความจุเพิ่ม (CPU ต่อ tx คงที่ · block เล็กมากมีต้นทุนคงที่ต่อ block) · ผลวัดเต็มใน block-time-sim.md ของโปรเจกต์
-**ยิงผ่าน HTTP จริงที่ค่าเริ่มนี้** (24 ต.ค. · LMDB · DEV · `load-test --url --txs 500 --blocks 3` · client เครื่องเดียวกัน): token 253–274 req/s (500 ใบเข้า block ใน 2.9–3.3 วิ · ~216 ใบ/block = เต็มแก๊ส 1M) · mix 168–210 req/s (140–189 ใบ/block · 3.2–4.0 วิ) · native 414–553 req/s (1.8–2.0 วิ) · ทุกใบสำเร็จ ไม่มี block ว่าง
+**ค่าเริ่มตอนนั้น (หลังจำลอง 0.25–3 วิ): block 1 วิ · 1M แก๊ส (gasTarget 500k) · 500 tx** (ตอนนี้ Bluewolfchain: block 2 วิ · 5M แก๊ส · gasTarget 2.5M · 500 tx · fork `bluewolf` · ความจุดู `deploy/README.md` ข้อ 1) — แก๊สต่อวินาทีเท่าเดิม (3M / 3 วิ) · block เต็มแบบ mix ปิด 334 ms (p95 489) · ต่ำกว่า 0.75 วิไม่ได้ความจุเพิ่ม (CPU ต่อ tx คงที่ · block เล็กมากมีต้นทุนคงที่ต่อ block) · ผลวัดเต็มใน block-time-sim.md ของโปรเจกต์
+**ยิงผ่าน HTTP จริงที่ค่าเริ่มนั้น** (24 ต.ค. · LMDB · DEV · `load-test --url --txs 500 --blocks 3` · client เครื่องเดียวกัน): token 253–274 req/s (500 ใบเข้า block ใน 2.9–3.3 วิ · ~216 ใบ/block = เต็มแก๊ส 1M) · mix 168–210 req/s (140–189 ใบ/block · 3.2–4.0 วิ) · native 414–553 req/s (1.8–2.0 วิ) · ทุกใบสำเร็จ ไม่มี block ว่าง
 **แก้พร้อมกัน** (เจอตอนยิงจริงที่ 1M แก๊ส · เทสต์ `101-block-gas-defer`):
   - ใบที่แก๊สที่เหลือใน block ไม่พอ แต่ block ว่างรับได้ → `mempool.take` ปล่อยไว้รอ block ถัดไป (เดิมถูกปฏิเสธ → ใบ nonce ถัดไปของคนเดิมค้างจนหมดอายุ 5 นาที และ miner ปิด block ว่างทุกรอบระหว่างนั้น) · ใบที่ใหญ่เกิน block ว่างยังถูกปฏิเสธ
   - miner (`mineOnce`) ไม่ปิด block ว่างเมื่อไม่มีใบไหนเข้าได้และ base fee อยู่ที่ขั้นต่ำแล้ว (block ว่างช่วยแค่ลด base fee) · `minerState.idleAt` → `/health` ไม่นับเป็น stalled
-`load-test.js` ยังใช้ maxBlockGas 3M เพื่อวัด block 500 tx ได้ · `scenario:full --spawn` ตั้ง `MAX_BLOCK_GAS=3000000` (กับดัก OUT_OF_MEMORY ใช้ ~1.05M แก๊สใน tx เดียว · server ค่าเริ่ม = ข้ามหัวข้อนั้น) · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
+`load-test.js` ยังใช้ maxBlockGas 3M เพื่อวัด block 500 tx ได้ · `scenario:full --spawn` ตั้ง `MAX_BLOCK_GAS=3000000` (กับดัก OUT_OF_MEMORY ใช้ ~1.05M แก๊สใน tx เดียว · server ที่ maxBlockGas < 2M = ข้ามหัวข้อนั้น) · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
 ยังไม่ได้วัด: โหลดต่อเนื่องนาน ๆ (ยิงเป็นรอบ ≤ 800 ใบ) · client กับ server อยู่เครื่องเดียวกัน
 
 ---
@@ -1357,7 +1365,7 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
    แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
    ~~ความเร็ว / fuzz~~ เสร็จแล้ว: ภาพอุ่นต่อโปรแกรม (token transfer 2.2 → 0.94 ms/tx) · fuzz 20,000 รอบไม่พบปัญหา · ราคาแก๊สเทียบเวลา CPU แล้ว (`npm run bench:gas`)
 2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node) · การคัดลอก / สร้างข้อมูลคิดตามขนาด (spread / rest / string `+` / เมธอดในตัว · 1 ต่อสมาชิกหรือ 32 byte)
-   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server 1M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
+   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server = `MAX_BLOCK_GAS` 5M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
 3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
 
 ### บล็อกการมี node ที่สอง
@@ -1376,7 +1384,7 @@ end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
    ลองในเครื่องด้วย key ทดสอบ: `deploy/README.md` ข้อ 0 (RPC เป็น http · `EVM_RATE_LIMIT=0` กัน 429 เมื่อทุกอย่างมาจาก 127.0.0.1)
 10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
     ~~คอขวดคือการรับ tx (~65 token / ~110 native tx/s ต่อ node)~~ แก้แล้ว: ตรวจลายเซ็นครั้งเดียว + ใน worker thread · `Mempool.prune` เบาลง · ไม่คำนวณ root ซ้ำ · ภาพอุ่นของ sandbox (เทสต์ 82 / 89 / 90)
-    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ (ตอนนั้น block 3 วิ) · **ค่าเริ่มตอนนี้ block 1 วิ · 1M แก๊ส → ~216 token tx ต่อ block ≈ 216 tx/s** (หัวข้อ 10 "load test")
+    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ (ตอนนั้น block 3 วิ) · ค่าเริ่มตอนนั้น block 1 วิ · 1M แก๊ส → ~216 token tx ต่อ block ≈ 216 tx/s (หัวข้อ 10 "load test") · **ตอนนี้ block 2 วิ · 5M แก๊ส + fork `bluewolf`** (ความจุดู `deploy/README.md` ข้อ 1)
     ~~แผนตัด history~~ มีแล้ว: `HISTORY_KEEP_BLOCKS` (ระยะ 4 · หัวข้อ 4 "ระยะ 4") · ที่เหลือ: `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
 11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
     (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
@@ -1402,7 +1410,7 @@ rollback เร็ว · P2P · ผู้ผลิตหลายราย / fin
 | ไฟล์ | เนื้อหา |
 |---|---|
 | `README.md` | ภาพรวมสั้น + โครงสร้าง + วิธีเริ่ม |
-| `CHECKPOINT.md` | สถานะ, ค่าตั้งต้นที่แนะนำสำหรับ production, ตัวเลข performance ที่วัดจริง |
+| `CHECKPOINT.md` | ภาพ ณ Checkpoint 5: สถานะ, ค่าตั้งต้น, ตัวเลข performance ของตอนนั้น (chainId 1 · block 1 วิ — ค่าปัจจุบันดูไฟล์นี้ / `deploy/README.md`) |
 | `EXPLORER-SPEC.md` | สเปคฝั่ง API consumer — **รูปแบบ response ของทุก endpoint อยู่ที่นี่** อ่านก่อนทำ frontend |
 | `program-sdk/README.md` | สำหรับคนนอกที่จะเขียนโปรแกรม + testkit |
 | `client-sdk/index.js` | SDK ฝั่ง client (เซ็น + ส่ง tx + รอผล · ใช้ใน browser ได้) — หัวข้อ 6 |

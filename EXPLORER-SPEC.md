@@ -7,8 +7,8 @@
 
 ## 1. ภาพรวมของ chain
 
-- server เดียวเป็นผู้ผลิต block, ปิด block ทุก ~1 วินาที, block ว่างจะไม่ถูกสร้าง
-- ทุก tx เซ็นด้วย EIP-712 (secp256k1) เหมือน Ethereum จึงใช้ MetaMask ได้
+- server เดียวเป็นผู้ผลิต block, ปิด block ทุก ~2 วินาที (`BLOCK_MS`), block ว่างจะไม่ถูกสร้าง
+- ทุก tx เซ็นด้วย EIP-712 (secp256k1) เหมือน Ethereum จึงใช้ MetaMask ได้ · domain ไม่มี chainId (เซ็นจากกระเป๋าที่เปิดเชนไหนก็ได้) · chainId ของเชนอยู่ใน message → node ปฏิเสธถ้าไม่ตรง
 - address เป็นตัวพิมพ์เล็กเสมอ รูปแบบ `0x` + 40 hex — **ต้อง lowercase ก่อนค้นเสมอ**
 - โปรแกรม (smart contract) เขียนด้วย JavaScript และมี address แบบเดียวกับ wallet
 
@@ -110,7 +110,7 @@
 
 | endpoint | หมายเหตุ |
 |---|---|
-| `POST /sendtx` | `{ tx, signature }` — ตอบ 400 พร้อม `simulation` ถ้าจะล้ม · action: `call` `transfer` (value 0 ได้ = ยกเลิกใบที่ค้างด้วยการโอน 0 ให้ตัวเอง) `deploy` (`upgrader` ไม่บังคับ อยู่ในข้อมูลที่เซ็น) `init` `reject` `metadata` `upgrade` (`code` + `input` = migrate input) `setUpgrader` (`input: { upgrader: "0x…" \| null }`) `initUpgrade` `rejectUpgrade` |
+| `POST /sendtx` | `{ tx, signature }` — ตอบ 400 พร้อม `simulation` ถ้าจะล้ม · action: `call` `transfer` (value 0 ได้ = ยกเลิกใบที่ค้างด้วยการโอน 0 ให้ตัวเอง) `deploy` (`upgrader` ไม่บังคับ อยู่ในข้อมูลที่เซ็น) `init` `reject` `metadata` `upgrade` (`code` + `input` = migrate input) `setUpgrader` (`input: { upgrader: "0x…" \| null }`) `initUpgrade` `rejectUpgrade` `setGasConfig` (admin เท่านั้น · ไม่มี `to` · `input: { minBaseFee: "<wei>" \| null }` · null = กลับไปใช้ค่าใน genesis · มีผลตั้งแต่ block ถัดไป) |
 
 **`POST /query`** สำคัญมากสำหรับ explorer เพราะใช้อ่านค่าจากโปรแกรมได้โดยไม่ต้องส่ง tx
 
@@ -182,6 +182,8 @@ POST /query
   "nativeChanges": [{ "address": "0x…", "field": "consumed", "after": 813 }]
 }
 ```
+
+`signedOnChainId` = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (หน้าเว็บใส่จาก `eth_chainId` · ไม่ส่ง = เชนนี้ · อยู่ในลายเซ็นแต่ไม่ใช่หลักฐาน) · หน้า tx แสดงเป็นแถว "Signed on"
 
 **`trace` คือจุดขายของ chain นี้** เพราะเห็นการเรียกโปรแกรมซ้อนกันทุกชั้นโดยไม่ต้องเปิดโหมด debug
 `depth` 0 คือ user เรียก, depth 1 คือโปรแกรมเรียกโปรแกรมอื่นต่อ

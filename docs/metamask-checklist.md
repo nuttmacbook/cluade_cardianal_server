@@ -4,15 +4,12 @@
 ส่วนที่เหลือต้องใช้ MetaMask จริง เพราะหน้าจอของกระเป๋า การเลือกค่าแก๊ส และปุ่ม speed up / cancel ทำงานต่างจาก ethers
 กรอกผลในคอลัมน์ "ผล" (✓ / ✗ + หมายเหตุ) แล้วส่งกลับมา ข้อที่ ✗ ผมจะแก้ให้
 
-## 0. เตรียมเชน (ห้ามใช้ chainId 1)
+## 0. เตรียมเชน
 
-`genesis.json` ปัจจุบันตั้ง `chainId: 1` ซึ่งเป็นเลขของ Ethereum mainnet: MetaMask จะเข้าใจผิดว่าเป็น mainnet (ชื่อ / ราคา / ลิงก์ผิด) จึงต้องใช้ genesis แยกที่เลขไม่ชนใคร
+`genesis.json` ใน repo ตั้ง chainId 41234 (Bluewolfchain · ไม่ชนกับเชนอื่น) + fork `bluewolf` แล้ว ใช้ได้ตรง ๆ
 
 ```bash
-cat > genesis-metamask.json <<'EOF'
-{ "chainId": 7777, "balances": { "0x70997970c51812dc3a010c7d01b50e0d17dc79c8": "10000000000000000000000000n" } }
-EOF
-GENESIS=genesis-metamask.json DATA=./data-metamask npm run dev      # ไม่ตั้ง DATA = เก็บในหน่วยความจำ (ปิดแล้วหาย)
+DATA=./data-metamask npm run dev      # ไม่ตั้ง DATA = เก็บในหน่วยความจำ (ปิดแล้วหาย)
 node scripts/seed.js http://localhost:3000                          # อีกหน้าต่าง: สร้าง token MTK (namespace mytoken) + tx ตัวอย่าง
 ```
 
@@ -24,15 +21,15 @@ node scripts/seed.js http://localhost:3000                          # อีก�
 
 | # | ทำ | ควรเห็น | ผล |
 |---|---|---|---|
-| 1.1 | MetaMask → Networks → Add network manually: RPC URL `http://localhost:3000/evm` · Chain ID `7777` · Symbol `CARD` · Block explorer `http://localhost:3000/evm/explorer` | บันทึกได้ ไม่เตือนว่า chainId ไม่ตรง | |
-| 1.2 | Import account ด้วย private key ทดสอบข้างบน | ยอด CARD ประมาณ 10,000,000 (ลดลงเล็กน้อยจากค่าแก๊สของ seed) | |
+| 1.1 | MetaMask → Networks → Add network manually: RPC URL `http://localhost:3000/evm` · Chain ID `41234` · Symbol `BWSC` · Block explorer `http://localhost:3000/evm/explorer` | บันทึกได้ ไม่เตือนว่า chainId ไม่ตรง | |
+| 1.2 | Import account ด้วย private key ทดสอบข้างบน | ยอด BWSC ประมาณ 10,000,000 (ลดลงเล็กน้อยจากค่าแก๊สของ seed) | |
 | 1.3 | สลับไปเครือข่ายอื่นแล้วกลับมา | ยอดเดิม · ไม่มี error สีแดง | |
 
 ## 2. โอน native
 
 | # | ทำ | ควรเห็น | ผล |
 |---|---|---|---|
-| 2.1 | Send → `0xfabb0ac9d68b0b445fb7357272ff202c5651694a` จำนวน 1 CARD (ปล่อยค่าแก๊สตามที่ MetaMask เลือก) | หน้ายืนยันขึ้นค่าแก๊สได้ (ไม่ขึ้น "unable to estimate") | |
+| 2.1 | Send → `0xfabb0ac9d68b0b445fb7357272ff202c5651694a` จำนวน 1 BWSC (ปล่อยค่าแก๊สตามที่ MetaMask เลือก) | หน้ายืนยันขึ้นค่าแก๊สได้ (ไม่ขึ้น "unable to estimate") | |
 | 2.2 | Confirm | Activity ขึ้น Pending แล้วเป็น Confirmed ภายในไม่กี่วินาที (1 block) | |
 | 2.3 | กด "View on block explorer" ใน Activity | เปิดหน้า tx ของ explorer เชนนี้ เห็น from / to / ยอด ตรงกัน | |
 | 2.4 | ลองโอนแบบ Legacy (Settings → Advanced → เปิด "Customize transaction nonce" / เลือก gas แบบ legacy ถ้ามี) | ผ่านเหมือนกัน | |
@@ -51,7 +48,7 @@ node scripts/seed.js http://localhost:3000                          # อีก�
 
 | # | ทำ | ควรเห็น | ผล |
 |---|---|---|---|
-| 4.1 | ส่ง 0.1 CARD แล้วกด **Speed up** ระหว่าง Pending | ใบใหม่ Confirmed · ใบเดิมหายไป (explorer: หน้า tx เดิมขึ้น "replaced" ชี้ใบใหม่) | |
+| 4.1 | ส่ง 0.1 BWSC แล้วกด **Speed up** ระหว่าง Pending | ใบใหม่ Confirmed · ใบเดิมหายไป (explorer: หน้า tx เดิมขึ้น "replaced" ชี้ใบใหม่) | |
 | 4.2 | ส่งอีกใบแล้วกด **Cancel** | Cancel Confirmed (เป็นการโอน 0 ให้ตัวเอง nonce เดิม) · ใบเดิมไม่ถูกรัน | |
 
 ## 5. เซ็นแบบของเชน (EIP-712 ใน explorer)
@@ -61,7 +58,8 @@ node scripts/seed.js http://localhost:3000                          # อีก�
 | 5.1 | เปิด `http://localhost:3000` → Connect wallet | ต่อได้ เห็น address | |
 | 5.2 | หน้า token MTK → แท็บเรียกฟังก์ชัน → `transfer` | MetaMask ขึ้นหน้าต่าง "Signature request" แสดงฟิลด์ action / to / method / input อ่านรู้เรื่อง | |
 | 5.3 | Sign | tx เข้า block · Activity ของ MetaMask **ไม่** แสดงใบนี้ (เป็นลายเซ็น ไม่ใช่ tx ของ EVM) — ถือว่าปกติ | |
-| 5.4 | หน้า token → แท็บ permit → เซ็น | ขึ้นหน้าต่าง EIP-2612 permit · ส่งได้ | |
+| 5.4 | หน้า token → แท็บ permit → เซ็น (กระเป๋าต้องเปิดเชนนี้ · permit มี chainId ใน domain) | ขึ้นหน้าต่าง EIP-2612 permit · ส่งได้ | |
+| 5.5 | สลับ MetaMask ไปเชนอื่น (เช่น Ethereum) แล้วทำ 5.2 ซ้ำ | ก่อนเปิดกระเป๋า explorer แสดงยอด BWSC + ค่าแก๊สโดยประมาณ + "signing on chain …" · เซ็นได้โดยไม่ต้องสลับเชน · หน้า tx มีแถว "Signed on" | |
 
 ## 6. เครื่องมือ dev (ถ้าสะดวก)
 

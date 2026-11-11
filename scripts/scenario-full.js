@@ -2,9 +2,9 @@
  * scenario ครบทุกฟังก์ชันของเชน — ส่ง tx จริงเข้า server แล้วตรวจผลบนเชนทุกข้อ (ไม่ใช่แค่ "เข้าคิวแล้ว")
  * ผลที่ได้ดูได้ทั้งใน explorer ของเรา (REST) และใน Blockscout (ผ่าน /evm JSON-RPC)
  *
- *   RATE_LIMIT=0 npm start                     # server (ยิงจากเครื่องเดียว จึงต้องปิด rate limit ต่อ IP)
+ *   RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # server (ยิงจากเครื่องเดียว จึงต้องปิด rate limit ต่อ IP · ราคา / งบแก๊สอิง 1 gwei + DEFAULT_GAS · ดู HANDOFF.md ข้อ 10)
  *   npm run scenario:full                      # อีก terminal · http://localhost:3000
- *   npm run scenario:full -- --spawn           # เปิด server ให้เอง (MemoryDB · PORT สุ่ม · BLOCK_MS 1000 · UPGRADE_DELAY_BLOCKS 2)
+ *   npm run scenario:full -- --spawn           # เปิด server ให้เอง (MemoryDB · PORT สุ่ม · BLOCK_MS 1000 · UPGRADE_DELAY_BLOCKS 2 · GAS_PRICE 1 gwei · genesis ไม่มี forks · MAX_BLOCK_GAS 3M)
  *   npm run scenario:full -- --spawn --quick   # block เร็วขึ้น (BLOCK_MS 300) สำหรับเทสต์
  *
  * หัวข้อที่ตรวจ (ทุกข้อพิมพ์ ✅ / ❌ · ล้มข้อเดียว = exit code 1)

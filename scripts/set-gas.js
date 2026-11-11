@@ -2,7 +2,7 @@
  * เจ้าของเชน (key ที่อยู่ใน admins ของ genesis) ปรับขั้นต่ำของ gas price กลางทาง — ไม่ต้อง fork / ล้างเชน / restart · มีผลตั้งแต่ block ถัดไป
  *
  *   ดูค่าปัจจุบัน:          node scripts/set-gas.js http://localhost:3000
- *   ลดขั้นต่ำ:              ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 0.1gwei
+ *   ลดขั้นต่ำ:              ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 1000gwei
  *   กลับไปใช้ค่าใน genesis:  ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --reset
  *
  *   --min-base-fee  หน่วย wei ต่อแก๊ส: 100000000 · 0.1gwei · 1gwei   (≥ 1 wei)

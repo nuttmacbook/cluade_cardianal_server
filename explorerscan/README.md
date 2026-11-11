@@ -19,7 +19,8 @@ explorerscan/
 │   │   ├── tx.js                 #tx/<hash>      รวมแผนภาพการเรียกโปรแกรม
 │   │   ├── address.js            #address/<addr> ข้อมูลหลัก + เลือกแท็บ
 │   │   ├── deploy.js             #deploy         ส่งโปรแกรมใหม่
-│   │   └── system.js             #system         โปรแกรมกลาง (Multicall, WCARD, Factory …) จาก config.js
+│   │   ├── gas.js                #gas            ค่าแก๊สของเชน (จาก /genesis) + admin ปรับขั้นต่ำ (setGasConfig)
+│   │   └── system.js             #system         โปรแกรมกลาง (Multicall, WBWSC, Factory …) จาก config.js
 │   └── tabs/                 แท็บในหน้า address / โปรแกรม
 │       ├── interact.js           เรียกฟังก์ชัน (ฟอร์ม / JSON) + ผลลัพธ์
 │       ├── storage.js            ข้อมูลที่โปรแกรมเก็บ
@@ -53,10 +54,10 @@ explorerscan/
 
 ## ใช้ยังไง
 
-**กับ server ของ repo นี้** (ค่าเริ่ม): `node server.js` แล้วเปิด `http://localhost:3000/` · แก้ไฟล์แล้วกด refresh เห็นผลทันที ไม่ต้อง restart
+**กับ server ของ repo นี้** (ค่าเริ่ม): `npm run dev` (ของจริง `npm start` ต้องตั้ง `ADMINS` + `PRODUCER_KEY`) แล้วเปิด `http://localhost:3000/` · แก้ไฟล์แล้วกด refresh เห็นผลทันที ไม่ต้อง restart
 
 **fork ไปแต่งเอง** มี 2 แบบ
-1. copy โฟลเดอร์ไปที่อื่น แล้วเปิด server ด้วย `EXPLORER_DIR=/path/to/my-explorer node server.js`
+1. copy โฟลเดอร์ไปที่อื่น แล้วเปิด server ด้วย `EXPLORER_DIR=/path/to/my-explorer npm run dev`
 2. โฮสต์แยกเป็นเว็บ static (nginx, GitHub Pages, Netlify ฯลฯ): ตั้ง `api` ใน `config.js` เป็นที่อยู่ node · server ตอบ CORS ให้แล้ว
 
 ## กติกาของระบบ (อย่าทำพัง)

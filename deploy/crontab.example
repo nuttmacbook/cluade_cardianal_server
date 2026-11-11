@@ -3,4 +3,4 @@
 0 */6 * * *  cd /opt/cardianal && node scripts/backup.js --data /var/lib/cardianal --out /backups --keep 8 && rclone sync /backups remote:cardianal-backups
 
 # ---- บนเครื่องอื่น (เครื่องเชนล่มแล้วเตือนตัวเองไม่ได้)
-* * * * *  cd ~/cardianal && node scripts/monitor.js --url https://chain.example.com --once >/dev/null || curl -s -d "Cardianal: /health มีปัญหา" https://hooks.example.com/<webhook>
+* * * * *  cd ~/cardianal && node scripts/monitor.js --url https://chain.example.com --once >/dev/null || curl -s -d "Bluewolfchain: /health มีปัญหา" https://hooks.example.com/<webhook>

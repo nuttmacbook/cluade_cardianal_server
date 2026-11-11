@@ -1,6 +1,7 @@
 # Checkpoint 5
 
 > เอกสารนี้คือภาพ ณ Checkpoint 5 · ข้อมูลล่าสุด (ไฟล์, env, สิ่งที่ค้าง) อยู่ใน `HANDOFF.md` — ถ้าสองไฟล์ขัดกันให้ยึด `HANDOFF.md`
+> ค่าในหน้านี้เป็นของตอนนั้น (chainId 1 · `burnPercent` 50 · block 1 วิ / 1M แก๊ส · `public/explorer.html` · 868 เคส) · ตอนนี้ = Bluewolfchain (BWSC) chainId 41234 · block 2 วิ · 5M แก๊ส · ขั้นต่ำ 10,000 gwei · fork `bluewolf` · explorer อยู่ `explorerscan/` · ค่าที่ใช้จริงดู `server.js` / `deploy/genesis.mainnet.example.json`
 
 สถานะ: เสถียร — เทสต์ 868 เคสผ่านทั้งหมด (`npm install` แล้ว `npm test`)
 

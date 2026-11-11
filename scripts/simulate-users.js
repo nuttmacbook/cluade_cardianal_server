@@ -2,10 +2,10 @@
  * จำลองผู้ใช้จริง 200 กระเป๋าบน server ที่รันอยู่ — ส่ง tx ทีละ block ตามจังหวะที่ server ปิด block
  *
  *   # เปิด server (ต้องปิด rate limit ต่อ IP เพราะยิงจากเครื่องเดียว)
- *   RATE_LIMIT=0 npm start
+ *   RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # ราคา / งบแก๊สในสคริปต์อิง 1 gwei + DEFAULT_GAS (genesis-nofork.json = genesis.json ที่ลบ forks · ดู HANDOFF.md ข้อ 10)
  *   # อีก terminal
  *   node scripts/simulate-users.js                     # http://localhost:3000
- *   node scripts/simulate-users.js --spawn             # เปิด server ให้เองแล้วจำลอง (MemoryDB)
+ *   GAS_PRICE=1000000000 GENESIS=genesis-nofork.json node scripts/simulate-users.js --spawn   # เปิด server ให้เองแล้วจำลอง (MemoryDB · env ส่งต่อให้ server)
  *
  * เฟส 1  กระจายเหรียญ: กระเป๋าตั้งต้น (genesis) → 10 กระเป๋าแจก → อีก 190 กระเป๋า  (~10 block, ~20 tx/block)
  * เฟส 2  ใช้งานจริง: deploy โทเคน / ตลาด / โพลล์ แล้วใช้งาน — โอน, approve, ประกาศขาย, ซื้อ, ฝาก-ถอน, โหวต, ตั้งชื่อ
