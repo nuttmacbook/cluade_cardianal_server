@@ -17,7 +17,7 @@
  *   - EIP-1559: baseFeePerGas ใน block · eth_feeHistory · eth_maxPriorityFeePerGas · eth_gasPrice = base fee ถัดไป + tip ที่แนะนำ
  *     tx แบบ 1559 → type 0x2 + maxFeePerGas / maxPriorityFeePerGas · receipt มี effectiveGasPrice
  *   - eth_getLogs: ข้าม block ด้วย logsBloom ของ header · มี topic0 + topic อื่น → ใช้ดัชนี eventidx: replay เฉพาะ block ที่ตรง
- *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (null = ไม่ได้ประกาศ)
+ *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (โปรแกรมแถมได้ ABI จากโค้ด: src/standards/system-abi.js · null = ไม่ได้ประกาศ)
  *   - cardianal_getProof([key, …]) → หลักฐาน Merkle ของ key ใน state ล่าสุด เทียบกับ stateRoot ของ block ล่าสุด (vm.getProof)
  *       key = dbKey ("0xprog:storage:balances:0xabc") หรือ { program, key } (key เป็น string หรือ array = map(...))
  *     eth_getProof ตอบ error: state ของเชนไม่ใช่ account trie แบบ EVM (ไม่มี storageHash / slot 32 byte) → ใช้ cardianal_getProof
@@ -41,6 +41,7 @@ import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { NATIVE_FIELD, codeKey, nativeKey, nonceKey, normalizeAddress, metadataKey, eventLog, logsBloom, bloomContains, toEvmAbi, decodeDbKey,
   storageKey, map } from "../core/virtualmachine.js";
 import { checkTokenStandard, unescapeCode } from "../standards/token.js";
+import { resolveAbi } from "../standards/system-abi.js";
 import { checkNftStandard } from "../standards/nft.js";
 import { checkMultiTokenStandard } from "../standards/multitoken.js";
 import { abiFunctions, decodeInput, encodeOutput, AbiError } from "./evm-abi.js";
@@ -670,7 +671,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
 
   /** eth_call ของโปรแกรมที่ประกาศ metadata.abi: selector = keccak("ชื่อ(ชนิด,…)") ตาม toEvmAbi → ถอด argument → query → เข้ารหัสผลตาม outputs */
   function abiCall(to, at, data, query) {
-    const abi = readAt(at, metadataKey(to, "abi"));
+    const abi = resolveAbi((dbKey) => readAt(at, dbKey), to);   // ประกาศเอง ?? โปรแกรมแถม
     const fn = abi ? abiFunctions(abi).get(data.slice(0, 10)) : undefined;
     if (!fn) fail(EVM_ERROR.SERVER, abi ? `execution reverted: no function in metadata.abi matches selector ${data.slice(0, 10)}`
       : "execution reverted: program has no metadata.abi (only ERC-20 / ERC-721 / ERC-1155 reads on standard programs work without one)");
@@ -696,7 +697,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       if (write.method === "approve") return { method: "approve", input: { spender: address(0), amount: amount(1) }, token: true };
       return { method: "transferFrom", input: { from: address(0), to: address(1), amount: amount(2) }, token: true };
     }
-    const abi = readAt(null, metadataKey(to, "abi"));
+    const abi = resolveAbi((dbKey) => readAt(null, dbKey), to);
     const fn = abi ? abiFunctions(abi).get(selector) : undefined;
     if (!fn) throw new RawTxError(abi ? `ไม่มีฟังก์ชันใน metadata.abi ที่ตรงกับ selector ${selector}` : "โปรแกรมนี้ไม่ได้ประกาศ metadata.abi (กระเป๋า EVM เรียกได้เฉพาะ token มาตรฐาน / โปรแกรมที่มี ABI)");
     try { return { method: fn.name, input: decodeInput(fn, data), fn }; }
@@ -899,7 +900,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     eth_maxPriorityFeePerGas: () => quantity(native(suggestedTip())),
     eth_feeHistory: ([blockCount, newest, percentiles]) => feeHistory(blockCount, newest, percentiles),
     cardianal_getAbi: ([address]) => {
-      const abi = vm.read(metadataKey(needAddress(address), "abi"));
+      const abi = resolveAbi((dbKey) => vm.read(dbKey), needAddress(address));
       return abi ? toEvmAbi(abi) : null;
     },
     cardianal_getProof: ([keys]) => {
