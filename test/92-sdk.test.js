@@ -32,6 +32,7 @@ test("sdk ไม่ import VM / sandbox / storage / node:* (ใช้ใน brow
 });
 
 test("sdk: send (key / กระเป๋า EIP-1193) → wait ถึง block · nonce ผิด = ChainError พร้อม body", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

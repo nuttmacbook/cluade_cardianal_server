@@ -70,7 +70,7 @@ test("resolveSettings: genesis ก่อน env · env ที่ต่างจ�
   assert.equal(dev.settings.burnPercent, 80);
   assert.equal(dev.settings.gasTarget, 100);
   assert.equal(dev.settings.admins, null);
-  assert.equal(resolveSettings({}, {}).settings.minBaseFee, 1_000_000_000n);
+  assert.equal(resolveSettings({}, {}).settings.minBaseFee, 10_000_000_000_000n);   // 10,000 gwei
   assert.match(resolveSettings({}, { BLOCK_MS: "abc" }).errors[0], /BLOCK_MS/);
 });
 
@@ -187,11 +187,12 @@ test("replay / sync ใช้ replayTimeoutMs: tx ที่ผู้ผลิต
   assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 ไม่ตรงกับผู้ผลิต/);
 });
 
-test("ค่าเริ่มของ block: 1 วิ · 1M แก๊ส (gasTarget = ครึ่งหนึ่ง) · genesis ล็อก maxBlockGas ได้", () => {
+test("ค่าเริ่มของ block (Bluewolfchain): 2 วิ · 5M แก๊ส (gasTarget = ครึ่งหนึ่ง) · chainId 41234 · genesis ล็อก maxBlockGas ได้", () => {
   const { settings } = resolveSettings({}, {});
-  assert.equal(settings.blockMs, 1000);
-  assert.equal(settings.maxBlockGas, 1_000_000);
-  assert.equal(new VM.VirtualMachine(new MemoryDB(), { maxBlockGas: settings.maxBlockGas }).gasTarget, 500_000);
+  assert.equal(settings.blockMs, 2000);
+  assert.equal(settings.maxBlockGas, 5_000_000);
+  assert.equal(settings.chainId, 41234);
+  assert.equal(new VM.VirtualMachine(new MemoryDB(), { maxBlockGas: settings.maxBlockGas }).gasTarget, 2_500_000);
   assert.equal(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, {}).settings.maxBlockGas, 1_500_000);
   assert.equal(resolveSettings({}, { MAX_BLOCK_GAS: "2000000" }).settings.maxBlockGas, 2_000_000);
   assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 ไม่ตรงกับ genesis/);

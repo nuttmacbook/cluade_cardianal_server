@@ -2,7 +2,7 @@
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 
-// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei
+// native มี 18 ทศนิยม (wei) · ยอด native ในสคริปต์นับเป็น gwei · ราคาแก๊สตามเชน (2 เท่าของขั้นต่ำใน /genesis เผื่อ base fee ขึ้น)
 const gwei = (amount) => `${BigInt(amount) * 10n ** 9n}`;
 
 const API = process.argv[2] ?? "http://localhost:3000";
@@ -16,11 +16,12 @@ const post = (path, body) => fetch(API + path, { method: "POST", headers: { "con
 const get = (path) => fetch(API + path).then((r) => r.json());
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const { chainId } = await get("/genesis");   // ตามเชนที่รันอยู่ (เช่น genesis ที่ตั้ง chainId ไว้ใช้กับ MetaMask)
+const { chainId, gasPrice: minGasPrice } = await get("/genesis");   // ตามเชนที่รันอยู่ (เช่น genesis ที่ตั้ง chainId ไว้ใช้กับ MetaMask)
+const gasPrice = `${2n * BigInt(String(minGasPrice ?? "1000000000").replace(/n$/, ""))}`;
 
 async function send(fields) {
   const { nonce } = await get(`/nonce/${me}`);
-  const tx = { chainId, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: gwei(1), nonce, ...fields };
+  const tx = { chainId, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice, nonce, ...fields };
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, KEY) });
   if (!result.queued) {
     console.error(`${tx.action} ไม่เข้าคิว:`, JSON.stringify(result).slice(0, 200));

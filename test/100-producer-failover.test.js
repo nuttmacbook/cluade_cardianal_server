@@ -185,7 +185,7 @@ const freePort = () => new Promise((resolve) => {
 async function startNode(env) {
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(ROOT, "server.js")], {
-    cwd: ROOT, env: { PATH: process.env.PATH, PORT: String(port), BLOCK_MS: "100", VERIFY_WORKERS: "0", ...env }, stdio: ["ignore", "pipe", "pipe"],
+    cwd: ROOT, env: { PATH: process.env.PATH, PORT: String(port), BLOCK_MS: "100", VERIFY_WORKERS: "0", GAS_PRICE: "1000000000", ...env }, stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
   const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));

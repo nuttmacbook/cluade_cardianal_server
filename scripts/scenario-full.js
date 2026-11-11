@@ -952,6 +952,15 @@ async function startServer() {
   const port = await new Promise((resolve) => { const probe = net.createServer().listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => resolve(port)); }); });
   // env เดียวกันนี้ถูกใช้กับ node ผู้อ่านในหัวข้อ sync ด้วย (import server.js ในโปรเซสนี้) → ตั้งไว้ใน process.env
   process.env.BLOCK_MS ??= OPTIONS.quick ? "300" : "1000";
+  process.env.GAS_PRICE ??= "1000000000";   // ขั้นตอนในสคริปต์ตั้งราคาเป็น gwei ระดับ ETH (1–20 gwei) · เชนจริงตั้งต้น 10,000 gwei
+  // ตัวเลขแก๊สในสคริปต์อิงตารางแก๊สพื้นฐาน (DEFAULT_GAS) → ใช้ genesis.json ที่ไม่มี forks (ไม่เปิด fork "bluewolf")
+  if (!process.env.GENESIS) {
+    const base = JSON.parse(fs.readFileSync(path.join(ROOT, "genesis.json"), "utf8"));
+    delete base.forks;
+    const file = path.join(fs.mkdtempSync(path.join((await import("node:os")).tmpdir(), "scenario-genesis-")), "genesis.json");
+    fs.writeFileSync(file, JSON.stringify(base));
+    process.env.GENESIS = file;
+  }
   process.env.UPGRADE_DELAY_BLOCKS ??= "2";
   process.env.MAX_BLOCK_GAS ??= "3000000";   // กับดัก OUT_OF_MEMORY ต้องใช้ ~1.05M แก๊สใน tx เดียว (ค่าเริ่มของ server = 1M)
   process.env.RATE_LIMIT = "0";

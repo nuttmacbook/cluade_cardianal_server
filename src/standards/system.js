@@ -396,7 +396,7 @@ export function factorySalt(creator, salt) {
  * @returns {Array<{ key, nonce, address, namespace, title, description, code, input }>}
  *   input ใช้ตัวเลขแบบ "18n" (ส่งผ่าน JSON ของ /sendtx ได้)
  */
-export function systemPrograms({ addressAt, symbol = "CARD" }) {
+export function systemPrograms({ addressAt, symbol = "BWSC" }) {
   const meta = (namespace, description) => ({ namespace, description });
   const list = [
     { key: "multicall", title: "Multicall", code: MULTICALL_PROGRAM,

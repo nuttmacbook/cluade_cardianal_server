@@ -24,13 +24,13 @@ const wei = (value) => BigInt(String(value).replace(/n$/, ""));
 
 /** ชื่อใน genesis → { env, parse, default } · chainId อยู่ชั้นบนของ genesis (ที่เดิม) ที่เหลืออยู่ใน genesis.config */
 export const GENESIS_SETTINGS = {
-  chainId: { env: "CHAIN_ID", parse: integer, default: 1 },
+  chainId: { env: "CHAIN_ID", parse: integer, default: 41234 },
   burnPercent: { env: "BURN_PERCENT", parse: integer, default: 100 },
-  minBaseFee: { env: "GAS_PRICE", parse: wei, default: 1_000_000_000n },
+  minBaseFee: { env: "GAS_PRICE", parse: wei, default: 10_000_000_000_000n },   // 10,000 gwei
   gasTarget: { env: "GAS_TARGET", parse: integer, default: null },
   baseFeeDenominator: { env: "BASE_FEE_DENOMINATOR", parse: integer, default: 8 },
-  blockMs: { env: "BLOCK_MS", parse: integer, default: 1000 },
-  maxBlockGas: { env: "MAX_BLOCK_GAS", parse: integer, default: 1_000_000 },   // gasTarget ไม่ตั้ง = ครึ่งหนึ่งของค่านี้ (มีผลกับ base fee → ทุกเครื่องต้องเหมือนกัน)
+  blockMs: { env: "BLOCK_MS", parse: integer, default: 2000 },
+  maxBlockGas: { env: "MAX_BLOCK_GAS", parse: integer, default: 5_000_000 },   // gasTarget ไม่ตั้ง = ครึ่งหนึ่งของค่านี้ (มีผลกับ base fee → ทุกเครื่องต้องเหมือนกัน)
   upgradeDelayBlocks: { env: "UPGRADE_DELAY_BLOCKS", parse: integer, default: 0 },
   memoryLimitMb: { env: "MEMORY_LIMIT_MB", parse: integer, default: 32 },
   stackLimitKb: { env: "STACK_LIMIT_KB", parse: integer, default: 256 },

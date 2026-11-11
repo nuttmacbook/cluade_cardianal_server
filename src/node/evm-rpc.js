@@ -713,7 +713,8 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const from = isAddress(request.from) ? normalizeAddress(request.from) : ZERO_ADDRESS;
     const result = vm.query({ programUuid: to, functionName: call.method, input: call.input, context: { sender: from, origin: from }, value: `${/^0x[0-9a-f]+$/i.test(String(request.value ?? "")) ? BigInt(request.value) : toBig(request.value ?? 0)}n` });
     if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? call.method}`);
-    return quantity(Math.ceil(Number(result.gasUsed ?? 0) * 1.25) + 1000);
+    // vm.query ไม่ใช่ tx ของ user → ไม่มีค่าพื้นฐานต่อ tx (gas.tx) · บวกเองตามตารางของ block ถัดไป
+    return quantity(Math.ceil(Number(result.gasUsed ?? 0) * 1.25) + 1000 + (vm.gasAt?.().tx ?? 0));
   }
 
   // ---------- txpool ----------
@@ -819,7 +820,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       return one(body);
     },
     /** ค่าที่ใส่ใน wallet_addEthereumChain ได้ทันที */
-    chainParams({ rpcUrl, explorerUrl, name = "Cardianal", symbol = "CARD" } = {}) {
+    chainParams({ rpcUrl, explorerUrl, name = "Bluewolfchain", symbol = "BWSC" } = {}) {
       return {
         chainId: quantity(vm.chainId), chainName: name,
         nativeCurrency: { name, symbol, decimals: 18 },   // MetaMask บังคับ 18 · เชนเป็น wei อยู่แล้ว

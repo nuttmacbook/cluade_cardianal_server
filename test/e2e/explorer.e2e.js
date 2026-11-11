@@ -31,7 +31,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 before(async () => {
   const port = await freePort();
   url = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, DEV: "1", PORT: String(port), BLOCK_MS: "300", RATE_LIMIT: "0", REJECTED_HOLD_MS: "1000" }, stdio: "pipe" });
+  server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, DEV: "1", PORT: String(port), BLOCK_MS: "300", RATE_LIMIT: "0", REJECTED_HOLD_MS: "1000", GAS_PRICE: process.env.GAS_PRICE ?? "1000000000" }, stdio: "pipe" });
   for (let i = 0; i < 50; i += 1) {
     if (await fetch(`${url}/genesis`).then(() => true, () => false)) break;
     await wait(100);
@@ -216,7 +216,7 @@ test("ข้อมูลแบบ { } อยู่ในกรอบดำแบ
   await open(`#tx/${last.hash}`);
   assert.ok(await page.locator("#view pre.json").count() >= 2);
   const bg = await page.locator("#view pre.json").first().evaluate((el) => getComputedStyle(el).backgroundColor);
-  assert.equal(bg, "rgb(4, 5, 13)");
+  assert.equal(bg, "rgb(3, 7, 19)");
   assert.match(await page.locator("#view pre.json").first().textContent(), /^\{\n  "/);
   // แถว block มีไอคอนกล่อง + เลข block ของ tx
   const blockRow = page.locator("#view tr", { hasText: /^Block/ }).first();
@@ -997,10 +997,10 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
     assert.equal(await page.locator("#view tbody tr").count(), 7);
     assert.doesNotMatch(await view(), /Not deployed yet/);
     assert.equal(await page.locator("#side [data-nav=system].on").count(), 1);
-    await page.click("#view tbody tr:has-text('Wrapped CARD') a");
+    await page.click("#view tbody tr:has-text('Wrapped BWSC') a");
     await page.waitForFunction((address) => location.hash === `#address/${address}`, result.programs.wcard.address);
     await settle();
-    assert.match(await view(), /wcard/);
+    assert.match(await view(), /wbwsc/);
   } finally {
     await import("node:fs").then((fs) => fs.rmSync(out, { force: true }));
   }
@@ -1011,7 +1011,7 @@ test("ค่าแก๊ส: หน้า Gas settings แสดงค่าท�
   await open("#gas");
   await page.waitForSelector("#gas-form");
   assert.match(await view(), /Minimum gas price[\s\S]*1 gwei/);
-  assert.match(await view(), /Coin transfer costs[\s\S]*1,300 gas/);
+  assert.match(await view(), /Coin transfer costs[\s\S]*17,300 gas/);
   assert.equal(await page.locator("#view input").count(), 1);   // ปรับได้แค่ขั้นต่ำ · ราคาต่อหน่วยแสดงอย่างเดียว
   assert.match(await view(), /changed only by a fork/);
   assert.equal(await page.locator("#side [data-nav=gas].on").count(), 1);

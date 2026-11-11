@@ -22,6 +22,7 @@ let clock = Date.now();
 
 before(async () => {
   let miner;
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   ({ server, vm, mempool, miner } = await import("../server.js"));
   clearInterval(miner);                                           // ปิด block เองในเทสต์
   vm.db.load({ [`${alice}:native:received`]: "1000000000000000000n", [`${bob}:native:received`]: "1000000000000000000n" });

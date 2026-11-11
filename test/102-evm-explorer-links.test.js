@@ -10,6 +10,7 @@ import * as sign from "../src/crypto/signature.js";
 
 let server, vm, mempool, mineOnce, url;
 before(async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   ({ server, vm, mempool, mineOnce } = await import("../server.js"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${server.address().port}`;

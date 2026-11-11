@@ -97,7 +97,7 @@ test("fork: ชื่อที่โค้ดไม่รู้จัก / block
   assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { nope: 2 } } } }), /เปลี่ยนค่าแก๊ส 'nope' ไม่ได้/);
   assert.throws(make({ forks: [] }), /ต้องเป็น \{ ชื่อ: block \}/);
   assert.deepEqual(new VM.VirtualMachine(new MemoryDB()).forkSchedule(), []);
-  assert.deepEqual(VM.FORKS, {});
+  assert.deepEqual(Object.keys(VM.FORKS), ["bluewolf"]);   // fork ที่มีในโค้ด (genesis.json เปิดตั้งแต่ block 0)
 });
 
 test("fork: genesis hash ไม่รวม forks (เพิ่มตารางทีหลังได้) · resolveSettings อ่าน forks จาก genesis", () => {

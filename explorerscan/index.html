@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#05060b">
-<title>Program VM Explorer</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#040811">
+<title>Bluewolfchain Explorer</title>
 <!-- explorerscan/index.html [แก้ได้ · โครงหน้า] ชื่อเว็บ, โลโก้, เมนูบน, เมนูข้าง · โครงสร้างโฟลเดอร์อยู่ใน README.md -->
 <link rel="stylesheet" href="theme/colors.css">
 <link rel="stylesheet" href="theme/style.css">
@@ -8,9 +8,9 @@
 <div class="canvas" aria-hidden="true"><i></i></div>
 <header><div class="bar">
   <button class="menu" id="menu-btn" title="Menu" aria-label="Menu" onclick="sideMenu()">☰</button>
-  <div class="brand" onclick="go('')"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#bbb6f1"/><stop offset=".5" stop-color="#3d3399"/><stop offset="1" stop-color="#5362d4"/></linearGradient></defs>
+  <div class="brand" onclick="go('')"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9cc8ff"/><stop offset=".5" stop-color="#2563eb"/><stop offset="1" stop-color="#6a4fd9"/></linearGradient></defs>
     <path d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z" fill="none" stroke="url(#lg)" stroke-width="2.4" stroke-linejoin="round"/>
-    <path d="M16 9.5 21.6 12.75v6.5L16 22.5l-5.6-3.25v-6.5zM16 2.5v7M27.7 22.75 21.6 19.25M4.3 22.75l6.1-3.5" fill="none" stroke="url(#lg)" stroke-width="2" stroke-linejoin="round"/></svg>Program VM<span id="tick"></span></div>
+    <path d="M16 9.5 21.6 12.75v6.5L16 22.5l-5.6-3.25v-6.5zM16 2.5v7M27.7 22.75 21.6 19.25M4.3 22.75l6.1-3.5" fill="none" stroke="url(#lg)" stroke-width="2" stroke-linejoin="round"/></svg>Bluewolfchain<span id="tick"></span></div>
   <nav class="pills" aria-label="Sections">
     <a class="pill" data-nav="explore" onclick="go('')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>Explorer</a>
     <a class="pill" data-nav="programs" onclick="go('#programs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg>Programs<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m6 9 6 6 6-6"/></svg></a>
@@ -23,7 +23,7 @@
 <div class="shell">
 <aside class="side" id="side" aria-label="Navigation">
   <details open><summary><h3>Explorer</h3></summary>
-    <a data-nav="home" onclick="sideGo('')"><span class="dot" style="--c:#5362d4">◆</span><span>Overview</span></a>
+    <a data-nav="home" onclick="sideGo('')"><span class="dot" style="--c:#2f6df0">◆</span><span>Overview</span></a>
     <a data-nav="block" onclick="sideClose();api('/genesis').then((i) => go('#block/' + (i.latest || 1)))"><span class="dot" style="--c:#2563eb">B</span><span>Latest block</span><span class="n" id="side-latest">—</span></a>
     <a data-nav="gas" onclick="sideGo('#gas')"><span class="dot" style="--c:#d97706">⛽</span><span>Gas settings</span></a>
   </details>

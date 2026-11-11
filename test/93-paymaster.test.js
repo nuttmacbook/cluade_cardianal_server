@@ -47,6 +47,7 @@ test("ลายเซ็น: ไม่มี sponsor = ชนิดเดิม 
 });
 
 test("เชน: ผู้ใช้ไม่มีเหรียญส่ง tx ได้เมื่อมี sponsor · แก๊สหักจาก sponsor · nonce / value เป็นของผู้ส่ง", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
