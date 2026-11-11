@@ -3,7 +3,7 @@
  *
  *   ลำดับ (nonce ของกระเป๋า deployer) → address รู้ล่วงหน้า (programAddressFor(deployer, nonce))
  *     0 multicall            MULTICALL_PROGRAM (src/standards/multicall.js)
- *     1 wcard                WCARD_PROGRAM     ห่อเหรียญหลักเป็น token 1:1 (แบบ WETH / WBNB)
+ *     1 wcard                WCARD_PROGRAM     ห่อเหรียญหลักเป็น token 1:1 (แบบ WETH / WBNB) · ชื่อบนเชน w<สัญลักษณ์> เช่น wbwsc
  *     2 multisig-template    MULTISIG_PROGRAM  ต้นแบบกระเป๋าหลายเจ้าของ (clone ผ่าน factory)
  *     3 token-template       TOKEN_PROGRAM     ต้นแบบ token
  *     4 nft-template         NFT_PROGRAM       ต้นแบบ NFT
@@ -16,7 +16,7 @@
  *    11 staking              STAKING_PROGRAM     (staking.js)     pool stake แบบถอนได้ทุกเมื่อ รางวัลต่อวินาที
  *    12 limit-order          LIMIT_ORDER_PROGRAM (limitorder.js)  order book แบบตั้งราคา token ↔ token
  *    13 nft-market           NFT_MARKET_PROGRAM  (nftmarket.js)   ตลาด NFT / multi-token (ขาย + offer · ค่าธรรมเนียมเริ่ม 0)
- *   ชื่อ (namespace) ข้างหน้าตั้งตอน initialization → explorer แสดงชื่อ · ค้น /name/wcard ได้
+ *   ชื่อ (namespace) ข้างหน้าตั้งตอน initialization → explorer แสดงชื่อ · ค้น /name/wbwsc ได้
  *   ทั้งชุดไม่มี upgrader (แก้ไม่ได้) · ต้นแบบที่ deploy ตรงไม่มีเจ้าของ (ใช้เป็นแม่แบบอย่างเดียว)
  */
 import { MULTICALL_PROGRAM } from "./multicall.js";
@@ -33,11 +33,11 @@ import { NFT_MARKET_PROGRAM } from "./nftmarket.js";
 import { ERC1271_MAGIC_VALUE, ERC1271_INVALID_VALUE, ERC721_RECEIVED, ERC1155_RECEIVED, ERC1155_BATCH_RECEIVED } from "./wallet.js";
 
 /**
- * WCARD — เหรียญหลักแบบ token (มาตรฐาน token ครบ + permit) · ฝาก 1 CARD ได้ 1 WCARD ถอนคืนได้ทุกเมื่อ
- *   input ตอน deploy: { name?, ticker?, namespace?, icon?, url?, description? } (ค่าเริ่ม "Wrapped CARD" / "WCARD")
- *   deposit()               แนบ value → ได้ WCARD เท่ากัน (event Deposit + Transfer จาก zero)
+ * WCARD — เหรียญหลักแบบ token (มาตรฐาน token ครบ + permit) · ฝากเหรียญหลัก 1 ได้ 1 ถอนคืนได้ทุกเมื่อ (Bluewolfchain = WBWSC)
+ *   input ตอน deploy: { name?, ticker?, namespace?, icon?, url?, description? } (deploy-system ตั้งเป็น "Wrapped <สัญลักษณ์>" / "W<สัญลักษณ์>" เช่น Wrapped BWSC / WBWSC)
+ *   deposit()               แนบ value → ได้ token ห่อเท่ากัน (event Deposit + Transfer จาก zero)
  *   depositTo({ to })       ฝากให้คนอื่น
- *   withdraw({ amount })    เผา WCARD → ได้เหรียญหลักคืน (event Withdrawal + Transfer ไป zero)
+ *   withdraw({ amount })    เผา token ห่อ → ได้เหรียญหลักคืน (event Withdrawal + Transfer ไป zero)
  *   withdrawTo({ to, amount })
  *   decimals = 18 เท่าเหรียญหลัก · totalSupply = เหรียญหลักที่ฝากอยู่
  */

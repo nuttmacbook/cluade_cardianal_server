@@ -55,12 +55,12 @@ const EMPTY_UNCLES = "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd
 const BLOCK_GAS_LIMIT = 30_000_000;   // ใช้เมื่อเชนไม่ได้ตั้ง maxBlockGas
 const REPLAY_CACHE = 64;              // จำนวน block ที่เก็บผล replay ไว้
 const LOG_RANGE = 1000;               // ช่วง block สูงสุดของ eth_getLogs
-const TRANSFER_GAS = 21_000;
+const TRANSFER_GAS = 21_000;   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
 const FILTER_TTL_MS = 5 * 60_000;     // filter ที่ไม่ถูกเรียกนานเท่านี้ถูกลบ (เท่า geth)
 const MAX_FILTERS = 10_000;           // filter ทั้ง node
 const MAX_FILTERS_PER_CLIENT = 100;   // filter ต่อ IP
 const PENDING_BUFFER = 10_000;        // hash ที่ pending filter เก็บค้างได้
-const SIMULATE_MAX_CALLS = 100;       // call ต่อ eth_simulateV1   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
+const SIMULATE_MAX_CALLS = 100;       // call ต่อ eth_simulateV1
 
 const TOKEN_WRITE = {   // ERC-20 ที่กระเป๋าส่งมา (eth_sendRawTransaction) → ฟังก์ชันของ token มาตรฐาน
   "0xa9059cbb": { method: "transfer", args: 2 }, "0x095ea7b3": { method: "approve", args: 2 }, "0x23b872dd": { method: "transferFrom", args: 3 },

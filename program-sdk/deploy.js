@@ -11,7 +11,9 @@ import { addressOf, signTransaction, hashTypedData } from "programvm/signature.j
 const API = process.env.API ?? "http://localhost:3000";
 const API_KEY = process.env.API_KEY ?? "";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const CHAIN_ID = Number(process.env.CHAIN_ID ?? 1);
+// chainId / ราคาแก๊สอ่านจาก GET /genesis ของ node (ตั้ง CHAIN_ID / GAS_PRICE เองได้) · chainId ไม่ตรง = node ปฏิเสธ
+let CHAIN_ID = process.env.CHAIN_ID === undefined ? undefined : Number(process.env.CHAIN_ID);
+let GAS_PRICE = process.env.GAS_PRICE;
 
 if (!PRIVATE_KEY) {
   console.error("ต้องตั้ง PRIVATE_KEY ก่อน เช่น  PRIVATE_KEY=0x… node deploy.js hello-world/hello.program.js");
@@ -31,7 +33,7 @@ async function api(endpoint, body) {
 }
 
 /** ทุกฟิลด์ต้องมีครบ เพราะลายเซ็นผูกกับทุกฟิลด์ */
-const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 200_000, gasPrice = "1000000000" }) =>   // gasPrice 1 gwei (native 18 ทศนิยม)
+const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 1_500_000, gasPrice = GAS_PRICE }) =>   // จ่ายตามแก๊สที่ใช้จริง · gasLimit = เพดาน
   ({ chainId: CHAIN_ID, action, from: me, to, method, input, ...(code === undefined ? {} : { code }), value, nonce, gasLimit, gasPrice });
 
 const send = (tx) => api("/sendtx", { tx, signature: signTransaction(tx, PRIVATE_KEY) });
@@ -42,6 +44,9 @@ async function main() {
   const code = String(program);     // ฟังก์ชัน → string (คำว่า export ไม่ติดไปด้วย)
 
   console.log(`deploy ${file} (${Buffer.byteLength(code)} ไบต์) โดย ${me}`);
+  const genesis = await api("/genesis");
+  CHAIN_ID ??= genesis.chainId;
+  GAS_PRICE ??= String(BigInt(String(genesis.baseFee ?? genesis.gasPrice).replace(/n$/, "")) * 2n);   // 2 เท่าของ base fee ตอนนี้ เผื่อขึ้น
   const { nonce } = await api(`/nonce/${me}`);
 
   const tx = buildTx({ action: "deploy", input: { greeting: "สวัสดี" }, code, nonce });
