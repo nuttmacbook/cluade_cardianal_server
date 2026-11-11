@@ -15,7 +15,7 @@ Blockscout ต่อเข้ากับ `/evm` ของเชน (ตัว�
 DEV=1 EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
 ```
 - `EVM_RATE_LIMIT=0` สำคัญ: indexer ยิงถี่มาก ถ้าเปิด limit ไว้ 600/นาที จะโดน 429
-- อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node scripts/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario` — ต้องเปิดเชนด้วย `GAS_PRICE=1000000000` + genesis ที่ไม่มี `forks` ดู `HANDOFF.md` หัวข้อ 10)
+- อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node dev/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario` — ต้องเปิดเชนด้วย `GAS_PRICE=1000000000` + genesis ที่ไม่มี `forks` ดู `HANDOFF.md` หัวข้อ 10)
 - จด chainId ของเชนไว้ (ค่าเริ่มต้น + `genesis.json` = 41234) ต้องใส่ให้ตรงกันใน Blockscout
 
 เช็กว่า `/evm` ตอบ:
@@ -129,10 +129,10 @@ log `Index already caught up` แปลว่าไม่มี block ค้า�
   new TextDecoder().decode(Uint8Array.from("0x...".slice(2).match(/../g), (h) => parseInt(h, 16)))
   ```
 
-## ดูว่า Blockscout ถามอะไร /evm ตอบอะไร: `scripts/evm-proxy.mjs`
+## ดูว่า Blockscout ถามอะไร /evm ตอบอะไร: `dev/evm-proxy.mjs`
 ตัวดักที่ log ทุกคำขอ JSON-RPC (แตก gzip ให้) แล้วส่งต่อไปที่ `/evm` — ไม่แตะเชน
 ```bash
-node scripts/evm-proxy.mjs   # ฟัง :3001 ส่งต่อไป http://127.0.0.1:3000/evm (แก้ด้วย PORT= / TARGET=)
+node dev/evm-proxy.mjs   # ฟัง :3001 ส่งต่อไป http://127.0.0.1:3000/evm (แก้ด้วย PORT= / TARGET=)
 ```
 ใน `envs/common-blockscout.env` เปลี่ยน `ETHEREUM_JSONRPC_HTTP_URL` และ `ETHEREUM_JSONRPC_TRACE_URL` เป็น `http://host.docker.internal:3001` แล้ว
 ```bash

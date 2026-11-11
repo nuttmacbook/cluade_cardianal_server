@@ -1,6 +1,6 @@
 // ตัวดักดูคำขอ JSON-RPC ที่ส่งเข้า /evm (ใช้หาว่า Blockscout ถามอะไรแล้วเราตอบอะไร) — ไม่แตะเชน
-//   node scripts/evm-proxy.mjs          → ฟังที่ :3001 ส่งต่อไป http://127.0.0.1:3000/evm
-//   PORT=3001 TARGET=http://127.0.0.1:3000/evm node scripts/evm-proxy.mjs · วิธีใช้กับ Blockscout: docs/blockscout.md
+//   node dev/evm-proxy.mjs          → ฟังที่ :3001 ส่งต่อไป http://127.0.0.1:3000/evm
+//   PORT=3001 TARGET=http://127.0.0.1:3000/evm node dev/evm-proxy.mjs · วิธีใช้กับ Blockscout: docs/blockscout.md
 import http from "node:http";
 import zlib from "node:zlib";
 

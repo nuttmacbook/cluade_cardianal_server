@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 /*
- * scripts/load-test.js --quick: ชุดเล็ก (20 tx · 1 + 2 block · native / token / mix · LMDB + memory) ในโปรเซส
+ * dev/load-test.js --quick: ชุดเล็ก (20 tx · 1 + 2 block · native / token / mix · LMDB + memory) ในโปรเซส
  * ต้องจบด้วย exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วงและขนาด LMDB ที่โต
  */
 
@@ -15,7 +15,7 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 test("load-test --quick: ทุก workload × LMDB / memory ปิด block ได้ครบ และรายงานเวลาทุกช่วง", { timeout: 60_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "load-test-smoke-"));
   const out = path.join(dir, "report.json");
-  const child = spawn(process.execPath, ["scripts/load-test.js", "--quick", "--data-dir", dir, "--out", out], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["dev/load-test.js", "--quick", "--data-dir", dir, "--out", out], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
   child.stderr.on("data", (chunk) => { output += chunk; });

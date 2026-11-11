@@ -1,4 +1,4 @@
-/** รันสถานการณ์ตลาดจริงบน chain ผ่าน HTTP: node scripts/demo-market.js [url] */
+/** รันสถานการณ์ตลาดจริงบน chain ผ่าน HTTP: node dev/demo-market.js [url] */
 import * as sign from "../src/crypto/signature.js";
 import fs from "node:fs";
 

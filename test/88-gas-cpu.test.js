@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
-import { measure, WORKLOADS, MAX_TX_GAS } from "../scripts/bench-gas.js";
+import { measure, WORKLOADS, MAX_TX_GAS } from "../dev/bench-gas.js";
 
 /*
- * ระยะ 2.2: แก๊สตามงาน CPU (วัดด้วย npm run bench:gas — scripts/bench-gas.js)
+ * ระยะ 2.2: แก๊สตามงาน CPU (วัดด้วย npm run bench:gas — dev/bench-gas.js)
  * งานที่เคย "ถูกแต่ช้า" (เวลาต่อแก๊สเกิน baseline หลายสิบเท่า) ถูกคิดเพิ่ม:
  *   JSON.stringify ซ้อนลึก (เดิม 275 เท่า: tx 3M แก๊สใช้ 47 วิ) · Map / Set ที่ key เป็น string ยาว (68 เท่า) · switch / === / < กับ string ยาว (13–16 เท่า)
  *   sort ปริยาย (14) · flat ลึก (12) · normalize (11) · JSON.parse

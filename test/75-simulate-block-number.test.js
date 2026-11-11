@@ -8,7 +8,7 @@ import { simulate } from "../src/node/simulate.js";
  * simulate (ที่ /sendtx) จำลองเป็น block ถัดไปเสมอ
  * เดิมใช้ number: null → BlockNumber() ในโปรแกรมเป็น null ตอน simulate (แต่เป็น BigInt ตอนรันใน block)
  * → โปรแกรมที่คำนวณกับเลข block (เช่น BlockHash(BlockNumber() - 1n)) ถูกปฏิเสธที่ /sendtx ทั้งที่ใน block รันได้
- * (พบตอนทำ scripts/scenario-full.js หัวข้อ "API ในโปรแกรม")
+ * (พบตอนทำ dev/scenario-full.js หัวข้อ "API ในโปรแกรม")
  */
 
 const CODE = `function program() {

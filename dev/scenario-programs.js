@@ -1,5 +1,5 @@
 /**
- * โปรแกรมที่ใช้ใน scripts/scenario.js (แยกไฟล์เพื่อให้เทสต์ test/50-scenario-programs.test.js ตรวจได้โดยไม่ต้องเปิด server)
+ * โปรแกรมที่ใช้ใน dev/scenario.js (แยกไฟล์เพื่อให้เทสต์ test/50-scenario-programs.test.js ตรวจได้โดยไม่ต้องเปิด server)
  *
  *   MULTISEND_PROGRAM  แจกเหรียญหลัก (native) หลายกระเป๋าใน tx เดียว: แนบ value = ผลรวม แล้ว transferNative ทีละรายการ
  *   CHAIN_PROGRAM      โปรแกรมต่อกันเป็นทอด ๆ: step() เรียก step() ของโปรแกรมถัดไปตาม path (deploy 6 ตัว → A→B→C→D→E→F)

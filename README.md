@@ -4,7 +4,7 @@ VM สำหรับรันโปรแกรม JavaScript บน chain ข�
 
 ```bash
 npm install
-npm test          # 1028 เคส
+npm test          # 1045 เคส
 npm run demo      # สนามทดลอง
 npm run examples  # ตัวอย่าง request ทุกประเภท
 
@@ -20,31 +20,49 @@ DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # โปรแกร�
 
 ## โครงสร้าง
 
-```
-src/
-  core/virtualmachine.js   VM, Transaction, Block, Compiler — ตรรกะทั้งหมดของ chain
-  core/autoreview.js       ตรวจโค้ดที่ผู้ใช้ส่งมาด้วยบัญชีขาว (ใช้แทนการรีวิวด้วยคน)
-  storage/db.js            DB (LMDB) และ MemoryDB — readKeys / writeKeys / listKeys
-  crypto/signature.js      EIP-712 บน secp256k1 — เซ็นและตรวจลายเซ็น
-  node/
-    mempool.js             คิว tx: rate limit, TTL, กัน tx ซ้ำ, เรียงตาม tip (EIP-1559)
-    sync.js                node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash (เริ่มจาก snapshot ได้)
-    snapshot.js            snapshot ของ state ณ block N (export / โหลดแบบตรวจกับ stateRoot)
-  core/trie.js             Merkle Patricia Trie แบบ Ethereum — stateRoot + หลักฐาน (getProof / verifyProof)
+แบ่งเป็น 3 กลุ่ม: **ใช้กับเชนจริง** (ต้องมีบนเครื่องที่เปิดเชน) · **เครื่องมือของนักพัฒนา** (ไม่ต้องอยู่บนเครื่อง server) · **ทดสอบเท่านั้น** (ลบได้ เชนยังทำงาน)
 
-server.js                  server จริง (node:http ไม่มี dependency เพิ่ม)
-explorerscan/              หน้า explorer: theme/ (สี) · ui/ (หน้าตา) · core/ (ระบบ อ่านเชน / กระเป๋า) · README บอกว่าแก้ตรงไหน
-genesis.json               ยอดเงินตั้งต้น (ช่วงพัฒนา · เปิดจริงใช้ deploy/genesis.mainnet.example.json)
-deploy/                    เปิดเชนสาธารณะเครื่องเดียว: genesis + env ตัวอย่าง, nginx, systemd, cron, check.sh · อ่าน deploy/README.md
-index.js                   จุดเข้าเดียว — import ทุกอย่างจากที่นี่ได้
-scripts/                   demo.js, examples.js, deploy-system.js (โปรแกรมกลางทั้งชุด), set-gas.js (เจ้าของปรับขั้นต่ำของ gas price กลางทาง)
-src/standards/             มาตรฐาน token / NFT / multi-token / กระเป๋า / multicall + system.js (WBWSC, Multisig, Factory) + multisender / tokenlock / dex / staking / limitorder / nftmarket
-program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบน VM
+### 1. ใช้กับเชนจริง
+
+```
+server.js                  server จริง (node:http) — VM + mempool + autoreview + simulate + ปิด block + /evm + explorer
+src/                       ตัวเชนทั้งหมด (server.js import จากที่นี่)
+  core/                    virtualmachine.js (ตรรกะของเชน) · autoreview.js · sandbox.js · gasmeter.js · trie.js · encoding.js
+  storage/db.js            LMDB / MemoryDB
+  crypto/                  ลายเซ็น EIP-712 บน secp256k1
+  node/                    mempool · sync · snapshot · genesis · /evm (evm-rpc / evm-ws / evm-raw / evm-abi) · explorer-api · rate limit
+  standards/               โปรแกรมมาตรฐาน + โปรแกรมแถม 14 ตัว (system.js · dex · staking · …) · abi/ = ABI ของโปรแกรมแถม
+explorerscan/              หน้า explorer ที่ server เสิร์ฟ · README บอกว่าแก้ตรงไหน
+deploy/                    ไฟล์เปิดเชนจริง: genesis.mainnet.example.json · producer / follower env · nginx · systemd · cron · check.sh · README
+scripts/                   คำสั่งสำหรับดูแลเชนจริง
+  preflight.js             ตรวจ genesis + env ก่อนเปิด (ต้องผ่านทุกครั้ง)
+  deploy-system.js         deploy โปรแกรมแถม 14 ตัว (npm run deploy:system)
+  set-gas.js               admin ปรับขั้นต่ำของ gas price (npm run gas:set)
+  backup.js                สำรอง / ตรวจ / กู้ LMDB (npm run backup)
+  snapshot.js              export / import snapshot ของ state (npm run snapshot)
+  monitor.js               เฝ้า /health แล้วเตือน (npm run monitor)
+package.json · package-lock.json   dependency (เครื่องจริง: npm ci --omit=dev)
+```
+
+### 2. เครื่องมือของนักพัฒนา (ใช้กับเชนจริงได้ แต่ไม่ต้องอยู่บนเครื่อง server)
+
+```
 client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
+program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบนเชน (deploy.js อ่าน chainId / ค่าแก๊สจากเชนเอง)
+index.js                   จุดเข้าเดียวของไลบรารี — import ทุกอย่างจากที่นี่ได้
 docs/                      Blockscout · checklist ลอง MetaMask จริง
-test/                      116 ไฟล์ · 1028 เคส
-HANDOFF.md                 เอกสารส่งต่อโปรเจค — อ่านไฟล์นี้ก่อน
-CHECKPOINT.md              ภาพ ณ Checkpoint 5 (ข้อมูลล่าสุดอยู่ใน HANDOFF.md)
+README.md · HANDOFF.md     เอกสาร (HANDOFF = รายละเอียดทุกส่วน อ่านก่อนแก้โค้ด)
+EXPLORER-SPEC.md           สเปกของ explorer
+CHECKPOINT.md              บันทึกเก่า ณ Checkpoint 5 (ค่าในนั้นเป็นของเดิม)
+.github/                   CI (test + e2e ทุก PR)
+```
+
+### 3. ทดสอบเท่านั้น (ลบได้ · เชนจริงไม่ได้ใช้)
+
+```
+test/                      118 ไฟล์ · 1045 เคส + test/e2e (Playwright) — ลบแล้ว npm test / CI ใช้ไม่ได้
+dev/                       demo · seed · scenario · simulate · load test · bench แก๊ส · fuzz · evm-proxy (ดู dev/README.md)
+genesis.json               genesis ของช่วงพัฒนา (key ทดสอบของ Hardhat มีเงิน) · ห้ามใช้เปิดเชนจริง (preflight ไม่ผ่าน)
 ```
 
 ## แต่ละส่วนทำอะไร

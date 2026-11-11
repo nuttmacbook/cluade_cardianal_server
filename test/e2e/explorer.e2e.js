@@ -38,7 +38,7 @@ before(async () => {
   }
   // ข้อมูลตั้งต้น: โทเคน "mytoken" + tx ทุกประเภท
   CHAIN_ID = (await (await fetch(`${url}/genesis`)).json()).chainId;
-  await promisify(execFile)(process.execPath, ["scripts/seed.js", url], { cwd: ROOT });
+  await promisify(execFile)(process.execPath, ["dev/seed.js", url], { cwd: ROOT });
 
   browser = await chromium.launch();
   const context = await browser.newContext();
