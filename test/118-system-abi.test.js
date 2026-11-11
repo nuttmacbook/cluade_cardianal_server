@@ -108,10 +108,10 @@ test("system abi: deploy ชุดเต็ม → ทุกตัวได้ A
 
   // factory.createToken + createMultisig → log Created ถอดด้วย ABI · multisig ที่ clone ได้ ABI ด้วย
   const created = block((b) => ok(b.call({ programUuid: at.factory, functionName: "createToken", context: { sender: ALICE, origin: ALICE }, nonce: nonce(ALICE),
-    input: { name: "Coin", ticker: "C", decimals: 18n, supply: 1000n }, gasLimit: 3_000_000 })));
+    input: { name: "Coin", ticker: "C", decimals: "18n", supply: "1000n" }, gasLimit: 3_000_000 })));
   const multisig = block((b) => ok(b.call({ programUuid: at.factory, functionName: "createMultisig", context: { sender: ALICE, origin: ALICE }, nonce: nonce(ALICE),
-    input: { owners: [ALICE], threshold: 1n }, gasLimit: 3_000_000 }))).result;
-  const receipt = call("eth_getTransactionReceipt", [created.hash]);
+    input: { owners: [ALICE], threshold: "1n" }, gasLimit: 3_000_000 }))).result;
+  const receipt = call("eth_getTransactionReceipt", [vm.getBlock(vm.latestBlockNumber() - 1).txHashes[0]]);
   const factory = iface(at.factory);
   const parsed = receipt.logs.filter((log) => log.address === at.factory).map((log) => factory.parseLog(log));
   assert.deepEqual(parsed.map((log) => [log.name, log.args.kind, log.args.address.toLowerCase(), log.args.creator.toLowerCase()]),
