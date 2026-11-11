@@ -19,6 +19,9 @@
  *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
  *   TRUST_PROXY=0     จำนวนชั้นของ reverse proxy ข้างหน้า (nginx / Caddy = 1) → rate limit ใช้ IP จาก X-Forwarded-For (src/node/client-ip.js)
  *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
+ *                     batch นับทุกคำขอในชุด · ws นับทุก frame (eth_sendRawTransaction ผ่าน ws นับ RATE_LIMIT ด้วยเหมือน HTTP)
+ *   EVM_MAX_BATCH=1000  คำขอสูงสุดต่อ batch ของ /evm (HTTP และ ws) · เท่า geth · indexer เช่น Blockscout ส่ง batch ถึง 500
+ *   MAX_BODY_BYTES=1048576  ขนาด body สูงสุดของ POST (/sendtx, /query, /evm) · เกิน = 413 (โค้ดโปรแกรมใหญ่สุด 64 KB)
  *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
  *   EVM_NAME=Bluewolfchain EVM_SYMBOL=BWSC   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
  *   UPGRADE_DELAY_BLOCKS=0   timelock ของการอัปเกรดโปรแกรม: โค้ดใหม่เริ่มใช้ที่ block (ที่อนุมัติ + N) · 0 = ทันที
@@ -127,6 +130,8 @@ export const mempool = new Mempool(vm, { replacedLog, maxRejectedPerBlock: Numbe
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
 // ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
 export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
+const EVM_MAX_BATCH = Math.max(1, Number(process.env.EVM_MAX_BATCH ?? 1000));
+const MAX_BODY_BYTES = Math.max(1024, Number(process.env.MAX_BODY_BYTES ?? 1024 * 1024));
 // eth_sendRawTransaction → intake เดียวกับ /sendtx (ประกาศ function ไว้ด้านล่าง ใช้ได้เพราะ hoist)
 export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0),
   submit: (verified) => intake({ tx: verified.tx, signature: verified.request.signature }, verified) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
@@ -436,6 +441,20 @@ const send = (response, status, data) => {
  * /evm/explorer/{tx,address,token,block}/:id — ลิงก์ "ดูใน explorer" ของกระเป๋า (EIP-3091) → หน้า explorer เดิม
  * /evm/explorer — หน้าแรกของ explorer (URL ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง ต้องได้ 2xx หลัง redirect)
  */
+/** อ่าน body ของ POST ไม่เกิน MAX_BODY_BYTES · เกิน → null (หยุดอ่านทันที ไม่เก็บทั้งก้อนไว้ในหน่วยความจำ) */
+async function readBody(request) {
+  if (Number(request.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return null;
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return null;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+const TOO_LARGE = { error: `body ใหญ่เกิน ${MAX_BODY_BYTES} ไบต์` };
+
 async function handleEvm(request, response, url) {
   if (url.pathname === "/evm/explorer" || url.pathname === "/evm/explorer/") {
     response.writeHead(302, { location: "/" });
@@ -461,15 +480,24 @@ async function handleEvm(request, response, url) {
       name: process.env.EVM_NAME ?? "Bluewolfchain", symbol: process.env.EVM_SYMBOL ?? "BWSC" }));
   }
   if (request.method !== "POST") return send(response, 405, { error: "Use POST for JSON-RPC" });
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  const raw = await readBody(request);
+  if (raw === null) return send(response, 413, { jsonrpc: "2.0", id: null, error: { code: -32600, message: TOO_LARGE.error } });
   const ip = clientIp(request);
   if (!evmLimiter.allow(ip)) {
     response.setHeader("retry-after", String(evmLimiter.retryAfter(ip)));
     return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
   }
   let body;
-  try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(response, 200, parseError()); }
+  try { body = JSON.parse(raw.toString("utf8")); } catch { return send(response, 200, parseError()); }
+  // batch: จำกัดจำนวน + นับทุกคำขอในชุดกับ EVM_RATE_LIMIT (ครั้งแรกนับไปแล้วข้างบน)
+  if (Array.isArray(body) && body.length > EVM_MAX_BATCH) {
+    return send(response, 200, { jsonrpc: "2.0", id: null, error: { code: -32600, message: `batch too large (max ${EVM_MAX_BATCH})` } });
+  }
+  for (let i = 1; Array.isArray(body) && i < body.length; i += 1) {
+    if (evmLimiter.allow(ip)) continue;
+    response.setHeader("retry-after", String(evmLimiter.retryAfter(ip)));
+    return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
+  }
   // ส่ง tx ผ่าน /evm นับโควตาเดียวกับ POST /sendtx (RATE_LIMIT) ไม่ใช่โควตาอ่านของ /evm
   const sends = (Array.isArray(body) ? body : [body]).filter((item) => item?.method === "eth_sendRawTransaction").length;
   for (let i = 0; i < sends; i += 1) {
@@ -537,14 +565,14 @@ export const server = http.createServer(async (request, response) => {
   try {
     let result;
     if (request.method === "POST") {
-      const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
+      const raw = await readBody(request);
+      if (raw === null) return send(response, 413, TOO_LARGE);
       const ip = clientIp(request);
       if (!postLimiter.allow(ip)) {
         response.setHeader("retry-after", String(postLimiter.retryAfter(ip)));
         return send(response, 429, { error: "Too many requests, try again later" });
       }
-      result = await handlePost(url.pathname, chunks.length ? JSON.parse(Buffer.concat(chunks)) : {});
+      result = await handlePost(url.pathname, raw.length ? JSON.parse(raw) : {});
     } else if (ROUTES[url.pathname]) {
       result = ROUTES[url.pathname](url.searchParams);
     } else {
@@ -560,7 +588,8 @@ export const server = http.createServer(async (request, response) => {
 });
 
 // ws://host/evm: eth_subscribe newHeads / logs (นับ rate limit ร่วมกับ POST /evm)
-export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip) });
+export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip), allowSend: (ip) => postLimiter.allow(ip),
+  maxBatch: EVM_MAX_BATCH });
 
 if (process.argv[1]?.endsWith("server.js")) {
   const problems = startupProblems({ settings, errors: settingErrors, dev: DEV, producer: producer?.address ?? null,

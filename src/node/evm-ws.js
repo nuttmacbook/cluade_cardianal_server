@@ -8,6 +8,8 @@
  *   - eth_subscribe("logs", { address, topics }) → log ของ block ใหม่ที่ตรงเงื่อนไข
  *   - eth_subscribe("newPendingTransactions"[, true]) → hash ของ tx ที่เพิ่งเข้า mempool ทันที (true = ทั้งใบแบบ eth_getTransactionByHash)
  *   - eth_unsubscribe(id)
+ * กันโหลด: allow(ip) นับทุกคำขอ (batch นับทุกตัว) · allowSend(ip) นับ eth_sendRawTransaction เพิ่ม (โควตาเดียวกับ /sendtx)
+ *   batch ไม่เกิน maxBatch · subscription ต่อการเชื่อมต่อไม่เกิน maxSubscriptions · การเชื่อมต่อต่อ IP ไม่เกิน maxConnectionsPerIp
  * ไม่ใช้ไลบรารีนอก: handshake + frame ตาม RFC 6455 (เฉพาะ text / ping / close ไม่รับ frame แตกส่วน)
  * block ใหม่ตรวจจาก vm.latestBlockNumber() ทุก pollMs เฉพาะตอนที่มีคน subscribe อยู่ (ไม่แตะตัวสร้าง block)
  */
@@ -63,7 +65,8 @@ function readFrames(buffer) {
  * @param {import("node:http").Server} server
  * @param {{ rpc: ReturnType<import("./evm-rpc.js").createEvmRpc>, vm: object, path?: string, pollMs?: number, allow?: (ip: string) => boolean }} options
  */
-export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 1000, allow = () => true } = {}) {
+export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 1000, allow = () => true, allowSend = () => true,
+  maxBatch = 1000, maxSubscriptions = 100, maxConnectionsPerIp = 20 } = {}) {
   const clients = new Set();
   let timer = null;
   let seen = vm.latestBlockNumber() ?? 0;
@@ -120,6 +123,9 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
         const check = rpc.handle({ jsonrpc: "2.0", id, method: "eth_getLogs", params: [{ ...filter, fromBlock: "latest", toBlock: "latest" }] });
         if (check.error) return check;
       }
+      if (client.subscriptions.size >= maxSubscriptions) {
+        return { jsonrpc: "2.0", id, error: { code: EVM_ERROR.LIMIT, message: `too many subscriptions on this connection (max ${maxSubscriptions})` } };
+      }
       const subscription = `0x${crypto.randomBytes(16).toString("hex")}`;
       client.subscriptions.set(subscription, { kind, filter });
       if (kind !== "newPendingTransactions") startPolling();
@@ -127,6 +133,9 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
     }
     if (message?.method === "eth_unsubscribe") {
       return { jsonrpc: "2.0", id, result: client.subscriptions.delete(message.params?.[0]) };
+    }
+    if (message?.method === "eth_sendRawTransaction" && !allowSend(client.ip)) {
+      return { jsonrpc: "2.0", id, error: { code: EVM_ERROR.LIMIT, message: "Too many requests, try again later" } };
     }
     return rpc.handle(message, { client: client.ip });
   }
@@ -138,10 +147,14 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
       socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
+    const ip = clientIp(request);
+    if ([...clients].filter((other) => other.ip === ip).length >= maxConnectionsPerIp) {
+      socket.end("HTTP/1.1 429 Too Many Requests\r\n\r\n");   // เปิดค้างไว้หลายอันต่อ IP ไม่ได้
+      return;
+    }
     const accept = crypto.createHash("sha1").update(key + GUID).digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
 
-    const ip = clientIp(request);
     const client = {
       ip,
       subscriptions: new Map(),
@@ -167,6 +180,14 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
         }
         let body;
         try { body = JSON.parse(payload.toString("utf8")); } catch { client.send(parseError()); continue; }
+        if (Array.isArray(body) && body.length > maxBatch) {
+          client.send({ jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.REQUEST, message: `batch too large (max ${maxBatch})` } });
+          continue;
+        }
+        if (Array.isArray(body) && body.slice(1).some(() => !allow(ip))) {   // ตัวแรกนับไปแล้วข้างบน
+          client.send({ jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.LIMIT, message: "Too many requests, try again later" } });
+          continue;
+        }
         try {
           client.send(Array.isArray(body) && body.length ? body.map((message) => handle(client, message)) : handle(client, body));
         } catch (error) {

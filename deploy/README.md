@@ -90,7 +90,7 @@ EVM_SYMBOL=BWSC
 | `EVM_NAME` / `EVM_SYMBOL` | ชื่อที่ MetaMask เห็นตอนกด Add network · ต้องตรงกับที่ลง chainlist |
 | ไม่ตั้ง `DEV` | DEV=1 ปิดการบังคับ admin / key |
 | ไม่ตั้ง `HISTORY_KEEP_BLOCKS` | เก็บประวัติทั้งหมดไว้ก่อน (ดิสก์ ~7–9 KB ต่อ tx) ตัดทีหลังได้ |
-| ค่าเริ่มที่ไม่ต้องแตะ | `RATE_LIMIT=120` POST ต่อ IP ต่อนาที · `EVM_RATE_LIMIT=600` · `TIMEOUT_MS=5000` · `MAX_TX_PER_BLOCK=500` |
+| ค่าเริ่มที่ไม่ต้องแตะ | `RATE_LIMIT=120` POST ต่อ IP ต่อนาที · `EVM_RATE_LIMIT=600` (batch นับทุกตัว) · `EVM_MAX_BATCH=1000` · `MAX_BODY_BYTES=1048576` · `TIMEOUT_MS=5000` · `MAX_TX_PER_BLOCK=500` |
 
 ## 3. nginx (HTTPS ข้างหน้า)
 
