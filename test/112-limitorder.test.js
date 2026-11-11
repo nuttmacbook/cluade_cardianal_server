@@ -469,3 +469,30 @@ test("limitorder: tx ที่ล้มไม่ทิ้งตัวล็อ�
   t.place(ALICE, { sellToken: TA, sellAmount: "1n", buyToken: TB, buyAmount: "1n" });
   t.invariant();
 });
+
+test("limitorder: จำนวน ≥ 2^128 → too large · expiresAt เป็นมิลลิวินาที → ล้ม · bestOrders ยังใช้ได้", () => {
+  const t = setup();
+  const good = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n" }).id;
+  const huge = s(2n ** 128n);
+  t.fails(t.send(BOB, BOOK, "placeOrder", { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: huge }), /too large/);
+  t.fails(t.send(BOB, BOOK, "placeOrder", { sellToken: TA, sellAmount: huge, buyToken: TB, buyAmount: "100n" }), /too large/);
+  t.fails(t.send(BOB, BOOK, "placeOrder", { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: s(2n ** 8000n) }), /too large/);
+  t.fails(t.send(BOB, BOOK, "placeOrder", { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "100n", expiresAt: "100000000000n" }), /milliseconds/);
+  t.fails(t.send(BOB, BOOK, "placeOrder", { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "100n", expiresAt: s(BigInt(t.now()) + 60_000n) }), /milliseconds/);
+  assert.equal(t.query(BOOK, "orderCount"), 1n);
+  const best = t.query(BOOK, "bestOrders", { sellToken: TA, buyToken: TB });
+  assert.deepEqual(best.orders.map((o) => o.orderId), [good]);
+  t.invariant();
+});
+
+test("limitorder: ห้ามแนบ native value — placeOrder / ฟังก์ชันอ่าน getOrder / bestOrders ล้ม · book ไม่ถือเหรียญหลัก", () => {
+  const t = setup();
+  const id = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n" }).id;
+  const a0 = BigInt(t.vm.nativeBalanceOf(ALICE).balance);
+  t.fails(t.send(ALICE, BOOK, "placeOrder", { sellToken: TA, sellAmount: "1n", buyToken: TB, buyAmount: "1n" }, { value: "10" }), /native coin not accepted/);   // ฟังก์ชันเขียน state ปฏิเสธอยู่แล้ว
+  t.fails(t.send(ALICE, BOOK, "getOrder", { orderId: s(id) }, { value: "10" }), /this function does not accept native value/);
+  t.fails(t.send(ALICE, BOOK, "bestOrders", { sellToken: TA, buyToken: TB }, { value: "10" }), /this function does not accept native value/);
+  assert.equal(BigInt(t.vm.nativeBalanceOf(BOOK).balance), 0n);
+  assert.equal(BigInt(t.vm.nativeBalanceOf(ALICE).balance), a0);
+  t.invariant();
+});

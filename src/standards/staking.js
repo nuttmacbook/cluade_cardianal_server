@@ -46,7 +46,7 @@
  */
 import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 
-export const STAKING_PRECISION = 10n ** 18n;
+export const STAKING_PRECISION = 10n ** 36n;   // 1e36 (ไม่ใช่ 1e18 แบบ Synthetix) → stake token ซัพพลายสูง + reward token ทศนิยมน้อยก็ไม่ปัดรางวัลหาย
 export const STAKING_MAX_DURATION = 315_360_000n;   // 10 ปี (วินาที)
 export const STAKING_MAX_START_DELAY = 31_536_000n; // 365 วัน
 export const STAKING_MAX_PAGE = 50;
@@ -55,6 +55,8 @@ export const STAKING_FUNCTIONS = ["createPool", "stake", "unstake", "claim", "ex
 export const STAKING_EVENTS = ["PoolCreated", "Staked", "Unstaked", "Claimed", "RewardsAdded", "EmergencyWithdraw", "RewardsRecovered"];
 
 export const STAKING_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const P = ${STAKING_PRECISION}n
   const MAX_DURATION = ${STAKING_MAX_DURATION}n
   const MAX_START_DELAY = ${STAKING_MAX_START_DELAY}n
@@ -109,7 +111,10 @@ export const STAKING_PROGRAM = `function program() {
     const t = now < pool.endAt ? now : pool.endAt
     if (t <= pool.lastUpdate) return pool
     if (pool.totalStaked > 0n) {
-      const inc = pool.rewardRate * (t - pool.lastUpdate) / pool.totalStaked
+      // เศษที่หารไม่ลงตัวยกไปรอบถัดไป (carry) ไม่ทิ้ง → เรียกถี่ ๆ ก็ไม่ทำให้รางวัลหาย / ไม่กลายเป็นเงินที่ผู้สร้างดึงคืนได้
+      const scaled = pool.rewardRate * (t - pool.lastUpdate) + (pool.carry || 0n)
+      const inc = scaled / pool.totalStaked
+      pool.carry = scaled - inc * pool.totalStaked
       pool.acc = pool.acc + inc
       pool.allocated = pool.allocated + inc * pool.totalStaked
     }
@@ -118,7 +123,7 @@ export const STAKING_PROGRAM = `function program() {
   }
   function futureScaled(pool) { return pool.lastUpdate < pool.endAt ? pool.rewardRate * (pool.endAt - pool.lastUpdate) : 0n }
   function unallocatedOf(pool) {
-    const free = (pool.funded - pool.recovered) * P - pool.allocated - futureScaled(pool)
+    const free = (pool.funded - pool.recovered) * P - pool.allocated - (pool.carry || 0n) - futureScaled(pool)   // carry = รางวัลที่ไหลแล้วแต่ยังไม่ถึงหน่วย
     return free > 0n ? free / P : 0n
   }
   function reserveOf(pool) { return pool.funded - pool.claimed - pool.recovered }
@@ -152,7 +157,7 @@ export const STAKING_PROGRAM = `function program() {
   }
 
   // ---------- เปลี่ยน state ----------
-  function createPool(params) {
+  function createPool(params) { rejectValue(params);
     lock()
     const input = params.input
     const now = nowOf(params)
@@ -184,7 +189,7 @@ export const STAKING_PROGRAM = `function program() {
     return poolId
   }
 
-  function stake(params) {
+  function stake(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const who = params.context.sender
@@ -217,7 +222,7 @@ export const STAKING_PROGRAM = `function program() {
     pool.totalStaked = pool.totalStaked - amount
   }
 
-  function unstake(params) {
+  function unstake(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const who = params.context.sender
@@ -233,7 +238,7 @@ export const STAKING_PROGRAM = `function program() {
     return true
   }
 
-  function claim(params) {
+  function claim(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const who = params.context.sender
@@ -248,7 +253,7 @@ export const STAKING_PROGRAM = `function program() {
     return user.reward
   }
 
-  function exit(params) {
+  function exit(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const who = params.context.sender
@@ -266,7 +271,7 @@ export const STAKING_PROGRAM = `function program() {
     return { unstaked: user.stake, claimed: user.reward }
   }
 
-  function emergencyWithdraw(params) {
+  function emergencyWithdraw(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const who = params.context.sender
@@ -285,7 +290,7 @@ export const STAKING_PROGRAM = `function program() {
     return user.stake
   }
 
-  function addRewards(params) {
+  function addRewards(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const amount = checkAmount(params.input.amount, "amount")
@@ -320,7 +325,7 @@ export const STAKING_PROGRAM = `function program() {
     return pool.rewardRate
   }
 
-  function recoverUnallocated(params) {
+  function recoverUnallocated(params) { rejectValue(params);
     lock()
     const poolId = checkId(params.input.poolId)
     const pool = accrue(loadPool(poolId), nowOf(params))
@@ -344,9 +349,9 @@ export const STAKING_PROGRAM = `function program() {
     if (typeof limit !== "bigint" || limit <= 0n || limit > BigInt(max)) throw new Error("limit must be 1n … " + max + "n")
     return { start: start, limit: limit }
   }
-  function getPool(params) { return view(checkId(params.input.poolId), loadPool(params.input.poolId), nowOf(params)) }
-  function poolCount() { return readDB("poolCount") || 0n }
-  function pools(params) {
+  function getPool(params) { rejectValue(params); return view(checkId(params.input.poolId), loadPool(params.input.poolId), nowOf(params)) }
+  function poolCount(params) { rejectValue(params); return readDB("poolCount") || 0n }
+  function pools(params) { rejectValue(params);
     const page = pageArgs(params.input || {}, ${STAKING_MAX_PAGE})
     const total = poolCount()
     const out = []
@@ -354,17 +359,17 @@ export const STAKING_PROGRAM = `function program() {
     for (let id = page.start; id < total && id < page.start + page.limit; id = id + 1n) out.push(view(id, loadPool(id), now))
     return out
   }
-  function stakedOf(params) {
+  function stakedOf(params) { rejectValue(params);
     checkId(params.input.poolId)
     return readDB(map("stakes", params.input.poolId, checkAddress(params.input.who, "who"))) || 0n
   }
-  function pendingRewards(params) {
+  function pendingRewards(params) { rejectValue(params);
     const poolId = checkId(params.input.poolId)
     const pool = accrue(loadPool(poolId), nowOf(params))
     return earnedOf(pool, poolId, checkAddress(params.input.who, "who")).reward
   }
-  function poolsOfCount(params) { return readDB(map("userPoolCount", checkAddress(params.input.who, "who"))) || 0n }
-  function poolsOf(params) {
+  function poolsOfCount(params) { rejectValue(params); return readDB(map("userPoolCount", checkAddress(params.input.who, "who"))) || 0n }
+  function poolsOf(params) { rejectValue(params);
     const who = checkAddress(params.input.who, "who")
     const page = pageArgs(params.input, ${STAKING_MAX_USER_PAGE})
     const total = readDB(map("userPoolCount", who)) || 0n

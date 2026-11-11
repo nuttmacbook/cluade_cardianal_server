@@ -522,3 +522,40 @@ test("dex: แก๊สภายใต้ fork bluewolf — addLiquidity · swap
   console.log("dex gas (bluewolf):", JSON.stringify(gas));
   for (const [name, used] of Object.entries(gas)) assert.ok(used > 15_000 && used < 2_000_000, `${name} ${used}`);
 });
+
+test("dex: donate + sync ตอน totalSupply = 0 → router ถือเป็น pool ใหม่ · ผู้ฝากแรกฝากครบ · ผู้โจมตีไม่ได้กำไร", () => {
+  const t = setup();
+  const pair = t.ok(t.send(EVE, ROUTER, "createPair", { tokenA: TKA, tokenB: TKB })).result;
+  // ผู้โจมตีบริจาค 1 wei A + 100 wei B แล้ว sync → reserve ไม่เป็น 0 แต่ totalSupply ยัง 0
+  t.ok(t.send(EVE, TKA, "transfer", { to: pair, amount: "1n" }));
+  t.ok(t.send(EVE, TKB, "transfer", { to: pair, amount: "100n" }));
+  t.ok(t.send(EVE, pair, "sync"));
+  assert.equal(t.query(pair, "totalSupply"), "0n");
+  const [eveA0, eveB0] = [t.bal(TKA, EVE), t.bal(TKB, EVE)];
+  const res = t.ok(add(t, ALICE, TKA, TKB, 1000n * COIN, 1000n * COIN)).result;
+  assert.equal(big(res.amountA), 1000n * COIN);
+  assert.equal(big(res.amountB), 1000n * COIN);
+  // ผู้โจมตี swap วนกลับ → ขาดทุน (pool ราคา 1:1 แล้ว)
+  const r = t.query(pair, "getReserves");
+  const amountIn = 90n * COIN;
+  const out = outFor(amountIn, big(r.reserve0), big(r.reserve1));
+  t.ok(t.send(EVE, TKA, "transfer", { to: pair, amount: n(amountIn) }));
+  t.ok(t.send(EVE, pair, "swap", { amount0Out: "0n", amount1Out: n(out), to: EVE }));
+  const profit = (t.bal(TKA, EVE) - eveA0) + (t.bal(TKB, EVE) - eveB0);
+  assert.ok(profit <= 0n, `attacker profit ${profit}`);
+});
+
+test("dex: ห้ามแนบ native value — pair.sync / pair.swap / pair.getReserves / router.getPair / getAmountsOut", () => {
+  const t = setup();
+  t.ok(add(t, ALICE, TKA, TKB, 1000n * COIN, 1000n * COIN));
+  const pair = t.query(ROUTER, "getPair", { tokenA: TKA, tokenB: TKB });
+  const b0 = t.balance(BOB);
+  const v = { value: `${COIN}` };
+  for (const [prog, fn, input] of [[pair, "sync", {}], [pair, "skim", { to: BOB }], [pair, "swap", { amount0Out: "1n", amount1Out: "0n", to: BOB }],
+    [pair, "getReserves", {}], [ROUTER, "getPair", { tokenA: TKA, tokenB: TKB }], [ROUTER, "getAmountsOut", { amountIn: n(COIN), path: [TKA, TKB] }]]) {
+    t.fails(t.send(BOB, prog, fn, input, v), /this function does not accept native value/);
+  }
+  assert.equal(t.balance(pair), 0n);
+  assert.equal(t.balance(ROUTER), 0n);
+  assert.equal(t.balance(BOB), b0);
+});

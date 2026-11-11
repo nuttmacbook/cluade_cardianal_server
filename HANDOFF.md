@@ -960,7 +960,7 @@ mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(
 | `multicall.js` | `MULTICALL_PROGRAM` | (init รับ `namespace` / `icon` / `url` / `contact` / `description` ไม่บังคับ) `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
 
 ### โปรแกรมกลางของเชน (`src/standards/system.js` · `scripts/deploy-system.js` · เทสต์ `105-system-programs` + e2e)
-ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 13 · ครบ 14 ตัวใช้ ~5.6M แก๊ส · deploy tx ตั้ง gasLimit 1.5M) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wcard` ได้ · ทั้งชุดไม่มี upgrader
+ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 13 · ครบ 14 ตัวใช้ ~6M แก๊ส · deploy tx ตั้ง gasLimit 1.5M) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wcard` ได้ · ทั้งชุดไม่มี upgrader
 
 | nonce | ชื่อ | โปรแกรม | สรุป |
 |---|---|---|---|

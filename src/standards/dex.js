@@ -69,6 +69,8 @@ export function dexPairSalt(tokenA, tokenB) {
 }
 
 export const DEX_PAIR_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const MINIMUM_LIQUIDITY = ${DEX_MINIMUM_LIQUIDITY}n
   const MAX_RESERVE = 5192296858534827628530496329220095n
@@ -156,7 +158,7 @@ ${TOKEN_CORE}
     emit("Sync", { reserve0: balance0, reserve1: balance1 })
   }
 
-  function mint(params) {
+  function mint(params) { rejectValue(params);
     lock()
     const to = checkAddress(params.input.to, "to")
     const reserve0 = readDB("reserve0")
@@ -185,7 +187,7 @@ ${TOKEN_CORE}
     return liquidity
   }
 
-  function burn(params) {
+  function burn(params) { rejectValue(params);
     lock()
     const to = checkAddress(params.input.to, "to")
     const token0 = readDB("token0")
@@ -208,7 +210,7 @@ ${TOKEN_CORE}
     return { amount0: amount0, amount1: amount1 }
   }
 
-  function swap(params) {
+  function swap(params) { rejectValue(params);
     lock()
     const amount0Out = amountArg(params.input.amount0Out === undefined ? 0n : params.input.amount0Out, "amount0Out")
     const amount1Out = amountArg(params.input.amount1Out === undefined ? 0n : params.input.amount1Out, "amount1Out")
@@ -237,7 +239,7 @@ ${TOKEN_CORE}
     return true
   }
 
-  function skim(params) {
+  function skim(params) { rejectValue(params);
     lock()
     const to = checkAddress(params.input.to, "to")
     const token0 = readDB("token0")
@@ -250,26 +252,28 @@ ${TOKEN_CORE}
     return { amount0: amount0 > 0n ? amount0 : 0n, amount1: amount1 > 0n ? amount1 : 0n }
   }
 
-  function sync(params) {
+  function sync(params) { rejectValue(params);
     lock()
     update(balanceOfToken(readDB("token0")), balanceOfToken(readDB("token1")), readDB("reserve0"), readDB("reserve1"), params)
     unlock()
     return true
   }
 
-  function getReserves() {
+  function getReserves(params) { rejectValue(params);
     return { reserve0: readDB("reserve0") || 0n, reserve1: readDB("reserve1") || 0n, blockTimestampLast: readDB("blockTimestampLast") || 0n }
   }
-  function token0() { return readDB("token0") || null }
-  function token1() { return readDB("token1") || null }
-  function factory() { return readDB("factory") || null }
-  function price0CumulativeLast() { return readDB("price0CumulativeLast") || 0n }
-  function price1CumulativeLast() { return readDB("price1CumulativeLast") || 0n }
+  function token0(params) { rejectValue(params); return readDB("token0") || null }
+  function token1(params) { rejectValue(params); return readDB("token1") || null }
+  function factory(params) { rejectValue(params); return readDB("factory") || null }
+  function price0CumulativeLast(params) { rejectValue(params); return readDB("price0CumulativeLast") || 0n }
+  function price1CumulativeLast(params) { rejectValue(params); return readDB("price1CumulativeLast") || 0n }
 
   return { ${TOKEN_CORE_EXPORTS}, mint, burn, swap, skim, sync, getReserves, token0, token1, factory, price0CumulativeLast, price1CumulativeLast }
 }`;
 
 export const DEX_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const MAX_PATH = ${DEX_MAX_PATH}
   const MAX_PAGE = 100n
   ${SET_METADATA}
@@ -424,9 +428,9 @@ export const DEX_PROGRAM = `function program() {
     notPayable(params)
     return createPairFor(params.input.tokenA, params.input.tokenB)
   }
-  function getPair(params) { return pairOf(params.input.tokenA, params.input.tokenB) || null }
-  function pairCount() { return readDB("pairCount") }
-  function allPairs(params) {
+  function getPair(params) { rejectValue(params); return pairOf(params.input.tokenA, params.input.tokenB) || null }
+  function pairCount(params) { rejectValue(params); return readDB("pairCount") }
+  function allPairs(params) { rejectValue(params);
     const start = nonNegative(params.input.start, "start")
     const limit = params.input.limit === undefined || params.input.limit === null ? MAX_PAGE : positive(params.input.limit, "limit")
     if (limit > MAX_PAGE) throw new Error("limit must be at most " + MAX_PAGE)
@@ -435,8 +439,8 @@ export const DEX_PROGRAM = `function program() {
     for (let i = start; i < count && i < start + limit; i++) list.push(readDB(map("pairs", i)))
     return list
   }
-  function pairTemplate() { return readDB("pairTemplate") }
-  function wrapped() { return readDB("wrapped") }
+  function pairTemplate(params) { rejectValue(params); return readDB("pairTemplate") }
+  function wrapped(params) { rejectValue(params); return readDB("wrapped") }
 
   // ── liquidity ──
   function optimalAmounts(tokenA, tokenB, desiredA, desiredB, minA, minB) {
@@ -444,7 +448,9 @@ export const DEX_PROGRAM = `function program() {
     if (pair === undefined) pair = createPairFor(tokenA, tokenB)
     const r = reservesOf(tokenA, tokenB)
     // ยังว่าง (หรือมีคน sync donation ข้างเดียวไว้) → ใส่ตาม desired (pair.mint ครั้งแรกคิดจากยอดที่เกิน reserve)
-    if (r.reserveA === 0n || r.reserveB === 0n) return { pair: pair, amountA: desiredA, amountB: desiredB }
+    // ยังไม่มี LP (totalSupply 0) ก็ถือว่าใหม่: กันคนบริจาค + sync ตั้งอัตราหลอกไว้ก่อน แล้วผู้ใส่คนแรกโดนดึงตามอัตรานั้น
+    const supply = runProgram(pair, "totalSupply", {}, { readonly: true })
+    if (r.reserveA === 0n || r.reserveB === 0n || supply === 0n) return { pair: pair, amountA: desiredA, amountB: desiredB }
     const optimalB = quoteAmount(desiredA, r.reserveA, r.reserveB)
     if (optimalB <= desiredB) {
       if (optimalB < minB || optimalB === 0n) throw new Error("insufficient B amount")
@@ -640,18 +646,18 @@ export const DEX_PROGRAM = `function program() {
   }
 
   // ── อ่าน ──
-  function getAmountsOut(params) { return amountsOut(params.input.amountIn, checkPath(params.input.path)) }
-  function getAmountsIn(params) { return amountsIn(params.input.amountOut, checkPath(params.input.path)) }
-  function quote(params) {
+  function getAmountsOut(params) { rejectValue(params); return amountsOut(params.input.amountIn, checkPath(params.input.path)) }
+  function getAmountsIn(params) { rejectValue(params); return amountsIn(params.input.amountOut, checkPath(params.input.path)) }
+  function quote(params) { rejectValue(params);
     return quoteAmount(params.input.amountA, nonNegative(params.input.reserveA, "reserveA"), nonNegative(params.input.reserveB, "reserveB"))
   }
-  function getAmountOut(params) {
+  function getAmountOut(params) { rejectValue(params);
     return amountOutFor(params.input.amountIn, nonNegative(params.input.reserveIn, "reserveIn"), nonNegative(params.input.reserveOut, "reserveOut"))
   }
-  function getAmountIn(params) {
+  function getAmountIn(params) { rejectValue(params);
     return amountInFor(params.input.amountOut, nonNegative(params.input.reserveIn, "reserveIn"), nonNegative(params.input.reserveOut, "reserveOut"))
   }
-  function getReserves(params) {
+  function getReserves(params) { rejectValue(params);
     const r = reservesOf(params.input.tokenA, params.input.tokenB)
     return { reserveA: r.reserveA, reserveB: r.reserveB }
   }

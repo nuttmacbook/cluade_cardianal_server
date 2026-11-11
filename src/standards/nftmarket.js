@@ -67,6 +67,8 @@ export const NFT_MARKET_FUNCTIONS = ["list", "listMulti", "buy", "updatePrice", 
 export const NFT_MARKET_EVENTS = ["Listed", "PriceUpdated", "Cancelled", "Sold", "OfferMade", "OfferCancelled", "OfferAccepted"];
 
 export const NFT_MARKET_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const MAX_FEE_BPS = ${NFT_MARKET_MAX_FEE_BPS}n
   const MAX_PAGE = ${NFT_MARKET_MAX_PAGE}n
@@ -116,12 +118,13 @@ export const NFT_MARKET_PROGRAM = `function program() {
     writeDB("lock", expect)
   }
   function exit() { deleteDB("lock") }
-  function feeOf(total) { return total * readDB("feeBps") / 10000n }
+  // ปัดขึ้น: แยกซื้อทีละชิ้นก็หนีค่าธรรมเนียมไม่ได้ (feeBps ≤ 10% → fee ไม่เกิน total)
+  function feeOf(total) { return (total * readDB("feeBps") + 9999n) / 10000n }
 
   function tokenBalance(token, who) { return runProgram(token, "balanceOf", { who: who }, { readonly: true }) }
   /** โอน token แล้วตรวจว่าผู้รับได้ยอดเต็มจริง (ไม่เชื่อค่าที่ token ตอบอย่างเดียว) · from = ThisAddress() → transfer */
   function moveToken(token, from, to, amount) {
-    if (amount === 0n) return
+    if (amount === 0n || from === to) return   // โอนให้ตัวเอง (feeRecipient ซื้อเอง) = ไม่มีอะไรเปลี่ยน
     const before = tokenBalance(token, to)
     if (from === ThisAddress()) runProgram(token, "transfer", { to: to, amount: amount })
     else runProgram(token, "transferFrom", { from: from, to: to, amount: amount })
@@ -191,7 +194,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
   }
 
   // ---------- วางขาย ----------
-  function list(params) {
+  function list(params) { rejectValue(params);
     noValue(params)
     const input = params.input || {}
     const collection = checkProgram(input.nft, "nft")
@@ -213,7 +216,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return id
   }
 
-  function listMulti(params) {
+  function listMulti(params) { rejectValue(params);
     noValue(params)
     const input = params.input || {}
     const collection = checkProgram(input.multiToken, "multiToken")
@@ -242,15 +245,15 @@ export const NFT_MARKET_PROGRAM = `function program() {
     if (params.context.sender !== expect.collection || input.operator !== ThisAddress() || input.from !== expect.from
       || tokenId !== expect.tokenId || amount !== expect.amount) throw new Error("unexpected transfer")
   }
-  function onERC721Received(params) {
+  function onERC721Received(params) { rejectValue(params);
     expected(params, "erc721", (params.input || {}).tokenId, 1n)
     return "${ERC721_RECEIVED}"
   }
-  function onERC1155Received(params) {
+  function onERC1155Received(params) { rejectValue(params);
     expected(params, "erc1155", (params.input || {}).id, (params.input || {}).amount)
     return "${ERC1155_RECEIVED}"
   }
-  function onERC1155BatchReceived() { throw new Error("batch transfers are not accepted; use listMulti") }
+  function onERC1155BatchReceived(params) { rejectValue(params); throw new Error("batch transfers are not accepted; use listMulti") }
 
   // ---------- ซื้อ / แก้ราคา / ยกเลิก ----------
   function buy(params) {
@@ -261,12 +264,14 @@ export const NFT_MARKET_PROGRAM = `function program() {
     if (buyer === listing.seller) throw new Error("seller cannot buy own listing")
     const amount = input.amount === undefined || input.amount === null ? 1n : checkPositive(input.amount, "amount")
     if (amount > listing.amount) throw new Error("amount exceeds the listed amount")
+    // จ่ายด้วย token ต้องระบุ price (กันผู้ขายขึ้นราคาตัดหน้า แล้วดึงจาก allowance ที่ให้ไว้เยอะ) · native ตรวจจาก value อยู่แล้ว
     if (input.price !== undefined && input.price !== null && input.price !== listing.price) throw new Error("price changed")
     const total = listing.price * amount
     const value = params.value || 0n
     if (listing.payToken === "") {
       if (value !== total) throw new Error("value must equal the exact price (" + total + ")")
     } else if (value !== 0n) throw new Error("this listing is paid in tokens; do not attach native value")
+    else if (input.price === undefined || input.price === null) throw new Error("price is required when paying with a token")
     listing.amount = listing.amount - amount
     listing.sold = listing.sold + amount
     if (listing.amount === 0n) {
@@ -282,7 +287,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return { listingId: listing.listingId, amount: amount, price: total, fee: fee }
   }
 
-  function updatePrice(params) {
+  function updatePrice(params) { rejectValue(params);
     noValue(params)
     const input = params.input || {}
     const listing = activeListing(input.listingId)
@@ -295,7 +300,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return true
   }
 
-  function cancel(params) {
+  function cancel(params) { rejectValue(params);
     noValue(params)
     enter(null)
     const listing = activeListing((params.input || {}).listingId)
@@ -327,6 +332,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     const amount = checkPositive(input.amount, "amount")
     const expiresAt = input.expiresAt === undefined || input.expiresAt === null ? 0n : checkId(input.expiresAt, "expiresAt")
     if (expiresAt !== 0n && expiresAt <= now(params)) throw new Error("expiresAt must be in the future")
+    if (expiresAt >= 100000000000n) throw new Error("expiresAt looks like milliseconds: use unix seconds")
     const buyer = params.context.sender
     const value = params.value || 0n
     if (payToken === "") {
@@ -349,7 +355,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return offerId
   }
 
-  function cancelOffer(params) {
+  function cancelOffer(params) { rejectValue(params);
     noValue(params)
     enter(null)
     const offer = loadOffer((params.input || {}).offerId)
@@ -364,7 +370,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return true
   }
 
-  function acceptOffer(params) {
+  function acceptOffer(params) { rejectValue(params);
     noValue(params)
     enter(null)
     const offer = loadOffer((params.input || {}).offerId)
@@ -396,11 +402,11 @@ export const NFT_MARKET_PROGRAM = `function program() {
   }
 
   // ---------- อ่าน ----------
-  function fee() { return { feeBps: readDB("feeBps"), feeRecipient: readDB("feeRecipient") } }
-  function listingCount() { return readDB("listingCount") }
-  function offerCount() { return readDB("offerCount") }
-  function getListing(params) { return loadListing((params.input || {}).listingId) }
-  function getOffer(params) { return loadOffer((params.input || {}).offerId) }
+  function fee(params) { rejectValue(params); return { feeBps: readDB("feeBps"), feeRecipient: readDB("feeRecipient") } }
+  function listingCount(params) { rejectValue(params); return readDB("listingCount") }
+  function offerCount(params) { rejectValue(params); return readDB("offerCount") }
+  function getListing(params) { rejectValue(params); return loadListing((params.input || {}).listingId) }
+  function getOffer(params) { rejectValue(params); return loadOffer((params.input || {}).offerId) }
 
   /** ไล่ total รายการตั้งแต่ start ไม่เกิน limit รายการ (กรอง activeOnly หลังโหลด) */
   function page(input, total, idAt, load) {
@@ -416,21 +422,21 @@ export const NFT_MARKET_PROGRAM = `function program() {
     }
     return { items: items, next: i < total ? i : null, total: total }
   }
-  function listings(params) {
+  function listings(params) { rejectValue(params);
     const input = params.input || {}
     return page(input, readDB("listingCount"), (i) => i, loadListing)
   }
-  function listingsOf(params) {
+  function listingsOf(params) { rejectValue(params);
     const input = params.input || {}
     const seller = checkAddress(input.seller, "seller")
     return page(input, readDB(map("sellerCount", seller)) || 0n, (i) => readDB(map("seller", seller, i)), loadListing)
   }
-  function listingsForCollection(params) {
+  function listingsForCollection(params) { rejectValue(params);
     const input = params.input || {}
     const collection = checkAddress(input.nft, "nft")
     return page(input, readDB(map("collectionCount", collection)) || 0n, (i) => readDB(map("collection", collection, i)), loadListing)
   }
-  function offersFor(params) {
+  function offersFor(params) { rejectValue(params);
     const input = params.input || {}
     const collection = checkAddress(input.nft, "nft")
     const tokenId = checkId(input.tokenId, "tokenId")

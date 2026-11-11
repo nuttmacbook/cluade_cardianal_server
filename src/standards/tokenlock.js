@@ -54,6 +54,8 @@ export const TOKEN_LOCK_READS = ["getLock", "lockCount", "locksOf", "locksForTok
 export const TOKEN_LOCK_EVENTS = ["Locked", "Unlocked", "LockExtended", "LockIncreased", "LockOwnerChanged"];
 
 export const TOKEN_LOCK_PROGRAM = `function program() {
+  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const BPS = 10000n
   const MAX_TIME = 100000000000n
@@ -154,6 +156,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return item.amount * bps / BPS
   }
   function withdrawableNow(item, now) {
+    if (item.owner === ZERO) return 0n   // สละสิทธิ์แล้ว = ไม่มีใครถอนได้ (หน้า UI / ตัวตรวจ lock ต้องไม่เห็นเป็นถอนได้)
     const unlocked = unlockedAmount(item, now)
     return unlocked > item.withdrawn ? unlocked - item.withdrawn : 0n
   }
@@ -224,7 +227,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
   }
 
   // ---------- state-changing ----------
-  function lock(params) {
+  function lock(params) { rejectValue(params);
     const input = params.input
     const token = checkToken(input.token)
     return create(params, {
@@ -233,7 +236,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
       tgeAt: 0n, tgeBps: 0n, cycleSeconds: 0n, cycleBps: 0n, description: checkDescription(input.description) })
   }
 
-  function vestingLock(params) {
+  function vestingLock(params) { rejectValue(params);
     const input = params.input
     const token = checkToken(input.token)
     const tgeAt = checkFuture(input.tgeAt, "tgeAt", params)
@@ -250,7 +253,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
       description: checkDescription(input.description) })
   }
 
-  function unlock(params) {
+  function unlock(params) { rejectValue(params);
     enter()
     const id = params.input.id
     const item = load(id)
@@ -268,7 +271,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return amount
   }
 
-  function extendLock(params) {
+  function extendLock(params) { rejectValue(params);
     enter()
     const id = params.input.id
     const item = load(id)
@@ -285,7 +288,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return true
   }
 
-  function increaseLock(params) {
+  function increaseLock(params) { rejectValue(params);
     enter()
     const id = params.input.id
     const item = load(id)
@@ -312,7 +315,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     emit("LockOwnerChanged", { id: item.id, previousOwner: previous, newOwner: newOwner }, { indexed: ["id", "previousOwner", "newOwner"] })
   }
 
-  function transferLockOwnership(params) {
+  function transferLockOwnership(params) { rejectValue(params);
     enter()
     const item = load(params.input.id)
     onlyLockOwner(item, params)
@@ -326,7 +329,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
   }
 
   // ⚠️ ไม่มีใครถอนได้อีก — token ในล็อกนี้ติดอยู่ตลอดไป
-  function renounceLockOwnership(params) {
+  function renounceLockOwnership(params) { rejectValue(params);
     enter()
     const item = load(params.input.id)
     onlyLockOwner(item, params)
@@ -337,12 +340,12 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
   }
 
   // ---------- reads ----------
-  function getLock(params) { return view(load(params.input.id), params) }
-  function lockCount() { return readDB("count") || 0n }
-  function withdrawableOf(params) { return withdrawableNow(load(params.input.id), nowSeconds(params)) }
-  function totalLocked(params) { return readDB(map("total", checkAddress(params.input.token, "token"))) || 0n }
-  function locksOf(params) { return listFrom("owner", checkAddress(params.input.owner, "owner"), params) }
-  function locksForToken(params) { return listFrom("token", checkAddress(params.input.token, "token"), params) }
+  function getLock(params) { rejectValue(params); return view(load(params.input.id), params) }
+  function lockCount(params) { rejectValue(params); return readDB("count") || 0n }
+  function withdrawableOf(params) { rejectValue(params); return withdrawableNow(load(params.input.id), nowSeconds(params)) }
+  function totalLocked(params) { rejectValue(params); return readDB(map("total", checkAddress(params.input.token, "token"))) || 0n }
+  function locksOf(params) { rejectValue(params); return listFrom("owner", checkAddress(params.input.owner, "owner"), params) }
+  function locksForToken(params) { rejectValue(params); return listFrom("token", checkAddress(params.input.token, "token"), params) }
 
   return { lock, vestingLock, unlock, extendLock, increaseLock, transferLockOwnership, renounceLockOwnership, getLock, lockCount, locksOf, locksForToken, totalLocked, withdrawableOf }
 }`;

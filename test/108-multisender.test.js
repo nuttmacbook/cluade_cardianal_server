@@ -322,3 +322,18 @@ test(`แก๊ส: ${MULTISENDER_MAX_ITEMS} รายการต่อ call �
   assert.equal(t.tokenBalance(TOKEN, recipients[1]), 2n);
   assert.equal(t.query(NFT, "ownerOf", { tokenId: `${n}n` }), recipients[n - 1]);
 });
+
+test("address ต้องเป็น hex 40 ตัว: 0x+'g'*40 → ล้ม ไม่มีอะไรย้าย", () => {
+  const t = setup();
+  const bad = `0x${"g".repeat(40)}`;
+  const a0 = t.balance(ALICE);
+  t.fail(t.send(ALICE, SENDER, "sendNative", { transfers: [{ to: bad, amount: "5n" }] }, { value: "5" }), /must be an address/);
+  assert.equal(t.balance(bad), 0n);
+  t.ok(t.send(ALICE, TOKEN, "approve", { spender: SENDER, amount: "100n" }));
+  const tok0 = t.tokenBalance(TOKEN, ALICE);
+  t.fail(t.send(ALICE, SENDER, "sendToken", { token: TOKEN, transfers: [{ to: bad, amount: "5n" }] }), /must be an address/);
+  assert.equal(t.tokenBalance(TOKEN, ALICE), tok0);
+  assert.equal(t.query(TOKEN, "allowance", { owner: ALICE, spender: SENDER }), "100n");
+  assert.equal(t.balance(ALICE), a0, "native not sent");
+  assertEmpty(t);
+});

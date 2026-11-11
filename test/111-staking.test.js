@@ -91,8 +91,8 @@ function setup() {
   for (const token of [TKA, TKB]) deploy(token, TOKEN_PROGRAM, { name: token, ticker: "T", decimals: "18n", supply: `${4_000_000n * E}n`, owner: CREATOR });
   deploy(FEE, TEST_TOKEN, { holders: USERS, supply: `${1_000_000n * E}n`, fee: "10n" });
   deploy(EVIL, TEST_TOKEN, { holders: USERS, supply: `${1_000_000n * E}n` });
-  const send = (who, programUuid, functionName, input = {}, at) => block((b) => {
-    const res = b.call({ programUuid, functionName, input: enc(input), context: { sender: who, origin: who }, gasLimit: 4_000_000 });
+  const send = (who, programUuid, functionName, input = {}, at, extra = {}) => block((b) => {
+    const res = b.call({ programUuid, functionName, input: enc(input), context: { sender: who, origin: who }, gasLimit: 4_000_000, ...extra });
     return { ...res, value: big(res.result) };
   }, at);
   const ok = (res) => {
@@ -114,7 +114,7 @@ function setup() {
   for (const who of USERS.slice(1)) for (const token of [TKA, TKB]) ok(send(CREATOR, token, "transfer", { to: who, amount: 1_000_000n * E }));
   for (const who of USERS) for (const token of [TKA, TKB, FEE, EVIL]) ok(send(who, token, "approve", { spender: STAKING, amount: 10n ** 30n }));
   const time = () => now;
-  return { vm, send, ok, fail, query, bal, time };
+  return { vm, send, ok, fail, query, bal, time, deploy };
 }
 
 /** ยอด token ที่ staking ถืออยู่ ≥ ต้นเงิน + กองรางวัลของทุก pool ที่ใช้ token นี้ */
@@ -465,4 +465,49 @@ test("staking: pools / poolsOf / getPool · และค่าแก๊สขอ
   assert.equal(p.recovered, 3n * E);   // 30 วิแรกไม่มีใคร stake = 3 เหรียญ
   assert.equal(p.rewardReserve, 97n * E);
   assert.equal(t.vm.resolveNamespace("staking"), STAKING);
+});
+
+test("staking: ห้ามแนบ native value — stake / getPool ล้ม · โปรแกรมไม่ถือเหรียญหลัก", () => {
+  const t = setup();
+  t.vm.db.load({ [VM.nativeKey(ALICE, "received")]: `${1000n * E}n` });
+  const nat = (who) => BigInt(t.vm.nativeBalanceOf(who).balance);
+  const start = t.time() + 10n;
+  t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKB, rewardAmount: 1000n * E, duration: 100n, startAt: start }, start));
+  const a0 = nat(ALICE);
+  t.fail(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: E }, start, { value: `${E}` }), /this function does not accept native value/);
+  t.fail(t.send(ALICE, STAKING, "getPool", { poolId: 0n }, start, { value: `${E}` }), /this function does not accept native value/);
+  assert.equal(nat(STAKING), 0n);
+  assert.equal(nat(ALICE), a0);
+  assert.equal(t.query(STAKING, "stakedOf", { poolId: 0n, who: ALICE }), 0n);
+});
+
+test("staking: reward 6 หลัก + stake ก้อนใหญ่ · มีคนกระทุ้งทุก 120 วิ ก็ไม่ทำให้รางวัลหาย (precision 1e36 + เก็บเศษ)", () => {
+  const USD = "0x000000000000000000000000000000000000bbb6";   // reward token 6 หลัก
+  const E6 = 10n ** 6n;
+  const REWARD = 10_000n * E6;
+  const DURATION = 30n * 86400n;
+  const WINDOW = 3600n;
+  const STEP = 120n;
+  const expected = REWARD * WINDOW / DURATION;
+  const run = (poke) => {
+    const t = setup();
+    t.deploy(USD, TOKEN_PROGRAM, { name: "USD", ticker: "USD", decimals: "6n", supply: `${1_000_000n * E6}n`, owner: CREATOR });
+    t.ok(t.send(CREATOR, USD, "approve", { spender: STAKING, amount: 10n ** 30n }));
+    const start = t.time() + 10n;
+    t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: USD, rewardAmount: REWARD, duration: DURATION, startAt: start }, start));
+    t.ok(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: 1_000_000n * E }, start));
+    // BOB กระทุ้ง accrue ด้วย stake 1 wei ทุก STEP วินาที
+    if (poke) for (let at = start + STEP; at <= start + WINDOW; at += STEP) t.ok(t.send(BOB, STAKING, "stake", { poolId: 0n, amount: 1n }, at));
+    const end = start + WINDOW;
+    const alice = t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, end);
+    const rec = t.send(CREATOR, STAKING, "recoverUnallocated", { poolId: 0n }, end);
+    const recovered = rec.status === "success" ? rec.value : (t.fail(rec, "nothing to recover"), 0n);
+    return { alice, recovered };
+  };
+  for (const poke of [false, true]) {
+    const { alice, recovered } = run(poke);
+    const diff = alice > expected ? alice - expected : expected - alice;
+    assert.ok(diff <= 1n, `poke=${poke}: alice ${alice} vs expected ${expected}`);
+    assert.ok(recovered <= 1n, `poke=${poke}: recovered ${recovered}`);
+  }
 });
