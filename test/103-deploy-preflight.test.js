@@ -49,6 +49,15 @@ test("preflight: ไฟล์ตัวอย่างที่ยังไม่
   assert.equal(loose.status, 0);
   assert.match(loose.stdout, /เตือน: TRUST_PROXY/);
   assert.match(loose.stdout, /เตือน: HOST/);
+  assert.match(ok.stdout, /forks: bluewolf@0/);
+
+  // ลืม forks → ไม่ผ่าน (เชนจะเปิดด้วยตารางแก๊สเดิม: โอนเหรียญหลัก 1,300 แก๊สแทน 17,300)
+  const noFork = JSON.parse(fs.readFileSync(genesis, "utf8"));
+  delete noFork.forks;
+  fs.writeFileSync(genesis, JSON.stringify(noFork));
+  const missing = preflight({ GENESIS: genesis, PRODUCER_KEY: key, DATA: "/tmp/x", HOST: "127.0.0.1", TRUST_PROXY: "1" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /genesis ไม่มี fork "bluewolf"/);
 });
 
 test("server: HOST=127.0.0.1 ฟังเฉพาะในเครื่อง · ไฟล์ตัวอย่างที่กรอกครบเปิด server ได้", async () => {

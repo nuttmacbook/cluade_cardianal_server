@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import { resolveSettings, startupProblems, startupWarnings } from "../src/node/genesis.js";
 import { addressOf } from "../src/crypto/signature.js";
+import { FORKS } from "../src/core/virtualmachine.js";
 
 const env = process.env;
 const problems = [];
@@ -33,6 +34,10 @@ warnings.push(...startupWarnings({ settings, dev: false }));
 // ---- server ยอมให้ผ่าน แต่ไม่ควรใช้กับเชนสาธารณะ
 if (dev) problems.push("ตั้ง DEV=1 อยู่ — ปิดการบังคับ admin / key ห้ามใช้กับเชนจริง");
 if (!genesis.config) problems.push(`${file} ไม่มี config — ค่าของเชนไม่ถูกล็อกใน genesis (ไฟล์ของช่วงพัฒนา) · ใช้ deploy/genesis.mainnet.example.json`);
+// fork ที่โค้ดรู้จักแต่ genesis ไม่ได้เปิด → เชนใช้กติกาเดิม (เช่น ไม่มี bluewolf = ตารางแก๊สเก่า โอนเหรียญหลัก 1,300 แก๊สแทน 17,300)
+for (const name of Object.keys(FORKS)) {
+  if (settings.forks?.[name] === undefined) problems.push(`genesis ไม่มี fork "${name}" ใน forks — ใส่ "forks": { "${name}": 0 } ตอนเปิดเชนใหม่ (เชนที่เปิดแล้ว: ใส่เลข block ในอนาคต)`);
+}
 if (settings.chainId === 1) problems.push("chainId = 1 ชนกับ Ethereum mainnet · ใช้เลขที่ไม่ซ้ำ (เช็คที่ chainlist.org)");
 for (const [address, amount] of Object.entries(genesis.balances ?? {})) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) problems.push(`balances มีค่าที่ไม่ใช่ address: ${address}`);
@@ -47,6 +52,7 @@ if (!env.DATA) warnings.push("DATA ไม่ได้ตั้ง — ข้อ�
 
 console.log(`genesis: ${file}`);
 console.log(`chainId ${settings.chainId} · block ${settings.blockMs} ms · maxBlockGas ${settings.maxBlockGas} · gasTarget ${settings.gasTarget ?? settings.maxBlockGas / 2} · upgradeDelayBlocks ${settings.upgradeDelayBlocks}`);
+console.log(`forks: ${Object.entries(settings.forks ?? {}).map(([name, block]) => `${name}@${block}`).join(", ") || "-"}`);
 console.log(`admins: ${(settings.admins ?? []).join(", ") || "-"}`);
 console.log(`producers: ${(settings.producers ?? []).join(", ") || "-"}`);
 console.log(`เครื่องนี้: ${follow ? `เครื่องสำรอง ตาม ${env.FOLLOW}` : producer ? `ผู้ผลิต ${producer}` : "-"}`);
