@@ -27,7 +27,7 @@ function saveDeployDraft() {
 
 async function useMyWallet() {
   saveDeployDraft();
-  try { if (!wallet) await connect(false); } catch (error) { return writeOut("dp-out", esc(error.message)); }
+  try { await ensureWallet(); } catch (error) { return writeOut("dp-out", esc(error.message)); }
   deployDraft.upgrader = wallet;
   document.getElementById("dp-upgrader").value = wallet;
 }

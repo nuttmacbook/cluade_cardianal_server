@@ -53,7 +53,7 @@ async function saveMeta(address) {
     if (!Object.keys(changes).length) return out("Nothing changed");
     if (changes.icon && !isImage(changes.icon) && [...changes.icon].length > 2) return out("Icon must be an https:// image link, a data:image/… URI, or one emoji");
     for (const field of ["url", "contact"]) if (changes[field] && !safeHref(changes[field])) return out(`${field} must be an https://, mailto: or tel: link, or an email address`);
-    if (!wallet) await connect(false);
+    await ensureWallet();
     if (wallet !== address) return out("You can only set metadata for the connected wallet's own address");
     out("Waiting for the wallet signature…");
     const result = await sendTx({ action: "metadata", input: changes });

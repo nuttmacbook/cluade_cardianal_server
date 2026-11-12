@@ -63,7 +63,7 @@ async function signPermitData(program) {
   const value = toUnits(document.getElementById("permit-value").value, token.decimals, "Value");
   const deadline = document.getElementById("permit-deadline").value.trim();
   if (!/^\d+$/.test(deadline)) throw new Error("Deadline must be unix seconds (whole number)");
-  if (!wallet) await connect(false);
+  await ensureWallet();
   const info = await api("/genesis");
   const nonce = await api("/query", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ programUuid: program, functionName: "nonces", input: { owner: wallet } }) });
@@ -74,7 +74,7 @@ async function signPermitData(program) {
     domain: { name: token.name, version: "1", chainId: info.chainId, verifyingContract: program },
     message: { owner: wallet, spender: spender.toLowerCase(), value: value.toString(), nonce: toBig(nonce.result).toString(), deadline },
   };
-  const signature = await window.ethereum.request({ method: "eth_signTypedData_v4", params: [wallet, JSON.stringify(typed)] });
+  const signature = await window.ethereum.request({ method: "eth_signTypedData_v4", params: [walletAccount ?? wallet, JSON.stringify(typed)] });
   const input = { owner: wallet, spender: spender.toLowerCase(), value: `${value}n`, deadline: `${deadline}n`, signature };
   return { program, input, typed };
 }
