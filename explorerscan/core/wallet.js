@@ -17,7 +17,8 @@ const TX_TYPE = [...BASE_TYPE, SIGNED_ON];
 // EIP-1559: same fields without gasPrice, plus maxFeePerGas / maxPriorityFeePerGas (TRANSACTION_TYPE_1559 in signature.js)
 const TX_TYPE_1559 = [...BASE_TYPE.filter((f) => f.name !== "gasPrice"),
   { name: "maxFeePerGas", type: "uint256" }, { name: "maxPriorityFeePerGas", type: "uint256" }, SIGNED_ON];
-let wallet = null;
+let wallet = null;          // lower-case: for the node (from / nonce / balance)
+let walletAccount = null;   // exactly as the wallet returned it: Brave Wallet only signs for that exact string (MetaMask accepts any case)
 
 /** canonical JSON, same as the VM (sorted keys, bigint as "123n") */
 function canonical(value) {
@@ -42,10 +43,41 @@ function signingInput(tx) {
 async function connect(rerender = true) {
   if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
   const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
-  wallet = account.toLowerCase();
+  walletAccount = String(account);
+  wallet = walletAccount.toLowerCase();
   document.getElementById("wbtn").textContent = cut(wallet);
   if (rerender) render(true);
 }
+
+/**
+ * the account to sign with, still authorized for this site right now
+ *   MetaMask only signs for accounts the site was granted (eth_accounts) · switching / disconnecting the account in the wallet
+ *   after connecting leaves the old address here → error 4100 "not authorized" · so ask again whenever it is not in the list
+ */
+async function ensureWallet() {
+  if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
+  let accounts = [];
+  try { accounts = (await window.ethereum.request({ method: "eth_accounts" })) ?? []; } catch {}
+  const same = accounts.find((a) => String(a).toLowerCase() === wallet);
+  if (wallet && same) { walletAccount = String(same); return wallet; }
+  if (accounts.length) {   // the wallet switched to another authorized account → use the one it has selected
+    walletAccount = String(accounts[0]);
+    wallet = walletAccount.toLowerCase();
+    const button = document.getElementById("wbtn");
+    if (button) button.textContent = cut(wallet);
+    return wallet;
+  }
+  await connect(false);   // not authorized (yet / any more) → the wallet asks the user to connect
+  return wallet;
+}
+
+// account switched / disconnected in the wallet → follow it (no stale address left to sign with)
+window.ethereum?.on?.("accountsChanged", (accounts) => {
+  walletAccount = accounts?.[0] ? String(accounts[0]) : null;
+  wallet = walletAccount ? walletAccount.toLowerCase() : null;
+  const button = document.getElementById("wbtn");
+  if (button) button.textContent = wallet ? cut(wallet) : "Connect wallet";
+});
 
 /** add this chain to the wallet (MetaMask): chainId / name / symbol / rpcUrls / explorer come from GET /evm of the node */
 async function addNetwork() {
@@ -92,7 +124,7 @@ async function coinSymbol() {
 
 /** sign and send to the chain — returns the /sendtx response · onCost(text) shows balance + fee before the wallet pops up */
 async function sendTx(fields, { onCost } = {}) {
-  if (!wallet) await connect(false);
+  await ensureWallet();
   const info = await api("/genesis");
   const signedOn = await walletChainId();
   const { nonce } = await api(`/nonce/${wallet}`);
@@ -117,7 +149,7 @@ async function sendTx(fields, { onCost } = {}) {
 
   const signature = await window.ethereum.request({
     method: "eth_signTypedData_v4",
-    params: [wallet, JSON.stringify({ domain: DOMAIN,
+    params: [walletAccount ?? wallet, JSON.stringify({ domain: DOMAIN,
       types: { EIP712Domain: DOMAIN_TYPE, Transaction: legacy ? TX_TYPE : TX_TYPE_1559 }, primaryType: "Transaction", message })],
   });
 

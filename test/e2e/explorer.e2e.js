@@ -48,12 +48,22 @@ before(async () => {
     return wallet.signTypedData(domain, rest, message);
   });
   await context.addInitScript((account) => {
+    // แบบ Brave Wallet (เข้มกว่า MetaMask): เซ็นได้เฉพาะบัญชีที่เว็บได้รับสิทธิ์ (eth_accounts) และต้องส่ง address ตัวพิมพ์ตรงกับที่กระเป๋าให้มา
+    //   ไม่ตรง = error 4100 · __revoke() = ผู้ใช้ตัดการเชื่อมต่อในกระเป๋า
+    const authorized = new Set();
+    window.__requested = 0;
+    window.__revoke = () => authorized.clear();
     window.ethereum = {
+      on: () => {},
       request: async ({ method, params }) => {
-        if (method === "eth_requestAccounts") return [account];
+        if (method === "eth_requestAccounts") { window.__requested += 1; authorized.add(account); return [account]; }
+        if (method === "eth_accounts") return [...authorized];
         // แบบ MetaMask: เปิดเชนอื่นอยู่ (ค่าเริ่ม BSC 0x38 = ยังไม่ได้ add เชนนี้) · chainId ใน domain ต้องตรงกับเชนที่เปิดอยู่
         if (method === "eth_chainId") return window.__walletChain ?? "0x38";
         if (method === "eth_signTypedData_v4") {
+          if (!authorized.has(params[0])) {
+            throw Object.assign(new Error("The requested account and/or method has not been authorized by the user."), { code: 4100 });
+          }
           const domainChain = JSON.parse(params[1]).domain?.chainId;
           if (domainChain !== undefined && BigInt(domainChain) !== BigInt(window.__walletChain ?? "0x38")) {
             throw new Error(`Provided chainId "${domainChain}" must match the active chainId "${BigInt(window.__walletChain ?? "0x38")}"`);
@@ -326,6 +336,21 @@ test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC �
   const after = (await get(`/program/${address}/storage?prefix=balances&limit=200`)).items;
   const bobAfter = after.find((s) => s.key[1] === BOB.toLowerCase()).value;
   assert.equal(BigInt(bobAfter.slice(0, -1)) - BigInt(bobBefore.slice(0, -1)), 7n);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("wallet: ผู้ใช้ตัดการเชื่อมต่อ / สลับบัญชีในกระเป๋าหลังเชื่อมแล้ว → ขอสิทธิ์ใหม่ก่อนเซ็น (ไม่เจอ error 4100 not authorized)", async () => {
+  const { address } = await get("/name/mytoken");
+  await open(`#address/${address}`);
+  await tab("Interact");
+  await page.selectOption("#fn", "transfer");
+  await page.click(".ix-head .seg button[data-mode=json]");
+  await page.fill("#args", JSON.stringify({ to: BOB, amount: "1n" }));
+  const asked = await page.evaluate(async () => { await connect(false); window.__revoke(); return window.__requested; });   // เชื่อมแล้ว แล้วผู้ใช้ตัดสิทธิ์
+  await page.click("text=Send transaction");
+  await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
+  assert.match(await page.locator("#out .ix-status").innerText(), /Success/);
+  assert.equal(await page.evaluate(() => window.__requested), asked + 1);   // ขอสิทธิ์ใหม่ 1 ครั้ง
   assert.deepEqual(pageErrors, []);
 });
 
