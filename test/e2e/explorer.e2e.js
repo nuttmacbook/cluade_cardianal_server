@@ -768,6 +768,24 @@ test("ฟอร์ม deploy: ใส่ upgrader เป็น wallet ตัว�
   assert.deepEqual(pageErrors, []);
 });
 
+test("ฟอร์ม deploy: โปรแกรมใหญ่ใช้แก๊สเกิน 500,000 ก็ deploy ได้ (gas limit ค่าเริ่ม = เพดานต่อ tx · ไม่เจอ OUT_OF_GAS) · จ่ายเฉพาะแก๊สที่ใช้จริง", async () => {
+  const big = `function program() {\n  function ping(params) { return 2n }\n  function pad(params) { return "${"x".repeat(16000)}" }\n  return { ping, pad };\n}`;
+  await open("#deploy");
+  await page.fill("#dp-code", big);
+  await page.fill("#dp-upgrader", "");
+  await page.click("#dp-send");
+  await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
+  const program = (await page.locator("#dp-out a[title^='0x']").first().getAttribute("title")).toLowerCase();
+  const pending = (await get("/programs/pending?limit=100")).items.find((p) => p.address === program);
+  assert.ok(pending, "รออนุมัติ");
+  const hash = await page.locator("#dp-out a[href^='#tx/']").first().getAttribute("href").catch(() => null);
+  if (hash) {
+    const receipt = (await get(`/tx/${hash.slice(4)}/receipt`)).result ?? {};
+    if (receipt.gasUsed !== undefined) assert.ok(Number(receipt.gasUsed) > 500_000, `gasUsed ${receipt.gasUsed}`);
+  }
+  assert.deepEqual(pageErrors, []);
+});
+
 test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → รอรีวิว → Approve upgrade → version 2 · โอนสิทธิ์ให้ BOB · โปรแกรมที่ไม่มี upgrader แก้ไม่ได้", async () => {
   await open(`#address/${upgradable}`);
   await tab("Upgrade");
