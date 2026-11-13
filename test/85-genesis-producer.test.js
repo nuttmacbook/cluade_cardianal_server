@@ -62,7 +62,7 @@ test("resolveSettings: genesis before env · env differing from genesis = error 
 
   const bad = resolveSettings(genesis, { BURN_PERCENT: "100", CHAIN_ID: "1", ADMINS: "0xaa" });
   assert.equal(bad.errors.length, 3);
-  assert.match(bad.errors.join("\n"), /BURN_PERCENT=100 ไม่ตรงกับ genesis/);
+  assert.match(bad.errors.join("\n"), /BURN_PERCENT=100 does not match genesis/);
   assert.match(bad.errors.join("\n"), /CHAIN_ID=1/);
 
   const dev = resolveSettings({ chainId: 1, balances: {} }, { BURN_PERCENT: "80", GAS_TARGET: "100" });
@@ -80,12 +80,12 @@ test("startupProblems: non-DEV needs ADMINS + PRODUCER_KEY · producer must be i
   assert.deepEqual(startupProblems({ settings: empty, dev: true }), []);
   const settings = resolveSettings({ config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [PRODUCER] } }, {}).settings;
   assert.deepEqual(startupProblems({ settings, producer: PRODUCER }), []);
-  assert.match(startupProblems({ settings, producer: sign.addressOf(OTHER_KEY) })[0], /ไม่อยู่ในรายชื่อผู้ผลิต/);
+  assert.match(startupProblems({ settings, producer: sign.addressOf(OTHER_KEY) })[0], /who is not in the producer list/);
   assert.deepEqual(startupProblems({ settings: empty, errors: ["x"], dev: true }), ["x"]);
   // sample values left in genesis → refuses to start (a malformed address = nobody can actually be admin / producer)
   const placeholder = resolveSettings({ config: { admins: ["0xADDRESS_ADMIN_1"], producers: [PRODUCER, "0xaddress_spare"] } }, {}).settings;
   const problems = startupProblems({ settings: placeholder, producer: PRODUCER });
-  assert.deepEqual(problems, ["config.admins มีค่าที่ไม่ใช่ address: 0xaddress_admin_1", "config.producers มีค่าที่ไม่ใช่ address: 0xaddress_spare"]);
+  assert.deepEqual(problems, ["config.admins has values that are not addresses: 0xaddress_admin_1", "config.producers has values that are not addresses: 0xaddress_spare"]);
   assert.deepEqual(startupProblems({ settings: placeholder, producer: PRODUCER, dev: true }), []);   // DEV skips the check
 });
 
@@ -96,14 +96,14 @@ test("server.js: no ADMINS / PRODUCER_KEY = refuses to start · env differing fr
   });
   const missing = run({});
   assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /ต้องตั้ง ADMINS/);
-  assert.match(missing.stderr, /ต้องตั้ง PRODUCER_KEY/);
+  assert.match(missing.stderr, /ADMINS must be set/);
+  assert.match(missing.stderr, /PRODUCER_KEY must be set/);
 
   const file = path.join(dir, "genesis.json");
   fs.writeFileSync(file, JSON.stringify({ chainId: 5, balances: {}, config: { burnPercent: 100, admins: ["0xaa"] } }));
   const mismatch = run({ GENESIS: file, BURN_PERCENT: "50", PRODUCER_KEY });
   assert.equal(mismatch.status, 1);
-  assert.match(mismatch.stderr, /BURN_PERCENT=50 ไม่ตรงกับ genesis/);
+  assert.match(mismatch.stderr, /BURN_PERCENT=50 does not match genesis/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -128,15 +128,15 @@ test("sync: checks the producer signature against the list · forged block / pro
 
   // another producer not on the list (valid signature from its own key)
   const stranger = chain({ key: OTHER_KEY, blocks: 1 });
-  assert.throws(() => applyBlock(follower(), itemsOf(stranger)[0], { producers: [PRODUCER] }), /ไม่อยู่ในรายชื่อผู้ผลิต/);
+  assert.throws(() => applyBlock(follower(), itemsOf(stranger)[0], { producers: [PRODUCER] }), /who is not in the producer list/);
   // change the header's producer to a listed name → signature mismatch
   const forged = itemsOf(stranger)[0];
-  assert.throws(() => applyBlock(follower(), { ...forged, header: { ...forged.header, producer: PRODUCER } }, { producers: [PRODUCER] }), /ลายเซ็นผู้ผลิตไม่ถูกต้อง/);
+  assert.throws(() => applyBlock(follower(), { ...forged, header: { ...forged.header, producer: PRODUCER } }, { producers: [PRODUCER] }), /has an invalid producer signature/);
   // missing signature
   const [first] = itemsOf(source);
-  assert.throws(() => applyBlock(follower(), { ...first, header: { ...first.header, producerSignature: null } }), /ลายเซ็นผู้ผลิตไม่ถูกต้อง/);
+  assert.throws(() => applyBlock(follower(), { ...first, header: { ...first.header, producerSignature: null } }), /has an invalid producer signature/);
   // genesis names producers, but the block has none
-  assert.throws(() => applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0], { producers: [PRODUCER] }), /ไม่มีผู้ผลิต/);
+  assert.throws(() => applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0], { producers: [PRODUCER] }), /has no producer/);
   // no list passed (development) → blocks without a producer sync as before
   assert.equal(applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0]).number, 1);
 });
@@ -184,7 +184,7 @@ test("replay / sync use replayTimeoutMs: a tx the producer finished in time does
   const old = slow(60_000);
   applyBlock(old, itemsOf(source)[0]);
   old.replayTimeoutMs = 1;
-  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 ไม่ตรงกับผู้ผลิต/);
+  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 does not match the producer/);
 });
 
 test("block defaults (Bluewolfchain): 2 s · 5M gas (gasTarget = half) · chainId 41234 · genesis can lock maxBlockGas", () => {
@@ -195,5 +195,5 @@ test("block defaults (Bluewolfchain): 2 s · 5M gas (gasTarget = half) · chainI
   assert.equal(new VM.VirtualMachine(new MemoryDB(), { maxBlockGas: settings.maxBlockGas }).gasTarget, 2_500_000);
   assert.equal(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, {}).settings.maxBlockGas, 1_500_000);
   assert.equal(resolveSettings({}, { MAX_BLOCK_GAS: "2000000" }).settings.maxBlockGas, 2_000_000);
-  assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 ไม่ตรงกับ genesis/);
+  assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 does not match genesis/);
 });

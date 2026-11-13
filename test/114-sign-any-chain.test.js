@@ -40,7 +40,7 @@ test("cross-chain replay: a signature for another chainId (e.g. test chain 27272
   const { vm, pool } = setup();
   const res = pool.add(signed(transfer({ chainId: 272727 })));
   assert.equal(res.ok, false);
-  assert.match(res.reason, /chainId ของ tx \(272727\) ไม่ตรงกับเชน \(41234\)/);
+  assert.match(res.reason, /tx chainId \(272727\) does not match the chain \(41234\)/);
   assert.equal(pool.size ?? pool.countOf(alice), 0);
   assert.equal(BigInt(vm.nativeBalanceOf(bob).balance), 0n);
 });

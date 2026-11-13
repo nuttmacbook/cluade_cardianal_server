@@ -39,15 +39,15 @@ test("/health: normal = 200 · txs waiting but no new block = stalled · block c
     assert.deepEqual(health(Date.now()).problems, []);   // STALL_MS not reached yet
     const stalled = health(Date.now() + STALL_MS + 1000);
     assert.equal(stalled.ok, false);
-    assert.match(stalled.problems[0], /^stalled: มี 1 tx รอ/);
+    assert.match(stalled.problems[0], /^stalled: 1 tx waiting/);
 
     Object.assign(minerState, { failures: 2, lastError: "disk full" });
     const failing = await get("/health");
     assert.equal(failing.status, 503);
-    assert.match(failing.body.problems.join("\n"), /ปิด block ล้มเหลว 2 ครั้งติดกัน \(disk full\)/);
+    assert.match(failing.body.problems.join("\n"), /block seal failed 2 times in a row \(disk full\)/);
     const watched = await check(url);
     assert.equal(watched.ok, false);
-    assert.match(watched.problems[0], /ปิด block ล้มเหลว/);
+    assert.match(watched.problems[0], /block seal failed/);
     minerState.failures = 0;
 
     // block closed → latest block age + no problems
@@ -103,7 +103,7 @@ test("backup: backs up while the DB is open · manifest + block chain check · k
     await backup({ data, out, now: new Date(T + 120_000), keep: 2 });
     assert.equal(fs.readdirSync(out).length, 2);
     assert.deepEqual(prune(out, 1).length, 1);
-    await assert.rejects(() => db.backup(path.join(out, fs.readdirSync(out)[0])), /ไม่ว่าง/);
+    await assert.rejects(() => db.backup(path.join(out, fs.readdirSync(out)[0])), /is not empty/);
   } finally {
     db.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -118,8 +118,8 @@ test("verify / restore: detects missing headers / manifest mismatch · restores 
   const { dir } = await backup({ data, out: path.join(root, "backups"), now: new Date(T) });
   db.close();
   try {
-    assert.throws(() => verifyBackup(dir, { expect: { latest: 4, latestHash: "0xdead" } }), /ไม่ตรงกับ manifest/);
-    assert.throws(() => verifyBackup(path.join(root, "nothing")), /ไม่มี data.mdb/);
+    assert.throws(() => verifyBackup(dir, { expect: { latest: 4, latestHash: "0xdead" } }), /does not match the manifest/);
+    assert.throws(() => verifyBackup(path.join(root, "nothing")), /has no data.mdb/);
 
     const target = path.join(root, "restored");
     assert.deepEqual(restore({ from: dir, data: target }).moved, null);
@@ -128,7 +128,7 @@ test("verify / restore: detects missing headers / manifest mismatch · restores 
     restored.close();
     assert.equal(fs.existsSync(path.join(target, "replaced-tx.jsonl")), false);   // the source has no such file
 
-    assert.throws(() => restore({ from: dir, data }), /มีข้อมูลอยู่แล้ว/);
+    assert.throws(() => restore({ from: dir, data }), /already has data/);
     const forced = restore({ from: dir, data, force: true, now: new Date(T) });
     assert.ok(fs.existsSync(path.join(forced.moved, "data.mdb")));
 
@@ -136,7 +136,7 @@ test("verify / restore: detects missing headers / manifest mismatch · restores 
     const broken = new DB(target);
     broken.writeKeys([{ type: "del", dbKey: VM.blockKey(2) }]);
     broken.close();
-    assert.throws(() => verifyBackup(target), /block 3 parentHash ไม่ตรงกับ block 2/);
+    assert.throws(() => verifyBackup(target), /block 3 parentHash does not match block 2/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

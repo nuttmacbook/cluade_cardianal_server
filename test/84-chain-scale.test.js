@@ -210,7 +210,7 @@ test("LMDB: mapSize default 1 TB · parseSize · stats() reports usage against m
   assert.equal(parseSize("500g"), 500 * 1024 ** 3);
   assert.equal(parseSize("64MB"), 64 * 1024 ** 2);
   assert.equal(parseSize("4096"), 4096);
-  assert.throws(() => parseSize("lots"), /ขนาดไม่ถูกต้อง/);
+  assert.throws(() => parseSize("lots"), /Invalid size/);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chain-scale-"));
   try {

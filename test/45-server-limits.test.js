@@ -67,7 +67,7 @@ test("mempool: wrong nonce → simulate is never called", () => {
   let calls = 0;
   const res = pool.add(signed(5), { simulate: () => { calls += 1; return { ok: true }; } });
   assert.equal(res.ok, false);
-  assert.equal(res.reason, "nonce ต้องเป็น 0");
+  assert.equal(res.reason, "nonce must be 0");
   assert.equal(calls, 0);
 });
 
@@ -82,7 +82,7 @@ test("mempool: simulate fails → not queued, but counted in the rate limit", ()
   pool.add(signed(0), { now: T, simulate: failing });
 
   const third = pool.add(signed(0), { now: T, simulate: failing });
-  assert.equal(third.reason, "ส่งถี่เกินกำหนด");
+  assert.equal(third.reason, "sending too frequently");
   assert.equal(calls, 2);                                         // the 3rd call is not simulated
 });
 

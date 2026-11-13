@@ -89,18 +89,18 @@ test("verify: forged signature / tx changed after signing / from mismatch → re
   const tx = transferTx();
   const signature = sign.signTransaction(tx, ALICE_KEY);
 
-  assert.throws(() => sign.verifyTransaction({ tx: transferTx(0, { input: { to: bob, amount: 999 } }), signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, BOB_KEY) }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: "0x1234" }), /signature ต้องยาว 65 byte/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: `${signature.slice(0, -2)}05` }), /v ต้องเป็น 27 หรือ 28/);
+  assert.throws(() => sign.verifyTransaction({ tx: transferTx(0, { input: { to: bob, amount: 999 } }), signature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, BOB_KEY) }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: "0x1234" }), /signature must be 65 bytes/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: `${signature.slice(0, -2)}05` }), /v must be 27 or 28/);
 });
 
 test("verify: a tx signed for another chain cannot be used here", () => {
   const tx = transferTx(0, { chainId: 999 });
   const signature = sign.signTransaction(tx, ALICE_KEY);
   assert.equal(sign.verifyTransaction({ tx, signature }).sender, alice);              // valid on its own chain
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, chainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, chainId: 1 }, signature }), /signature does not match from/);
   assert.equal(sign.verifyTransaction({ tx, signature }).chainId, 999);   // the mempool compares it with the chain's chainId (test 114)
 });
 
@@ -110,7 +110,7 @@ test("signedOnChainId: part of the signature (cannot be changed later) · omitte
   const verified = sign.verifyTransaction({ tx: onBsc, signature });
   assert.equal(verified.sender, alice);
   assert.equal(verified.request.signedOnChainId, 56);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...onBsc, signedOnChainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...onBsc, signedOnChainId: 1 }, signature }), /signature does not match from/);
   assert.equal(sign.buildTypedData(transferTx(0)).message.signedOnChainId, 1);
   assert.throws(() => sign.buildTypedData(transferTx(0, { signedOnChainId: "bsc" })), /signedOnChainId/);
 });
@@ -132,7 +132,7 @@ test("flow: a correctly signed tx works, and sender comes from the signature", (
 test("flow: from cannot be forged — bob signs but claims to be alice", () => {
   const vm = setup();
   const tx = transferTx(0, { from: alice });
-  assert.throws(() => submit(vm, tx, sign.signTransaction(tx, BOB_KEY)), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => submit(vm, tx, sign.signTransaction(tx, BOB_KEY)), /signature does not match from/);
   assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], undefined);
 });
 
@@ -235,5 +235,5 @@ test("flow: signed metadata tx — names the sender's own address", () => {
   assert.equal(res.status, "success");
   assert.equal(vm.resolveNamespace("alice"), alice);
   assert.deepEqual(vm.getMetadata(alice), { namespace: "alice", icon: "👩" });
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature: sign.signTransaction(tx, ALICE_KEY) }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature: sign.signTransaction(tx, ALICE_KEY) }), /signature does not match from/);
 });

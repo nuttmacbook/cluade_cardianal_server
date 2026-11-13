@@ -65,7 +65,7 @@ test("sync: tampered block → stops immediately, saves nothing", () => {
   const item = { header: { ...source.getBlock(1) }, body: source.getBlockBody(1) };
   item.body[0].request.initInput = { supply: 999 };       // tamper with a tx in transit
 
-  assert.throws(() => applyBlock(target, item), /ไม่ตรงกับผู้ผลิต/);
+  assert.throws(() => applyBlock(target, item), /does not match the producer/);
   assert.equal(target.latestBlockNumber(), null);
 });
 

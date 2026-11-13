@@ -364,7 +364,7 @@ async function main() {
       eq("GET /tx of the original → replaced", replaced.status, "replaced");
       eq("replacedBy = the new one", replaced.replacedBy, replacement.hash);
       check("/pending shows the new one, not the original", pending.transactions.some((t) => t.hash === replacement.hash) && !pending.transactions.some((t) => t.hash === original.hash), JSON.stringify(pending).slice(0, 300));
-      check("replacing with less than a 10% bump → rejected", !low.queued && /too low|ต่ำเกินไป/.test(String(low.reason ?? low.error ?? "")), JSON.stringify(low).slice(0, 200));
+      check("replacing with less than a 10% bump → rejected", !low.queued && /too low/.test(String(low.reason ?? low.error ?? "")), JSON.stringify(low).slice(0, 200));
       const found = await mined(replacement.hash);
       eq("the new one lands in a block successfully", found[replacement.hash].status, "success");
       eq("the original is still replaced after the block closes", (await get(`/tx/${original.hash}`)).status, "replaced");

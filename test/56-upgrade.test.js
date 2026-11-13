@@ -316,7 +316,7 @@ test("upgrade: signed actions (deploy + upgrader / upgrade / setUpgrader / initU
 
   // upgrader is part of the signed data: changing it after signing → a different signer
   const tx = { action: "deploy", from: me, code: V1, upgrader: me, nonce: 0 };
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, upgrader: "0x" + "9".repeat(40) }, signature: sign.signTransaction(tx, key) }), /ลายเซ็นไม่ตรง/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, upgrader: "0x" + "9".repeat(40) }, signature: sign.signTransaction(tx, key) }), /signature does not match/);
   // no upgrader → signed data is byte-identical to before (existing txs keep their hash)
   assert.equal(sign.buildTypedData({ action: "deploy", from: me, code: V1 }).message.input, VM.canonicalJson({ input: {}, code: V1 }));
   assert.equal("upgrader" in sign.normalizeTransaction({ action: "deploy", code: V1 }), false);

@@ -51,8 +51,8 @@ test("signatures: 1559 txs use a Transaction type with maxFeePerGas / maxPriorit
   assert.equal(verified.sender, alice);
   assert.deepEqual([verified.request.maxFeePerGas, verified.request.maxPriorityFeePerGas, verified.request.gasPrice], ["2000", "3", undefined]);
   // the signature covers gas fees: changing priority after signing → a different signer
-  assert.throws(() => sign.verifyTransaction({ tx: { ...typed, maxPriorityFeePerGas: "300" }, signature: signed(typed, KEYS[0]).signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction(signed({ ...typed, gasPrice: 7 }, KEYS[0])), /gasPrice คู่กับ maxFeePerGas/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...typed, maxPriorityFeePerGas: "300" }, signature: signed(typed, KEYS[0]).signature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction(signed({ ...typed, gasPrice: 7 }, KEYS[0])), /gasPrice cannot be combined with maxFeePerGas/);
   // maxFeePerGas 0 = unset (the VM uses baseFee + priority)
   assert.equal(sign.verifyTransaction(signed(transferTx(alice, 0, { maxPriorityFeePerGas: "5" }), KEYS[0])).request.maxFeePerGas, undefined);
 });
@@ -103,7 +103,7 @@ test("replace: must raise both maxFee and priority by ≥ 10% · legacy → 1559
   assert.ok(old.ok);
   const onlyMax = add(pool, alice, 0, { maxFeePerGas: "3000", maxPriorityFeePerGas: "105" });
   assert.equal(onlyMax.ok, false);
-  assert.match(onlyMax.reason, /maxFeePerGas ≥ 2200 และ maxPriorityFeePerGas ≥ 110/);
+  assert.match(onlyMax.reason, /maxFeePerGas ≥ 2200 and maxPriorityFeePerGas ≥ 110/);
   assert.deepEqual([onlyMax.minimumMaxFeePerGas, onlyMax.minimumMaxPriorityFeePerGas], ["2200", "110"]);
   const onlyTip = add(pool, alice, 0, { maxFeePerGas: "2100", maxPriorityFeePerGas: "500" });
   assert.equal(onlyTip.ok, false);
@@ -126,7 +126,7 @@ test("legacy replace (gasPrice on both txs): same message as before · the inclu
   const pool = new Mempool(vm);
   add(pool, carol, 0, { gasPrice: "1000" });
   const low = add(pool, carol, 0, { gasPrice: "1099" });
-  assert.equal(low.reason, "ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย 1100)");
+  assert.equal(low.reason, "gas price too low to replace (must be at least 1100)");
   assert.ok(add(pool, carol, 0, { gasPrice: "1100" }).ok);
   const { block } = mine(vm, pool);
   assert.equal(block.results()[0].gasPrice, "1100n");

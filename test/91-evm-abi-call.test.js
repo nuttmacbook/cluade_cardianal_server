@@ -90,9 +90,9 @@ test("eth_call: unknown selector / program throws / short calldata / no abi → 
   const error = (data, to = P) => send(rpc, "eth_call", { to, data }, "latest").error;
   assert.match(error("0x12345678").message, /no function in metadata\.abi matches selector 0x12345678/);
   assert.match(error(iface.encodeFunctionData("boom")).message, /execution reverted: .*nope/);
-  assert.match(error(iface.encodeFunctionData("bump", [1n]).slice(0, 20)).message, /bump\(uint256\): calldata สั้นเกินไป/);
+  assert.match(error(iface.encodeFunctionData("bump", [1n]).slice(0, 20)).message, /bump\(uint256\): calldata too short/);
   const notJson = iface.encodeFunctionData("echo", [BOB, 1n, 1n, true, "x", "{nope", "0x"]);
-  assert.match(error(notJson).message, /raw: ต้องเป็น JSON/);
+  assert.match(error(notJson).message, /raw: must be JSON/);
   assert.equal(error("0x18160ddd").code, EVM_ERROR.SERVER);
 });
 
@@ -109,5 +109,5 @@ test("evm-abi: decode / encode match ethers (multiple outputs as object / array 
   assert.deepEqual([...decoded].slice(1), [1n, -1n, true, "", '{"a":"1n"}', "0x00ff"]);
   const profile = [...fns.values()].find((fn) => fn.name === "profile");
   assert.equal(encodeOutput(profile, { name: "a", score: 1n, tags: [] }), encodeOutput(profile, ["a", 1n, []]));
-  assert.throws(() => encodeOutput([...fns.values()].find((fn) => fn.name === "count"), -1n), /เกินช่วง uint256/);
+  assert.throws(() => encodeOutput([...fns.values()].find((fn) => fn.name === "count"), -1n), /out of uint256 range/);
 });

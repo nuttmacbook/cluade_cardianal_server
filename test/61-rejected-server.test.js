@@ -60,11 +60,11 @@ let rejectedHash, header;
 test("/tx: rejected at /sendtx → rejected (block: null) right away → after the next block, returns the block number + reason", async () => {
   const bad = await post("/sendtx", signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "1n" }, nonce: 9 })));
   assert.equal(bad.queued, false);
-  assert.equal(bad.reason, "nonce ต้องเป็น 2");
+  assert.equal(bad.reason, "nonce must be 2");
   rejectedHash = sign.verifyTransaction(signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "1n" }, nonce: 9 }))).hash;
   assert.equal(bad.hash, rejectedHash);
   const waiting = (await get(`/tx/${rejectedHash}`)).body;
-  assert.deepEqual([waiting.status, waiting.block, waiting.stage, waiting.reason, waiting.sender, waiting.nonce], ["rejected", null, "sendtx", "nonce ต้องเป็น 2", alice, 9]);
+  assert.deepEqual([waiting.status, waiting.block, waiting.stage, waiting.reason, waiting.sender, waiting.nonce], ["rejected", null, "sendtx", "nonce must be 2", alice, 9]);
   assert.equal((await get("/pending")).body.rejectedPending, 1);
 
   // bad signature → not recorded
@@ -78,7 +78,7 @@ test("/tx: rejected at /sendtx → rejected (block: null) right away → after t
   header = mine();
   assert.deepEqual([header.txCount, header.rejectedCount], [1, 1]);
   const found = (await get(`/tx/${rejectedHash}`)).body;
-  assert.deepEqual([found.status, found.block, found.blockNumber, found.index, found.reason, found.to], ["rejected", header.number, header.number, 0, "nonce ต้องเป็น 2", token]);
+  assert.deepEqual([found.status, found.block, found.blockNumber, found.index, found.reason, found.to], ["rejected", header.number, header.number, 0, "nonce must be 2", token]);
   assert.equal((await get(`/tx/${rejectedHash}/receipt`)).status, 404);   // not run = no receipt
   assert.equal((await get(`/nonce/${alice}`)).body.nonce, 3);              // no nonce used
   const full = (await get(`/block/${header.number}?full=1`)).body;
@@ -131,7 +131,7 @@ test("/evm: rejected txs follow the block's real txs as failed txs (status 0x0, 
   assert.deepEqual(await rpc("eth_getTransactionReceipt", [rejectedHash]), rejected);
   assert.ok(real.logs.every((log, i) => log.logIndex === `0x${i.toString(16)}`));
   const trace = await rpc("debug_traceTransaction", [rejectedHash, { tracer: "callTracer" }]);
-  assert.equal(trace.error, "nonce ต้องเป็น 2");
+  assert.equal(trace.error, "nonce must be 2");
   assert.equal((await rpc("debug_traceBlockByNumber", [number, { tracer: "callTracer" }])).length, 2);
   assert.equal(await rpc("eth_getTransactionCount", [alice, "latest"]), "0x3");
 });

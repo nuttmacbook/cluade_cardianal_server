@@ -50,7 +50,7 @@ test("DB: writeKeys is atomic — a single bad entry means nothing is saved", ()
   assert.throws(() => db.writeKeys([
     { type: "put", dbKey: "token:storage:balances:bob", value: 999 },
     { type: "put", dbKey: "bad" },
-  ]), /write ไม่ถูกต้อง/);
+  ]), /Invalid write/);
   assert.equal(db.readKeys(["token:storage:balances:bob"])[0], before);
 });
 

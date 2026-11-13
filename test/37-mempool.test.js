@@ -42,7 +42,7 @@ test("add: valid signature → queued, bad signature → rejected", () => {
   const forged = { ...signed(alice, ALICE_KEY, 1), signature: sign.signTransaction(makeTx(alice, 1), BOB_KEY) };
   const res = pool.add(forged);
   assert.equal(res.ok, false);
-  assert.match(res.reason, /ลายเซ็นไม่ตรงกับ from/);
+  assert.match(res.reason, /signature does not match from/);
 });
 
 test("add: several consecutive nonces are accepted, but gaps are not", () => {
@@ -51,7 +51,7 @@ test("add: several consecutive nonces are accepted, but gaps are not", () => {
 
   const skipped = pool.add(signed(alice, ALICE_KEY, 5));
   assert.equal(skipped.ok, false);
-  assert.deepEqual([skipped.reason, skipped.expectedNonce], ["nonce ต้องเป็น 3", 3]);
+  assert.deepEqual([skipped.reason, skipped.expectedNonce], ["nonce must be 3", 3]);
   assert.equal(pool.nextNonce(alice), 3);
 });
 
@@ -60,19 +60,19 @@ test("add: resending the same tx → rejected, even after it is in a block", () 
   const pool = new Mempool(vm);
   const item = signed(alice, ALICE_KEY, 0);
   assert.equal(pool.add(item).ok, true);
-  assert.equal(pool.add(item).reason, "tx นี้ถูกส่งมาแล้ว");
+  assert.equal(pool.add(item).reason, "tx already submitted");
 
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   pool.take(block);
   block.commit();
   assert.equal(pool.size, 0);
-  assert.equal(pool.add(item).reason, "tx นี้ถูกส่งมาแล้ว");   // replay guard after commit
+  assert.equal(pool.add(item).reason, "tx already submitted");   // replay guard after commit
 });
 
 test("quota: one address may have at most maxPerSender queued", () => {
   const pool = new Mempool(setup(), { maxPerSender: 3 });
   for (const nonce of [0, 1, 2]) assert.equal(pool.add(signed(alice, ALICE_KEY, nonce)).ok, true);
-  assert.equal(pool.add(signed(alice, ALICE_KEY, 3)).reason, "คิวของ address นี้เต็ม");
+  assert.equal(pool.add(signed(alice, ALICE_KEY, 3)).reason, "queue for this address is full");
   assert.equal(pool.add(signed(bob, BOB_KEY, 0)).ok, true);   // others can still send
 });
 
@@ -80,7 +80,7 @@ test("quota: whole queue full", () => {
   const pool = new Mempool(setup(), { maxSize: 2 });
   assert.equal(pool.add(signed(alice, ALICE_KEY, 0)).ok, true);
   assert.equal(pool.add(signed(bob, BOB_KEY, 0)).ok, true);
-  assert.equal(pool.add(signed(alice, ALICE_KEY, 1)).reason, "คิวเต็ม");
+  assert.equal(pool.add(signed(alice, ALICE_KEY, 1)).reason, "queue is full");
 });
 
 test("rate limit: sending too often is rejected, then allowed again once the window passes", () => {
@@ -88,7 +88,7 @@ test("rate limit: sending too often is rejected, then allowed again once the win
   const now = T;
   assert.equal(pool.add(signed(alice, ALICE_KEY, 0), { now }).ok, true);
   assert.equal(pool.add(signed(alice, ALICE_KEY, 1), { now }).ok, true);
-  assert.equal(pool.add(signed(alice, ALICE_KEY, 2), { now }).reason, "ส่งถี่เกินกำหนด");
+  assert.equal(pool.add(signed(alice, ALICE_KEY, 2), { now }).reason, "sending too frequently");
 
   assert.equal(pool.add(signed(alice, ALICE_KEY, 2), { now: now + 1500 }).ok, true); // window passed
   assert.equal(pool.add(signed(bob, BOB_KEY, 0), { now }).ok, true);                  // counted per address

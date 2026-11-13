@@ -204,25 +204,25 @@ test("snapshot: tampered / incomplete data / wrong producer / wrong chain = reje
   const empty = () => { assert.equal(target.latestBlockNumber(), null); assert.deepEqual(Object.keys(stateOf(target)), []); };
 
   const tampered = lines.map((text) => (text.startsWith(`["${BALANCE("alice")}"`) ? JSON.stringify([BALANCE("alice"), "999999n"]) : text));
-  await assert.rejects(loadSnapshot(target, tampered), /ไม่ตรงกับ stateRoot/);
+  await assert.rejects(loadSnapshot(target, tampered), /does not match the stateRoot/);
   empty();
-  await assert.rejects(loadSnapshot(target, lines.slice(0, -1)), /ไม่ครบ/);
-  await assert.rejects(loadSnapshot(target, lines.filter((text) => !text.startsWith(`["${BALANCE("user2")}"`))), /ไม่ตรงกับ stateRoot/);
-  await assert.rejects(loadSnapshot(target, lines, { producers: ["0x0000000000000000000000000000000000000001"] }), /ไม่อยู่ในรายชื่อผู้ผลิต/);
+  await assert.rejects(loadSnapshot(target, lines.slice(0, -1)), /incomplete/);
+  await assert.rejects(loadSnapshot(target, lines.filter((text) => !text.startsWith(`["${BALANCE("user2")}"`))), /does not match the stateRoot/);
+  await assert.rejects(loadSnapshot(target, lines, { producers: ["0x0000000000000000000000000000000000000001"] }), /who is not in the producer list/);
   const forged = lines.map((text, index) => (index === 3 ? JSON.stringify({ header: { ...JSON.parse(text).header, stateRoot: `0x${"1".repeat(64)}` } }) : text));
-  await assert.rejects(loadSnapshot(target, forged), /hash ของ header/);
+  await assert.rejects(loadSnapshot(target, forged), /hash of header/);
   await assert.rejects(loadSnapshot(target, [JSON.stringify({ ...JSON.parse(lines[0]), chainId: 2 }), ...lines.slice(1)]), /chainId/);
-  await assert.rejects(loadSnapshot(target, [lines[0], ...lines.slice(1, 3), `["block:000000000001", {}]`, ...lines.slice(3)]), /ไม่ใช่ state/);
+  await assert.rejects(loadSnapshot(target, [lines[0], ...lines.slice(1, 3), `["block:000000000001", {}]`, ...lines.slice(3)]), /non-state key/);
   empty();
 
   await loadSnapshot(target, lines, { producers: [PRODUCER] });
   assert.equal(target.stateRoot(), source.stateRoot());
-  await assert.rejects(loadSnapshot(target, lines), /ยังไม่มี block/);
+  await assert.rejects(loadSnapshot(target, lines), /no blocks/);
 });
 
 test("snapshot: headers for the last 256 blocks (BlockHash) · no blocks = cannot snapshot", async () => {
   const vm = reader({ producer: null });
-  await assert.rejects(writeSnapshot(vm, path.join(os.tmpdir(), "never.ndjson")), /ยังไม่มี block/);
+  await assert.rejects(writeSnapshot(vm, path.join(os.tmpdir(), "never.ndjson")), /no blocks/);
   for (let number = 1; number <= 260; number += 1) {
     const block = vm.createBlock({ timestamp: T + number, feeRecipient: "miner" });
     block.commit();

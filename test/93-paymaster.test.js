@@ -38,12 +38,12 @@ test("signatures: no sponsor = the old type · sponsor = appended to the type (e
   assert.equal(verified.request.sponsorSignature, sponsorSignature);
   assert.equal(sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY) }).request.sponsor, undefined);
 
-  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature }), /ต้องมี sponsorSignature/);
-  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature, sponsorSignature: sign.signTransaction(sponsored, OTHER_KEY) }), /sponsorSignature ไม่ตรงกับ sponsor/);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...sponsored, sponsor: sign.addressOf(OTHER_KEY) }, signature, sponsorSignature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY), sponsorSignature }), /ไม่ได้ระบุ sponsor/);
+  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature }), /needs a sponsorSignature/);
+  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature, sponsorSignature: sign.signTransaction(sponsored, OTHER_KEY) }), /sponsorSignature does not match sponsor/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...sponsored, sponsor: sign.addressOf(OTHER_KEY) }, signature, sponsorSignature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY), sponsorSignature }), /the tx has no sponsor/);
   const self = { ...base, sponsor: USER };
-  assert.throws(() => sign.verifyTransaction({ tx: self, signature: sign.signTransaction(self, USER_KEY), sponsorSignature: sign.signTransaction(self, USER_KEY) }), /ไม่ใช่ผู้ส่งเอง/);
+  assert.throws(() => sign.verifyTransaction({ tx: self, signature: sign.signTransaction(self, USER_KEY), sponsorSignature: sign.signTransaction(self, USER_KEY) }), /must not be the sender/);
 });
 
 test("chain: a user with no coins can send a tx with a sponsor · gas charged to the sponsor · nonce / value belong to the sender", async () => {

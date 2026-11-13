@@ -89,7 +89,7 @@ test("sync: the syncer runs blocks itself and compares hashes (including receipt
   applyBlock(other, blocks[0]);
   const fake = { ...blocks[1].header, logsBloom: `0x${"f".repeat(512)}` };
   fake.hash = other.hashBlock({ ...fake, writes: [] }).hash;
-  assert.throws(() => applyBlock(other, { ...blocks[1], header: fake }), /ไม่ตรงกับผู้ผลิต/);
+  assert.throws(() => applyBlock(other, { ...blocks[1], header: fake }), /does not match the producer/);
 });
 
 test("/evm: logsBloom / receiptsRoot / baseFeePerGas of a block come from the header", () => {

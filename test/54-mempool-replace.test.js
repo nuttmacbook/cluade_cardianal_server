@@ -49,7 +49,7 @@ test("replace: gasPrice +9% → rejected, and the old tx stays", () => {
   const old = pool.add(signed(callTx(alice, 0, 100)), { now: T });
   const res = pool.add(signed(callTx(alice, 0, 109, 2)), { now: T });
   assert.equal(res.ok, false);
-  assert.equal(res.reason, "ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย 110)");
+  assert.equal(res.reason, "gas price too low to replace (must be at least 110)");
   assert.equal(pool.has(old.hash), true);
   assert.equal(pool.size, 1);
 });
@@ -63,13 +63,13 @@ test("replace: exact boundary (large wei as a string) and rounding up · no gasP
   // a tx without gasPrice counts as the VM's default price (1 gwei)
   const { gasPrice, ...noPrice } = callTx(alice, 1, 0);
   assert.equal(pool.add(signed(noPrice), { now: T }).ok, true);
-  assert.match(pool.add(signed(callTx(alice, 1, 1_000_000_000)), { now: T }).reason, /ต้องอย่างน้อย 1100000000\)/);
+  assert.match(pool.add(signed(callTx(alice, 1, 1_000_000_000)), { now: T }).reason, /must be at least 1100000000\)/);
   assert.equal(pool.add(signed(callTx(alice, 1, 1_100_000_000)), { now: T }).ok, true);
 
   // small price: 10% of 1 rounds up → must be 2
   const small = new Mempool(setup());
   small.add(signed(callTx(alice, 0, 1)), { now: T });
-  assert.match(small.add(signed(callTx(alice, 0, 1, 3)), { now: T }).reason, /ต้องอย่างน้อย 2\)/);
+  assert.match(small.add(signed(callTx(alice, 0, 1, 3)), { now: T }).reason, /must be at least 2\)/);
   assert.equal(small.add(signed(callTx(alice, 0, 2)), { now: T }).ok, true);
 });
 
@@ -88,7 +88,7 @@ test("cancel: replace a call with a 0 transfer to yourself → the block has onl
   assert.equal(vm.getTransaction(cancel.hash).status, "success");
   assert.ok(!vm.getTransaction(call.hash));
   assert.equal(vm.checkTransaction({ from: alice, nonce: -1 }).expectedNonce, 1);
-  assert.equal(pool.add(signed(callTx(alice, 0, 10)), { now: T }).reason, "tx นี้ถูกส่งมาแล้ว");   // the old tx cannot be resent
+  assert.equal(pool.add(signed(callTx(alice, 0, 10)), { now: T }).reason, "tx already submitted");   // the old tx cannot be resent
 });
 
 test("replace: simulate fails → the old tx stays (but it counts toward the rate limit)", () => {
@@ -101,7 +101,7 @@ test("replace: simulate fails → the old tx stays (but it counts toward the rat
   assert.equal(pool.replacedBy(old.hash, { now: T }), null);
 
   pool.add(signed(callTx(alice, 0, 30)), { now: T, simulate: failing });
-  assert.equal(pool.add(signed(callTx(alice, 0, 40)), { now: T, simulate: failing }).reason, "ส่งถี่เกินกำหนด");
+  assert.equal(pool.add(signed(callTx(alice, 0, 40)), { now: T, simulate: failing }).reason, "sending too frequently");
   assert.equal(pool.has(old.hash), true);
 });
 
@@ -127,20 +127,20 @@ test("nonce: gaps are still rejected · a nonce already in a block cannot be rep
   const pool = new Mempool(vm);
   pool.add(signed(callTx(alice, 0, 10)), { now: T });
   const skipped = pool.add(signed(callTx(alice, 2, 10)), { now: T });
-  assert.deepEqual([skipped.ok, skipped.reason, skipped.expectedNonce], [false, "nonce ต้องเป็น 1", 1]);
+  assert.deepEqual([skipped.ok, skipped.reason, skipped.expectedNonce], [false, "nonce must be 1", 1]);
 
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   pool.take(block);
   block.commit();
   const late = pool.add(signed(callTx(alice, 0, 100)), { now: T });
-  assert.deepEqual([late.ok, late.reason], [false, "nonce ต้องเป็น 1"]);
+  assert.deepEqual([late.ok, late.reason], [false, "nonce must be 1"]);
 });
 
 test("quota: replacing does not use up maxPerSender / maxSize", () => {
   const pool = new Mempool(setup(), { maxPerSender: 2, maxSize: 2 });
   pool.add(signed(callTx(alice, 0, 10)), { now: T });
   pool.add(signed(callTx(alice, 1, 10)), { now: T });
-  assert.equal(pool.add(signed(callTx(alice, 2, 10)), { now: T }).reason, "คิวเต็ม");
+  assert.equal(pool.add(signed(callTx(alice, 2, 10)), { now: T }).reason, "queue is full");
   assert.equal(pool.add(signed(callTx(alice, 1, 11)), { now: T }).ok, true);
   assert.equal(pool.add(signed(callTx(alice, 0, 11)), { now: T }).ok, true);
   assert.equal(pool.size, 2);
@@ -148,7 +148,7 @@ test("quota: replacing does not use up maxPerSender / maxSize", () => {
   const perSender = new Mempool(setup(), { maxPerSender: 2 });
   perSender.add(signed(callTx(alice, 0, 10)), { now: T });
   perSender.add(signed(callTx(alice, 1, 10)), { now: T });
-  assert.equal(perSender.add(signed(callTx(alice, 2, 10)), { now: T }).reason, "คิวของ address นี้เต็ม");
+  assert.equal(perSender.add(signed(callTx(alice, 2, 10)), { now: T }).reason, "queue for this address is full");
   assert.equal(perSender.add(signed(callTx(alice, 1, 20)), { now: T }).ok, true);
   assert.equal(perSender.countOf(alice), 2);
 });
@@ -192,7 +192,7 @@ test("server: replace via /sendtx → the old /tx returns replaced, /nonce does 
 
   const low = await post("/sendtx", signed({ ...cancelTx(alice, 0, 1_099_999_999), chainId }));
   assert.equal(low.queued, false);
-  assert.equal(low.reason, "ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย 1100000000)");
+  assert.equal(low.reason, "gas price too low to replace (must be at least 1100000000)");
 
   const next = await post("/sendtx", signed({ ...cancelTx(alice, 0, 1_100_000_000), chainId }));
   assert.equal(next.queued, true, JSON.stringify(next));

@@ -148,8 +148,8 @@ test("sync: the reader applies the entries as sent and compares hashes · missin
   block.commit();
   const item = { header: source.getBlock(1), body: source.getBlockBody(1), rejected: source.getBlockRejected(1) };
 
-  assert.throws(() => applyBlock(setup(), { header: item.header, body: item.body }), /ไม่ตรงกับผู้ผลิต/);
-  assert.throws(() => applyBlock(setup(), { ...item, rejected: item.rejected.slice(1) }), /ไม่ตรงกับผู้ผลิต/);
+  assert.throws(() => applyBlock(setup(), { header: item.header, body: item.body }), /does not match the producer/);
+  assert.throws(() => applyBlock(setup(), { ...item, rejected: item.rejected.slice(1) }), /does not match the producer/);
   const reader = setup();
   applyBlock(reader, item);
   assert.equal(reader.getBlock(1).hash, item.header.hash);
@@ -168,12 +168,12 @@ test("mempool: rejected at intake (wrong nonce / failed simulate / too frequent)
   const ok = pool.add(signed(callTx(alice, 0)), { now: clock });
   assert.equal(ok.ok, true);
   const duplicate = pool.add(signed(callTx(alice, 0)), { now: clock });
-  assert.equal(duplicate.reason, "tx นี้ถูกส่งมาแล้ว");
+  assert.equal(duplicate.reason, "tx already submitted");
   const badSignature = pool.add({ tx: callTx(alice, 1), signature: "0x1234" }, { now: clock });
   assert.equal(badSignature.ok, false);
   pool.add(signed(callTx(alice, 1, 1, 9)), { now: clock });
   const limited = pool.add(signed(callTx(alice, 2, 1, 3)), { now: clock });
-  assert.equal(limited.reason, "ส่งถี่เกินกำหนด");
+  assert.equal(limited.reason, "sending too frequently");
   assert.deepEqual(pool.pendingRejections().map((item) => item.hash), [wrongNonce.hash, failing.hash, limited.hash]);
   assert.equal(pool.pendingRejection(failing.hash).code, "PROGRAM_ERROR");
 
@@ -182,9 +182,9 @@ test("mempool: rejected at intake (wrong nonce / failed simulate / too frequent)
   assert.equal(header.rejectedCount, 3);
   const list = vm.getBlockRejected(header.number);
   assert.deepEqual(list.map((item) => [item.hash, item.stage, item.reason, item.nonce]), [
-    [wrongNonce.hash, "sendtx", "nonce ต้องเป็น 0", 5],
+    [wrongNonce.hash, "sendtx", "nonce must be 0", 5],
     [failing.hash, "sendtx", "insufficient balance", 0],
-    [limited.hash, "sendtx", "ส่งถี่เกินกำหนด", 2],
+    [limited.hash, "sendtx", "sending too frequently", 2],
   ]);
   assert.deepEqual([list[0].sender, list[0].action, list[0].to, list[0].gasPrice], [alice, "call", "token", "1"]);
   assert.equal(pool.rejectedPending, 0);
@@ -196,7 +196,7 @@ test("mempool: rejected, then the same tx is resent and accepted → not recorde
   const pool = new Mempool(vm, { maxPerSender: 1 });
   pool.add(signed(callTx(alice, 0)), { now: clock });
   const full = pool.add(signed(callTx(alice, 1)), { now: clock });
-  assert.equal(full.reason, "คิวของ address นี้เต็ม");
+  assert.equal(full.reason, "queue for this address is full");
   const other = pool.add(signed(callTx(bob, 3), BOB_KEY), { now: clock });
   pool.add(signed(callTx(alice, 1)), { now: clock });                       // rejected again → moved to the end
   assert.deepEqual(pool.pendingRejections().map((item) => item.hash), [other.hash, full.hash]);

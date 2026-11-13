@@ -29,7 +29,7 @@ test("the worker matches verifyTransaction byte for byte · bad signature / bad 
     }
     const forged = { tx: TXS[0], signature: sign.signTransaction(TXS[0], OTHER) };
     const expected = (() => { try { sign.verifyTransaction(forged); } catch (error) { return error.message; } })();
-    assert.match(expected, /ลายเซ็นไม่ตรงกับ from/);
+    assert.match(expected, /signature does not match from/);
     await assert.rejects(pool.verify(forged), { message: expected });
     await assert.rejects(pool.verify({ tx: TXS[0], signature: "0x1234" }));
     await assert.rejects(pool.verify({}));

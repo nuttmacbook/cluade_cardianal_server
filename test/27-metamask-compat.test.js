@@ -88,7 +88,7 @@ test("tampering with a tx after signing → ethers also recovers someone else (m
   const theirs = ethers.verifyTypedData(...Object.values(forEthers(tampered)), signature).toLowerCase();
   assert.notEqual(theirs, wallet.address.toLowerCase());
   assert.equal(sign.recoverSigner(tampered, signature), theirs);
-  assert.throws(() => sign.verifyTransaction({ tx: tampered, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: tampered, signature }), /signature does not match from/);
 });
 
 test("what the user sees in MetaMask", () => {

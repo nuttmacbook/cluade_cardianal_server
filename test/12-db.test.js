@@ -11,7 +11,7 @@ test("MemoryDB.readKeys: returns an array in key order, missing → undefined", 
   db.writeKeys([{ type: "put", dbKey: "a", value: 1 }, { type: "put", dbKey: "b", value: { x: [1] } }]);
   assert.deepEqual(db.readKeys(["b", "missing", "a"]), [{ x: [1] }, undefined, 1]);
   assert.deepEqual(db.readKeys([]), []);
-  assert.throws(() => db.readKeys("a"), /keys ต้องเป็น array/);
+  assert.throws(() => db.readKeys("a"), /keys must be an array/);
 });
 
 test("MemoryDB.writeKeys: put / del / writing the same key repeatedly keeps the last value", () => {
@@ -33,8 +33,8 @@ test("MemoryDB.writeKeys: a bad entry → nothing is saved (atomic)", () => {
     [{ type: "put", dbKey: 1, value: 1 }],
     [null],
   ];
-  for (const writes of bad) assert.throws(() => db.writeKeys(writes), /write ไม่ถูกต้อง/);
-  assert.throws(() => db.writeKeys("x"), /writes ต้องเป็น array/);
+  for (const writes of bad) assert.throws(() => db.writeKeys(writes), /Invalid write/);
+  assert.throws(() => db.writeKeys("x"), /writes must be an array/);
   assert.deepEqual(db.snapshot(), {});
 });
 
@@ -169,7 +169,7 @@ test("MemoryDB: dump can truncate long strings (e.g. program code)", () => {
   db.load({ "token:code": "x".repeat(500), "token:storage:n": 1 });
 
   const short = JSON.parse(db.dump({ maxStringLength: 20 }));
-  assert.equal(short["token:code"], `${"x".repeat(20)}… (500 ตัวอักษร)`);
+  assert.equal(short["token:code"], `${"x".repeat(20)}… (500 chars)`);
   assert.equal(short["token:storage:n"], 1);
   assert.equal(JSON.parse(db.dump())["token:code"].length, 500); // not truncated unless asked
 });

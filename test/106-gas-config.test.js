@@ -176,7 +176,7 @@ test("server.js + scripts/set-gas.js: owner lowers the gas price minimum mid-cha
     const port = await freePort();
     const node = run("server.js", [], { PORT: String(port), BLOCK_MS: "100", VERIFY_WORKERS: "0", GENESIS: genesisFile, RATE_LIMIT: "0", GAS_PRICE: "1000000000", ...env });
     const until = Date.now() + 20_000;
-    while (!node.output().includes("chain ทำงานที่")) {
+    while (!node.output().includes("chain running at")) {
       if (Date.now() > until) throw new Error(node.output());
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -191,7 +191,7 @@ test("server.js + scripts/set-gas.js: owner lowers the gas price minimum mid-cha
 
     const script = run("scripts/set-gas.js", [producer.url, "--min-base-fee", "0.1gwei"], { ADMIN_KEY: adminKey });
     assert.equal(await script.exited, 0, script.output());
-    assert.match(script.output(), /✓ อยู่ใน block \d+ · มีผลตั้งแต่ block \d+/);
+    assert.match(script.output(), /✓ included in block \d+ · takes effect from block \d+/);
     const info = await get(`${producer.url}/genesis`);
     assert.equal(info.minBaseFee, "100000000n");
     assert.equal(info.genesisMinBaseFee, "1000000000n");
@@ -201,7 +201,7 @@ test("server.js + scripts/set-gas.js: owner lowers the gas price minimum mid-cha
     // non-admin → the script stops before sending
     const stranger = run("scripts/set-gas.js", [producer.url, "--min-base-fee", "1"], { ADMIN_KEY: sign.randomPrivateKey() });
     assert.equal(await stranger.exited, 1);
-    assert.match(stranger.output(), /ไม่อยู่ใน admins/);
+    assert.match(stranger.output(), /is not in this chain's admins/);
 
     const follower = await startNode({ FOLLOW: producer.url, DATA: path.join(dir, "follower") });
     nodes.push(follower);

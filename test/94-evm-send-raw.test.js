@@ -88,12 +88,12 @@ test("eth_sendRawTransaction rejects: missing chainId · wrong chainId · byteco
   const wallet = new Wallet(FUNDER_KEY);
   const send = async (raw) => evmRpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] }).error?.message;
   const base = { to: BOB, value: 1n, nonce: 999, gasLimit: 21_000n };
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 0, gasPrice: 1n })), /ไม่มี chainId/);
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /chainId ของ tx \(5\) ไม่ตรงกับเชน \(41234\)/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 0, gasPrice: 1n })), /has no chainId/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /tx chainId \(5\) does not match the chain \(41234\)/);
   assert.match(await send(await wallet.signTransaction({ ...base, to: null, data: "0x6000", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /deploy bytecode/);
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 1, chainId: BigInt(vm.chainId), gasPrice: 1n })), /ไม่รองรับ tx type 1/);
-  assert.match(await send(await wallet.signTransaction({ ...base, data: "0x1234", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /ไม่ใช่โปรแกรม/);
-  assert.match(await send("0x02c0"), /12 ฟิลด์/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 1, chainId: BigInt(vm.chainId), gasPrice: 1n })), /unsupported tx type 1/);
+  assert.match(await send(await wallet.signTransaction({ ...base, data: "0x1234", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /is not a program/);
+  assert.match(await send("0x02c0"), /12 fields/);
   assert.match(await send("0xzz"), /hex/);
 
   // decodes the same as ethers (sender / hash / value)

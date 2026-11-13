@@ -46,9 +46,9 @@ test("duplicate tx: blocked within ttl × 2 of first sight, even before cleanup 
   const block = vm.createBlock({ timestamp: T + 10 });
   pool.take(block, { now: T + 10 });
   block.commit();
-  assert.match(pool.add(item, { now: T + 1500 }).reason, /ถูกส่งมาแล้ว/);
-  assert.match(pool.add(item, { now: T + 2000 }).reason, /ถูกส่งมาแล้ว/, "exactly ttl × 2 is still blocked");
-  assert.doesNotMatch(String(pool.add(item, { now: T + 2001 }).reason ?? ""), /ถูกส่งมาแล้ว/, "past ttl × 2 → not a duplicate (hits the nonce check instead)");
+  assert.match(pool.add(item, { now: T + 1500 }).reason, /already submitted/);
+  assert.match(pool.add(item, { now: T + 2000 }).reason, /already submitted/, "exactly ttl × 2 is still blocked");
+  assert.doesNotMatch(String(pool.add(item, { now: T + 2001 }).reason ?? ""), /already submitted/, "past ttl × 2 → not a duplicate (hits the nonce check instead)");
 });
 
 test("expired queued txs are cleaned up when a new tx arrives (no wait for a block) and recorded as expired", () => {
@@ -70,7 +70,7 @@ test("light cleanup stops at the first unexpired entry: every seen tx is still b
   const block = vm.createBlock({ timestamp: T + 1 });
   pool.take(block, { now: T + 1 });
   block.commit();
-  for (const item of items) assert.match(pool.add(item, { now: T + 2 }).reason, /ถูกส่งมาแล้ว/);
+  for (const item of items) assert.match(pool.add(item, { now: T + 2 }).reason, /already submitted/);
 });
 
 test("block.hashes(): cached · changes when a tx runs or a rejected tx is recorded · matches the recomputation on replay", () => {

@@ -39,7 +39,7 @@ test("server: body over MAX_BODY_BYTES → 413 on /sendtx /query /evm · normal 
   for (const path of ["/sendtx", "/query"]) {
     const res = await post(path, big);
     assert.equal(res.status, 413, path);
-    assert.match((await res.json()).error, /body ใหญ่เกิน 2048/);
+    assert.match((await res.json()).error, /body exceeds 2048/);
     assert.notEqual((await post(path, { pad: "x".repeat(1024) })).status, 413, path);
   }
   const evm = await post("/evm", big);
