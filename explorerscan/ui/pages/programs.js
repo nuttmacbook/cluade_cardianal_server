@@ -6,6 +6,18 @@ const openPrograms = (id) => { tabState["#programs"] = id; go("#programs"); };
 // type of program: standard token / NFT collection (ERC-721) / multi-token (ERC-1155) / anything else
 const kindTag = (token, collection) => `<span class="tag">${token ? "Token" : collection === "ERC-721" ? "NFT" : collection ? "Multi-token" : "Program"}</span>`;
 const bytes = (n) => `${num(n ?? 0)} B`;
+/** review: shows the pending program's colored source in a row under it (a second click hides it) */
+async function togglePendingCode(address, button) {
+  const row = button.closest("tr");
+  if (row.nextElementSibling?.classList.contains("code-row")) { row.nextElementSibling.remove(); button.classList.remove("on"); return; }
+  row.insertAdjacentHTML("afterend", `<tr class="code-row"><td colspan="${row.children.length}"><div class="dim">Loading code…</div></td></tr>`);
+  button.classList.add("on");
+  const cell = row.nextElementSibling.firstElementChild;
+  try {
+    const pending = await api(`/programs/pending/${address}`);
+    cell.innerHTML = codeView(sourceOf(pending.code), { max: "70vh" });
+  } catch (e) { cell.innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+}
 async function programs(draw = el) {
   const [counts, pending, approved] = await Promise.all([
     api("/programs"), paged("/programs/pending", "pending"), paged("/programs/approved", "approved"),
@@ -16,7 +28,8 @@ async function programs(draw = el) {
       ? `<div class="pad">${walletRow("Approving or rejecting needs an admin wallet (any wallet when the chain has no admin list)")}</div>`
         + table(["Program", "Name", "Type", "Deployer", "Value", "Code size", "Review"], pending.items.map((p) => txRow(p, [
           addr(p.address), p.name ? esc(p.name) : '<span class="dim">—</span>', kindTag(p.token, p.collection), addr(p.deployer), coin(p.value), bytes(p.codeSize),
-          `<span class="row"><button class="btn sm solid" data-review="init" onclick="reviewProgram('${p.address}','init')">Approve</button>
+          `<span class="row"><button class="btn sm" data-code onclick="togglePendingCode('${p.address}', this)">Code</button>
+           <button class="btn sm solid" data-review="init" onclick="reviewProgram('${p.address}','init')">Approve</button>
            <button class="btn sm" data-review="reject" onclick="reviewProgram('${p.address}','reject')">Reject</button></span>`,
         ]))) + pager(pending, "setPage('pending',$)") + '<div class="pad"><div class="out" id="review-out">Nothing sent yet</div></div>'
       : empty("No programs are waiting for approval") },

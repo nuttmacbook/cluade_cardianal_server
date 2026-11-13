@@ -59,7 +59,7 @@ import { withSystemAbi } from "./src/standards/system-abi.js";
 import { createSnapshotter } from "./src/node/snapshot.js";
 import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHoldings, collectionInfo, nftHoldings,
   pageOf, pageBlocks, pageTransactionsOf, pageTransactionsTo, pageEvents, pageStorageMap, pageHolders,
-  programCounts, pagePendingPrograms, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
+  programCounts, pagePendingPrograms, pendingProgram, pageApprovedPrograms, cursorOf, cursorTransactionsTo, cursorEvents,
   storageGroups, pageRejected, indexedFilterOf, cursorIndexedEvents, programAbi } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -310,6 +310,8 @@ const DYNAMIC = [
     transactions: vm.listTransactionsOf(m[1], { limit: limitOf(query) }),
     incoming: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
   })],
+  // one program awaiting review, with its source (an uninitialized program has no /program/:a yet)
+  [/^\/programs\/pending\/([^/]+)$/, (m) => pendingProgram(vm, m[1]) ?? { status: 404, body: { error: "No program is awaiting review at this address" } }],
   [/^\/program\/([^/]+)$/, (m, query) => {
     const code = vm.read(`${lower(m[1])}:code`);
     if (!code) return { status: 404, body: { error: "Program not found (it may not be initialized yet)" } };

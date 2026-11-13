@@ -11,6 +11,7 @@ explorerscan/
 │   └── style.css             Background, top bar, sidebar, tables, cards, forms, mobile (@media)
 ├── ui/                   🎨 Rendering (HTML for each page)
 │   ├── components.js         Pieces used on every page: panel, table, address / tx links, tags, JSON box, pager, tabs
+│   ├── code.js               Program source viewer: VS Code colors + line numbers (Code tab, review list, pending upgrade)
 │   ├── sidebar.js            Sidebar: highlights the current page + latest programs
 │   ├── pages/                One full page per URL
 │   │   ├── home.js               #               Overview + latest blocks

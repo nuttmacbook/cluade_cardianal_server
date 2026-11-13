@@ -300,6 +300,14 @@ export function pagePendingPrograms(vm, paging) {
   }) };
 }
 
+/** one program awaiting review, with its source (for the admin to read before init / reject) → null when not pending */
+export function pendingProgram(vm, address) {
+  const pending = vm.read(`pending${SEP}${String(address).toLowerCase()}`);
+  if (!pending) return null;
+  return { address: String(address).toLowerCase(), deployer: pending.context?.sender ?? null,
+    name: pending.metadata?.namespace ?? pending.initInput?.namespace ?? null, value: pending.value ?? 0, code: pending.code ?? "" };
+}
+
 /** approved programs · newest to oldest by approval time (createdAt) */
 export function pageApprovedPrograms(vm, paging) {
   const programs = approvedProgramAddresses(vm).map((address) => ({ address, metadata: vm.getMetadata(address) }))
