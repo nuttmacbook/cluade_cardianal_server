@@ -1,4 +1,4 @@
-/** จุดเข้าเดียวของทั้งระบบ */
+/** Single entry point for the whole system */
 export * from "./src/core/virtualmachine.js";
 export { DB, MemoryDB } from "./src/storage/db.js";
 export { reviewProgram, review, reviewMessage, PROGRAM_API, ALLOWED_GLOBALS, ALLOWED_MEMBERS } from "./src/core/autoreview.js";
