@@ -5,21 +5,21 @@ import { spawn } from "node:child_process";
 import { clientIp } from "../src/node/client-ip.js";
 
 /*
- * rate limit หลัง reverse proxy (src/node/client-ip.js · TRUST_PROXY)
- *   0 = IP ของ socket · N = นับจากขวาของ X-Forwarded-For + socket (ผู้ใช้ปลอมได้แค่ส่วนซ้าย)
+ * rate limiting behind a reverse proxy (src/node/client-ip.js · TRUST_PROXY)
+ *   0 = the socket IP · N = counted from the right of X-Forwarded-For + socket (users can only forge the left part)
  */
 
 const ROOT = path.join(import.meta.dirname, "..");
 const req = (remoteAddress, xff) => ({ socket: { remoteAddress }, headers: xff === undefined ? {} : { "x-forwarded-for": xff } });
 
-test("clientIp: TRUST_PROXY 0 / 1 / 2 · ปลอม header ทางซ้ายไม่ได้ผล · ไม่มี header = IP ของ socket", () => {
-  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 0), "10.0.0.1");               // ไม่เชื่อ header
-  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 1), "1.1.1.1");                // nginx เติม IP ผู้ใช้
-  assert.equal(clientIp(req("10.0.0.1", "6.6.6.6, 1.1.1.1"), 1), "1.1.1.1");       // ผู้ใช้ส่ง 6.6.6.6 มาเอง → ไม่ใช้
+test("clientIp: TRUST_PROXY 0 / 1 / 2 · forging the left of the header has no effect · no header = the socket IP", () => {
+  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 0), "10.0.0.1");               // header not trusted
+  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 1), "1.1.1.1");                // nginx appends the user IP
+  assert.equal(clientIp(req("10.0.0.1", "6.6.6.6, 1.1.1.1"), 1), "1.1.1.1");       // the user sent 6.6.6.6 themselves → ignored
   assert.equal(clientIp(req("10.0.0.1", "6.6.6.6, 1.1.1.1, 172.16.0.9"), 2), "1.1.1.1");   // CDN + nginx
-  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 3), "1.1.1.1");                // ชั้นน้อยกว่าที่ตั้ง = ซ้ายสุด
+  assert.equal(clientIp(req("10.0.0.1", "1.1.1.1"), 3), "1.1.1.1");                // fewer hops than configured = leftmost
   assert.equal(clientIp(req("10.0.0.1"), 1), "10.0.0.1");
-  assert.equal(clientIp(req("10.0.0.1", ["6.6.6.6", "1.1.1.1"]), 1), "1.1.1.1");   // header ซ้ำหลายบรรทัด
+  assert.equal(clientIp(req("10.0.0.1", ["6.6.6.6", "1.1.1.1"]), 1), "1.1.1.1");   // header repeated on several lines
   assert.equal(clientIp({ socket: {}, headers: {} }, 0), "unknown");
 });
 
@@ -33,26 +33,26 @@ async function startServer(env) {
     try { await fetch(`${url}/health`); return { url, child }; } catch { await new Promise((r) => setTimeout(r, 100)); }
   }
   child.kill();
-  throw new Error("server ไม่เริ่ม");
+  throw new Error("server did not start");
 }
 
 const post = (url, xff) => fetch(`${url}/query`, { method: "POST", headers: { "content-type": "application/json", ...(xff ? { "x-forwarded-for": xff } : {}) },
   body: JSON.stringify({ programUuid: "0x0000000000000000000000000000000000000001", functionName: "x" }) }).then((r) => r.status);
 
-test("server หลัง proxy: TRUST_PROXY=1 นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = ทุกคนใช้โควตาของ proxy ร่วมกัน", async () => {
+test("server behind a proxy: TRUST_PROXY=1 counts quota per user · unset = everyone shares the proxy's quota", async () => {
   const behind = await startServer({ TRUST_PROXY: "1", RATE_LIMIT: "2" });
   try {
     assert.notEqual(await post(behind.url, "1.1.1.1"), 429);
     assert.notEqual(await post(behind.url, "1.1.1.1"), 429);
     assert.equal(await post(behind.url, "1.1.1.1"), 429);
-    assert.equal(await post(behind.url, "9.9.9.9, 1.1.1.1"), 429);   // ปลอมทางซ้ายไม่ช่วย
-    assert.notEqual(await post(behind.url, "2.2.2.2"), 429);         // ผู้ใช้อีกคนยังมีโควตา
+    assert.equal(await post(behind.url, "9.9.9.9, 1.1.1.1"), 429);   // forging the left part does not help
+    assert.notEqual(await post(behind.url, "2.2.2.2"), 429);         // another user still has quota
   } finally { behind.child.kill(); }
 
   const direct = await startServer({ RATE_LIMIT: "2" });
   try {
     assert.notEqual(await post(direct.url, "1.1.1.1"), 429);
     assert.notEqual(await post(direct.url, "2.2.2.2"), 429);
-    assert.equal(await post(direct.url, "3.3.3.3"), 429);            // header ถูกเมิน: ทุกคนคือ 127.0.0.1
+    assert.equal(await post(direct.url, "3.3.3.3"), 429);            // header ignored: everyone is 127.0.0.1
   } finally { direct.child.kill(); }
 });

@@ -12,7 +12,7 @@ import { addressOf, randomPrivateKey } from "../src/crypto/signature.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
 /*
- * ระยะ 4: stateRoot = Merkle trie (getProof) · pruning ของ history (historyKeep) · snapshot ของ state (src/node/snapshot.js)
+ * Phase 4: stateRoot = Merkle trie (getProof) · history pruning (historyKeep) · state snapshots (src/node/snapshot.js)
  */
 
 const T = Date.parse("2025-05-01T00:00:00Z");
@@ -26,7 +26,7 @@ const READER = { ...OPTIONS, producer: null };
 const BALANCE = (who) => `token:storage:balances:${who}`;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "phase4-"));
 
-/** block 1 = deploy + init token · block ต่อไป = โอนให้ user<i> · บาง block ลบ key (approve 0 → ค่าใหม่ทับ) */
+/** block 1 = deploy + init token · later blocks = transfer to user<i> · some blocks delete keys (approve 0 → overwritten by a new value) */
 function produce(vm, from, to) {
   for (let number = from; number <= to; number += 1) {
     const block = vm.createBlock({ timestamp: T + number * 1000, feeRecipient: "miner" });
@@ -66,7 +66,7 @@ const feed = (source) => async (from, limit) => {
 //  4.3 Merkle trie · getProof
 // ---------------------------------------------------------------------------
 
-test("getProof: ค่าใน state ล่าสุดพิสูจน์ได้กับ stateRoot ของ header ล่าสุด · key ที่ไม่มีก็พิสูจน์ได้ว่าไม่มี", () => {
+test("getProof: values in the latest state prove against the latest header's stateRoot · missing keys can be proven absent", () => {
   const vm = chain(4);
   const header = vm.getBlock(4);
   const keys = [BALANCE("alice"), BALANCE("user3"), "alice:nonce", "alice:native:received", BALANCE("nobody")];
@@ -76,14 +76,14 @@ test("getProof: ค่าใน state ล่าสุดพิสูจน์ไ
     assert.deepEqual(value, vm.read(dbKey));
     assert.deepEqual(verifyProof(header.stateRoot, dbKey, proof), value === undefined ? { exists: false } : { exists: true, value });
   }
-  // หลักฐานเก่าใช้กับ root ใหม่ไม่ได้ (ค่าเปลี่ยน → node ตามทางเปลี่ยน)
+  // an old proof does not work with a new root (value changed → nodes on the path changed)
   const old = result.proofs[0];
   produce(vm, 5, 5);
   assert.throws(() => verifyProof(vm.getBlock(5).stateRoot, old.dbKey, old.proof), /หลักฐานไม่ครบ/);
   assert.throws(() => vm.getProof("x"), /key/);
 });
 
-test("trie ตรงกันทุก node: ผู้อ่านซิงก์แล้วได้ stateRoot / node ของ trie เหมือนผู้ผลิต · ย้ายข้อมูลจาก DB ที่ไม่มี trie ได้ root เดิม", async () => {
+test("tries match node for node: after syncing, the reader has the producer's stateRoot / trie nodes · migrating a DB without a trie gives the same root", async () => {
   const source = chain(5);
   const target = reader();
   await syncOnce(target, feed(source));
@@ -91,7 +91,7 @@ test("trie ตรงกันทุก node: ผู้อ่านซิงก�
   const trieOf = (vm) => vm.db.snapshot("trie:");
   assert.deepEqual(trieOf(target), trieOf(source));
 
-  // DB เก่า (ก่อนระยะ 4.3) ไม่มี trie: VM สร้างให้เองครั้งแรกที่ใช้
+  // an old DB (before phase 4.3) has no trie: the VM builds it on first use
   const legacy = new MemoryDB(Object.fromEntries(Object.entries(source.db.snapshot()).filter(([key]) => !key.startsWith("trie:"))));
   assert.equal(new VM.VirtualMachine(legacy).stateRoot(), source.getBlock(5).stateRoot);
   assert.equal(new VM.VirtualMachine(new MemoryDB()).stateRoot(), EMPTY_ROOT);
@@ -101,29 +101,29 @@ test("trie ตรงกันทุก node: ผู้อ่านซิงก�
 //  4.2 pruning
 // ---------------------------------------------------------------------------
 
-test("pruning: historyKeep = 3 → เหลือ history แค่ 3 block ล่าสุด · ย้อนดู / replay ได้แค่ช่วงนั้น · header / body ยังครบ ซิงก์ต่อได้", async () => {
+test("pruning: historyKeep = 3 → only the last 3 blocks of history remain · lookback / replay only within that range · headers / bodies stay complete, syncing still works", async () => {
   const vm = chain(8, { historyKeep: 3 });
   assert.equal(vm.historyFrom(), 6);
   assert.deepEqual(vm.listKeys("blockundo:").map((key) => Number(key.split(":")[1])), [6, 7, 8]);
   assert.ok(vm.listKeys("history:").every((key) => Number(key.split(":").at(-1)) >= 6));
 
-  assert.equal(vm.stateAt(5, BALANCE("alice")), "960n");                    // state ณ block 5 = ก่อน block 6 → ยังย้อนได้
+  assert.equal(vm.stateAt(5, BALANCE("alice")), "960n");                    // state at block 5 = before block 6 → still reachable
   assert.throws(() => vm.stateAt(4, BALANCE("alice")) && vm.snapshotAt(4), { code: "NOT_FOUND" });
   assert.throws(() => vm.snapshotAt(4), { code: "NOT_FOUND" });
   assert.equal(vm.replayBlock(6).hash, vm.getBlock(6).hash);
   assert.throws(() => vm.replayBlock(5), { code: "NOT_FOUND" });
-  assert.throws(() => vm.rebuildFrom(7), { code: "NOT_FOUND" });           // rebuild ต้องมี history ตั้งแต่ block 1
+  assert.throws(() => vm.rebuildFrom(7), { code: "NOT_FOUND" });           // rebuild needs history from block 1
 
-  // node ที่ตัด history ยังเป็นต้นทางของการซิงก์ได้ (body ครบ) และผลตรงกับ archive
+  // a pruned node can still serve as a sync source (bodies complete), with results matching an archive node
   const archive = chain(8);
   const synced = reader();
   await syncOnce(synced, feed(vm));
   assert.equal(synced.stateRoot(), archive.stateRoot());
   assert.deepEqual(stateOf(synced), stateOf(archive));
-  assert.equal(vm.getBlock(8).hash, archive.getBlock(8).hash);              // pruning ไม่อยู่ใน hash (ตั้งต่างกันได้ทุกเครื่อง)
+  assert.equal(vm.getBlock(8).hash, archive.getBlock(8).hash);              // pruning is not in the hash (each machine may set it differently)
 });
 
-test("pruning: เปิดบนเชนที่ยาวแล้ว → ทยอยลบไม่เกิน maxKeys ต่อครั้ง", () => {
+test("pruning: enabled on an already long chain → deletes gradually, at most maxKeys per run", () => {
   const vm = chain(10);
   assert.equal(vm.historyFrom(), 1);
   const first = vm.pruneHistory({ keep: 2, maxKeys: 4 });
@@ -140,7 +140,7 @@ test("pruning: เปิดบนเชนที่ยาวแล้ว → ท
 //  4.1 snapshot
 // ---------------------------------------------------------------------------
 
-test("snapshot: โหลด state ณ block N แล้วซิงก์ต่อ → state / trie เหมือนผู้ผลิตทุก key", async () => {
+test("snapshot: load state at block N, then keep syncing → state / trie match the producer for every key", async () => {
   const dir = tmp();
   try {
     const source = chain(6);
@@ -155,7 +155,7 @@ test("snapshot: โหลด state ณ block N แล้วซิงก์ต่
     assert.equal(target.historyFrom(), 7);
     assert.equal(target.stateRoot(), source.getBlock(6).stateRoot);
     assert.deepEqual(stateOf(target), stateOf(source));
-    assert.equal(target.getBlockBody(6), null);                               // ไม่มี body ก่อน snapshot
+    assert.equal(target.getBlockBody(6), null);                               // no bodies before the snapshot
     assert.throws(() => target.replayBlock(6), { code: "NOT_FOUND" });
 
     produce(source, 7, 9);
@@ -166,7 +166,7 @@ test("snapshot: โหลด state ณ block N แล้วซิงก์ต่
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("snapshot: export ไม่หยุดเชน — block ใหม่ (รวมลบ key) ระหว่าง export ไม่กระทบ state ณ block N", async () => {
+test("snapshot: export does not stop the chain: new blocks (including key deletes) during export do not affect the state at block N", async () => {
   const source = chain(4);
   const five = source.createBlock({ timestamp: T + 5000, feeRecipient: "miner" });
   five.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: "7n" }, nonce: 4 });
@@ -178,7 +178,7 @@ test("snapshot: export ไม่หยุดเชน — block ใหม่ (�
   let moved = false;
   for await (const chunk of snapshotLines(source, { batch: 3 })) {
     lines.push(...chunk.split("\n").filter(Boolean));
-    if (!moved && lines.length > 8) {            // header 5 อันแล้ว อยู่กลางรายการ state (ก่อนถึง "counter:" / "token:")
+    if (!moved && lines.length > 8) {            // past 5 headers, in the middle of the state list (before "counter:" / "token:")
       moved = true;
       const block = source.createBlock({ timestamp: T + 6000, feeRecipient: "miner" });
       block.call({ programUuid: "token", functionName: "transfer", input: { to: "late", amount: 1 }, context: user("alice"), nonce: 5 });
@@ -196,7 +196,7 @@ test("snapshot: export ไม่หยุดเชน — block ใหม่ (�
   assert.equal(target.read(BALANCE("late")), undefined);
 });
 
-test("snapshot: ข้อมูลถูกแก้ / ไม่ครบ / ผู้ผลิตไม่ตรง / chain ไม่ตรง = ไม่รับ และไม่เหลือ state ค้าง", async () => {
+test("snapshot: tampered / incomplete data / wrong producer / wrong chain = rejected, leaving no partial state", async () => {
   const source = chain(3);
   const lines = [];
   for await (const chunk of snapshotLines(source)) lines.push(...chunk.split("\n").filter(Boolean));
@@ -220,7 +220,7 @@ test("snapshot: ข้อมูลถูกแก้ / ไม่ครบ / ผ�
   await assert.rejects(loadSnapshot(target, lines), /ยังไม่มี block/);
 });
 
-test("snapshot: header ย้อนหลัง 256 block (BlockHash) · ไม่มี block = ทำไม่ได้", async () => {
+test("snapshot: headers for the last 256 blocks (BlockHash) · no blocks = cannot snapshot", async () => {
   const vm = reader({ producer: null });
   await assert.rejects(writeSnapshot(vm, path.join(os.tmpdir(), "never.ndjson")), /ยังไม่มี block/);
   for (let number = 1; number <= 260; number += 1) {
@@ -237,6 +237,6 @@ test("snapshot: header ย้อนหลัง 256 block (BlockHash) · ไม�
   assert.equal(target.getBlock(4), null);
   const next = target.createBlock({ timestamp: T + 261, feeRecipient: "miner" });
   const same = vm.createBlock({ timestamp: T + 261, feeRecipient: "miner" });
-  assert.equal(next.header().hash, same.header().hash);                       // base fee / parentHash ต่อจาก header N ได้
+  assert.equal(next.header().hash, same.header().hash);                       // base fee / parentHash continue from header N
   applyBlock(target, { header: same.header(), body: [] });
 });

@@ -393,10 +393,10 @@ POST /sendtx
 **Replacing a queued tx (replace-by-fee)** — `mempool.add()` accepts nonces in the range [on-chain nonce, on-chain nonce + number queued]
 - nonce = next → appended to the queue as before · skipped number → rejected as before (`nonce must be N`)
 - nonce = a queued tx from the same sender → replaceable when **both** the new maxFee and priority ≥ old × 1.1 (`replaceBumpPercent: 10`, computed with BigInt rounding up · legacy gasPrice = both values)
-  Not enough (both legacy) → `gas price too low for replacement (must be at least X)` · with 1559 → `(requires maxFeePerGas ≥ X and maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
+  Not enough (both legacy) → `gas price too low to replace (must be at least X)` · with 1559 → `(needs maxFeePerGas ≥ X and maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
   · no gasPrice given = `vm.gas.price`
 - The new tx can be any action → **cancel = replace with a 0 transfer to yourself** (`{ action: "transfer", to: <yourself>, value: 0 }`)
-  The chain accepts EVM-style native transfers of 0: gas is still charged and the nonce consumed · negative / non-integer → `amount must be a non-negative integer`
+  The chain accepts EVM-style native transfers of 0: gas is still charged and the nonce consumed · negative / non-integer → `amount ต้องเป็นจำนวนเต็มไม่ติดลบ` ("amount must be a non-negative integer"; VM consensus message, kept in Thai)
   (`transferNative` inside programs still does not accept 0, as before)
 - Does not use up more `maxPerSender` / `maxSize`, but counts toward the per-address rate limit · must pass simulate first — fails → the old tx stays
 - The old tx leaves the queue but stays in "seen" (it cannot be resubmitted) · `mempool.replacedBy(hash)` remembers it in memory for `ttlMs`
@@ -1001,7 +1001,7 @@ node scripts/deploy-system.js --plan --deployer 0x… --chain-id 41234          
 DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js https://chain.example.com # deploy + approve → deploy/system-programs.json
 ```
 - `systemPrograms({ addressAt, symbol })` = the plan (order / name / input of each · the factory's input gets the template addresses filled in)
-- The script: checks names are free · nonces already used must be the planned programs (otherwise it stops) · the deployer must be funded · resends the same tx when the mempool answers "sent too often" · can be rerun (skips existing ones) · no `ADMIN_KEY` = waits for an admin to press Approve
+- The script: checks names are free · nonces already used must be the planned programs (otherwise it stops) · the deployer must be funded · resends the same tx when the mempool answers "sending too frequently" · can be rerun (skips existing ones) · no `ADMIN_KEY` = waits for an admin to press Approve
 - Explorer: the `#system` page (sidebar "System programs") reads the list from `EXPLORER.systemPrograms` in `explorerscan/config.js` and finds addresses with `/name/<name>`
 - All code passes `reviewProgram` — autoreview disallows `obj[key]`, so metadata is set one field at a time
 
@@ -1101,7 +1101,7 @@ The principle is a **whitelist** — only what is listed is allowed, everything 
 Real check over HTTP:
 ```
 code: function program() { function evil(p) { return process.env } return { evil } }
-→ 400 { "error": "Code failed review",
+→ 400 { "error": "code failed review",
         "issues": [{ "line": 2, "message": "'process' ไม่รู้จัก (ใช้ได้เฉพาะ API ของ VM และตัวแปรที่ประกาศเอง)" }] }
 ```
 (The issue message comes from `src/core/autoreview.js` and stays in Thai because it is consensus text; it means "'process' is unknown (only VM APIs and your own declared variables are allowed)")

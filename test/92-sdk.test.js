@@ -6,15 +6,15 @@ import { Wallet } from "ethers";
 import { createClient, keySigner, walletSigner, fromChainValue, toChainValue, ChainError, hashTypedData } from "../client-sdk/index.js";
 
 /*
- * ระยะ 3.3: SDK ฝั่ง client (client-sdk/index.js)
- *   ไม่ดึง VM / sandbox มาด้วย (ใช้ใน browser ได้) · send เติม chainId / nonce / แก๊สเอง · wait ตามจนถึง block
- *   walletSigner เซ็นด้วย eth_signTypedData_v4 → ลายเซ็นจากกระเป๋าแบบ EIP-712 มาตรฐาน (ethers แทน MetaMask) ผ่าน /sendtx
+ * Phase 3.3: client-side SDK (client-sdk/index.js)
+ *   does not pull in the VM / sandbox (browser-safe) · send fills in chainId / nonce / gas · wait follows the tx into a block
+ *   walletSigner signs with eth_signTypedData_v4 → standard EIP-712 wallet signatures (ethers standing in for MetaMask) pass /sendtx
  */
 
-const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // มียอดใน genesis.json
+const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // funded in genesis.json
 const BOB = "0x00000000000000000000000000000000000000b0";
 
-test("sdk ไม่ import VM / sandbox / storage / node:* (ใช้ใน browser ได้)", () => {
+test("sdk does not import VM / sandbox / storage / node:* (browser-safe)", () => {
   const seen = new Set();
   const walk = (file) => {
     if (seen.has(file)) return;
@@ -31,8 +31,8 @@ test("sdk ไม่ import VM / sandbox / storage / node:* (ใช้ใน brow
   assert.ok(files.includes("src/crypto/signature.js"));
 });
 
-test("sdk: send (key / กระเป๋า EIP-1193) → wait ถึง block · nonce ผิด = ChainError พร้อม body", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("sdk: send (key / EIP-1193 wallet) → wait until in a block · wrong nonce = ChainError with body", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -51,7 +51,7 @@ test("sdk: send (key / กระเป๋า EIP-1193) → wait ถึง block 
     assert.equal(done.blockNumber, 1);
     assert.equal(await client.balance(BOB), 7n);
 
-    // กระเป๋า EIP-1193 (ethers Wallet เซ็น typed data แบบเดียวกับ MetaMask)
+    // EIP-1193 wallet (ethers Wallet signs typed data the same way MetaMask does)
     const wallet = new Wallet(FUNDER_KEY);
     const provider = { request: async ({ method, params }) => {
       if (method === "eth_requestAccounts") return [wallet.address];
@@ -62,7 +62,7 @@ test("sdk: send (key / กระเป๋า EIP-1193) → wait ถึง block 
     } };
     const browser = await walletSigner(provider);
     assert.equal(browser.address, signer.address);
-    const second = await client.send({ action: "transfer", to: BOB, value: 3n, gasLimit: 21_000 }, browser);   // BigInt → "3n" เอง
+    const second = await client.send({ action: "transfer", to: BOB, value: 3n, gasLimit: 21_000 }, browser);   // BigInt → "3n" automatically
     assert.equal(second.queued, true);
     assert.equal(second.tx.nonce, 1);
     mine();

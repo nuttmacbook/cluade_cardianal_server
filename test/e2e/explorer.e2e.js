@@ -1,9 +1,9 @@
 /**
- * explorer ในเบราว์เซอร์จริง (Chromium ผ่าน Playwright) กับ server จริง
+ * the explorer in a real browser (Chromium via Playwright) against a real server
  *   npm run test:e2e
  *
- * wallet ถูกจำลองด้วย window.ethereum ที่เซ็นด้วย ethers.Wallet.signTypedData
- * → เซ็นข้อมูลที่หน้าเว็บประกอบเองทุกตัวอักษร เหมือน MetaMask (ไม่ได้ประกอบใหม่ฝั่ง Node)
+ * the wallet is mocked by a window.ethereum that signs with ethers.Wallet.signTypedData
+ * → it signs exactly the data the page builds, like MetaMask (nothing is rebuilt on the Node side)
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -14,12 +14,12 @@ import { chromium } from "playwright";
 import { Wallet, JsonRpcProvider, WebSocketProvider, Contract, id as topicOf } from "ethers";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
-const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";  // มียอดใน genesis.json
+const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";  // funded in genesis.json
 const wallet = new Wallet(KEY);
 const ME = wallet.address.toLowerCase();
-const BOB = "0xFABB0ac9d68B0B445fB7357272Ff202C5651694a";                          // ตัวพิมพ์ผสมแบบ checksum
+const BOB = "0xFABB0ac9d68B0B445fB7357272Ff202C5651694a";                          // mixed-case checksum address
 
-let server, browser, page, url, CHAIN_ID;   // CHAIN_ID = chainId ของเชนที่ทดสอบ (tx ที่เซ็นต้องตรง ไม่งั้น node ปฏิเสธ)
+let server, browser, page, url, CHAIN_ID;   // CHAIN_ID = chainId of the chain under test (signed txs must match, or the node rejects them)
 const pageErrors = [];
 
 const freePort = () => new Promise((resolve) => {
@@ -36,7 +36,7 @@ before(async () => {
     if (await fetch(`${url}/genesis`).then(() => true, () => false)) break;
     await wait(100);
   }
-  // ข้อมูลตั้งต้น: โทเคน "mytoken" + tx ทุกประเภท
+  // seed data: token "mytoken" + every tx type
   CHAIN_ID = (await (await fetch(`${url}/genesis`)).json()).chainId;
   await promisify(execFile)(process.execPath, ["dev/seed.js", url], { cwd: ROOT });
 
@@ -44,12 +44,12 @@ before(async () => {
   const context = await browser.newContext();
   await context.exposeFunction("__signTypedData", (json) => {
     const { domain, types, message } = JSON.parse(json);
-    const { EIP712Domain, ...rest } = types;          // ethers สร้าง EIP712Domain เอง
+    const { EIP712Domain, ...rest } = types;          // ethers builds EIP712Domain itself
     return wallet.signTypedData(domain, rest, message);
   });
   await context.addInitScript((account) => {
-    // แบบ Brave Wallet (เข้มกว่า MetaMask): เซ็นได้เฉพาะบัญชีที่เว็บได้รับสิทธิ์ (eth_accounts) และต้องส่ง address ตัวพิมพ์ตรงกับที่กระเป๋าให้มา
-    //   ไม่ตรง = error 4100 · __revoke() = ผู้ใช้ตัดการเชื่อมต่อในกระเป๋า
+    // like Brave Wallet (stricter than MetaMask): only accounts the site was granted (eth_accounts) can sign, and the address case must match what the wallet returned
+    //   mismatch = error 4100 · __revoke() = the user disconnects in the wallet
     const authorized = new Set();
     window.__requested = 0;
     window.__revoke = () => authorized.clear();
@@ -58,7 +58,7 @@ before(async () => {
       request: async ({ method, params }) => {
         if (method === "eth_requestAccounts") { window.__requested += 1; authorized.add(account); return [account]; }
         if (method === "eth_accounts") return [...authorized];
-        // แบบ MetaMask: เปิดเชนอื่นอยู่ (ค่าเริ่ม BSC 0x38 = ยังไม่ได้ add เชนนี้) · chainId ใน domain ต้องตรงกับเชนที่เปิดอยู่
+        // like MetaMask: another chain is active (default BSC 0x38 = this chain not added yet) · the domain chainId must match the active chain
         if (method === "eth_chainId") return window.__walletChain ?? "0x38";
         if (method === "eth_signTypedData_v4") {
           if (!authorized.has(params[0])) {
@@ -71,7 +71,7 @@ before(async () => {
           return window.__signTypedData(params[1]);
         }
         if (method === "wallet_addEthereumChain") { window.__addedChain = params[0]; return null; }
-        throw new Error(`ไม่รองรับ ${method}`);
+        throw new Error(`unsupported ${method}`);
       },
     };
   }, wallet.address);
@@ -90,20 +90,20 @@ const open = async (hash) => {
   await settle();
 };
 const settle = () => page.waitForFunction(() => !document.getElementById("view").textContent.includes("Loading"));
-const view = () => page.locator("#view").textContent();   // textContent: ไม่โดน text-transform ของ CSS
+const view = () => page.locator("#view").textContent();   // textContent: not affected by CSS text-transform
 const tab = async (label) => { await page.click(`button.tab:has-text('${label}')`); await page.waitForSelector(`button.tab.on:has-text('${label}')`); await settle(); };
 
-test("หน้าแรก: ภาพรวม + รายการ block", async () => {
+test("home page: overview + block list", async () => {
   await open("");
   const text = await view();
   assert.match(text, /Latest blocks/);
   assert.equal(await page.locator("#view a", { hasText: /^1$/ }).count(), 1);
-  assert.ok(await page.locator("#view .ico.blk").count() >= 1);                  // เลข block มีไอคอนกล่อง
-  assert.ok(await page.locator("#view .ico.gas").count() >= 1);                  // ค่าแก๊สมีไอคอนไฟ
+  assert.ok(await page.locator("#view .ico.blk").count() >= 1);                  // block numbers have a box icon
+  assert.ok(await page.locator("#view .ico.gas").count() >= 1);                  // gas values have a flame icon
   assert.deepEqual(pageErrors, []);
 });
 
-test("ปุ่ม Add network: ส่งค่าจาก GET /evm ให้ wallet_addEthereumChain (chainId / rpcUrls / explorer ของ node นี้)", async () => {
+test("Add network button: passes the GET /evm values to wallet_addEthereumChain (this node's chainId / rpcUrls / explorer)", async () => {
   await open("");
   await page.click("#nbtn");
   await page.waitForFunction(() => window.__addedChain);
@@ -114,7 +114,7 @@ test("ปุ่ม Add network: ส่งค่าจาก GET /evm ให้ w
   assert.deepEqual(pageErrors, []);
 });
 
-test("หน้า block: header + รายการ tx ที่ replay ได้", async () => {
+test("block page: header + the replayed tx list", async () => {
   await open("#block/1");
   const text = await view();
   assert.match(text, /Block #1/);
@@ -123,28 +123,28 @@ test("หน้า block: header + รายการ tx ที่ replay ได
   assert.deepEqual(pageErrors, []);
 });
 
-test("หน้า tx: ค้นด้วย hash ของระบบและ hash ที่ผู้ใช้เซ็นได้ทั้งคู่", async () => {
+test("tx page: found by both the system hash and the hash the user signed", async () => {
   const [first] = (await get(`/address/${ME}`)).transactions;
   const { digest, record } = await get(`/tx/${first.hash}`);
-  assert.match(record.signature, /^0x[0-9a-f]{130}$/);   // ลายเซ็นอ่านจาก blockbody (txn ไม่เก็บซ้ำ)
+  assert.match(record.signature, /^0x[0-9a-f]{130}$/);   // the signature is read from blockbody (txn does not duplicate it)
   for (const hash of [first.hash, digest]) {
     await open(`#tx/${hash}`);
     const text = await view();
     assert.match(text, /Success/);
     assert.match(text, /Signed hash/);
-    assert.ok(text.includes(record.signature), "แสดงลายเซ็น");
+    assert.ok(text.includes(record.signature), "shows the signature");
   }
   assert.deepEqual(pageErrors, []);
 });
 
-test("ค้นหาด้วยชื่อ → หน้าโปรแกรม พร้อมแท็บ event / ข้อมูล / โค้ด", async () => {
+test("search by name → program page with event / data / code tabs", async () => {
   await open("");
   await page.fill("#q", "mytoken");
   await page.press("#q", "Enter");
   await page.waitForFunction(() => location.hash.startsWith("#address/"));
   await settle();
   assert.match(await view(), /mytoken/);
-  // อัปเกรด: เวอร์ชัน (ไม่เคยอัปเกรด = 1) และ upgrader (ไม่มี = แก้ไม่ได้)
+  // upgrades: version (never upgraded = 1) and upgrader (none = immutable)
   assert.match(await view(), /Version\s*1/);
   assert.match(await view(), /Upgrader\s*None \(immutable\)/);
 
@@ -152,7 +152,7 @@ test("ค้นหาด้วยชื่อ → หน้าโปรแกร
   assert.match(await view(), /Transfer/);
 
   await tab("Storage");
-  assert.match(await page.locator("#storage-box").textContent(), /owner/);          // program info: key 1 ชั้น
+  assert.match(await page.locator("#storage-box").textContent(), /owner/);          // program info: 1-level keys
   await page.click("#storage-panel [data-sub=storage]");
   await page.waitForSelector("#storage-box #map-name");
 
@@ -161,7 +161,7 @@ test("ค้นหาด้วยชื่อ → หน้าโปรแกร
   assert.deepEqual(pageErrors, []);
 });
 
-test("ไอคอน address: โปรแกรม = คอมพิวเตอร์ · กระเป๋า = คน", async () => {
+test("address icons: program = computer · wallet = person", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await page.waitForSelector("#view .ico.big.program");
@@ -173,31 +173,31 @@ test("ไอคอน address: โปรแกรม = คอมพิวเต�
   assert.deepEqual(pageErrors, []);
 });
 
-test("แถบข้อมูล: program info / storage (dropdown ที่หัวตาราง) / get storage (key แนวตั้ง + ปุ่ม +)", async () => {
+test("data tab: program info / storage (dropdown in the table header) / get storage (vertical keys + a + button)", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Storage");
-  await page.click("#storage-panel [data-sub=info]");                              // แถบที่เลือกไว้จากเทสต์ก่อนถูกจำไว้
+  await page.click("#storage-panel [data-sub=info]");                              // the tab chosen in the previous test is remembered
   const info = await page.locator("#storage-box").textContent();
   for (const key of ["owner", "name", "ticker", "decimals", "totalSupply"]) assert.match(info, new RegExp(key));
-  await page.waitForSelector("#storage-box .ico.person");                          // ค่า owner เป็น address
-  assert.ok(await page.locator("#storage-box .kchip").count() >= 5);              // key เป็น badge
+  await page.waitForSelector("#storage-box .ico.person");                          // the owner value is an address
+  assert.ok(await page.locator("#storage-box .kchip").count() >= 5);              // keys are badges
 
   await page.click("#storage-panel [data-sub=storage]");
-  await page.waitForSelector("#storage-box thead #map-name");                      // dropdown อยู่ที่หัวตาราง
+  await page.waitForSelector("#storage-box thead #map-name");                      // the dropdown is in the table header
   assert.deepEqual(await page.locator("#map-name option").allTextContents(), ["balances (63)"]);
   assert.match(await page.locator("#storage-box").textContent(), /Showing 1–25 of 63/);
 
   await page.click("#storage-panel [data-sub=get]");
   assert.deepEqual(await page.locator("#gk-name option").allTextContents(), ["allowance"]);
   const parts = page.locator(".gk-part");
-  await parts.nth(0).fill(wallet.address);                                        // ตัวพิมพ์ผสม
+  await parts.nth(0).fill(wallet.address);                                        // mixed case
   await parts.nth(1).fill(BOB);
   await page.click("button[title='Add a key part']");
   assert.equal(await parts.count(), 3);
   const [y1, y2] = await Promise.all([parts.nth(1).boundingBox(), parts.nth(2).boundingBox()]);
-  assert.ok(y2.y > y1.y, "ช่อง key เรียงลงมาแนวตั้ง");
-  assert.equal(await parts.nth(0).inputValue(), wallet.address);                  // กด + แล้วค่าที่กรอกไม่หาย
+  assert.ok(y2.y > y1.y, "key fields are stacked vertically");
+  assert.equal(await parts.nth(0).inputValue(), wallet.address);                  // pressing + keeps the entered value
   await page.click("button[title='Remove the last key part']");
   assert.equal(await parts.count(), 2);
   await page.click("#storage-box button:has-text('Read value')");
@@ -211,12 +211,12 @@ test("แถบข้อมูล: program info / storage (dropdown ที่ห
   assert.deepEqual(pageErrors, []);
 });
 
-test("เหรียญที่ถือ: นับจาก event Transfer · ยอดแสดงตาม decimals (6) · ข้อมูล token บนหน้าโปรแกรม", async () => {
+test("holdings: counted from Transfer events · balances shown with decimals (6) · token info on the program page", async () => {
   await open(`#address/${BOB}`);
-  await page.waitForSelector("#view button.tab.on:has-text('Tokens')");        // แถบแรกของกระเป๋าที่มีเหรียญ
+  await page.waitForSelector("#view button.tab.on:has-text('Tokens')");        // the first tab of a wallet that holds tokens
   const text = await view();
   assert.match(text, /MTK/);
-  assert.match(text, /1,200\.5(?!\d)/);                                          // 1_200_500_000 หน่วย ÷ 10^6
+  assert.match(text, /1,200\.5(?!\d)/);                                          // 1_200_500_000 units ÷ 10^6
 
   await open(`#address/${ME}`);
   assert.match(await view(), /998,799\.499933/);
@@ -229,15 +229,15 @@ test("เหรียญที่ถือ: นับจาก event Transfer ·
   assert.deepEqual(pageErrors, []);
 });
 
-test("ข้อมูลแบบ { } อยู่ในกรอบดำแบบ JSON (input / event ของหน้า tx)", async () => {
+test("{ } data is shown in a dark JSON box (input / events on the tx page)", async () => {
   const { address } = await get("/name/mytoken");
-  const [last] = (await get(`/address/${ME}/txs?limit=1`)).items;   // tx ล่าสุดของ seed: โปรแกรมเรียกโปรแกรม
+  const [last] = (await get(`/address/${ME}/txs?limit=1`)).items;   // the seed's latest tx: a program calling a program
   await open(`#tx/${last.hash}`);
   assert.ok(await page.locator("#view pre.json").count() >= 2);
   const bg = await page.locator("#view pre.json").first().evaluate((el) => getComputedStyle(el).backgroundColor);
   assert.equal(bg, "rgb(3, 7, 19)");
   assert.match(await page.locator("#view pre.json").first().textContent(), /^\{\n  "/);
-  // แถว block มีไอคอนกล่อง + เลข block ของ tx
+  // the block row has a box icon + the tx's block number
   const blockRow = page.locator("#view tr", { hasText: /^Block/ }).first();
   assert.equal(await blockRow.locator(".ico.blk").count(), 1);
   assert.equal(await blockRow.locator("a").textContent(), String((await get(`/tx/${last.hash}`)).blockNumber));
@@ -245,13 +245,13 @@ test("ข้อมูลแบบ { } อยู่ในกรอบดำแบ
   assert.deepEqual(pageErrors, []);
 });
 
-test("อ่านค่าโปรแกรมจากฟอร์ม (ไม่ต้องเชื่อม wallet)", async () => {
+test("read program values from the form (no wallet connection needed)", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Interact");
   await page.click(".ix-head .seg button[data-mode=fields]");
   await page.selectOption("#fn", "balanceOf");
-  await page.fill("#ix-who", ME);                                                   // ช่องกรอกที่เดาจาก params.input.who
+  await page.fill("#ix-who", ME);                                                   // the field inferred from params.input.who
   await page.evaluate(() => { window.__swaps = 0; new MutationObserver((ms) => { for (const m of ms) if (m.target.id === "view") window.__swaps += 1; })
     .observe(document.getElementById("view"), { childList: true }); });
   await page.click("text=Read (no gas)");
@@ -259,16 +259,16 @@ test("อ่านค่าโปรแกรมจากฟอร์ม (ไม
   const { balance } = await get(`/address/${address}`).then(() => get(`/token/${address}/holders?limit=100`))
     .then((h) => h.items.find((x) => x.address === ME.toLowerCase()) ?? { balance: "0n" });
   assert.match(await page.locator("#out .ix-status").innerText(), /Success[\s\S]*Read · balanceOf\(\)/);
-  assert.equal(await page.locator("#out .ix-ret .mono").innerText(), BigInt(String(balance).replace(/n$/, "")).toLocaleString("en-US")); // ค่าที่ return จริง
-  assert.equal(await page.locator("#out details.ix-full").getAttribute("open"), null);   // ข้อมูลเต็มพับไว้
+  assert.equal(await page.locator("#out .ix-ret .mono").innerText(), BigInt(String(balance).replace(/n$/, "")).toLocaleString("en-US")); // the actual returned value
+  assert.equal(await page.locator("#out details.ix-full").getAttribute("open"), null);   // full details collapsed
   const full = JSON.parse(await page.locator("#out details.ix-full pre").textContent());
   assert.equal(full.status, "success");
   assert.equal(typeof full.result, "number");
-  assert.equal(await page.evaluate(() => window.__swaps), 0, "กด Read แล้วหน้าไม่ถูกวาดใหม่");
+  assert.equal(await page.evaluate(() => window.__swaps), 0, "pressing Read does not re-render the page");
   assert.equal(await page.locator("#fn").inputValue(), "balanceOf");
 });
 
-test("Interact: สร้างช่องกรอกจาก params.input ของฟังก์ชันที่เลือก · สลับ Fields ↔ JSON แล้วค่าไม่หาย", async () => {
+test("Interact: builds fields from the selected function's params.input · switching Fields ↔ JSON keeps the values", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Interact");
@@ -280,7 +280,7 @@ test("Interact: สร้างช่องกรอกจาก params.input �
   await page.fill("#ix-amount", "7");
 
   await page.click(".ix-head .seg button[data-mode=json]");
-  assert.deepEqual(JSON.parse(await page.inputValue("#args")), { to: BOB, amount: "7n" });   // ตัวเลขกลายเป็น bigint "7n"
+  assert.deepEqual(JSON.parse(await page.inputValue("#args")), { to: BOB, amount: "7n" });   // numbers become bigint "7n"
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "9n", memo: "hi" }));
   await page.click(".ix-head .seg button[data-mode=fields]");
   assert.equal(await page.inputValue("#ix-amount"), "9");
@@ -290,7 +290,7 @@ test("Interact: สร้างช่องกรอกจาก params.input �
   await page.click("text=Read (no gas)");
   assert.match(await page.locator("#out .ix-ret").innerText(), /amount must be a whole number/);
 
-  await page.selectOption("#fn", "multiTransfer");                                     // list ของ object: ตัวอย่างจาก item.to / item.amount
+  await page.selectOption("#fn", "multiTransfer");                                     // a list of objects: example from item.to / item.amount
   assert.deepEqual(await fields(), ["transfers:list"]);
   assert.deepEqual(JSON.parse(await page.getAttribute("#ix-transfers", "placeholder")), [{ to: "0x…", amount: 1 }]);
   await page.selectOption("#fn", "balanceOf");
@@ -300,7 +300,7 @@ test("Interact: สร้างช่องกรอกจาก params.input �
   assert.deepEqual(pageErrors, []);
 });
 
-test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC อยู่ (ไม่ได้ add เชนนี้) ก็เซ็นได้ · เห็นยอด + ค่าแก๊สก่อนเซ็น · หน้า tx แสดง Signed on (address ใน input เป็นตัวพิมพ์ผสม)", async () => {
+test("send a tx via wallet: signing works even with BSC active (this chain not added) · amount + gas shown before signing · the tx page shows Signed on (input address in mixed case)", async () => {
   const { address } = await get("/name/mytoken");
   const before = (await get(`/program/${address}/storage?prefix=balances&limit=200`)).items;
   const bobBefore = before.find((s) => s.key[1] === BOB.toLowerCase())?.value ?? "0n";
@@ -308,15 +308,15 @@ test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC �
   await open(`#address/${address}`);
   await tab("Interact");
   await page.selectOption("#fn", "transfer");
-  await page.click(".ix-head .seg button[data-mode=json]");                         // แบบ JSON เดิมยังใช้ได้
+  await page.click(".ix-head .seg button[data-mode=json]");                         // the JSON mode still works
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "7n" }));
-  // หยุด wallet ไว้ก่อนเซ็น → ดูข้อความยอด + ค่าแก๊สที่ขึ้นก่อนหน้าต่างของกระเป๋า
+  // pause the wallet before signing → check the amount + gas message shown before the wallet window
   await page.evaluate(() => {
     const sign = window.__signTypedData;
     window.__signTypedData = async (json) => { window.__costText = document.querySelector("#out .ix-status")?.innerText; return sign(json); };
   });
   await page.click("text=Send transaction");
-  // อยู่หน้าเดิม: รอเข้า block แล้วโชวค่าที่ return (transfer คืน true) + ข้อมูลเต็มแบบพับ
+  // stays on the page: waits for the block, then shows the return value (transfer returns true) + collapsed full details
   await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
   assert.match(await page.locator("#out .ix-status").innerText(), /Success[\s\S]*Transaction · transfer\(\) · block/);
   assert.equal(await page.locator("#out .ix-ret .mono").innerText(), "true");
@@ -326,7 +326,7 @@ test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC �
   assert.equal(receipt.signedOnChainId, 56);
   assert.match(await page.evaluate(() => window.__costText), /Balance [\d.,]+ BWSC · fee ≈ [\d.,]+ BWSC \(max [\d.,]+\) · signing on chain 56 — confirm in your wallet/);
 
-  await page.click("#out .ix-link");                                                 // ลิงก์ไปหน้า tx
+  await page.click("#out .ix-link");                                                 // link to the tx page
   await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
   await page.waitForFunction(() => document.getElementById("view").innerText.includes("Success"));
   assert.match(await view(), /transfer/);
@@ -339,22 +339,22 @@ test("ส่ง tx ผ่าน wallet: กระเป๋าเปิด BSC �
   assert.deepEqual(pageErrors, []);
 });
 
-test("wallet: ผู้ใช้ตัดการเชื่อมต่อ / สลับบัญชีในกระเป๋าหลังเชื่อมแล้ว → ขอสิทธิ์ใหม่ก่อนเซ็น (ไม่เจอ error 4100 not authorized)", async () => {
+test("wallet: the user disconnects / switches account after connecting → permission is requested again before signing (no error 4100 not authorized)", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Interact");
   await page.selectOption("#fn", "transfer");
   await page.click(".ix-head .seg button[data-mode=json]");
   await page.fill("#args", JSON.stringify({ to: BOB, amount: "1n" }));
-  const asked = await page.evaluate(async () => { await connect(false); window.__revoke(); return window.__requested; });   // เชื่อมแล้ว แล้วผู้ใช้ตัดสิทธิ์
+  const asked = await page.evaluate(async () => { await connect(false); window.__revoke(); return window.__requested; });   // connected, then the user revokes
   await page.click("text=Send transaction");
   await page.waitForSelector("#out:not(.busy) .ix-ret", { timeout: 20_000 });
   assert.match(await page.locator("#out .ix-status").innerText(), /Success/);
-  assert.equal(await page.evaluate(() => window.__requested), asked + 1);   // ขอสิทธิ์ใหม่ 1 ครั้ง
+  assert.equal(await page.evaluate(() => window.__requested), asked + 1);   // permission requested again once
   assert.deepEqual(pageErrors, []);
 });
 
-test("wallet: สคริปต์อื่นในหน้า (ส่วนเสริมของเบราว์เซอร์ / Cloudflare) ประกาศตัวแปร global ชื่อทั่วไป → explorer ยังโหลดครบ (ไม่เจอ walletButton is not defined)", async () => {
+test("wallet: other scripts on the page (browser extensions / Cloudflare) declare common global names → the explorer still loads fully (no walletButton is not defined)", async () => {
   const other = await browser.newPage();
   const errors = [];
   other.on("pageerror", (error) => errors.push(error.message));
@@ -370,24 +370,24 @@ test("wallet: สคริปต์อื่นในหน้า (ส่วน�
   await other.close();
 });
 
-test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 ด้วย eth_signTypedData_v4 (wallet ปลอม = ethers signTypedData) → ส่ง permit แล้วเชนรับ", async () => {
+test("Permit (ERC-2612): the token's Permit tab signs EIP-712 with eth_signTypedData_v4 (mock wallet = ethers signTypedData) → the permit is sent and the chain accepts it", async () => {
   const { address } = await get("/name/mytoken");
   const query = (functionName, input) => fetch(`${url}/query`, { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ programUuid: address, functionName, input }) }).then((r) => r.json());
   const nonceBefore = BigInt((await query("nonces", { owner: ME })).result.replace(/n$/, ""));
 
-  // permit ของ token (EIP-2612) มี chainId ใน domain ตามมาตรฐาน → MetaMask ต้องเปิดเชนนี้อยู่
+  // a token permit (EIP-2612) has chainId in its domain per the standard → MetaMask must have this chain active
   await page.evaluate((id) => { window.__walletChain = `0x${id.toString(16)}`; }, (await get("/genesis")).chainId);
   await open(`#address/${address}`);
   await tab("Permit");
   assert.match(await view(), /Domain: name My Token · version 1/);
-  // ค่าผิด → ข้อความเตือน ไม่เรียก wallet
+  // bad values → warning message, wallet not called
   await page.fill("#permit-spender", "0x1234");
   await page.click("#permit-sign");
   await page.waitForFunction(() => /Spender must be an address/.test(document.getElementById("permit-sig").textContent));
 
-  await page.fill("#permit-spender", BOB);                                          // ตัวพิมพ์ผสม (checksum)
-  await page.fill("#permit-value", "2.5");                                          // 2.5 MTK = 2,500,000 หน่วย (6 decimals)
+  await page.fill("#permit-spender", BOB);                                          // mixed case (checksum)
+  await page.fill("#permit-value", "2.5");                                          // 2.5 MTK = 2,500,000 units (6 decimals)
   await page.click("#permit-sign");
   await page.waitForSelector("#permit-signature");
   const signature = (await page.locator("#permit-signature").textContent()).trim();
@@ -397,8 +397,8 @@ test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 �
   assert.deepEqual(typed.domain, { name: "My Token", version: "1", chainId: (await get("/genesis")).chainId, verifyingContract: address });
   assert.deepEqual(typed.message, { owner: ME, spender: BOB.toLowerCase(), value: "2500000", nonce: String(nonceBefore),
     deadline: typed.message.deadline });
-  assert.ok(Number(typed.message.deadline) > Date.now() / 1000, "deadline เป็นวินาทีในอนาคต");
-  // ลายเซ็นจากหน้าเว็บ = ethers signTypedData ของ typed data เดียวกัน (MetaMask v4 ได้ค่าเดียวกัน)
+  assert.ok(Number(typed.message.deadline) > Date.now() / 1000, "deadline is in seconds, in the future");
+  // the page's signature = ethers signTypedData of the same typed data (MetaMask v4 gives the same value)
   const { EIP712Domain, ...types } = typed.types;
   assert.equal(signature, await wallet.signTypedData(typed.domain, types, typed.message));
   assert.equal(EIP712Domain.length, 4);
@@ -413,9 +413,9 @@ test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 �
   assert.deepEqual(pageErrors, []);
 });
 
-test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้นจอหรือถูกตัด · มือถือแสดงตารางเป็นการ์ดที่มีชื่อคอลัมน์", async () => {
+test("responsive: from 180px screens to PC nothing overflows or gets clipped · mobile shows tables as cards with column names", async () => {
   const { address: token } = await get("/name/mytoken");
-  const [last] = (await get(`/address/${ME}/txs?limit=1`)).items;   // tx ล่าสุดของ seed: โปรแกรมเรียกโปรแกรม
+  const [last] = (await get(`/address/${ME}/txs?limit=1`)).items;   // the seed's latest tx: a program calling a program
   const pages = [["#", null], [`#tx/${last.hash}`, null], [`#address/${BOB}`, null],
     [`#address/${token}`, "#view button.tab:has-text('Interact')"], [`#address/${token}`, "#storage-panel [data-sub=storage]"],
     [`#address/${token}`, "#view button.tab[data-tab=holders]"], [`#address/${ME}`, "#view button.tab[data-tab=meta]"]];
@@ -429,7 +429,7 @@ test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้น
         const problems = await page.evaluate(() => {
           const vw = document.documentElement.clientWidth;
           const found = [];
-          if (document.documentElement.scrollWidth > vw + 1) found.push(`หน้าเลื่อนข้าง ${document.documentElement.scrollWidth}`);
+          if (document.documentElement.scrollWidth > vw + 1) found.push(`page scrolls sideways ${document.documentElement.scrollWidth}`);
           const scrolls = (el) => { for (let a = el.parentElement; a; a = a.parentElement) {
             if (/(auto|scroll)/.test(getComputedStyle(a).overflowX) && a.scrollWidth > a.clientWidth + 1) return true; } return false; };
           for (const el of document.querySelectorAll("header *, #view *")) {
@@ -443,7 +443,7 @@ test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้น
         assert.deepEqual(problems, [], `${width}px ${hash} ${action ?? ""}`);
       }
     }
-    // มือถือ: ตาราง block ล่าสุดเป็นการ์ด แต่ละช่องมีชื่อคอลัมน์
+    // mobile: the latest blocks table is cards, each cell with its column name
     await page.setViewportSize({ width: 180, height: 800 });
     await open("#");
     const cell = page.locator("#view table.grid tbody td").first();
@@ -456,17 +456,17 @@ test("responsive: จอ 180px ถึง PC ไม่มีอะไรล้น
   assert.deepEqual(pageErrors, []);
 });
 
-test("metadata: information (ไอคอนสี่เหลี่ยม + namespace) และ links (url / contact เปิดออกไปข้างนอก) · โปรแกรมไม่มีปุ่มแก้ไข", async () => {
+test("metadata: information (square icon + namespace) and links (url / contact open externally) · programs have no edit button", async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { address: token } = await get("/name/mytoken");
   await open(`#address/${token}`);
   const info = page.locator("#meta-info");
   assert.match(await info.locator(".avatar img").getAttribute("src"), /^data:image\/svg\+xml/);
   const box = await info.locator(".avatar").boundingBox();
-  assert.equal(Math.round(box.width), Math.round(box.height));                      // สี่เหลี่ยมจัตุรัส
+  assert.equal(Math.round(box.width), Math.round(box.height));                      // square
   assert.match(await info.textContent(), /mytoken/);
-  assert.equal(await info.locator("button").count(), 0);                             // โปรแกรมตั้ง metadata จากโค้ดเท่านั้น
-  assert.equal(await page.locator("button.tab[data-tab=meta]").count(), 0);         // ไม่มีแถบแก้ metadata
+  assert.equal(await info.locator("button").count(), 0);                             // programs set metadata from code only
+  assert.equal(await page.locator("button.tab[data-tab=meta]").count(), 0);         // no metadata edit tab
   assert.equal(await page.locator("button.tab[data-tab=interact]").count(), 1);
   const links = page.locator("#view a.ext");
   assert.equal(await links.count(), 2);
@@ -479,9 +479,9 @@ test("metadata: information (ไอคอนสี่เหลี่ยม + nam
   assert.deepEqual(pageErrors, []);
 });
 
-test("metadata: เจ้าของกระเป๋ากดตั้งค่าเองได้ (เซ็นด้วย wallet) · ลิงก์อันตรายไม่ถูกส่ง · กระเป๋าคนอื่นแก้ไม่ได้", async () => {
+test("metadata: a wallet owner can set it (signed with the wallet) · dangerous links are not sent · other people's wallets cannot be edited", async () => {
   await open(`#address/${BOB}`);
-  await tab("Edit metadata");                                                        // แก้ metadata อยู่ในแถบเดียวกับ Interact
+  await tab("Edit metadata");                                                        // metadata editing is in the same tab as Interact
   await page.fill("#meta-url", "https://bob.example");
   await page.click("button:has-text('Save (send transaction)')");
   await page.waitForFunction(() => /only set metadata for the connected wallet/.test(document.getElementById("meta-out").textContent));
@@ -502,21 +502,21 @@ test("metadata: เจ้าของกระเป๋ากดตั้งค�
   for (let i = 0; i < 50 && (await get(`/address/${ME}`)).nonce === nonce; i += 1) await wait(200);
   const meta = (await get(`/address/${ME}`)).metadata;
   assert.deepEqual({ url: meta.url, contact: meta.contact, icon: meta.icon, namespace: meta.namespace },
-    { url: "https://me.example", contact: "me@example.com", icon: "🦊", namespace: "alice" });   // ช่องที่ไม่เปลี่ยนไม่ถูกส่ง
+    { url: "https://me.example", contact: "me@example.com", icon: "🦊", namespace: "alice" });   // unchanged fields are not sent
 
   await open(`#address/${ME}`);
   assert.equal(await page.locator("#view a.ext").nth(1).getAttribute("href"), "mailto:me@example.com");
   assert.deepEqual(pageErrors, []);
 });
 
-test("แบ่งหน้า: ผู้ถือ token กดเลขหน้า / ถัดไป / ข้ามไปหน้าที่พิมพ์ได้ · ยอดเรียงมากไปน้อย", async () => {
+test("paging: token holders support page numbers / next / jumping to a typed page · balances sorted descending", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   await tab("Holders");
   const pager = page.locator("#view .pager");
   assert.match(await pager.textContent(), /Showing 1–25 of 63/);
   assert.deepEqual(await pager.locator(".pg").allTextContents(), ["‹", "1", "2", "3", "›", "Go"]);
-  assert.match(await page.locator("#view table.grid tbody tr").first().textContent(), /998,799\.4999/);   // เทสต์ก่อนหน้าโอนออกไปแล้ว 7 หน่วย
+  assert.match(await page.locator("#view table.grid tbody tr").first().textContent(), /998,799\.4999/);   // the previous test already sent out 7 units
 
   await pager.locator(".pg", { hasText: /^3$/ }).click();
   await page.waitForFunction(() => /Showing 51–63 of 63/.test(document.querySelector("#view .pager").textContent));
@@ -532,43 +532,43 @@ test("แบ่งหน้า: ผู้ถือ token กดเลขหน�
   assert.deepEqual(pageErrors, []);
 });
 
-test("address ย่อเป็น 0x + 4 ตัวหน้า … 4 ตัวหลัง · ทั้งหน้าเป็นภาษาอังกฤษ", async () => {
+test("addresses are shortened to 0x + first 4 … last 4 · the whole page is in English", async () => {
   const { address } = await get("/name/mytoken");
   await open(`#address/${address}`);
   const short = await page.locator("#view table.grid tbody a[title]").first().textContent();
   assert.match(short, /^0x[0-9a-f]{4}…[0-9a-f]{4}$/);
   for (const hash of ["", `#address/${address}`, "#block/2"]) {
     await open(hash);
-    const text = (await page.locator("body").textContent()).replace(/เหรียญตัวอย่าง|ผู้ใช้คนแรก/g, "");   // คำอธิบายใน metadata เป็นข้อมูลของผู้ใช้
+    const text = (await page.locator("body").textContent());
     assert.doesNotMatch(text, /[\u0E00-\u0E7F]/, hash);
   }
   assert.deepEqual(pageErrors, []);
 });
 
-test("trace การเรียกโปรแกรม: แผนผังต้นไม้กล่องเลขลำดับเล็ก ๆ อยู่กึ่งกลาง + ลูกศรตามลำดับ · กดกล่องแล้วรายละเอียดของ call นั้นโชวด้านล่าง", async () => {
+test("program call trace: a centered tree of small numbered boxes + arrows in order · clicking a box shows that call's details", async () => {
   let relay;
   for (const t of (await get(`/address/${ME}/txs?limit=50`)).items) {
     if ((await get(`/tx/${t.hash}/receipt`)).trace?.length === 2) { relay = t; break; }
   }
   await open(`#tx/${relay.hash}`);
-  // แถว Return value = ค่าที่โปรแกรม return เต็ม ๆ แบบเดียวกับผล Read
+  // the Return value row = the program's full return value, same as the Read result
   assert.equal((await page.locator("#view tr", { hasText: /^Return value/ }).locator("td").last().innerText()).trim(), "1,200,500,000");
   const nodes = page.locator("#view .flow .node[data-call]");
   assert.equal(await nodes.count(), 2);
-  assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // กล่องผู้ส่ง tx
-  assert.equal(await page.locator("#view .flow svg path[marker-end]").count(), 2);     // ลูกศร ผู้ส่ง→#1 และ #1→#2
-  assert.deepEqual(await nodes.allTextContents(), ["1", "2"]);                         // กล่องโชวแค่เลขลำดับ
+  assert.equal(await page.locator("#view .flow .node.start").count(), 1);              // the tx sender box
+  assert.equal(await page.locator("#view .flow svg path[marker-end]").count(), 2);     // arrows sender→#1 and #1→#2
+  assert.deepEqual(await nodes.allTextContents(), ["1", "2"]);                         // boxes show only the sequence number
   const [w, h] = await nodes.nth(0).evaluate((n) => [n.offsetWidth, n.offsetHeight]);
-  assert.ok(w <= 32 && h <= 32, `กล่องเล็ก (${w}×${h})`);
+  assert.ok(w <= 32 && h <= 32, `small boxes (${w}×${h})`);
   const [a, b] = await Promise.all([nodes.nth(0).boundingBox(), nodes.nth(1).boundingBox()]);
-  assert.ok(b.y > a.y && Math.abs(b.x - a.x) < 1, "ต้นไม้บนลงล่าง: call ที่ถูกเรียกอยู่ใต้ผู้เรียกตรงกลาง");
+  assert.ok(b.y > a.y && Math.abs(b.x - a.x) < 1, "top-down tree: a callee sits centered under its caller");
   const [wrap, start] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#view .flow .node.start").boundingBox()]);
-  assert.ok(Math.abs(start.x + start.width / 2 - (wrap.x + wrap.width / 2)) <= 2, "แผนผังอยู่กึ่งกลางกรอบ");
+  assert.ok(Math.abs(start.x + start.width / 2 - (wrap.x + wrap.width / 2)) <= 2, "the diagram is centered in its frame");
   const [flow, side] = await Promise.all([page.locator("#view .flowwrap").boundingBox(), page.locator("#call-detail").boundingBox()]);
-  assert.ok(side.x >= flow.x + flow.width && side.y < flow.y + flow.height, "จอกว้าง: รายละเอียดอยู่ข้างขวาแผนผัง");
-  assert.ok(Math.abs(side.height - flow.height) <= 1, `กล่องรายละเอียดสูงเท่าแผนผัง (${side.height} vs ${flow.height})`);
+  assert.ok(side.x >= flow.x + flow.width && side.y < flow.y + flow.height, "wide screen: details sit to the right of the diagram");
+  assert.ok(Math.abs(side.height - flow.height) <= 1, `the details box is as tall as the diagram (${side.height} vs ${flow.height})`);
 
-  // เริ่มต้นโชวรายละเอียดของ #1 เท่านั้น
+  // initially only #1's details are shown
   const detail = page.locator("#call-detail");
   assert.equal(await page.locator("#view .call").count(), 1);
   assert.match(await detail.textContent(), /Call #1[\s\S]*\.check\(\)[\s\S]*Input[\s\S]*"who"[\s\S]*Result[\s\S]*1,200,500,000/);
@@ -578,7 +578,7 @@ test("trace การเรียกโปรแกรม: แผนผังต
   assert.deepEqual(pageErrors, []);
 });
 
-test("เวลา: ทุกจุดที่บอก ... ago มีวันเวลา UTC ตัวเล็ก · จอกว้างถึงวินาที จอแคบถึงนาที", async () => {
+test("time: every ... ago has a small UTC date-time · seconds on wide screens, minutes on narrow ones", async () => {
   const { address } = await get("/name/mytoken");
   const latest = await get("/block/latest");
   const stamp = new Date(latest.timestamp).toISOString();
@@ -586,7 +586,7 @@ test("เวลา: ทุกจุดที่บอก ... ago มีวัน
     await open(hash);
     if (hash.startsWith("#address")) await tab("Calls");
     const smalls = page.locator("#view .utc");
-    assert.ok(await smalls.count() > 0, `มี UTC ใน ${hash || "หน้าแรก"}`);
+    assert.ok(await smalls.count() > 0, `has UTC on ${hash || "home page"}`);
     assert.match(await smalls.first().innerText(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/);
   }
   assert.equal(await page.locator("#view .utc").first().innerText(), `${stamp.slice(0, 10)} ${stamp.slice(11, 19)} UTC`);
@@ -600,13 +600,13 @@ test("เวลา: ทุกจุดที่บอก ... ago มีวัน
   }
 });
 
-test("Calls ของโปรแกรม: call ซ้อนที่ล้มแต่ชั้นบน catch ไว้ → Status = Success ตรงกับหน้า tx + ข้อความเตือนสีส้ม ⚠ caught", async () => {
+test("program Calls: a nested call that failed but was caught above → Status = Success matching the tx page + an orange ⚠ caught warning", async () => {
   const { address: token } = await get("/name/mytoken");
   await open(`#address/${token}`);
   await tab("Calls");
   const row = page.locator("#view tr", { hasText: "⚠ caught" });
   assert.equal(await row.count(), 1);
-  assert.equal(await row.locator(".warn").evaluate((n) => getComputedStyle(n).color), "rgb(251, 146, 60)");   // ส้ม ไม่ใช่แดง
+  assert.equal(await row.locator(".warn").evaluate((n) => getComputedStyle(n).color), "rgb(251, 146, 60)");   // orange, not red
   assert.match(await row.textContent(), /Nested · depth 1[\s\S]*transfer[\s\S]*Success/);
   await row.locator("a[title^='0x']").first().click();
   await page.waitForFunction(() => location.hash.startsWith("#tx/0x"));
@@ -614,14 +614,14 @@ test("Calls ของโปรแกรม: call ซ้อนที่ล้ม�
   assert.match(await page.locator("#view tr", { hasText: /^Status/ }).textContent(), /Success/);
 });
 
-test("/evm: ethers JsonRpcProvider ต่อกับเชนได้ (chainId, block, ยอด, tx, receipt, ERC-20) · ส่ง tx ไม่ได้ · ลิงก์ explorer ของกระเป๋าพาไปหน้าเดิม", async () => {
+test("/evm: ethers JsonRpcProvider connects to the chain (chainId, block, balance, tx, receipt, ERC-20) · cannot send txs · the wallet's explorer links lead to the same pages", async () => {
   const provider = new JsonRpcProvider(`${url}/evm`);
   const genesis = await get("/genesis");
   assert.equal((await provider.getNetwork()).chainId, BigInt(genesis.chainId));
   const latest = await provider.getBlock("latest");
   assert.ok(latest.number >= 1 && latest.timestamp < Date.now() / 1000 + 5);
   const native = (await get(`/address/${ME}`)).native.balance;
-  assert.equal(await provider.getBalance(ME), BigInt(String(native).replace(/n$/, "")));   // native เป็น wei อยู่แล้ว
+  assert.equal(await provider.getBalance(ME), BigInt(String(native).replace(/n$/, "")));   // native is already in wei
   const { address: token } = await get("/name/mytoken");
   const erc20 = new Contract(token, ["function symbol() view returns (string)", "function decimals() view returns (uint8)", "function balanceOf(address) view returns (uint256)"], provider);
   assert.equal(await erc20.symbol(), "MTK");
@@ -644,11 +644,11 @@ test("/evm: ethers JsonRpcProvider ต่อกับเชนได้ (chainId
   provider.destroy();
 });
 
-test("/evm สำหรับ Blockscout: ยอดย้อนหลังตามเลข block · eth_getLogs · debug_traceTransaction (callTracer) · WebSocket", async () => {
+test("/evm for Blockscout: historical balances by block number · eth_getLogs · debug_traceTransaction (callTracer) · WebSocket", async () => {
   const provider = new JsonRpcProvider(`${url}/evm`);
   const latest = await provider.getBlockNumber();
   const before = await provider.getBalance(ME, 0);
-  assert.ok(before > await provider.getBalance(ME, latest));   // genesis มียอดมากกว่าหลังจ่ายค่าแก๊ส
+  assert.ok(before > await provider.getBalance(ME, latest));   // genesis has a larger balance than after paying gas
   assert.equal(await provider.getBalance(BOB, 0), 0n);
   const { address: token } = await get("/name/mytoken");
   assert.equal(await provider.getCode(token, 0), "0x");
@@ -657,7 +657,7 @@ test("/evm สำหรับ Blockscout: ยอดย้อนหลังต�
   const logs = await provider.getLogs({ address: token, topics: [topicOf("Transfer(address,address,uint256)")], fromBlock: 0, toBlock: latest });
   assert.ok(logs.length >= 2);
   const indexes = logs.map((log) => `${log.blockNumber}:${log.index}`);
-  assert.equal(new Set(indexes).size, indexes.length);   // logIndex ไม่ซ้ำใน block
+  assert.equal(new Set(indexes).size, indexes.length);   // logIndex is unique within the block
   const receipts = await provider.send("eth_getBlockReceipts", [`0x${logs[0].blockNumber.toString(16)}`]);
   assert.ok(receipts.some((r) => r.transactionHash === logs[0].transactionHash));
 
@@ -681,7 +681,7 @@ test("/evm สำหรับ Blockscout: ยอดย้อนหลังต�
 });
 
 
-test("โปรแกรม: หน้าแรกบอกจำนวนที่อนุมัติแล้ว / รออนุมัติ · กดแล้วเห็นรายการแต่ละแบบ", async () => {
+test("programs: the home page shows approved / pending counts · clicking shows each list", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { nonce } = await get(`/nonce/${ME}`);
   const tx = { chainId: CHAIN_ID, from: ME, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", nonce,
@@ -692,7 +692,7 @@ test("โปรแกรม: หน้าแรกบอกจำนวนที
   for (let i = 0; i < 50 && !(await get(`/tx/${sent.hash}`))?.blockNumber; i += 1) await wait(200);
 
   const counts = await get("/programs");
-  assert.ok(counts.approved >= 2);   // mytoken + relay จาก seed
+  assert.ok(counts.approved >= 2);   // mytoken + relay from the seed
   assert.equal(counts.pending, 1);
 
   await open("");
@@ -712,7 +712,7 @@ test("โปรแกรม: หน้าแรกบอกจำนวนที
   assert.deepEqual(pageErrors, []);
 });
 
-test("NFT: หน้าโปรแกรมบอก Collection (ERC-721) · หน้ากระเป๋ามีแท็บ NFTs พร้อม tokenId และ tokenURI", async () => {
+test("NFT: the program page shows Collection (ERC-721) · the wallet page has an NFTs tab with tokenId and tokenURI", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { NFT_PROGRAM } = await import("../../src/standards/nft.js");
   const send = async (fields) => {
@@ -743,12 +743,12 @@ test("NFT: หน้าโปรแกรมบอก Collection (ERC-721) · �
   await open(`#address/${BOB}`);
   await tab("NFTs");
   assert.match(await view(), /ipfs:\/\/second/);
-  assert.equal(await page.locator("#view a[href^='ipfs:']").count(), 0);   // ไม่ใช่ http(s) → ไม่ทำเป็นลิงก์
+  assert.equal(await page.locator("#view a[href^='ipfs:']").count(), 0);   // not http(s) → not made a link
   assert.deepEqual(pageErrors, []);
 });
 
 // ---------------------------------------------------------------------------
-//  ฟอร์ม deploy (มี upgrader) → อนุมัติ → upgrade → อนุมัติการอัปเกรด → โอนสิทธิ์ · ทุกใบเซ็นจากหน้าเว็บ
+//  deploy form (with upgrader) → approve → upgrade → approve the upgrade → transfer the right · every tx signed from the page
 // ---------------------------------------------------------------------------
 
 const V1 = "function program() {\n  function initialization(params) { writeDB(\"count\", 1n) }\n  function ping(params) { return readDB(\"count\") }\n  return { ping };\n}";
@@ -758,7 +758,7 @@ const outSays = (selector, pattern, timeout = 20_000) =>
   page.waitForFunction(([sel, source]) => new RegExp(source).test(document.querySelector(sel)?.textContent ?? ""), [selector, pattern.source], { timeout });
 
 let upgradable;
-test("ฟอร์ม deploy: ใส่ upgrader เป็น wallet ตัวเอง (อยู่ในข้อมูลที่เซ็น) → รออนุมัติ → กด Approve ในหน้ารายการโปรแกรม", async () => {
+test("deploy form: set the upgrader to your own wallet (part of the signed data) → pending → press Approve on the program list page", async () => {
   await open("#deploy");
   assert.match(await view(), /Deploy a program/);
   await page.fill("#dp-code", V1);
@@ -766,8 +766,8 @@ test("ฟอร์ม deploy: ใส่ upgrader เป็น wallet ตัว�
   assert.equal(await page.inputValue("#dp-upgrader"), ME);
   await page.fill("#dp-upgrader", "0x123");
   await page.click("#dp-send");
-  assert.match(await page.locator("#dp-out").textContent(), /Upgrader must be an address/);   // ตรวจก่อนเซ็น
-  await page.fill("#dp-upgrader", wallet.address);                                         // ตัวพิมพ์ผสม → ส่งเป็นตัวเล็ก
+  assert.match(await page.locator("#dp-out").textContent(), /Upgrader must be an address/);   // checked before signing
+  await page.fill("#dp-upgrader", wallet.address);                                         // mixed case → sent lower case
   await page.click("#dp-send");
   await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
   upgradable = (await page.locator("#dp-out a[title^='0x']").first().getAttribute("title")).toLowerCase();
@@ -784,7 +784,7 @@ test("ฟอร์ม deploy: ใส่ upgrader เป็น wallet ตัว�
   assert.deepEqual(pageErrors, []);
 });
 
-test("ฟอร์ม deploy: โปรแกรมใหญ่ใช้แก๊สเกิน 500,000 ก็ deploy ได้ (gas limit ค่าเริ่ม = เพดานต่อ tx · ไม่เจอ OUT_OF_GAS) · จ่ายเฉพาะแก๊สที่ใช้จริง", async () => {
+test("deploy form: a large program using over 500,000 gas still deploys (default gas limit = the per-tx cap · no OUT_OF_GAS) · pays only the gas actually used", async () => {
   const big = `function program() {\n  function ping(params) { return 2n }\n  function pad(params) { return "${"x".repeat(16000)}" }\n  return { ping, pad };\n}`;
   await open("#deploy");
   await page.fill("#dp-code", big);
@@ -793,7 +793,7 @@ test("ฟอร์ม deploy: โปรแกรมใหญ่ใช้แก�
   await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
   const program = (await page.locator("#dp-out a[title^='0x']").first().getAttribute("title")).toLowerCase();
   const pending = (await get("/programs/pending?limit=100")).items.find((p) => p.address === program);
-  assert.ok(pending, "รออนุมัติ");
+  assert.ok(pending, "pending approval");
   const hash = await page.locator("#dp-out a[href^='#tx/']").first().getAttribute("href").catch(() => null);
   if (hash) {
     const receipt = (await get(`/tx/${hash.slice(4)}/receipt`)).result ?? {};
@@ -802,7 +802,7 @@ test("ฟอร์ม deploy: โปรแกรมใหญ่ใช้แก�
   assert.deepEqual(pageErrors, []);
 });
 
-test("ฟอร์ม deploy: ตั้ง gas limit เองได้ (อยู่ในข้อมูลที่เซ็น) · ไม่ใช่ตัวเลขถูกห้ามก่อนเซ็น · ว่าง = อัตโนมัติ", async () => {
+test("deploy form: gas limit can be set (part of the signed data) · non-numbers are blocked before signing · empty = automatic", async () => {
   const big = `function program() {\n  function ping(params) { return 3n }\n  function pad(params) { return "${"y".repeat(16000)}" }\n  return { ping, pad };\n}`;
   await open("#deploy");
   await page.fill("#dp-code", big);
@@ -810,21 +810,21 @@ test("ฟอร์ม deploy: ตั้ง gas limit เองได้ (อย�
   await page.fill("#dp-gasLimit", "abc");
   await page.click("#dp-send");
   assert.match(await page.locator("#dp-out").textContent(), /Gas limit must be a whole number/);
-  await page.fill("#dp-gasLimit", "2,000,000");                                            // ใส่ , คั่นหลักได้
+  await page.fill("#dp-gasLimit", "2,000,000");                                            // commas as thousands separators are allowed
   const sent = page.waitForRequest((r) => r.url().endsWith("/sendtx"));
   await page.click("#dp-send");
-  assert.equal(JSON.parse((await sent).postData()).tx.gasLimit, 2_000_000);               // ค่าที่ตั้งอยู่ในข้อมูลที่เซ็น
+  assert.equal(JSON.parse((await sent).postData()).tx.gasLimit, 2_000_000);               // the value set is in the signed data
   await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
   await page.evaluate(() => { deployDraft.gasLimit = ""; });
   assert.deepEqual(pageErrors, []);
 });
 
-test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → รอรีวิว → Approve upgrade → version 2 · โอนสิทธิ์ให้ BOB · โปรแกรมที่ไม่มี upgrader แก้ไม่ได้", async () => {
+test("Upgrade tab: submit new code + migrate input → awaiting review → Approve upgrade → version 2 · transfer the right to BOB · programs without an upgrader cannot be changed", async () => {
   await open(`#address/${upgradable}`);
   await tab("Upgrade");
   assert.equal(await page.locator("#up-version").textContent(), "1");
   assert.match(await page.locator("#upgrade-panel").textContent(), /You are the upgrader/);
-  assert.match(await page.inputValue("#up-code"), /function ping/);               // เริ่มจากโค้ดปัจจุบัน
+  assert.match(await page.inputValue("#up-code"), /function ping/);               // starts from the current code
   await page.fill("#up-code", V2);
   await page.fill("#up-input", '{ "start": 41 }');
   await page.click("#up-send");
@@ -837,7 +837,7 @@ test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → �
   await page.waitForFunction(() => document.getElementById("up-version")?.textContent === "2", null, { timeout: 20_000 });
   assert.equal(await page.locator("#up-pending-code").count(), 0);
   assert.equal((await query(upgradable, "pong")).result, "2n");
-  assert.equal((await query(upgradable, "ping")).result, "41n");                // migrate ได้ input ที่กรอก (ตัวเลข → bigint)
+  assert.equal((await query(upgradable, "ping")).result, "41n");                // migrate receives the entered input (numbers → bigint)
   assert.equal((await get(`/program/${upgradable}/versions`)).length, 2);
 
   await page.fill("#up-next", "nope");
@@ -849,7 +849,7 @@ test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → �
   assert.equal((await get(`/program/${upgradable}`)).metadata.upgrader, BOB.toLowerCase());
   assert.match(await page.locator("#upgrade-panel").textContent(), /This wallet is not the upgrader/);
 
-  const { address: token } = await get("/name/mytoken");                          // seed deploy ไม่มี upgrader
+  const { address: token } = await get("/name/mytoken");                          // the seed deploys without an upgrader
   await open(`#address/${token}`);
   await tab("Upgrade");
   assert.match(await page.locator("#upgrade-panel").textContent(), /no upgrader, so its code can never change/);
@@ -857,7 +857,7 @@ test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → �
   assert.deepEqual(pageErrors, []);
 });
 
-test("แถบ Upgrade: สละสิทธิ์ต้องกดสองครั้ง · Reject upgrade ลบโค้ดที่รอ (ใบที่เซ็นจาก Node ก็แสดงในแถบเดียวกัน)", async () => {
+test("Upgrade tab: renouncing needs two clicks · Reject upgrade removes the pending code (txs signed from Node show in the same tab)", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const send = async (fields) => {
     const { nonce } = await get(`/nonce/${ME}`);
@@ -882,16 +882,16 @@ test("แถบ Upgrade: สละสิทธิ์ต้องกดสอง�
 
   await page.click("#up-renounce");
   assert.equal(await page.locator("#up-renounce").textContent(), "Click again to renounce for good");
-  assert.equal((await get(`/program/${program}`)).metadata.upgrader, ME);            // คลิกแรกยังไม่ส่ง
+  assert.equal((await get(`/program/${program}`)).metadata.upgrader, ME);            // the first click does not send yet
   await page.click("#up-renounce");
   await page.waitForFunction(() => /no upgrader/.test(document.getElementById("upgrade-panel")?.textContent ?? ""), null, { timeout: 20_000 });
   assert.equal((await get(`/program/${program}`)).metadata.upgrader ?? null, null);
   assert.deepEqual(pageErrors, []);
 });
 
-test("แบ่งหน้า Calls / Events ของโปรแกรม: Older / Newer (cursor) · หน้า 2 ต่อจากหน้า 1 ไม่ซ้ำ", async () => {
+test("paging program Calls / Events: Older / Newer (cursor) · page 2 continues page 1 with no repeats", async () => {
   const { address: token } = await get("/name/mytoken");
-  // seed มี call ไม่ถึง 1 หน้า → โอน token เพิ่ม 22 ใบ (ทีละไม่เกิน 16 ใบต่อ block ต่อผู้ส่ง)
+  // the seed has less than one page of calls → send 22 more token transfers (at most 16 per block per sender)
   const sign = await import("../../src/crypto/signature.js");
   for (const batch of [16, 6]) {
     const { nonce } = await get(`/nonce/${ME}`);
@@ -905,7 +905,7 @@ test("แบ่งหน้า Calls / Events ของโปรแกรม: Ol
     for (let i = 0; i < 100 && !(await get(`/tx/${last.hash}`)).blockNumber; i += 1) await wait(200);
   }
   const calls = (await get(`/address/${token}/incoming?limit=100`)).items;
-  assert.ok(calls.length > 20, `seed มี call มากกว่า 1 หน้า (${calls.length})`);
+  assert.ok(calls.length > 20, `the seed has more than one page of calls (${calls.length})`);
   await open(`#address/${token}`);
   await tab("Calls");
   const pager = page.locator("#view .pager[data-cursor=in]");
@@ -932,7 +932,7 @@ test("แบ่งหน้า Calls / Events ของโปรแกรม: Ol
   assert.deepEqual(pageErrors, []);
 });
 
-test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejected + เหตุผล · block มีรายการ Rejected · กระเป๋ามีแถบ Rejected · ทั้งหมดเป็นภาษาอังกฤษยกเว้นเหตุผลจาก server", async () => {
+test("rejected txs: the tx page shows Rejected + reason · the block lists Rejected · the wallet has a Rejected tab · everything is English except the server's reason", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const { nonce } = await get(`/nonce/${ME}`);
   const tx = { chainId: CHAIN_ID, action: "transfer", from: ME, to: BOB.toLowerCase(), method: "", input: {}, value: 1, gasLimit: 0, gasPrice: "1000000000", nonce: nonce + 5 };
@@ -954,19 +954,19 @@ test("tx ที่ถูกปฏิเสธ: หน้า tx บอก Rejecte
   assert.match(await page.locator("#rejected-panel").textContent(), /Rejected \(1\)/);
   assert.equal(await page.locator("#rejected-panel a[title]").first().getAttribute("title"), sent.hash);
   assert.match(await view(), /Rejected1 \(recorded only/);
-  await open("");   // รายการ block หน้าแรก: block ที่มีแต่ใบถูกปฏิเสธบอก Rejected ไม่ใช่ Empty
+  await open("");   // home page block list: a block with only rejected txs shows Rejected, not Empty
   const row = page.locator("#view tbody tr").filter({ has: page.locator("a", { hasText: new RegExp(`^${found.block}$`) }) }).first();
   assert.match(await row.textContent(), /Rejected 1/);
 
   await open(`#address/${ME}`);
   await tab("Rejected");
   assert.equal(await page.locator("#view table.grid tbody tr").first().locator("a[onclick*='#tx/']").getAttribute("title"), sent.hash);
-  const text = (await page.locator("body").textContent()).split(found.reason).join("").replace(/ผู้ใช้คนแรก|เหรียญตัวอย่าง/g, "");
-  assert.doesNotMatch(text, /[฀-๿]/);
+  const text = (await page.locator("body").textContent()).split(found.reason).join("");
+  assert.doesNotMatch(text, /[\u0E00-\u0E7F]/);
   assert.deepEqual(pageErrors, []);
 });
 
-test("EIP-1559 + ABI: block บอก base fee / fee split · tx จากหน้าเว็บเป็นแบบ 1559 · โปรแกรมที่ประกาศ ABI ได้ฟอร์มจาก ABI + event ระบุชนิด / indexed", async () => {
+test("EIP-1559 + ABI: blocks show base fee / fee split · txs from the page are 1559 · programs that declare an ABI get ABI forms + typed / indexed events", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const code = `function program() {
     function initialization() {
@@ -1029,7 +1029,7 @@ test("EIP-1559 + ABI: block บอก base fee / fee split · tx จากหน
   assert.deepEqual(pageErrors, []);
 });
 
-test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / drawer ☰ (มือถือ) · การ์ดมีป้ายชื่อด้านบน + หัวตารางสีม่วง", async () => {
+test("purple theme: navigation sidebar (wide screens) / drawer ☰ (mobile) · cards have a top label + purple table headers", async () => {
   const original = page.viewportSize();
   try {
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -1039,7 +1039,7 @@ test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / d
     assert.equal(await page.locator("#side [data-nav=home].on").count(), 1);
     assert.equal(await page.locator("header .pill[data-nav=explore].on").count(), 1);
     assert.notEqual(await page.locator("#view th").first().evaluate((th) => getComputedStyle(th).backgroundColor), "rgba(0, 0, 0, 0)");
-    await page.waitForSelector("#side-programs a[data-nav^='a:']");                 // โปรแกรมล่าสุดในแถบข้าง
+    await page.waitForSelector("#side-programs a[data-nav^='a:']");                 // recent programs in the sidebar
     await page.click("#side a[data-nav=programs-approved]");
     await page.waitForFunction(() => location.hash === "#programs");
     await settle();
@@ -1049,12 +1049,12 @@ test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / d
 
     await page.setViewportSize({ width: 390, height: 800 });
     await open("");
-    assert.equal(await page.locator("#side").isVisible(), false);                     // พับเป็น drawer
+    assert.equal(await page.locator("#side").isVisible(), false);                     // collapsed into a drawer
     await page.click("#menu-btn");
     await page.waitForFunction(() => getComputedStyle(document.getElementById("side")).visibility === "visible");
     await page.click("#side a[data-nav=deploy]");
     await page.waitForFunction(() => location.hash === "#deploy");
-    assert.equal(await page.evaluate(() => document.body.classList.contains("side-open")), false);   // เลือกแล้ว drawer ปิด
+    assert.equal(await page.evaluate(() => document.body.classList.contains("side-open")), false);   // choosing closes the drawer
     assert.equal(await page.locator("#dbtn.on").count(), 1);
   } finally {
     await page.setViewportSize(original ?? { width: 1280, height: 720 });
@@ -1062,7 +1062,7 @@ test("ธีมม่วง: sidebar นำทาง (จอกว้าง) / d
   assert.deepEqual(pageErrors, []);
 });
 
-test("โปรแกรมกลาง: scripts/deploy-system.js deploy ครบ 14 ตัวที่ address ตามแผน → หน้า System programs แสดงชื่อ + address", async () => {
+test("system programs: scripts/deploy-system.js deploys all 14 at the planned addresses → the System programs page shows names + addresses", async () => {
   const sign = await import("../../src/crypto/signature.js");
   const deployerKey = sign.randomPrivateKey();
   const deployer = sign.addressOf(deployerKey);
@@ -1084,7 +1084,7 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
     assert.equal(programs.length, 14);
     for (const p of programs) {
       assert.equal(p.status, "approved", p.namespace);
-      assert.ok(plan.includes(p.address), `${p.namespace} ตรงกับ --plan`);
+      assert.ok(plan.includes(p.address), `${p.namespace} matches --plan`);
       assert.equal((await get(`/name/${p.namespace}`)).address, p.address);
     }
 
@@ -1103,12 +1103,12 @@ test("โปรแกรมกลาง: scripts/deploy-system.js deploy คร�
   assert.deepEqual(pageErrors, []);
 });
 
-test("ค่าแก๊ส: หน้า Gas settings แสดงค่าที่ใช้อยู่ · ส่ง setGasConfig จากฟอร์มได้ (เชน DEV ไม่ตั้ง admins → ถูกปฏิเสธพร้อมเหตุผล)", async () => {
+test("gas: the Gas settings page shows current values · setGasConfig can be sent from the form (a DEV chain without admins → rejected with a reason)", async () => {
   await open("#gas");
   await page.waitForSelector("#gas-form");
   assert.match(await view(), /Minimum gas price[\s\S]*1 gwei/);
   assert.match(await view(), /Coin transfer costs[\s\S]*17,300 gas/);
-  assert.equal(await page.locator("#view input").count(), 1);   // ปรับได้แค่ขั้นต่ำ · ราคาต่อหน่วยแสดงอย่างเดียว
+  assert.equal(await page.locator("#view input").count(), 1);   // only the minimum is adjustable · the unit price is display-only
   assert.match(await view(), /changed only by a fork/);
   assert.equal(await page.locator("#side [data-nav=gas].on").count(), 1);
 
@@ -1116,7 +1116,7 @@ test("ค่าแก๊ส: หน้า Gas settings แสดงค่าท�
   await page.click("#gas-form button:has-text('Send change')");
   await page.waitForFunction(() => /admins/.test(document.getElementById("gas-out")?.textContent ?? ""), null, { timeout: 30_000 })
     .catch(async (error) => { throw new Error(`${error.message}: ${await page.locator("#gas-out").innerText()}`); });
-  // /sendtx ตอบ 400 พร้อมเหตุผล (browser log ไว้ใน console) — ที่เหลือต้องไม่มี error
+  // /sendtx answers 400 with a reason (the browser logs it to the console); nothing else may error
   assert.deepEqual(pageErrors.filter((message) => !/status of 400/.test(message)), []);
   pageErrors.length = 0;
 });

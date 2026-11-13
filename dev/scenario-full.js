@@ -364,7 +364,7 @@ async function main() {
       eq("GET /tx of the original → replaced", replaced.status, "replaced");
       eq("replacedBy = the new one", replaced.replacedBy, replacement.hash);
       check("/pending shows the new one, not the original", pending.transactions.some((t) => t.hash === replacement.hash) && !pending.transactions.some((t) => t.hash === original.hash), JSON.stringify(pending).slice(0, 300));
-      check("replacing with less than a 10% bump → rejected", !low.queued && /ต่ำเกินไป/.test(String(low.reason ?? low.error ?? "")), JSON.stringify(low).slice(0, 200));
+      check("replacing with less than a 10% bump → rejected", !low.queued && /too low|ต่ำเกินไป/.test(String(low.reason ?? low.error ?? "")), JSON.stringify(low).slice(0, 200));
       const found = await mined(replacement.hash);
       eq("the new one lands in a block successfully", found[replacement.hash].status, "success");
       eq("the original is still replaced after the block closes", (await get(`/tx/${original.hash}`)).status, "replaced");
@@ -528,18 +528,18 @@ async function main() {
     const wallet = program("wallet");
     const hash = keccakText(`scenario-full ${OPTIONS.tag}`);
     eq("isValidSignature (signed by the owner) = magic", await read(wallet, "isValidSignature", { hash, signature: signWalletHash(hash, alice.key) }), ERC1271_MAGIC_VALUE);
-    eq("isValidSignature (คนอื่นเซ็น) = 0xffffffff", await read(wallet, "isValidSignature", { hash, signature: signWalletHash(hash, bob.key) }), ERC1271_INVALID_VALUE);
+    eq("isValidSignature (signed by someone else) = 0xffffffff", await read(wallet, "isValidSignature", { hash, signature: signWalletHash(hash, bob.key) }), ERC1271_INVALID_VALUE);
     eq("owner() = alice", await read(wallet, "owner"), alice.address);
     const carolBefore = await balanceOf(carol.address);
     const [executed] = await batch([[alice, { action: "call", to: wallet, method: "execute", input: { target: token, fn: "transfer", input: { to: carol.address, amount: units(25) } } }, "wallet.execute → token.transfer"]]);
-    success("execute (เจ้าของสั่งกระเป๋าเรียกโปรแกรมอื่น)", executed);
-    eq("carol ได้ 25 FULL จากกระเป๋าโปรแกรม", (await balanceOf(carol.address)) - carolBefore, 25n * UNIT);
+    success("execute (the owner has the wallet call another program)", executed);
+    eq("carol received 25 FULL from the program wallet", (await balanceOf(carol.address)) - carolBefore, 25n * UNIT);
     check("trace: wallet → token.transfer (depth 1, sender = wallet)", executed.receipt.trace?.some((t) => t.depth === 1 && t.program === token && t.from === wallet), JSON.stringify(executed.receipt.trace).slice(0, 300));
     const stranger = await send(bob, { action: "call", to: wallet, method: "execute", input: { target: token, fn: "transfer", input: { to: bob.address, amount: units(1) } } });
-    check("คนที่ไม่ใช่เจ้าของ execute → ถูกปฏิเสธ (only owner)", !stranger.queued && /only owner/.test(JSON.stringify(stranger)), JSON.stringify(stranger).slice(0, 200));
+    check("execute by a non-owner → rejected (only owner)", !stranger.queued && /only owner/.test(JSON.stringify(stranger)), JSON.stringify(stranger).slice(0, 200));
   });
 
-  await section("8 multicall: aggregate / tryAggregate / readonly · tx รวมหลาย call", async () => {
+  await section("8 multicall: aggregate / tryAggregate / readonly · a tx bundling several calls", async () => {
     const mc = program("multicall");
     const counter = program("counter");
     const reads = await read(mc, "aggregate", { readonly: true, calls: [
@@ -548,22 +548,22 @@ async function main() {
       { target: multi, fn: "balanceOf", input: { account: bob.address, id: "1n" } },
       { target: mc, fn: "getChainId", input: {} },
     ] });
-    eq("aggregate readonly อ่าน 4 ค่าในรอบเดียว", reads.join(","), `${1000n * UNIT}n,${bob.address},10n,${CHAIN_ID}n`);
+    eq("readonly aggregate reads 4 values in one round", reads.join(","), `${1000n * UNIT}n,${bob.address},10n,${CHAIN_ID}n`);
     const tried = await read(mc, "tryAggregate", { calls: [{ target: nft, fn: "ownerOf", input: { tokenId: "999n" } }, { target: token, fn: "ticker", input: {} }] });
-    check("tryAggregate: ตัวที่ล้มได้ success false ที่เหลือทำต่อ", tried[0]?.success === false && /does not exist/.test(tried[0].error) && tried[1]?.success === true && tried[1].result === "FULL", JSON.stringify(tried));
+    check("tryAggregate: the failing call gets success false, the rest continue", tried[0]?.success === false && /does not exist/.test(tried[0].error) && tried[1]?.success === true && tried[1].result === "FULL", JSON.stringify(tried));
     const forbidden = await read(mc, "tryAggregate", { readonly: true, calls: [{ target: counter, fn: "increment", input: { by: "1n" } }] });
-    eq("tryAggregate readonly กับฟังก์ชันที่เขียน → FORBIDDEN", forbidden[0]?.code, "FORBIDDEN");
+    eq("readonly tryAggregate with a writing function → FORBIDDEN", forbidden[0]?.code, "FORBIDDEN");
     const all = await query(mc, "aggregate", { calls: [{ target: token, fn: "ticker", input: {} }, { target: nft, fn: "ownerOf", input: { tokenId: "999n" } }] });
-    check("aggregate: ล้มตัวเดียว = ล้มทั้งหมด", all.status === "throw", JSON.stringify(all).slice(0, 200));
+    check("aggregate: one failure = everything fails", all.status === "throw", JSON.stringify(all).slice(0, 200));
     const before = big(await read(counter, "get"));
     const [agg] = await batch([[bob, { action: "call", to: mc, method: "aggregate", input: { calls: [{ target: counter, fn: "increment", input: { by: "1n" } }, { target: counter, fn: "increment", input: { by: "2n" } }] } }, "multicall.aggregate (tx: counter +1 +2)"]]);
-    success("tx aggregate สำเร็จ", agg);
-    eq("counter เพิ่ม 3", big(await read(counter, "get")) - before, 3n);
-    eq("trace มี 2 call ซ้อนไปที่ counter", agg.receipt.trace?.filter((t) => t.depth === 1 && t.program === counter).length, 2);
+    success("aggregate tx succeeds", agg);
+    eq("counter increased by 3", big(await read(counter, "get")) - before, 3n);
+    eq("trace has 2 nested calls to counter", agg.receipt.trace?.filter((t) => t.depth === 1 && t.program === counter).length, 2);
     T.aggregate = agg;
   });
 
-  await section("9 โปรแกรมเรียกโปรแกรม: runProgram ซ้อน · STATICCALL (FORBIDDEN) · catch call ชั้นในที่ล้ม", async () => {
+  await section("9 program calls program: nested runProgram · STATICCALL (FORBIDDEN) · catch a failing inner call", async () => {
     const lab = program("lab");
     const counter = program("counter");
     const [nested, staticCall, caught] = await batch([
@@ -571,26 +571,26 @@ async function main() {
       [carol, { action: "call", to: lab, method: "staticWrite", input: { counter } }, "lab.staticWrite (STATICCALL)"],
       [carol, { action: "call", to: lab, method: "catchFailure", input: { counter } }, "lab.catchFailure (inner fails, caught)"],
     ]);
-    success("callCounter สำเร็จ", nested);
+    success("callCounter succeeds", nested);
     check("trace: lab → counter.increment depth 1", nested.receipt.trace?.some((t) => t.depth === 1 && t.program === counter && t.method === "increment" && t.from === lab), JSON.stringify(nested.receipt.trace).slice(0, 300));
-    check("event Incremented มี caller = lab (เรียกผ่านโปรแกรม)", nested.receipt.events?.some((e) => e.name === "Incremented" && e.data.caller === lab), JSON.stringify(nested.receipt.events).slice(0, 300));
-    success("staticWrite สำเร็จ (ผู้เรียก catch ได้)", staticCall);
-    eq("STATICCALL ที่เขียน → FORBIDDEN", staticCall.receipt.result?.blocked?.code, "FORBIDDEN");
-    check("trace มี type staticcall", staticCall.receipt.trace?.some((t) => t.type === "staticcall"), JSON.stringify(staticCall.receipt.trace).slice(0, 300));
-    success("catchFailure: tx สำเร็จแม้ชั้นในล้ม", caught);
-    eq("ข้อความ error ของชั้นในถูก catch", caught.receipt.result?.message, "intentional failure from the counter");
-    check("trace: call ชั้นในสถานะล้ม", caught.receipt.trace?.some((t) => t.depth === 1 && t.method === "fail" && t.status !== "success"), JSON.stringify(caught.receipt.trace).slice(0, 300));
+    check("Incremented event has caller = lab (called through a program)", nested.receipt.events?.some((e) => e.name === "Incremented" && e.data.caller === lab), JSON.stringify(nested.receipt.events).slice(0, 300));
+    success("staticWrite succeeds (the caller can catch)", staticCall);
+    eq("STATICCALL that writes → FORBIDDEN", staticCall.receipt.result?.blocked?.code, "FORBIDDEN");
+    check("trace has type staticcall", staticCall.receipt.trace?.some((t) => t.type === "staticcall"), JSON.stringify(staticCall.receipt.trace).slice(0, 300));
+    success("catchFailure: tx succeeds even though the inner call failed", caught);
+    eq("the inner call's error message was caught", caught.receipt.result?.message, "intentional failure from the counter");
+    check("trace: the inner call has a failed status", caught.receipt.trace?.some((t) => t.depth === 1 && t.method === "fail" && t.status !== "success"), JSON.stringify(caught.receipt.trace).slice(0, 300));
     T.nested = nested;
     T.caught = caught;
   });
 
-  await section("10 API ในโปรแกรม (BlockHash … Math.random) เทียบกับค่าจริงของเชน", async () => {
+  await section("10 program APIs (BlockHash … Math.random) compared with the chain's real values", async () => {
     const lab = program("lab");
     const message = `scenario-full probe ${OPTIONS.tag}`;
     const probeDigest = keccakText(`digest ${message}`);
     const [probe] = await batch([[carol, { action: "call", to: lab, method: "probe", value: gwei(1_000_000),
-      input: { message, signature: signProgramMessage(message, carol.key), digest: probeDigest, digestSignature: signTypedDataDigest(probeDigest, carol.key) } }, "lab.probe (ทุก API)"]]);
-    success("probe สำเร็จ", probe);
+      input: { message, signature: signProgramMessage(message, carol.key), digest: probeDigest, digestSignature: signTypedDataDigest(probeDigest, carol.key) } }, "lab.probe (every API)"]]);
+    success("probe succeeds", probe);
     const s = probe.receipt.result ?? {};
     const header = await get(`/block/${probe.tx.blockNumber}`);
     const parent = await get(`/block/${probe.tx.blockNumber - 1}`);
@@ -600,173 +600,173 @@ async function main() {
     let expectedModexp = 1n;
     for (let i = 0; i < 200; i += 1) expectedModexp = (expectedModexp * 3n) % 1000007n;
     eq("BlockNumber()", s.blockNumber, `${probe.tx.blockNumber}n`);
-    eq("BlockHash(n - 1) = hash ของ block ก่อน", s.blockHash, parent.hash);
+    eq("BlockHash(n - 1) = hash of the previous block", s.blockHash, parent.hash);
     eq("ChainId()", s.chainId, `${CHAIN_ID}n`);
     eq("Coinbase() = feeRecipient", s.coinbase, header.feeRecipient);
     eq("BlockGasLimit() = maxBlockGas", s.blockGasLimit, `${g.maxBlockGas}n`);
-    eq("BaseFee() = baseFeePerGas ของ block", s.baseFee, header.baseFeePerGas);
+    eq("BaseFee() = the block's baseFeePerGas", s.baseFee, header.baseFeePerGas);
     eq("GasPrice() = effectiveGasPrice", s.gasPrice, probe.receipt.effectiveGasPrice);
-    check("GasLeft() อยู่ระหว่าง 0 กับ gasLimit", big(s.gasLeft) > 0n && big(s.gasLeft) < 1_000_000n, s.gasLeft);
-    eq("CodeHashOf(this) = keccak256(โค้ด)", s.codeHash, keccakText(code));
-    eq("CodeSizeOf(this) = byte ของโค้ด", s.codeSize, `${Buffer.byteLength(code, "utf8")}n`);
+    check("GasLeft() is between 0 and gasLimit", big(s.gasLeft) > 0n && big(s.gasLeft) < 1_000_000n, s.gasLeft);
+    eq("CodeHashOf(this) = keccak256(code)", s.codeHash, keccakText(code));
+    eq("CodeSizeOf(this) = code bytes", s.codeSize, `${Buffer.byteLength(code, "utf8")}n`);
     eq("sha256('abc')", s.sha256, digest(sha256));
     eq("ripemd160('abc')", s.ripemd160, digest(ripemd160));
     eq("blake2b('abc') (512 bit)", s.blake2b, digest(blake2b));
     eq("keccak256('abc')", s.keccak256, keccakText("abc"));
     eq("modexp(3, 200, 1000007)", s.modexp, `${expectedModexp}n`);
-    eq("ecrecover(ข้อความ, ลายเซ็น) = ผู้เซ็น", s.signer, carol.address);
+    eq("ecrecover(message, signature) = the signer", s.signer, carol.address);
     eq("keccak256Bytes('0x616263') = keccak256('abc')", s.keccakBytes, keccakText("abc"));
-    eq("ecrecoverDigest(digest 32 byte, ลายเซ็น) = ผู้เซ็น", s.digestSigner, carol.address);
+    eq("ecrecoverDigest(32-byte digest, signature) = the signer", s.digestSigner, carol.address);
     const labDomain = { name: "Lab", version: "1", chainId: BigInt(CHAIN_ID), verifyingContract: lab };
-    eq("eip712DomainSeparator() = ค่าของตัวช่วยฝั่ง JS", s.domainSeparator, eip712DomainSeparator(labDomain));
-    eq("eip712Digest() = digest ของ eth_signTypedData_v4", s.typedDigest, eip712Digest(labDomain,
+    eq("eip712DomainSeparator() = the JS helper's value", s.domainSeparator, eip712DomainSeparator(labDomain));
+    eq("eip712Digest() = the eth_signTypedData_v4 digest", s.typedDigest, eip712Digest(labDomain,
       { Ping: [{ name: "from", type: "address" }, { name: "block", type: "uint256" }] }, "Ping", { from: carol.address, block: BigInt(probe.tx.blockNumber) }));
     check("BalanceOf(sender) > 0", big(s.senderBalance) > 0n, s.senderBalance);
-    eq("ThisBalance() = value ที่แนบมา", s.thisBalance, `${1_000_000n * GWEI}n`);
+    eq("ThisBalance() = the attached value", s.thisBalance, `${1_000_000n * GWEI}n`);
     eq("IsProgram(this) = true", s.thisIsProgram, true);
     eq("IsProgram(sender) = false", s.senderIsProgram, false);
     eq("MetadataOf(this, 'namespace')", s.namespace, ns("lab"));
-    eq("Date.now() = timestamp ของ block", s.now, `${header.timestamp}n`);
-    eq("params.block.timestamp = timestamp ของ block", s.timestamp, `${header.timestamp}n`);
-    check("Math.random() อยู่ใน [0, 1)", Number(s.random) >= 0 && Number(s.random) < 1, s.random);
+    eq("Date.now() = the block timestamp", s.now, `${header.timestamp}n`);
+    eq("params.block.timestamp = the block timestamp", s.timestamp, `${header.timestamp}n`);
+    check("Math.random() is in [0, 1)", Number(s.random) >= 0 && Number(s.random) < 1, s.random);
     const stored = await read(lab, "lastProbe");
-    check("replay ได้ค่าเดิมทุกตัว (receipt จาก replay = ค่าที่เก็บตอนรันจริง รวม Math.random)", JSON.stringify(stored) === JSON.stringify(s), `${JSON.stringify(stored).slice(0, 150)} ≠ ${JSON.stringify(s).slice(0, 150)}`);
+    check("replay gives the same values (receipt from replay = values stored during the real run, including Math.random)", JSON.stringify(stored) === JSON.stringify(s), `${JSON.stringify(stored).slice(0, 150)} ≠ ${JSON.stringify(s).slice(0, 150)}`);
     T.probe = probe;
   });
 
-  await section("11 อัปเกรดโปรแกรม: upgrade → reject → upgrade → approve (+ timelock) · migrate · versions · setUpgrader", async () => {
+  await section("11 program upgrades: upgrade → reject → upgrade → approve (+ timelock) · migrate · versions · setUpgrader", async () => {
     const counter = program("counter");
     const countBefore = big(await read(counter, "get"));
-    const [first] = await batch([[alice, { action: "upgrade", to: counter, code: COUNTER_V2, input: { tag: "rejected", bonus: "1n" } }, "upgrade #1 (จะถูก reject)"]]);
-    success("upgrader ส่งโค้ดใหม่", first);
-    check("GET /program → pendingUpgrade", (await get(`/program/${counter}`)).pendingUpgrade, "ไม่มี pendingUpgrade");
+    const [first] = await batch([[alice, { action: "upgrade", to: counter, code: COUNTER_V2, input: { tag: "rejected", bonus: "1n" } }, "upgrade #1 (will be rejected)"]]);
+    success("upgrader submits new code", first);
+    check("GET /program → pendingUpgrade", (await get(`/program/${counter}`)).pendingUpgrade, "no pendingUpgrade");
     const [rejected] = await batch([[admin, { action: "rejectUpgrade", to: counter }, "rejectUpgrade"]]);
-    success("ทีมงาน rejectUpgrade", rejected);
-    eq("หลัง reject: pendingUpgrade = null", (await get(`/program/${counter}`)).pendingUpgrade, null);
-    eq("หลัง reject: version() ยังเป็น 1", await read(counter, "version"), "1n");
+    success("team rejectUpgrade", rejected);
+    eq("after reject: pendingUpgrade = null", (await get(`/program/${counter}`)).pendingUpgrade, null);
+    eq("after reject: version() is still 1", await read(counter, "version"), "1n");
     const stranger = await send(bob, { action: "upgrade", to: counter, code: COUNTER_V2, input: {} });
-    check("คนที่ไม่ใช่ upgrader ส่งโค้ด → ถูกปฏิเสธ", !stranger.queued, JSON.stringify(stranger).slice(0, 200));
+    check("code submitted by a non-upgrader → rejected", !stranger.queued, JSON.stringify(stranger).slice(0, 200));
 
     const [second] = await batch([[alice, { action: "upgrade", to: counter, code: COUNTER_V2, input: { tag: "v2", bonus: "100n" } }, "upgrade #2"]]);
-    success("ส่งโค้ดใหม่รอบสอง", second);
+    success("new code submitted a second time", second);
     const [approved] = await batch([[admin, { action: "initUpgrade", to: counter }, "initUpgrade"]]);
-    success("ทีมงาน initUpgrade", approved);
+    success("team initUpgrade", approved);
     const state = approved.receipt.result?.state;
     if (state === "scheduled") {
       const activateAt = approved.receipt.result.activateAt;
-      check("timelock: ได้ state scheduled + activateAt", activateAt > approved.tx.blockNumber, JSON.stringify(approved.receipt.result));
+      check("timelock: state scheduled + activateAt", activateAt > approved.tx.blockNumber, JSON.stringify(approved.receipt.result));
       check("timelock: GET /program → scheduledUpgrade", (await get(`/program/${counter}`)).scheduledUpgrade?.activateAt === activateAt);
-      eq("timelock: ก่อนถึงเวลา version() ยังเป็น 1", await read(counter, "version"), "1n");
+      eq("timelock: before activation version() is still 1", await read(counter, "version"), "1n");
       await fillUntil(activateAt);
       const header = await get(`/block/${activateAt}`);
-      check(`timelock: header.upgrades ของ block ${activateAt} มีการเปิดใช้`, header.upgrades?.some((u) => u.program === counter), JSON.stringify(header.upgrades));
+      check(`timelock: header.upgrades of block ${activateAt} shows the activation`, header.upgrades?.some((u) => u.program === counter), JSON.stringify(header.upgrades));
     } else {
-      eq("ไม่มี timelock (UPGRADE_DELAY_BLOCKS=0): ใช้โค้ดใหม่ทันที", state, "active");
+      eq("no timelock (UPGRADE_DELAY_BLOCKS=0): new code used immediately", state, "active");
     }
     eq("version() = 2", await read(counter, "version"), "2n");
     eq("metadata.version = 2", (await get(`/address/${counter}?limit=1`)).metadata.version, 2);
-    eq("migrate รันครั้งเดียว (migratedTag)", await read(counter, "migratedTag"), "v2");
-    eq("storage เดิมอยู่ครบ + bonus จาก migrate", big(await read(counter, "get")), countBefore + 100n);
+    eq("migrate ran once (migratedTag)", await read(counter, "migratedTag"), "v2");
+    eq("existing storage intact + bonus from migrate", big(await read(counter, "get")), countBefore + 100n);
     const versions = await get(`/program/${counter}/versions`);
-    eq("GET /program/:a/versions มี 2 เวอร์ชัน", versions.map?.((v) => v.version).join(","), "1,2");
-    check("ABI ใหม่ (setMetadata ใน migrate) มี decrement", (await get(`/program/${counter}/abi`)).abi?.functions?.some((f) => f.name === "decrement"));
+    eq("GET /program/:a/versions has 2 versions", versions.map?.((v) => v.version).join(","), "1,2");
+    check("new ABI (setMetadata in migrate) has decrement", (await get(`/program/${counter}/abi`)).abi?.functions?.some((f) => f.name === "decrement"));
     const migrateCall = await query(counter, "migrate", { tag: "x" });
-    check("migrate เรียกจากภายนอกไม่ได้", migrateCall.status !== "success", JSON.stringify(migrateCall).slice(0, 150));
-    const [dec] = await batch([[bob, { action: "call", to: counter, method: "decrement", input: { by: "1n" } }, "counter.decrement (ฟังก์ชันใหม่ v2)"]]);
-    success("ฟังก์ชันใหม่ของ v2 ใช้ได้", dec);
+    check("migrate cannot be called from outside", migrateCall.status !== "success", JSON.stringify(migrateCall).slice(0, 150));
+    const [dec] = await batch([[bob, { action: "call", to: counter, method: "decrement", input: { by: "1n" } }, "counter.decrement (new v2 function)"]]);
+    success("v2's new function works", dec);
 
     const [handover] = await batch([[alice, { action: "setUpgrader", to: counter, input: { upgrader: bob.address } }, "setUpgrader → bob"]]);
-    success("setUpgrader โอนสิทธิ์", handover);
+    success("setUpgrader transfers the rights", handover);
     eq("metadata.upgrader = bob", (await get(`/address/${counter}?limit=1`)).metadata.upgrader, bob.address);
-    const [renounce] = await batch([[bob, { action: "setUpgrader", to: counter, input: { upgrader: null } }, "setUpgrader → null (สละสิทธิ์)"]]);
-    success("สละสิทธิ์อัปเกรด", renounce);
-    check("metadata.upgrader ถูกลบ (แก้ไม่ได้อีก)", !(await get(`/address/${counter}?limit=1`)).metadata.upgrader);
+    const [renounce] = await batch([[bob, { action: "setUpgrader", to: counter, input: { upgrader: null } }, "setUpgrader → null (renounce)"]]);
+    success("upgrade rights renounced", renounce);
+    check("metadata.upgrader removed (can no longer be changed)", !(await get(`/address/${counter}?limit=1`)).metadata.upgrader);
     const after = await send(bob, { action: "upgrade", to: counter, code: COUNTER_V1, input: {} });
-    check("หลังสละสิทธิ์ upgrade → ถูกปฏิเสธ", !after.queued, JSON.stringify(after).slice(0, 200));
+    check("upgrade after renouncing → rejected", !after.queued, JSON.stringify(after).slice(0, 200));
   });
 
-  await section("12 cloneProgram: โรงงานสร้างโปรแกรม (address แบบ CREATE2 ทำนายได้ก่อน)", async () => {
+  await section("12 cloneProgram: a program factory (CREATE2-style address predictable in advance)", async () => {
     const factory = program("factory");
     const template = program("note");
     const salt = `${OPTIONS.tag}-note-1`;
     const templateCode = (await get(`/program/${template}`)).code;
     const predicted = new VirtualMachine(new MemoryDB(), { chainId: CHAIN_ID }).cloneAddressFor(factory, salt, templateCode);
     const [created] = await batch([[dave, { action: "call", to: factory, method: "create", input: { template, salt, label: "Dave's note", namespace: ns("note-1") } }, "factory.create (cloneProgram)"]]);
-    success("create สำเร็จ", created);
-    eq("address ของ clone = ที่ทำนายไว้", created.receipt.result, predicted);
+    success("create succeeds", created);
+    eq("the clone's address = the predicted one", created.receipt.result, predicted);
     report.programs.clone = predicted;
     const meta = (await get(`/address/${predicted}?limit=1`)).metadata;
-    eq("metadata.template = ต้นแบบ", meta.template, template);
+    eq("metadata.template = the template", meta.template, template);
     eq("metadata.creator = factory", meta.creator, factory);
-    eq("namespace ของ clone", (await get(`/name/${ns("note-1")}`)).address, predicted);
-    check("trace มีรายการ type create", created.receipt.trace?.some((t) => t.type === "create"), JSON.stringify(created.receipt.trace).slice(0, 300));
+    eq("the clone's namespace", (await get(`/name/${ns("note-1")}`)).address, predicted);
+    check("trace has an entry of type create", created.receipt.trace?.some((t) => t.type === "create"), JSON.stringify(created.receipt.trace).slice(0, 300));
     const frame = await rpc("debug_traceTransaction", [created.hash, { tracer: "callTracer" }]);
-    check("/evm callTracer มี frame CREATE", JSON.stringify(frame).includes('"type":"CREATE"'), JSON.stringify(frame).slice(0, 300));
+    check("/evm callTracer has a CREATE frame", JSON.stringify(frame).includes('"type":"CREATE"'), JSON.stringify(frame).slice(0, 300));
     const [written] = await batch([[dave, { action: "call", to: predicted, method: "write", input: { text: "hello from a clone" } }, "clone.write"]]);
-    success("ใช้งาน clone ได้ (owner = ผู้เรียก factory)", written);
+    success("the clone works (owner = the factory caller)", written);
     eq("clone.note().text", (await read(predicted, "note")).text, "hello from a clone");
     const again = await send(dave, { action: "call", to: factory, method: "create", input: { template, salt, label: "again" } });
-    check("salt ซ้ำ → ถูกปฏิเสธ", !again.queued, JSON.stringify(again).slice(0, 200));
+    check("duplicate salt → rejected", !again.queued, JSON.stringify(again).slice(0, 200));
     T.clone = created;
   });
 
-  await section("13 แก๊ส / sandbox: OUT_OF_GAS · OUT_OF_MEMORY (ทั้งตอน query, ตอน /sendtx และใน block)", async () => {
+  await section("13 gas / sandbox: OUT_OF_GAS · OUT_OF_MEMORY (at query, at /sendtx and in the block)", async () => {
     const gasLab = program("gasLab");
     const spin = await query(gasLab, "spin");
-    eq("query ลูปไม่รู้จบ → OUT_OF_GAS", spin.error?.code, "OUT_OF_GAS");
+    eq("query infinite loop → OUT_OF_GAS", spin.error?.code, "OUT_OF_GAS");
     const sent = await send(erin, { action: "call", to: gasLab, method: "spin", gasLimit: 300_000 });
-    check("/sendtx ลูปไม่รู้จบ → simulate ไม่ผ่าน ไม่เข้าคิว", !sent.queued && sent.simulation?.errorCode === "OUT_OF_GAS", JSON.stringify(sent).slice(0, 200));
+    check("/sendtx infinite loop → simulation fails, not queued", !sent.queued && sent.simulation?.errorCode === "OUT_OF_GAS", JSON.stringify(sent).slice(0, 200));
     report.txs["rejected (spin OUT_OF_GAS at /sendtx)"] = sent.hash;
 
-    // กับดัก: arm แล้ว loop / memory ใน block เดียวกัน (simulate ตอนส่งเห็น state ก่อน arm จึงผ่าน)
-    // หน่วยความจำ 32 MB ≈ 1.05M แก๊ส → ต้องมี maxBlockGas ≥ 2M (loop 400k + memory 1.5M ใน block เดียว) · server ค่าเริ่ม 1M = ข้าม
-    if (Number((await get("/genesis")).maxBlockGas) < 2_000_000) return skip("กับดัก OUT_OF_GAS / OUT_OF_MEMORY ใน block", "maxBlockGas ของ server < 2M (ใช้ --spawn หรือ MAX_BLOCK_GAS=3000000)");
+    // trap: arm, then loop / memory in the same block (the simulation at send time sees the state before arm, so it passes)
+    // 32 MB of memory ≈ 1.05M gas → needs maxBlockGas ≥ 2M (loop 400k + memory 1.5M in one block) · server default 1M = skip
+    if (Number((await get("/genesis")).maxBlockGas) < 2_000_000) return skip("OUT_OF_GAS / OUT_OF_MEMORY trap in a block", "server maxBlockGas < 2M (use --spawn or MAX_BLOCK_GAS=3000000)");
     let items = null;
     for (let attempt = 1; attempt <= 3 && !items; attempt += 1) {
       await freshBlock();
       const { nonce } = await get(`/nonce/${erin.address}`);
       const arm = await send(erin, { action: "call", to: gasLab, method: "arm" }, { nonce });
       const loop = await send(erin, { action: "call", to: gasLab, method: "loopIfArmed", gasLimit: 400_000 }, { nonce: nonce + 1 });
-      // หน่วยความจำ 32 MB ≈ 1.05M gas (ข้อมูลคิดแก๊สตามขนาด) → gasLimit ต้องพอให้ถึงเพดานหน่วยความจำก่อน
+      // 32 MB of memory ≈ 1.05M gas (data is charged by size) → gasLimit must be enough to reach the memory cap first
       const memory = await send(erin, { action: "call", to: gasLab, method: "memoryIfArmed", gasLimit: 1_500_000 }, { nonce: nonce + 2 });
       if (arm.queued && loop.queued && memory.queued) items = { arm, loop, memory };
       else if (arm.queued) await mined(arm.hash);
     }
-    if (!items) return check("ส่งกับดักเข้าคิวครบ 3 ใบ", false, "block ปิดระหว่างส่ง 3 ครั้ง");
+    if (!items) return check("all 3 trap txs queued", false, "a block closed during all 3 attempts");
     const found = await mined([items.arm.hash, items.loop.hash, items.memory.hash]);
     const loopReceipt = await get(`/tx/${items.loop.hash}/receipt`);
     const memoryReceipt = await get(`/tx/${items.memory.hash}/receipt`);
-    eq("arm สำเร็จ", found[items.arm.hash].status, "success");
-    eq("ลูปใน block → OUT_OF_GAS", loopReceipt.error?.code, "OUT_OF_GAS");
-    check("OUT_OF_GAS: เข้า block · ใช้แก๊สเต็ม gasLimit · เสียค่าแก๊ส", found[items.loop.hash].blockNumber && loopReceipt.gasUsed >= 400_000 && big(loopReceipt.fee) > 0n, JSON.stringify([loopReceipt.gasUsed, loopReceipt.fee]));
-    eq("หน่วยความจำใน block → OUT_OF_MEMORY", memoryReceipt.error?.code, "OUT_OF_MEMORY");
-    // เสียค่าแก๊สตามข้อมูลที่จองไปจริง (~1M สำหรับ 32 MB) ไม่ใช่แค่ไม่กี่ร้อยแบบก่อนคิดแก๊สตามขนาดข้อมูล
-    check("OUT_OF_MEMORY: เข้า block · เสียค่าแก๊สตามข้อมูลที่จองไป (≥ 500,000)", found[items.memory.hash].blockNumber && memoryReceipt.gasUsed >= 500_000 && memoryReceipt.gasUsed <= 1_500_000 && big(memoryReceipt.fee) > 0n, JSON.stringify([memoryReceipt.gasUsed, memoryReceipt.fee]));
+    eq("arm succeeds", found[items.arm.hash].status, "success");
+    eq("loop in a block → OUT_OF_GAS", loopReceipt.error?.code, "OUT_OF_GAS");
+    check("OUT_OF_GAS: in a block · uses the full gasLimit · gas charged", found[items.loop.hash].blockNumber && loopReceipt.gasUsed >= 400_000 && big(loopReceipt.fee) > 0n, JSON.stringify([loopReceipt.gasUsed, loopReceipt.fee]));
+    eq("memory in a block → OUT_OF_MEMORY", memoryReceipt.error?.code, "OUT_OF_MEMORY");
+    // gas is charged for the data actually allocated (~1M for 32 MB), not just a few hundred as before size-based data gas
+    check("OUT_OF_MEMORY: in a block · gas charged for the allocated data (≥ 500,000)", found[items.memory.hash].blockNumber && memoryReceipt.gasUsed >= 500_000 && memoryReceipt.gasUsed <= 1_500_000 && big(memoryReceipt.fee) > 0n, JSON.stringify([memoryReceipt.gasUsed, memoryReceipt.fee]));
     const evmLoop = await rpc("eth_getTransactionReceipt", [items.loop.hash]);
-    check("/evm: tx ที่ล้มใน block → status 0x0 + gasUsed > 0", evmLoop.status === "0x0" && BigInt(evmLoop.gasUsed) > 0n, JSON.stringify(evmLoop).slice(0, 200));
+    check("/evm: tx failed in a block → status 0x0 + gasUsed > 0", evmLoop.status === "0x0" && BigInt(evmLoop.gasUsed) > 0n, JSON.stringify(evmLoop).slice(0, 200));
     report.txs["failed in block (OUT_OF_GAS)"] = items.loop.hash;
     report.txs["failed in block (OUT_OF_MEMORY)"] = items.memory.hash;
     T.oog = items.loop.hash;
-    skip("TIMEOUT_MS (หมดเวลา)", "แก๊สหมดก่อนเสมอ: maxTxGas 1–3M ≈ 20–60 ms ใน sandbox · timeout (5 วิ) เป็นด่านสุดท้ายที่ทดสอบไม่ได้โดยไม่ลด TIMEOUT_MS ของ server (เทสต์ 08 / 58 คุมอยู่)");
+    skip("TIMEOUT_MS (time limit)", "gas always runs out first: maxTxGas 1–3M ≈ 20–60 ms in the sandbox · the timeout (5 s) is a last line of defense that can't be tested without lowering the server's TIMEOUT_MS (covered by tests 08 / 58)");
   });
 
-  await section("14 event แบบ indexed: REST + eth_getLogs ตาม topic", async () => {
+  await section("14 indexed events: REST + eth_getLogs by topic", async () => {
     const latest = (await get("/genesis")).latest;
     const byTo = await get(`/program/${token}/events?name=Transfer&to=${bob.address}`);
-    check("GET /program/:a/events?name=Transfer&to=bob → เฉพาะของ bob", byTo.items?.length >= 1 && byTo.items.every((e) => e.data?.to === bob.address), JSON.stringify(byTo).slice(0, 300));
+    check("GET /program/:a/events?name=Transfer&to=bob → only bob's", byTo.items?.length >= 1 && byTo.items.every((e) => e.data?.to === bob.address), JSON.stringify(byTo).slice(0, 300));
     const both = await get(`/program/${token}/events?name=Transfer&from=${alice.address}&to=${carol.address}`);
-    check("หลาย field (AND): from=alice & to=carol", both.items?.length >= 1 && both.items.every((e) => e.data?.from === alice.address && e.data?.to === carol.address), JSON.stringify(both).slice(0, 300));
+    check("multiple fields (AND): from=alice & to=carol", both.items?.length >= 1 && both.items.every((e) => e.data?.from === alice.address && e.data?.to === carol.address), JSON.stringify(both).slice(0, 300));
     const byCaller = await get(`/program/${program("counter")}/events?name=Incremented&caller=${program("lab")}`);
-    check("event ของโปรแกรมตัวอย่าง (Incremented caller = lab)", byCaller.items?.length >= 1, JSON.stringify(byCaller).slice(0, 200));
+    check("sample program's event (Incremented caller = lab)", byCaller.items?.length >= 1, JSON.stringify(byCaller).slice(0, 200));
     const logs = await rpc("eth_getLogs", [{ fromBlock: hex(report.firstBlock), toBlock: hex(latest), address: token, topics: [SIG.transfer, null, `0x${addressWord(bob.address)}`] }]);
     check("eth_getLogs topic0 Transfer + topic2 = bob", logs.length >= 1 && logs.every((l) => l.topics[2] === `0x${addressWord(bob.address)}`), JSON.stringify(logs).slice(0, 200));
     const nftLogs = await rpc("eth_getLogs", [{ fromBlock: hex(report.firstBlock), toBlock: hex(latest), address: nft, topics: [SIG.transfer, null, null, `0x${word(1)}`] }]);
-    check("eth_getLogs NFT tokenId (topic3) = 1 → mint + โอน", nftLogs.length === 2, JSON.stringify(nftLogs).slice(0, 200));
+    check("eth_getLogs NFT tokenId (topic3) = 1 → mint + transfer", nftLogs.length === 2, JSON.stringify(nftLogs).slice(0, 200));
     const singles = await rpc("eth_getLogs", [{ fromBlock: hex(report.firstBlock), toBlock: hex(latest), topics: [SIG.transferSingle] }]);
-    check("eth_getLogs topic0 TransferSingle (ทุกโปรแกรม)", singles.length >= 3 && singles.every((l) => l.address === multi), JSON.stringify(singles).slice(0, 200));
+    check("eth_getLogs topic0 TransferSingle (all programs)", singles.length >= 3 && singles.every((l) => l.address === multi), JSON.stringify(singles).slice(0, 200));
   });
 
-  await section("15 /evm สำหรับ Blockscout: block · tx · receipt · log · eth_call · fee", async () => {
+  await section("15 /evm for Blockscout: block · tx · receipt · log · eth_call · fee", async () => {
     const latest = (await get("/genesis")).latest;
     eq("eth_chainId", await rpc("eth_chainId"), hex(CHAIN_ID));
     eq("eth_blockNumber", await rpc("eth_blockNumber"), hex(latest));
@@ -777,13 +777,13 @@ async function main() {
     eq("block.baseFeePerGas", block.baseFeePerGas, hex(header.baseFeePerGas));
     eq("block.logsBloom = header", block.logsBloom, header.logsBloom);
     eq("block.receiptsRoot = header", block.receiptsRoot, header.receiptsRoot);
-    check("block.transactions มี tx ของ block (hash ของ VM)", block.transactions.includes(T.tokenTransfer.tx.hash), JSON.stringify(block.transactions));
+    check("block.transactions has the block's txs (VM hashes)", block.transactions.includes(T.tokenTransfer.tx.hash), JSON.stringify(block.transactions));
     const fullBlock = await rpc("eth_getBlockByNumber", [hex(n), true]);
-    check("eth_getBlockByNumber(full) คืน tx object", fullBlock.transactions.every((t) => typeof t === "object" && t.hash));
+    check("eth_getBlockByNumber(full) returns tx objects", fullBlock.transactions.every((t) => typeof t === "object" && t.hash));
     const t1559 = await rpc("eth_getTransactionByHash", [T.tipped.hash]);
-    check("tx แบบ 1559: type 0x2 + maxFeePerGas + maxPriorityFeePerGas", t1559.type === "0x2" && t1559.maxFeePerGas === hex(gwei(20)) && t1559.maxPriorityFeePerGas === hex(gwei(2)), JSON.stringify(t1559).slice(0, 300));
+    check("1559 tx: type 0x2 + maxFeePerGas + maxPriorityFeePerGas", t1559.type === "0x2" && t1559.maxFeePerGas === hex(gwei(20)) && t1559.maxPriorityFeePerGas === hex(gwei(2)), JSON.stringify(t1559).slice(0, 300));
     const tLegacy = await rpc("eth_getTransactionByHash", [T.legacy2.hash]);
-    check("tx แบบเดิม: type 0x0 + gasPrice", tLegacy.type === "0x0" && tLegacy.gasPrice === hex(gwei(3)), JSON.stringify(tLegacy).slice(0, 300));
+    check("legacy tx: type 0x0 + gasPrice", tLegacy.type === "0x0" && tLegacy.gasPrice === hex(gwei(3)), JSON.stringify(tLegacy).slice(0, 300));
     const r1559 = await rpc("eth_getTransactionReceipt", [T.tipped.hash]);
     eq("receipt.effectiveGasPrice", r1559.effectiveGasPrice, hex(T.tipped.receipt.effectiveGasPrice));
     const erc20 = await rpc("eth_getTransactionReceipt", [T.tokenTransfer.hash]);
@@ -798,8 +798,8 @@ async function main() {
     const batchLog = (await rpc("eth_getTransactionReceipt", [T.batch.hash])).logs.find((l) => l.topics[0] === SIG.transferBatch);
     check("ERC-1155 TransferBatch log", batchLog?.topics.length === 4 && batchLog.topics[3] === `0x${addressWord(program("wallet"))}`, JSON.stringify(batchLog).slice(0, 300));
     const failed = await rpc("eth_getTransactionReceipt", [T.oog]);
-    eq("tx ที่ล้มใน block → status 0x0", failed.status, "0x0");
-    eq("tx ที่ถูกปฏิเสธ → status 0x0", (await rpc("eth_getTransactionReceipt", [T.rejected])).status, "0x0");
+    eq("tx failed in a block → status 0x0", failed.status, "0x0");
+    eq("rejected tx → status 0x0", (await rpc("eth_getTransactionReceipt", [T.rejected])).status, "0x0");
     const call = async (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
     eq("eth_call token.name()", decodeString(await call(token, callData("name()"))), "Scenario Full Token");
     eq("eth_call token.symbol()", decodeString(await call(token, callData("symbol()"))), "FULL");
@@ -816,26 +816,26 @@ async function main() {
     eq("eth_call multi.uri(3)", decodeString(await call(multi, callData("uri(uint256)", word(3)))), "https://example.com/scenario-full/items/legendary.json");
     eq("eth_call multi.name()", decodeString(await call(multi, callData("name()"))), "Scenario Full Items");
     const history = await rpc("eth_feeHistory", ["0x5", "latest", [25, 75]]);
-    check("eth_feeHistory: baseFeePerGas 6 ช่อง · gasUsedRatio 5 · reward 5", history.baseFeePerGas.length === 6 && history.gasUsedRatio.length === 5 && history.reward.length === 5, JSON.stringify(history).slice(0, 300));
+    check("eth_feeHistory: baseFeePerGas 6 entries · gasUsedRatio 5 · reward 5", history.baseFeePerGas.length === 6 && history.gasUsedRatio.length === 5 && history.reward.length === 5, JSON.stringify(history).slice(0, 300));
     const genesisNow = await get("/genesis");
-    check("eth_gasPrice ≥ base fee ของ block ถัดไป", BigInt(await rpc("eth_gasPrice")) >= big(genesisNow.baseFee));
-    eq("eth_getBalance(alice) = ยอดของเชน", BigInt(await rpc("eth_getBalance", [alice.address, "latest"])), big((await get(`/address/${alice.address}?limit=1`)).native.balance));
+    check("eth_gasPrice ≥ the next block's base fee", BigInt(await rpc("eth_gasPrice")) >= big(genesisNow.baseFee));
+    eq("eth_getBalance(alice) = the chain's balance", BigInt(await rpc("eth_getBalance", [alice.address, "latest"])), big((await get(`/address/${alice.address}?limit=1`)).native.balance));
     eq("eth_getTransactionCount(alice) = nonce", BigInt(await rpc("eth_getTransactionCount", [alice.address, "latest"])), BigInt((await get(`/nonce/${alice.address}`)).nonce));
-    check("eth_getCode(token) = ซอร์สของโปรแกรม", (await rpc("eth_getCode", [token, "latest"])).length > 100);
+    check("eth_getCode(token) = the program source", (await rpc("eth_getCode", [token, "latest"])).length > 100);
     const trace = await rpc("debug_traceTransaction", [T.aggregate.hash, { tracer: "callTracer" }]);
-    eq("debug_traceTransaction (callTracer) ของ aggregate: 2 call ย่อย", trace.calls?.length, 2);
+    eq("debug_traceTransaction (callTracer) of aggregate: 2 sub-calls", trace.calls?.length, 2);
     const receipts = await rpc("eth_getBlockReceipts", [hex(n)]);
-    check("eth_getBlockReceipts ครบทุก tx", receipts.length === block.transactions.length, `${receipts.length} / ${block.transactions.length}`);
+    check("eth_getBlockReceipts covers every tx", receipts.length === block.transactions.length, `${receipts.length} / ${block.transactions.length}`);
     const tokenBefore = BigInt(await rpc("eth_call", [{ to: token, data: callData("balanceOf(address)", addressWord(bob.address)) }, hex(T.tokenTransfer.tx.blockNumber - 1)]));
-    eq("eth_call ย้อนหลัง (block ก่อนโอน) bob = 0", tokenBefore, 0n);
+    eq("historical eth_call (block before the transfer) bob = 0", tokenBefore, 0n);
   });
 
-  await section("16 REST ที่ explorer ใช้ (address · tokens · nfts · program · แบ่งหน้า)", async () => {
+  await section("16 REST used by the explorer (address · tokens · nfts · program · pagination)", async () => {
     const wallet = program("wallet");
     const aliceView = await get(`/address/${alice.address}`);
     check("GET /address/alice: namespace + nonce + tx", aliceView.metadata?.namespace === ns("alice") && aliceView.nonce > 10 && aliceView.transactions?.length > 0, JSON.stringify(aliceView).slice(0, 200));
     const tokens = await get(`/address/${alice.address}/tokens`);
-    check("GET /address/alice/tokens มี FULL", tokens.some?.((t) => t.address === token && t.ticker === "FULL" && big(t.balance) > 0n), JSON.stringify(tokens).slice(0, 200));
+    check("GET /address/alice/tokens has FULL", tokens.some?.((t) => t.address === token && t.ticker === "FULL" && big(t.balance) > 0n), JSON.stringify(tokens).slice(0, 200));
     const bobNfts = await get(`/address/${bob.address}/nfts`);
     check("GET /address/bob/nfts: ERC-721 #1, #10 + ERC-1155 id 1 × 10", bobNfts.some?.((x) => x.program === nft && x.tokenId === "1n") && bobNfts.some((x) => x.program === nft && x.tokenId === "10n")
       && bobNfts.some((x) => x.program === multi && x.tokenId === "1n" && x.amount === "10n"), JSON.stringify(bobNfts).slice(0, 300));
@@ -846,45 +846,45 @@ async function main() {
     eq("GET /program/nft: collection ERC-721", (await get(`/program/${nft}`)).collection?.standard, "ERC-721");
     eq("GET /program/multi: collection ERC-1155", (await get(`/program/${multi}`)).collection?.standard, "ERC-1155");
     const approved = await get("/programs/approved?limit=100");
-    check("GET /programs/approved มีโปรแกรมของรอบนี้ (รวม clone)", ["token", "nft", "multi", "counter", "lab", "factory", "clone"].every((name) => approved.items?.some((p) => p.address === program(name)))
+    check("GET /programs/approved has this run's programs (including the clone)", ["token", "nft", "multi", "counter", "lab", "factory", "clone"].every((name) => approved.items?.some((p) => p.address === program(name)))
       || approved.total >= 12, `total ${approved.total}`);
     const blocks = await get("/blocks/page?page=1&limit=5");
     check("GET /blocks/page", blocks.items?.length === 5 && blocks.total >= blocks.items[0].number, JSON.stringify(blocks).slice(0, 150));
     const txs = await get(`/address/${alice.address}/txs?page=1&limit=5`);
-    check("GET /address/alice/txs (เรียงตาม nonce, แบ่งหน้า)", txs.items?.length === 5 && txs.total >= 20 && txs.pages >= 4, JSON.stringify({ total: txs.total, pages: txs.pages }));
+    check("GET /address/alice/txs (sorted by nonce, paginated)", txs.items?.length === 5 && txs.total >= 20 && txs.pages >= 4, JSON.stringify({ total: txs.total, pages: txs.pages }));
     const incoming = await get(`/address/${token}/incoming?page=1&limit=10`);
-    check("GET /address/token/incoming (รวม call ซ้อนชั้น)", incoming.total >= 10 && incoming.items?.some((i) => i.depth >= 1), JSON.stringify({ total: incoming.total }));
+    check("GET /address/token/incoming (including nested calls)", incoming.total >= 10 && incoming.items?.some((i) => i.depth >= 1), JSON.stringify({ total: incoming.total }));
     const interactions = await get(`/program/${token}/interactions?limit=5&cursor=`);
     check("GET /program/:a/interactions (cursor)", interactions.items?.length === 5 && interactions.next, JSON.stringify(interactions).slice(0, 150));
     const events = await get(`/program/${token}/events?page=1&limit=5`);
-    check("GET /program/:a/events (แบ่งหน้า)", events.items?.length === 5 && events.total >= 10, JSON.stringify({ total: events.total }));
+    check("GET /program/:a/events (paginated)", events.items?.length === 5 && events.total >= 10, JSON.stringify({ total: events.total }));
     const holders = await get(`/token/${token}/holders?page=1&limit=25`);
-    check("GET /token/:a/holders (≥ 6 ราย เรียงมากไปน้อย)", holders.total >= 6 && big(holders.items[0].balance) >= big(holders.items.at(-1).balance), JSON.stringify({ total: holders.total }));
+    check("GET /token/:a/holders (≥ 6 holders, largest first)", holders.total >= 6 && big(holders.items[0].balance) >= big(holders.items.at(-1).balance), JSON.stringify({ total: holders.total }));
     const entries = await get(`/program/${token}/entries?name=balances&page=1&limit=25`);
     check("GET /program/:a/entries?name=balances", entries.items?.length >= 6, JSON.stringify({ total: entries.total }));
     const layout = await get(`/program/${program("lab")}/layout`);
-    check("GET /program/:a/layout (Variables มี lastProbe)", JSON.stringify(layout).includes("lastProbe"), JSON.stringify(layout).slice(0, 150));
-    // /sendtx คืน digest (EIP-712 ที่ผู้ใช้เซ็น) · VM hash อยู่ใน record — ค้นได้ทั้งคู่
+    check("GET /program/:a/layout (Variables has lastProbe)", JSON.stringify(layout).includes("lastProbe"), JSON.stringify(layout).slice(0, 150));
+    // /sendtx returns the digest (the EIP-712 the user signed) · the VM hash is in the record — both are searchable
     const byVmHash = await get(`/tx/${T.tokenTransfer.tx.hash}`);
-    check("GET /tx/:hash ค้นได้ทั้ง VM hash และ digest ที่ผู้ใช้เซ็น", byVmHash.digest === T.tokenTransfer.hash && byVmHash.hash === T.tokenTransfer.tx.hash, json(byVmHash).slice(0, 200));
+    check("GET /tx/:hash finds both the VM hash and the user-signed digest", byVmHash.digest === T.tokenTransfer.hash && byVmHash.hash === T.tokenTransfer.tx.hash, json(byVmHash).slice(0, 200));
     const full = await get(`/block/${T.probe.tx.blockNumber}?full=1`);
-    check("GET /block/:n?full=1 (replay) ตรงกับ header", full.hash === (await get(`/block/${T.probe.tx.blockNumber}`)).hash && full.transactions?.length >= 1);
+    check("GET /block/:n?full=1 (replay) matches the header", full.hash === (await get(`/block/${T.probe.tx.blockNumber}`)).hash && full.transactions?.length >= 1);
     const state = await get(`/state/${token}?block=${T.tokenTransfer.tx.blockNumber - 1}`);
-    check("GET /state/:a?block= (state ย้อนหลัง) ก่อนโอน bob ยังไม่มียอด", !JSON.stringify(state).includes(bob.address), JSON.stringify(state).slice(0, 150));
-    // base fee ลงหลัง block ที่แน่น (ดูจาก header ช่วงหลัง)
+    check("GET /state/:a?block= (historical state) before the transfer bob has no balance", !JSON.stringify(state).includes(bob.address), JSON.stringify(state).slice(0, 150));
+    // base fee falls after the full block (seen in later headers)
     const latest = (await get("/genesis")).latest;
     const raised = big((await get(`/block/${T.heavyBlock + 1}`)).baseFeePerGas);
     let lowered = null;
     for (let n = T.heavyBlock + 2; n <= latest && lowered === null; n += 1) { const h = await get(`/block/${n}`); if (big(h.baseFeePerGas) < raised) lowered = n; }
-    check("base fee ลงเมื่อ block ใช้แก๊สน้อยกว่า target", lowered !== null, `ไม่มี block หลัง ${T.heavyBlock + 1} ที่ base fee ต่ำกว่า ${raised}`);
+    check("base fee falls when a block uses less gas than the target", lowered !== null, `no block after ${T.heavyBlock + 1} with a base fee below ${raised}`);
   });
 
   if (OPTIONS.sync) {
-    await section("17 sync: node ผู้อ่าน replay ทุก block แล้วได้ head hash เดียวกัน", async () => {
-      // node ผู้อ่าน = server.js ตัวที่สองในโปรเซสนี้ (ตั้งค่าเดียวกันทุกอย่างจาก env · MemoryDB · ไม่เปิด port ไม่ปิด block เอง)
+    await section("17 sync: a reader node replays every block and gets the same head hash", async () => {
+      // reader node = a second server.js in this process (same settings from env · MemoryDB · no port, doesn't close blocks itself)
       delete process.env.DATA;
       const cwd = process.cwd();
-      process.chdir(ROOT);   // server.js อ่าน genesis.json จาก cwd
+      process.chdir(ROOT);   // server.js reads genesis.json from cwd
       const reader = await import("../server.js");
       process.chdir(cwd);
       clearInterval(reader.miner);
@@ -898,15 +898,15 @@ async function main() {
       }
       const head = await get("/block/latest");
       const local = reader.vm.getBlock(reader.vm.latestBlockNumber());
-      eq("genesis hash ตรงกัน", reader.vm.genesisHash(), (await get("/genesis")).hash);
-      eq(`ซิงก์ครบ ${added} block (เลข block ล่าสุด)`, reader.vm.latestBlockNumber(), head.number);
-      eq("head hash ตรงกับผู้ผลิต", local?.hash, head.hash);
-      eq("stateRoot ตรงกับผู้ผลิต", local?.stateRoot, head.stateRoot);
-      console.log(`      (replay ${added} block ใน ${((Date.now() - started) / 1000).toFixed(1)} วินาที)`);
+      eq("genesis hash matches", reader.vm.genesisHash(), (await get("/genesis")).hash);
+      eq(`synced all ${added} blocks (latest block number)`, reader.vm.latestBlockNumber(), head.number);
+      eq("head hash matches the producer", local?.hash, head.hash);
+      eq("stateRoot matches the producer", local?.stateRoot, head.stateRoot);
+      console.log(`      (replayed ${added} blocks in ${((Date.now() - started) / 1000).toFixed(1)} seconds)`);
     });
   } else {
     current = "17 sync";
-    skip("sync ด้วย node ผู้อ่าน", "เปิดด้วย --spawn หรือ --sync (env ของ server ต้องตรงกับโปรเซสนี้)");
+    skip("sync with a reader node", "start with --spawn or --sync (the server's env must match this process)");
   }
 }
 
@@ -917,16 +917,16 @@ async function summary() {
   report.summary = { passed, failed: failed.length, skipped: skipped.length, total: report.checks.length };
   report.finishedAt = new Date().toISOString();
   console.log("\n================ scenario-full ================");
-  console.log(`  ผ่าน ${passed} · ไม่ผ่าน ${failed.length} · ข้าม ${skipped.length} (รวม ${report.checks.length} ข้อ)`);
+  console.log(`  passed ${passed} · failed ${failed.length} · skipped ${skipped.length} (total ${report.checks.length} checks)`);
   for (const c of failed) console.log(`  ❌ [${c.section}] ${c.name} — ${c.detail ?? ""}`.slice(0, 400));
-  console.log("\n  โปรแกรมตัวอย่าง (explorer ของเรา · Blockscout)");
+  console.log("\n  sample programs (our explorer · Blockscout)");
   const kind = { token: "ERC-20", nft: "ERC-721", multi: "ERC-1155", wallet: "ERC-1271 wallet", counter: "upgradeable", lab: "nested / API",
     gasLab: "gas / sandbox", multicall: "multicall", note: "clone template", factory: "factory", clone: "clone", rejectable: "rejected" };
   for (const [name, address] of Object.entries(report.programs)) {
     if (!address) continue;
     console.log(`  ${name.padEnd(11)} ${(kind[name] ?? "").padEnd(16)} ${address}  ${API}/#address/${address}  ·  ${OPTIONS.blockscout}/${name === "token" || name === "nft" || name === "multi" ? "token" : "address"}/${address}`);
   }
-  console.log("\n  tx ที่น่าดู (hash ของ VM = hash ที่ Blockscout ใช้ · explorer ของเราค้นได้ทั้ง VM hash และ digest ที่เซ็น)");
+  console.log("\n  txs worth a look (VM hash = the hash Blockscout uses · our explorer finds both the VM hash and the signed digest)");
   report.vmHashes = {};
   for (const [label, digest] of Object.entries(report.txs).filter(([label]) => /permit|safeTransfer|Batch|aggregate|nested|STATICCALL|caught|probe|cloneProgram|initUpgrade|replace|rejected|failed|legacy|EIP-1559|value 0/.test(label))) {
     const found = await get(`/tx/${digest}`).catch(() => null);
@@ -941,19 +941,19 @@ async function summary() {
     let gasUsed = 0;
     for (let n = report.firstBlock; n <= latest.number; n += 1) gasUsed += (await get(`/block/${n}`).catch(() => null))?.gasUsed ?? 0;
     report.gasUsed = gasUsed;
-    console.log(`  แก๊สรวมทุก block ของรอบนี้: ${gasUsed}`);
+    console.log(`  total gas over all blocks of this run: ${gasUsed}`);
   }
-  console.log(`\n  กระเป๋า: ${Object.entries(report.wallets).map(([n, a]) => `${n} ${short(a)}`).join(" · ")}`);
-  console.log(`  Blockscout: ตั้ง ETHEREUM_JSONRPC_HTTP_URL=${API}/evm (ดู docs/blockscout.md) · รายงาน: ${OPTIONS.out}`);
+  console.log(`\n  wallets: ${Object.entries(report.wallets).map(([n, a]) => `${n} ${short(a)}`).join(" · ")}`);
+  console.log(`  Blockscout: set ETHEREUM_JSONRPC_HTTP_URL=${API}/evm (see docs/blockscout.md) · report: ${OPTIONS.out}`);
 }
 
 // ============================================================================
 async function startServer() {
   const port = await new Promise((resolve) => { const probe = net.createServer().listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => resolve(port)); }); });
-  // env เดียวกันนี้ถูกใช้กับ node ผู้อ่านในหัวข้อ sync ด้วย (import server.js ในโปรเซสนี้) → ตั้งไว้ใน process.env
+  // this same env is also used for the reader node in the sync section (server.js is imported in this process) → set in process.env
   process.env.BLOCK_MS ??= OPTIONS.quick ? "300" : "1000";
-  process.env.GAS_PRICE ??= "1000000000";   // ขั้นตอนในสคริปต์ตั้งราคาเป็น gwei ระดับ ETH (1–20 gwei) · เชนจริงตั้งต้น 10,000 gwei
-  // ตัวเลขแก๊สในสคริปต์อิงตารางแก๊สพื้นฐาน (DEFAULT_GAS) → ใช้ genesis.json ที่ไม่มี forks (ไม่เปิด fork "bluewolf")
+  process.env.GAS_PRICE ??= "1000000000";   // the script's steps set prices in ETH-level gwei (1–20 gwei) · the real chain starts at 10,000 gwei
+  // gas numbers in this script follow the base gas table (DEFAULT_GAS) → use a genesis.json without forks (the "bluewolf" fork off)
   if (!process.env.GENESIS) {
     const base = JSON.parse(fs.readFileSync(path.join(ROOT, "genesis.json"), "utf8"));
     delete base.forks;
@@ -962,7 +962,7 @@ async function startServer() {
     process.env.GENESIS = file;
   }
   process.env.UPGRADE_DELAY_BLOCKS ??= "2";
-  process.env.MAX_BLOCK_GAS ??= "3000000";   // กับดัก OUT_OF_MEMORY ต้องใช้ ~1.05M แก๊สใน tx เดียว (ค่าเริ่มของ server = 1M)
+  process.env.MAX_BLOCK_GAS ??= "3000000";   // the OUT_OF_MEMORY trap needs ~1.05M gas in one tx (server default = 1M)
   process.env.RATE_LIMIT = "0";
   process.env.EVM_RATE_LIMIT = "0";
   const env = { ...process.env, DEV: process.env.DEV ?? "1", PORT: String(port), ...(OPTIONS.data ? { DATA: OPTIONS.data } : {}) };
@@ -970,7 +970,7 @@ async function startServer() {
   const child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env, stdio: ["ignore", "ignore", "inherit"] });
   API = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 200; i += 1) { if (await fetch(`${API}/genesis`).then(() => true, () => false)) break; await wait(100); }
-  console.log(`เปิด server ให้เอง: ${API} (BLOCK_MS ${process.env.BLOCK_MS} · UPGRADE_DELAY_BLOCKS ${process.env.UPGRADE_DELAY_BLOCKS})`);
+  console.log(`starting the server itself: ${API} (BLOCK_MS ${process.env.BLOCK_MS} · UPGRADE_DELAY_BLOCKS ${process.env.UPGRADE_DELAY_BLOCKS})`);
   return child;
 }
 
@@ -978,9 +978,9 @@ const child = OPTIONS.spawn ? await startServer() : null;
 try {
   await main();
 } catch (error) {
-  check("scenario ทำงานจนจบ", false, error.stack ?? error);
+  check("scenario runs to completion", false, error.stack ?? error);
 } finally {
-  await summary().catch((error) => console.error("สรุปผลล้ม:", error.message));
+  await summary().catch((error) => console.error("summary failed:", error.message));
   fs.writeFileSync(OPTIONS.out, JSON.stringify(report, null, 2));
   if (child) child.kill();
 }

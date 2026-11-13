@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04   # ubuntu-latest = 26.04 แล้ว · Playwright ยังไม่รองรับ chromium บน 26.04
+    runs-on: ubuntu-24.04   # ubuntu-latest is now 26.04 · Playwright doesn't support chromium on 26.04 yet
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
       - run: npm test
 
   e2e:
-    runs-on: ubuntu-24.04   # ubuntu-latest = 26.04 แล้ว · Playwright ยังไม่รองรับ chromium บน 26.04
+    runs-on: ubuntu-24.04   # ubuntu-latest is now 26.04 · Playwright doesn't support chromium on 26.04 yet
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

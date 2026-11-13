@@ -1,11 +1,11 @@
 {
   "chainId": 41234,
   "balances": {
-    "0xADDRESS_ที่ได้เหรียญตั้งต้น": "1000000000000000000000000n"
+    "0xADDRESS_RECEIVING_INITIAL_COINS": "1000000000000000000000000n"
   },
   "config": {
     "admins": ["0xADDRESS_ADMIN_1", "0xADDRESS_ADMIN_2"],
-    "producers": ["0xADDRESS_ผู้ผลิตหลัก", "0xADDRESS_ผู้ผลิตสำรอง"],
+    "producers": ["0xADDRESS_PRIMARY_PRODUCER", "0xADDRESS_BACKUP_PRODUCER"],
     "blockMs": 2000,
     "maxBlockGas": 5000000,
     "gasTarget": 2500000,

@@ -1,14 +1,14 @@
 /**
- * เจ้าของเชน (key ที่อยู่ใน admins ของ genesis) ปรับขั้นต่ำของ gas price กลางทาง — ไม่ต้อง fork / ล้างเชน / restart · มีผลตั้งแต่ block ถัดไป
+ * The chain owner (a key in genesis admins) adjusts the minimum gas price on the fly — no fork / chain wipe / restart · takes effect from the next block
  *
- *   ดูค่าปัจจุบัน:          node scripts/set-gas.js http://localhost:3000
- *   ลดขั้นต่ำ:              ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 1000gwei
- *   กลับไปใช้ค่าใน genesis:  ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --reset
+ *   show current values:          node scripts/set-gas.js http://localhost:3000
+ *   lower the minimum:              ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --min-base-fee 1000gwei
+ *   revert to the genesis value:  ADMIN_KEY=0x… node scripts/set-gas.js http://localhost:3000 --reset
  *
- *   --min-base-fee  หน่วย wei ต่อแก๊ส: 100000000 · 0.1gwei · 1gwei   (≥ 1 wei)
- *     ค่า tx ทุกแบบ = แก๊ส × base fee → ลดขั้นต่ำ = ค่า tx ถูกลงตามสัดส่วน โดยแก๊สต่อ tx / ความจุ block เท่าเดิม
- *     base fee ยังขึ้นลงตามความเต็มของ block · ลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
- *   ราคาต่อหน่วย (call / write …) ปรับที่นี่ไม่ได้ → fork (FORKS ใน src/core/virtualmachine.js)
+ *   --min-base-fee  in wei per gas: 100000000 · 0.1gwei · 1gwei   (≥ 1 wei)
+ *     every tx fee = gas × base fee → lowering the minimum makes txs proportionally cheaper; gas per tx / block capacity stay the same
+ *     the base fee still moves with block fullness · it falls toward the new minimum by at most 12.5% per block · raising it applies from the next block
+ *   per-unit prices (call / write …) can't be changed here → fork (FORKS in src/core/virtualmachine.js)
  */
 import * as sign from "../src/crypto/signature.js";
 
@@ -36,57 +36,57 @@ const gweiText = (wei) => {
 /** "0.1gwei" / "1 gwei" / "100000000" → wei (string) */
 export function parseWei(text) {
   const match = String(text).trim().toLowerCase().match(/^(\d*)(?:\.(\d+))?\s*(gwei|wei)?$/);
-  if (!match || (!match[1] && !match[2])) die(`--min-base-fee อ่านไม่ออก: ${text} (เช่น 0.1gwei หรือ 100000000)`);
+  if (!match || (!match[1] && !match[2])) die(`cannot parse --min-base-fee: ${text} (e.g. 0.1gwei or 100000000)`);
   const unit = match[3] ?? (match[2] ? "gwei" : "wei");
   if (unit === "wei") {
-    if (match[2]) die("wei ต้องเป็นจำนวนเต็ม");
+    if (match[2]) die("wei must be an integer");
     return BigInt(match[1]).toString();
   }
-  if ((match[2] ?? "").length > 9) die("gwei มีทศนิยมได้ไม่เกิน 9 หลัก");
+  if ((match[2] ?? "").length > 9) die("gwei allows at most 9 decimal places");
   return (BigInt(match[1] || "0") * 10n ** 9n + BigInt((match[2] ?? "").padEnd(9, "0"))).toString();
 }
 
 function show(info) {
   const config = info.gasConfig;
-  console.log(`เชน ${info.chainId} · block ล่าสุด ${info.latest ?? 0}`);
-  console.log(`  ขั้นต่ำของ gas price ${gweiText(info.minBaseFee ?? info.gasPrice)}${config?.minBaseFee ? `  (admin ตั้ง · genesis ${gweiText(info.genesisMinBaseFee)})` : "  (จาก genesis)"}`);
-  console.log(`  base fee ถัดไป    ${gweiText(info.baseFee)}`);
+  console.log(`chain ${info.chainId} · latest block ${info.latest ?? 0}`);
+  console.log(`  minimum gas price ${gweiText(info.minBaseFee ?? info.gasPrice)}${config?.minBaseFee ? `  (set by admin · genesis ${gweiText(info.genesisMinBaseFee)})` : "  (from genesis)"}`);
+  console.log(`  next base fee     ${gweiText(info.baseFee)}`);
   const gas = info.gas ?? {};
   const transfer = big(gas.call) + 2n * big(gas.read) + 2n * big(gas.write);
-  console.log(`  โอนเหรียญหลัก     ${transfer} แก๊ส × ${gweiText(info.baseFee)} = ${Number(transfer * big(info.baseFee)) / 1e18} เหรียญ`);
-  if (config) console.log(`  แก้ล่าสุด         block ${config.block} โดย ${config.by}`);
+  console.log(`  native transfer   ${transfer} gas × ${gweiText(info.baseFee)} = ${Number(transfer * big(info.baseFee)) / 1e18} coins`);
+  if (config) console.log(`  last changed      block ${config.block} by ${config.by}`);
 }
 
 const info = await get("/genesis");
 show(info);
 
-if (flag("--gas")) die("ราคาต่อหน่วย (call / write …) ปรับบนเชนไม่ได้ · ใช้ fork");
+if (flag("--gas")) die("per-unit prices (call / write …) can't be changed on-chain · use a fork");
 const input = {};
 if (option("--min-base-fee") !== undefined) input.minBaseFee = parseWei(option("--min-base-fee"));
 if (flag("--reset")) input.minBaseFee = null;
-if (!Object.keys(input).length) process.exit(0);   // ดูอย่างเดียว
+if (!Object.keys(input).length) process.exit(0);   // view only
 
-if (!ADMIN_KEY) die("ต้องตั้ง ADMIN_KEY (key ที่อยู่ใน admins ของ genesis)");
+if (!ADMIN_KEY) die("ADMIN_KEY must be set (a key in genesis admins)");
 const from = sign.addressOf(ADMIN_KEY);
-if (Array.isArray(info.admins) && !info.admins.includes(from.toLowerCase())) die(`${from} ไม่อยู่ใน admins ของเชนนี้`);
-console.log(`\nส่ง setGasConfig จาก ${from}: ${JSON.stringify(input)}`);
+if (Array.isArray(info.admins) && !info.admins.includes(from.toLowerCase())) die(`${from} is not in this chain's admins`);
+console.log(`\nsending setGasConfig from ${from}: ${JSON.stringify(input)}`);
 
 const { nonce } = await get(`/nonce/${from}`);
 const tx = { chainId: info.chainId, from, to: "", action: "setGasConfig", method: "", input, value: 0, gasLimit: 100_000,
   maxFeePerGas: String(big(info.baseFee) * 2n), maxPriorityFeePerGas: "0", nonce };
 const sent = await post("/sendtx", { tx, signature: sign.signTransaction(tx, ADMIN_KEY) });
-if (!sent.queued) die(`ไม่เข้าคิว: ${JSON.stringify(sent).slice(0, 300)}`);
+if (!sent.queued) die(`not queued: ${JSON.stringify(sent).slice(0, 300)}`);
 
 for (let i = 0; i < 120; i += 1) {
   await wait(500);
   const found = await get(`/tx/${sent.hash}`);
-  if (found?.status === "rejected") die(`ถูกปฏิเสธ: ${JSON.stringify(found.error ?? found.reason ?? found).slice(0, 300)}`);
+  if (found?.status === "rejected") die(`rejected: ${JSON.stringify(found.error ?? found.reason ?? found).slice(0, 300)}`);
   if (!found?.blockNumber) continue;
   const receipt = await get(`/tx/${sent.hash}/receipt`);
-  if (receipt.status !== "success") die(`ล้ม: ${JSON.stringify(receipt.error).slice(0, 300)}`);
-  console.log(`✓ อยู่ใน block ${found.blockNumber} · มีผลตั้งแต่ block ${found.blockNumber + 1}\n`);
+  if (receipt.status !== "success") die(`failed: ${JSON.stringify(receipt.error).slice(0, 300)}`);
+  console.log(`✓ included in block ${found.blockNumber} · takes effect from block ${found.blockNumber + 1}\n`);
   await wait(1500);
   show(await get("/genesis"));
   process.exit(0);
 }
-die(`รอ tx ${sent.hash} นานเกินไป`);
+die(`waited too long for tx ${sent.hash}`);

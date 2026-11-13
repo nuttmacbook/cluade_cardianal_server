@@ -4,8 +4,8 @@ import * as sign from "../src/crypto/signature.js";
 import { VerifyPool } from "../src/node/verify-pool.js";
 
 /*
- * ระยะ 2.3: ตรวจลายเซ็นของ /sendtx ใน worker thread (src/node/verify-pool.js)
- *   ผลเหมือน verifyTransaction บน thread หลักทุกไบต์ · ลายเซ็นผิด = ข้อความเดิม · thread หลักไม่ถูกบล็อกระหว่างตรวจ
+ * Phase 2.3: verify /sendtx signatures in a worker thread (src/node/verify-pool.js)
+ *   results byte-identical to verifyTransaction on the main thread · bad signature = same message · the main thread is not blocked during checks
  */
 
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -20,7 +20,7 @@ const TXS = [
 ];
 const signed = (tx, key = KEY) => ({ tx, signature: sign.signTransaction(tx, key) });
 
-test("worker ให้ผลเหมือน verifyTransaction ทุกไบต์ · ลายเซ็นผิด / ข้อมูลผิด = ข้อความ error เดิม", async () => {
+test("the worker matches verifyTransaction byte for byte · bad signature / bad data = the same error message", async () => {
   const pool = new VerifyPool({ size: 2 });
   try {
     for (const tx of TXS) {
@@ -33,13 +33,13 @@ test("worker ให้ผลเหมือน verifyTransaction ทุกไบ
     await assert.rejects(pool.verify(forged), { message: expected });
     await assert.rejects(pool.verify({ tx: TXS[0], signature: "0x1234" }));
     await assert.rejects(pool.verify({}));
-    await assert.rejects(pool.verify({ tx: { ...TXS[0], input: () => 1 }, signature: "0x" }));   // ส่งข้าม thread ไม่ได้ → reject ไม่ค้าง
+    await assert.rejects(pool.verify({ tx: { ...TXS[0], input: () => 1 }, signature: "0x" }));   // cannot cross threads → rejects instead of hanging
   } finally {
     await pool.close();
   }
 });
 
-test("size 0 = ตรวจบน thread หลัก · ปิดแล้วเรียกอีกได้ (สร้าง worker ใหม่)", async () => {
+test("size 0 = check on the main thread · can be called again after close (creates a new worker)", async () => {
   const inline = new VerifyPool({ size: 0 });
   const item = signed(TXS[1]);
   assert.deepEqual(await inline.verify(item), sign.verifyTransaction(item));
@@ -52,11 +52,11 @@ test("size 0 = ตรวจบน thread หลัก · ปิดแล้ว�
   await pool.close();
 });
 
-test("ตรวจ 200 ใบพร้อมกัน: thread หลักยังตอบได้ระหว่างนั้น · ผลครบและตรงลำดับ", async () => {
+test("verifying 200 txs at once: the main thread stays responsive · all results present, in order", async () => {
   const pool = new VerifyPool({ size: 2 });
   try {
     const items = Array.from({ length: 200 }, (_, nonce) => signed({ ...TXS[0], nonce }));
-    await pool.verify(items[0]);   // อุ่น worker
+    await pool.verify(items[0]);   // warm up the worker
     let ticks = 0;
     const timer = setInterval(() => { ticks += 1; }, 1);
     const started = performance.now();
@@ -65,8 +65,8 @@ test("ตรวจ 200 ใบพร้อมกัน: thread หลักยั
     clearInterval(timer);
     assert.deepEqual(results.map((result) => result.request.nonce), items.map((item) => item.tx.nonce));
     assert.ok(results.every((result) => result.sender === FROM));
-    // บน thread หลักงานนี้จะบล็อกต่อเนื่อง (timer ไม่ได้รันเลย) · ใน worker timer ต้องได้รันระหว่างรอ
-    assert.ok(ticks >= Math.min(5, elapsed / 20), `timer รัน ${ticks} ครั้งใน ${elapsed.toFixed(0)} ms`);
+    // on the main thread this work would block continuously (timers never run) · with a worker, timers must run while waiting
+    assert.ok(ticks >= Math.min(5, elapsed / 20), `timer ran ${ticks} times in ${elapsed.toFixed(0)} ms`);
   } finally {
     await pool.close();
   }

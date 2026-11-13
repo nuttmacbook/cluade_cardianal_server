@@ -6,8 +6,8 @@ import { createEvmRpc, EVM_ERROR } from "../src/node/evm-rpc.js";
 import { abiFunctions, decodeInput, encodeOutput } from "../src/node/evm-abi.js";
 
 /*
- * ระยะ 3.2: eth_call ของโปรแกรมที่เขียนเอง ถอด / เข้ารหัสตาม metadata.abi (src/node/evm-abi.js)
- *   ฝั่ง dApp ใช้ ethers Interface จาก cardianal_getAbi ได้ตรง ๆ · ตาม block ได้ · from = context.sender
+ * Phase 3.2: eth_call on custom programs, decoded / encoded by metadata.abi (src/node/evm-abi.js)
+ *   dApps can use an ethers Interface from cardianal_getAbi directly · works at a block · from = context.sender
  */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
@@ -59,18 +59,18 @@ const ask = (rpc, method, ...params) => {
   return reply.result;
 };
 
-test("eth_call ตาม metadata.abi: ethers เข้ารหัส / ถอดได้ทุกชนิด · ตาม block · from = context.sender", () => {
+test("eth_call via metadata.abi: ethers encodes / decodes every type · at a block · from = context.sender", () => {
   const { rpc } = chain();
   const iface = new Interface(ask(rpc, "cardianal_getAbi", P));
   const read = (fn, args = [], tag = "latest", extra = {}) =>
     iface.decodeFunctionResult(fn, ask(rpc, "eth_call", { to: P, data: iface.encodeFunctionData(fn, args), ...extra }, tag));
 
   assert.equal(read("count")[0], 12n);
-  assert.equal(read("count", [], "0x2")[0], 5n);   // state ตอนปิด block 2
+  assert.equal(read("count", [], "0x2")[0], 5n);   // state as of closing block 2
 
-  const echoed = read("echo", [BOB, 2n ** 200n, -42n, true, "สวัสดี", '{"a":[1,"2n"]}', "0xdeadbeef"]);
+  const echoed = read("echo", [BOB, 2n ** 200n, -42n, true, "สวัสดี", '{"a":[1,"2n"]}', "0xdeadbeef"]);   // Thai on purpose: tests UTF-8 string encoding
   assert.equal(echoed[0].toLowerCase(), BOB);
-  // object ผ่านโปรแกรมแล้วกลับเป็น JSON ตามแบบของเชน (จำนวนเต็มใน input เป็น BigInt → "1n")
+  // objects come back from the program as chain-style JSON (integers in input are BigInt → "1n")
   assert.deepEqual([...echoed].slice(1), [2n ** 200n, -42n, true, "สวัสดี", '{"a":["1n","2n"]}', "0xdeadbeef"]);
 
   const profile = read("profile", [21n]);
@@ -80,11 +80,11 @@ test("eth_call ตาม metadata.abi: ethers เข้ารหัส / ถอ�
 
   assert.equal(read("whoami", [], "latest", { from: BOB })[0].toLowerCase(), BOB);
   assert.equal(ask(rpc, "eth_call", { to: P, data: iface.encodeFunctionData("nothing") }, "latest"), "0x");
-  assert.equal(ask(rpc, "eth_call", { to: P, data: iface.encodeFunctionData("bump", [1n]) }, "latest"), "0x");   // จำลอง ไม่เขียนจริง
+  assert.equal(ask(rpc, "eth_call", { to: P, data: iface.encodeFunctionData("bump", [1n]) }, "latest"), "0x");   // simulated, nothing written
   assert.equal(read("count")[0], 12n);
 });
 
-test("eth_call: selector ไม่ตรง / โปรแกรม throw / calldata สั้น / ไม่มี abi → execution reverted", () => {
+test("eth_call: unknown selector / program throws / short calldata / no abi → execution reverted", () => {
   const { rpc } = chain();
   const iface = new Interface(ask(rpc, "cardianal_getAbi", P));
   const error = (data, to = P) => send(rpc, "eth_call", { to, data }, "latest").error;
@@ -96,7 +96,7 @@ test("eth_call: selector ไม่ตรง / โปรแกรม throw / call
   assert.equal(error("0x18160ddd").code, EVM_ERROR.SERVER);
 });
 
-test("evm-abi: ถอด / เข้ารหัสตรงกับ ethers (output หลายตัว object / array · int ติดลบ · string ว่าง)", () => {
+test("evm-abi: decode / encode match ethers (multiple outputs as object / array · negative int · empty string)", () => {
   const fns = abiFunctions(ABI);
   const echo = [...fns.values()].find((fn) => fn.name === "echo");
   assert.equal(echo.signature, "echo(address,uint256,int256,bool,string,string,bytes)");
