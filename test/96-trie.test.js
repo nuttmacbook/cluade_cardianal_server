@@ -4,8 +4,8 @@ import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { StateTrie, EMPTY_ROOT, verifyProof, TRIE_PREFIX, buildTrie, trieKeyOf, trieValueOf } from "../src/core/trie.js";
 
 /*
- * Merkle Patricia Trie (ระยะ 4.3 · src/core/trie.js)
- *   ตรงกับ Ethereum ทุกไบต์ (เวกเตอร์จาก geth trie_test.go) · node เก็บตาม path: แก้ทีละ block = สร้างใหม่ทั้งต้น · ไม่มี node ค้าง
+ * Merkle Patricia Trie (phase 4.3 · src/core/trie.js)
+ *   byte-identical to Ethereum (vectors from geth trie_test.go) · nodes stored by path: block-by-block updates = a full rebuild · no stale nodes
  */
 
 function memoryTrie(options) {
@@ -15,17 +15,17 @@ function memoryTrie(options) {
     for (const write of writes) {
       const path = write.dbKey.slice(TRIE_PREFIX.length);
       if (write.type === "put") store.set(path, write.value);
-      else { assert.ok(store.has(path), `ลบ node ที่ไม่มี '${path}'`); store.delete(path); }
+      else { assert.ok(store.has(path), `deleting a missing node '${path}'`); store.delete(path); }
     }
     return root;
   };
   return { store, trie, update: (entries) => apply(trie.update(entries)) };
 }
 
-const plain = (text) => bytesToHex(utf8ToBytes(text));   // key ไม่ hash (แบบเวกเตอร์ของ geth)
+const plain = (text) => bytesToHex(utf8ToBytes(text));   // unhashed keys (like geth's vectors)
 const raw = (dbKey, value) => ({ dbKey, key: plain(dbKey), bytes: value ? utf8ToBytes(value) : undefined });
 
-test("ตรงกับ Ethereum: trie ว่าง · doe/dog/dogglesworth · ใส่แล้วลบ (geth TestInsert / TestDelete)", () => {
+test("matches Ethereum: empty trie · doe/dog/dogglesworth · insert then delete (geth TestInsert / TestDelete)", () => {
   assert.equal(EMPTY_ROOT, "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421");
   const a = memoryTrie();
   assert.equal(a.trie.root, EMPTY_ROOT);
@@ -41,7 +41,7 @@ test("ตรงกับ Ethereum: trie ว่าง · doe/dog/dogglesworth · 
   assert.equal(b.trie.root, root);
 });
 
-/** สุ่มใส่ / แก้ / ลบ เป็นรอบ ๆ (เหมือน block) แล้วเทียบกับ trie ที่สร้างใหม่จากค่าสุดท้าย · node ในที่เก็บต้องเท่ากันทุกตัว */
+/** Random inserts / updates / deletes in rounds (like blocks), compared with a trie rebuilt from the final values · stored nodes must match exactly */
 function randomRounds(seed, rounds, perRound, keySpace, { keyOf, short = false } = {}) {
   let state = seed;
   const random = (n) => {   // mulberry32
@@ -63,19 +63,19 @@ function randomRounds(seed, rounds, perRound, keySpace, { keyOf, short = false }
     const root = inc.update(entries);
     const fresh = memoryTrie({ keyOf });
     const rebuilt = fresh.update([...live].map(([dbKey, value]) => ({ dbKey, value })));
-    assert.equal(root, rebuilt, `root ไม่ตรงที่รอบ ${round}`);
-    assert.deepEqual([...inc.store].sort(), [...fresh.store].sort(), `node ในที่เก็บไม่ตรงที่รอบ ${round}`);
-    // สร้างทีเดียวจาก key ที่เรียงแล้ว (rebuildTrie) = root + node เดียวกัน
+    assert.equal(root, rebuilt, `root mismatch at round ${round}`);
+    assert.deepEqual([...inc.store].sort(), [...fresh.store].sort(), `stored nodes mismatch at round ${round}`);
+    // building at once from sorted keys (rebuildTrie) = the same root + nodes
     const items = [...live].map(([dbKey, value]) => ({ key: (keyOf ?? trieKeyOf)(dbKey), bytes: trieValueOf(value) }))
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const built = new Map();
-    assert.equal(buildTrie(items, (path, enc) => built.set(path, enc)), root, `buildTrie ไม่ตรงที่รอบ ${round}`);
-    if (live.size) assert.deepEqual([...built].sort(), [...inc.store].sort(), `node ของ buildTrie ไม่ตรงที่รอบ ${round}`);
+    assert.equal(buildTrie(items, (path, enc) => built.set(path, enc)), root, `buildTrie mismatch at round ${round}`);
+    if (live.size) assert.deepEqual([...built].sort(), [...inc.store].sort(), `buildTrie nodes mismatch at round ${round}`);
   }
   return { inc, live };
 }
 
-test("สุ่ม 200 รอบ: แก้ทีละรอบ = สร้างใหม่ · ไม่มี node ค้าง · ลบหมด = trie ว่าง", () => {
+test("200 random rounds: incremental = rebuilt · no stale nodes · delete all = empty trie", () => {
   const { inc, live } = randomRounds(7, 200, 12, 60);
   assert.ok(live.size > 10);
   inc.update([...live.keys()].map((dbKey) => ({ dbKey, value: undefined })));
@@ -83,7 +83,7 @@ test("สุ่ม 200 รอบ: แก้ทีละรอบ = สร้า�
   assert.equal(inc.store.size, 0);
 });
 
-test("key ไม่ hash ที่เป็น prefix กัน (k1 / k10 / k100) + ค่าสั้น: ค่าใน branch · node ฝังในพ่อ · สุ่ม 300 รอบ", () => {
+test("unhashed keys that are prefixes of each other (k1 / k10 / k100) + short values: values in branches · nodes embedded in the parent · 300 random rounds", () => {
   const { inc, live } = randomRounds(5, 300, 6, 150, { keyOf: plain, short: true });
   for (const [dbKey, value] of live) {
     const { value: got, proof } = inc.trie.proof(dbKey);
@@ -93,7 +93,7 @@ test("key ไม่ hash ที่เป็น prefix กัน (k1 / k10 / k100
   assert.deepEqual(verifyProof(inc.trie.root, "k1000", inc.trie.proof("k1000").proof, { keyOf: plain }), { exists: false });
 });
 
-test("ใส่ค่าเดิมซ้ำ / ลบ key ที่ไม่มี = root เดิม ไม่มี write", () => {
+test("re-inserting the same value / deleting a missing key = same root, no writes", () => {
   const t = memoryTrie();
   const root = t.update([{ dbKey: "a", value: 1 }, { dbKey: "b", value: { x: [1, 2] } }, { dbKey: "c", value: "c" }]);
   const again = t.trie.update([{ dbKey: "a", value: 1 }, { dbKey: "zz", value: undefined }]);
@@ -101,7 +101,7 @@ test("ใส่ค่าเดิมซ้ำ / ลบ key ที่ไม่ม
   assert.deepEqual(again.writes, []);
 });
 
-test("หลักฐาน: มีค่า / ไม่มีค่า ตรวจกับ root ได้ · แก้ค่า / root ผิด / node ขาด = ไม่ผ่าน", () => {
+test("proofs: presence / absence verify against the root · altered value / wrong root / missing node = fail", () => {
   const { inc, live } = randomRounds(11, 30, 20, 200);
   const root = inc.trie.root;
   for (const [dbKey, value] of [...live].slice(0, 30)) {
@@ -117,20 +117,20 @@ test("หลักฐาน: มีค่า / ไม่มีค่า ตร�
   const [dbKey] = live.keys();
   const { proof } = inc.trie.proof(dbKey);
   const otherRoot = memoryTrie().update([{ dbKey, value: 1 }]);
-  assert.throws(() => verifyProof(otherRoot, dbKey, proof), /หลักฐานไม่ครบ/);
-  assert.throws(() => verifyProof(root, dbKey, proof.slice(0, -1)), /หลักฐานไม่ครบ/);
+  assert.throws(() => verifyProof(otherRoot, dbKey, proof), /incomplete proof/);
+  assert.throws(() => verifyProof(root, dbKey, proof.slice(0, -1)), /incomplete proof/);
   const forged = [...proof];
   forged[forged.length - 1] = forged.at(-1).replace(/..$/, (h) => (h === "00" ? "01" : "00"));
   assert.throws(() => verifyProof(root, dbKey, forged));
   assert.deepEqual(verifyProof(EMPTY_ROOT, dbKey, []), { exists: false });
 });
 
-test("node ในที่เก็บถูกแก้ = update / proof ตรวจเจอ (hash ไม่ตรงกับที่พ่ออ้างไว้)", () => {
+test("a tampered stored node = update / proof detects it (hash differs from what the parent references)", () => {
   const { inc } = randomRounds(3, 5, 30, 500);
   const path = [...inc.store.keys()].find((p) => p.length === 1);
   const node = Uint8Array.from(inc.store.get(path));
-  node[5] ^= 1;   // ข้างใน hash ของลูก / key (โครง RLP ยังถูก)
+  node[5] ^= 1;   // inside a child hash / key (RLP structure still valid)
   inc.store.set(path, node);
   const keys = [...Array(64).keys()].map((i) => `s:prog${i % 4}:k${i}`);
-  assert.throws(() => { for (const dbKey of keys) inc.trie.proof(dbKey); }, /ไม่ตรงกับ hash/);
+  assert.throws(() => { for (const dbKey of keys) inc.trie.proof(dbKey); }, /does not match the hash/);
 });

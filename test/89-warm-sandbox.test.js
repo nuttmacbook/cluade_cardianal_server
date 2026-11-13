@@ -5,9 +5,9 @@ import { warmStats, clearWarmCache } from "../src/core/sandbox.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 
 /*
- * ระยะ 2.4: snapshot อุ่นต่อโปรแกรม (src/core/sandbox.js warmImage) — ไม่คอมไพล์ factory ของโปรแกรมแรกของ tx ซ้ำทุก tx
- * ภาพอุ่น = ผลของ (snapshot ตั้งต้น, source) อย่างเดียว → มีใน cache หรือไม่ ผลของ tx ต้องเหมือนกันทุกไบต์
- * รวมจุดที่ OUT_OF_MEMORY (ขึ้นกับการจัดวาง heap) และแก๊สที่ใช้ถึงจุดนั้น
+ * Phase 2.4: a warm snapshot per program (src/core/sandbox.js warmImage), so the factory of a tx's first program is not recompiled on every tx
+ * a warm image = a function of (base snapshot, source) only → cached or not, tx results must be byte-identical
+ * including where OUT_OF_MEMORY happens (depends on heap layout) and the gas used up to that point
  */
 
 const T = Date.parse("2026-01-01T00:00:00Z");
@@ -42,35 +42,35 @@ const play = () => {
   return SCRIPT.map(([id, fn, input]) => call(id, fn, input));
 };
 
-test("ภาพอุ่นมี / ไม่มีใน cache / ปิด cache: ผลทุก tx เหมือนกันทุกไบต์ (รวมจุด OUT_OF_MEMORY)", () => {
+test("warm image cached / not cached / cache off: every tx result is byte-identical (including the OUT_OF_MEMORY point)", () => {
   const limit = warmStats.limit;
   try {
     clearWarmCache();
-    const cold = play();                        // ทุกโปรแกรมสร้างภาพครั้งแรก
+    const cold = play();                        // every program builds its image for the first time
     const hitsBefore = warmStats.hits;
-    const warm = play();                        // ใช้ภาพจาก cache
+    const warm = play();                        // uses images from the cache
     assert.ok(warmStats.hits > hitsBefore);
     warmStats.limit = 0;
     clearWarmCache();
-    const none = play();                        // ไม่จำภาพ: คอมไพล์ในที่ทุก tx ไม่คัดลอก memory
+    const none = play();                        // no image cache: compile in place on every tx, no memory copy
     assert.equal(warmStats.size, 0);
     warmStats.limit = 1;
     clearWarmCache();
-    const thrash = play();                      // ภาพถูกไล่ทิ้งสลับกัน: miss / hit ปนกัน
+    const thrash = play();                      // images evicted alternately: mixed misses / hits
     assert.deepEqual(warm, cold);
     assert.deepEqual(thrash, cold);
     assert.deepEqual(none, cold);
     assert.equal(cold[0].code, "OUT_OF_MEMORY");
-    assert.equal(cold[5].gasUsed, cold[0].gasUsed);   // จุดเดียวกันทุกครั้ง
-    assert.equal(cold[1].result, "undefined");        // global ของ tx ก่อนไม่ค้าง
+    assert.equal(cold[5].gasUsed, cold[0].gasUsed);   // the same point every time
+    assert.equal(cold[1].result, "undefined");        // globals from the previous tx do not persist
     assert.equal(cold[2].result, "undefined");
-    assert.equal(cold[4].status, "success");          // โปรแกรมที่สองของ tx คอมไพล์ใน tx ได้ตามปกติ
+    assert.equal(cold[4].status, "success");          // the tx's second program compiles within the tx as usual
   } finally {
     warmStats.limit = limit;
   }
 });
 
-test("cache มีเพดาน: เกิน limit ทิ้งตัวที่ใช้นานที่สุด", () => {
+test("the cache is capped: over the limit, the least recently used is dropped", () => {
   const limit = warmStats.limit;
   try {
     clearWarmCache();
@@ -80,7 +80,7 @@ test("cache มีเพดาน: เกิน limit ทิ้งตัวท�
     call("token", "balanceOf", { who: A });
     assert.equal(warmStats.size, 1);
     const misses = warmStats.misses;
-    call("hog", "leak");                        // ถูกทิ้งไปแล้ว → สร้างใหม่
+    call("hog", "leak");                        // already dropped → rebuilt
     assert.equal(warmStats.misses, misses + 1);
   } finally {
     warmStats.limit = limit;

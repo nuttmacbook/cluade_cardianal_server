@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB, num } from "./helpers.js";
 import { FUNDED, WALLET } from "./programs.js";
 
-/* vm.transfer (โอน native ระหว่าง address) และ value ที่แนบมากับ deploy */
+/* vm.transfer (native transfers between addresses) and value attached to deploy */
 
 const T = 1_700_000_000_000;
 const user = (name) => ({ sender: name, origin: name });
-const GAS = { call: 100, read: 0, write: 0, byte: 0, code: 0, price: 1 }; // code: 0 เพื่อให้ตัวเลขในเทสต์อ่านง่าย
+const GAS = { call: 100, read: 0, write: 0, byte: 0, code: 0, price: 1 }; // code: 0 keeps the test numbers readable
 let endpointCounter = 0;
 
 function setup(options = {}, balances = {}) {
@@ -24,12 +24,12 @@ const nativeWrites = (res) => Object.fromEntries(res.writes.filter((w) => w.dbKe
 //  vm.transfer
 // ---------------------------------------------------------------------------
 
-test("transfer: โอนระหว่าง wallet โดยไม่เรียกโปรแกรม", () => {
+test("transfer: transfer between wallets without calling a program", () => {
   const vm = setup({}, { alice: 1000 });
   const res = vm.transfer({ from: "alice", to: "BOB", amount: 300 });
 
   assert.equal(res.status, "success");
-  assert.deepEqual(res.result, { from: "alice", to: "bob", amount: "300n" });   // ยอด native ส่งออกเป็น "123n"
+  assert.deepEqual(res.result, { from: "alice", to: "bob", amount: "300n" });   // native amounts are exported as "123n"
   assert.deepEqual(res.calls, []);
   assert.deepEqual(res.writes, [
     { type: "put", dbKey: "alice:native:sended", value: "300n" },
@@ -40,15 +40,15 @@ test("transfer: โอนระหว่าง wallet โดยไม่เร�
   assert.equal(native(vm, "bob"), 300);
 });
 
-test("transfer: โอนเข้ากระเป๋าโปรแกรมก็ได้ (ไม่มีโค้ดทำงาน)", () => {
+test("transfer: transfer into a program's wallet works too (no code runs)", () => {
   const vm = setup({}, { alice: 1000 });
   vm.commit(vm.transfer({ from: "alice", to: "wallet", amount: 100 }).writes);
   assert.equal(native(vm, "wallet"), 100);
 });
 
-test("transfer: ยอดไม่พอ / ค่าไม่ถูกต้อง", () => {
+test("transfer: insufficient balance / invalid value", () => {
   const vm = setup({}, { alice: 100 });
-  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 200 }).error.message, "ยอด native ของ 'alice' ไม่พอ");
+  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 200 }).error.message, "insufficient native balance for 'alice'");
   for (const request of [
     { from: "", to: "bob", amount: 1 },
     { from: "alice", to: "", amount: 1 },
@@ -62,7 +62,7 @@ test("transfer: ยอดไม่พอ / ค่าไม่ถูกต้อ�
   assert.equal(native(vm, "alice"), 100);
 });
 
-test("transfer: โอน 0 ได้ (แบบ EVM) · ยังคิดค่าแก๊สและกิน nonce · โอน 0 ให้ตัวเองก็ได้", () => {
+test("transfer: transferring 0 is allowed (as in EVM) · still charges gas and consumes a nonce · 0 to self is allowed too", () => {
   const vm = setup({ requireNonce: true, chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 0 }, { alice: 10_000 });
   const res = vm.transfer({ from: "alice", to: "bob", amount: 0, nonce: 0 });
   assert.equal(res.status, "success");
@@ -70,28 +70,28 @@ test("transfer: โอน 0 ได้ (แบบ EVM) · ยังคิดค�
   assert.equal(res.gasUsed, GAS.call);
   assert.equal(res.writes.find((w) => w.dbKey === "alice:nonce").value, 1);
   vm.commit(res.writes);
-  assert.deepEqual([native(vm, "alice"), native(vm, "bob")], [10_000 - 100, 0]);   // จ่ายแค่ค่าแก๊ส
+  assert.deepEqual([native(vm, "alice"), native(vm, "bob")], [10_000 - 100, 0]);   // pays only gas
 
-  const self = vm.transfer({ from: "alice", to: "alice", amount: "0n", nonce: 1 });   // ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง
+  const self = vm.transfer({ from: "alice", to: "alice", amount: "0n", nonce: 1 });   // cancel a stuck tx = send 0 to self
   assert.equal(self.status, "success");
   vm.commit(self.writes);
   assert.equal(native(vm, "alice"), 10_000 - 200);
   assert.equal(vm.checkTransaction({ from: "alice", nonce: -1 }).expectedNonce, 2);
-  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: -1, nonce: 2 }).error.message, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ");
+  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: -1, nonce: 2 }).error.message, "amount must be a non-negative integer");
 });
 
-test("transfer: คิดค่าแก๊สและกิน nonce เหมือน tx อื่น", () => {
+test("transfer: charges gas and consumes a nonce like other txs", () => {
   const vm = setup({ requireNonce: true, chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 0 }, { alice: 10_000 });
   const res = vm.transfer({ from: "alice", to: "bob", amount: 500, nonce: 0 });
 
-  assert.equal(res.gasUsed, GAS.call); // read / write คิด 0 ในเทสต์นี้
+  assert.equal(res.gasUsed, GAS.call); // read / write cost 0 in this test
   assert.deepEqual(nativeWrites(res), { "alice:sended": 500, "bob:received": 500, "alice:consumed": 100, "miner:received": 100 });
   assert.equal(res.writes.find((w) => w.dbKey === "alice:nonce").value, 1);
   vm.commit(res.writes);
   assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 1, nonce: 0 }).error.code, "INVALID_REQUEST");
 });
 
-test("transfer: ยอดต้องพอทั้งจำนวนที่โอนและค่าแก๊ส", () => {
+test("transfer: balance must cover both the amount and the gas", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 1000 });
   assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 1000 }).error.code, "OUT_OF_GAS");
   const res = vm.transfer({ from: "alice", to: "bob", amount: 900 });
@@ -99,7 +99,7 @@ test("transfer: ยอดต้องพอทั้งจำนวนที่�
   assert.deepEqual(nativeWrites(res), { "alice:sended": 900, "bob:received": 900, "alice:consumed": 100, [`${VM.BURN_ADDRESS}:received`]: 100 });
 });
 
-test("transfer: ใช้ใน block ได้ และ tx ถัดไปเห็นยอดล่าสุด", () => {
+test("transfer: works in a block, and the next tx sees the latest balance", () => {
   const vm = setup({}, { alice: 1000 });
   const block = vm.createBlock({ timestamp: T });
   block.transfer({ from: "alice", to: "bob", amount: 600 });
@@ -107,16 +107,16 @@ test("transfer: ใช้ใน block ได้ และ tx ถัดไปเ�
   const failed = block.transfer({ from: "bob", to: "carol", amount: 500 });
 
   assert.equal(second.status, "success");
-  assert.equal(failed.error.message, "ยอด native ของ 'bob' ไม่พอ");
+  assert.equal(failed.error.message, "insufficient native balance for 'bob'");
   block.commit();
   assert.deepEqual([native(vm, "alice"), native(vm, "bob"), native(vm, "carol")], [400, 100, 500]);
 });
 
 // ---------------------------------------------------------------------------
-//  value ตอน deploy
+//  value at deploy
 // ---------------------------------------------------------------------------
 
-test("deploy พร้อม value: เงินย้ายไปที่โปรแกรมทันที และ initialization เห็น params.value", () => {
+test("deploy with value: funds move to the program immediately, and initialization sees params.value", () => {
   const vm = setup({}, { alice: 1000 });
   const deployed = vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 400 });
 
@@ -129,10 +129,10 @@ test("deploy พร้อม value: เงินย้ายไปที่โ�
   assert.equal(initialized.result.value, "400n");
   vm.commit(initialized.writes);
   assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], "400n");
-  assert.equal(native(vm, "funded"), 400); // เงินยังอยู่ที่โปรแกรม
+  assert.equal(native(vm, "funded"), 400); // funds remain with the program
 });
 
-test("deploy พร้อม value: reject คืนเงินให้ผู้ deploy", () => {
+test("deploy with value: reject refunds the deployer", () => {
   const vm = setup({}, { alice: 1000 });
   vm.commit(vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 400 }).writes);
   assert.equal(native(vm, "alice"), 600);
@@ -145,21 +145,21 @@ test("deploy พร้อม value: reject คืนเงินให้ผู�
   assert.equal(native(vm, "funded"), 0);
 });
 
-test("deploy พร้อม value: ยอดไม่พอ → ไม่มีอะไรเปลี่ยน", () => {
+test("deploy with value: insufficient balance → nothing changes", () => {
   const vm = setup({}, { alice: 100 });
   const res = vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 500 });
-  assert.equal(res.error.message, "ยอด native ของ 'alice' ไม่พอ");
+  assert.equal(res.error.message, "insufficient native balance for 'alice'");
   assert.deepEqual(res.writes, []);
 });
 
-test("deploy: ไม่แนบ value → params.value = 0 และ refund = 0", () => {
+test("deploy: no value attached → params.value = 0 and refund = 0", () => {
   const vm = setup({}, { alice: 1000 });
   vm.commit(vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice") }).writes);
   vm.commit(vm.init({ programUuid: "funded" }).writes);
   assert.equal(vm.db.readKeys(["funded:storage:seed"])[0], "0n");
 });
 
-test("deploy พร้อม value: โปรแกรมใช้เงินก้อนนั้นต่อได้หลัง init", () => {
+test("deploy with value: the program can spend those funds after init", () => {
   const vm = setup({}, { alice: 1000 });
   const block = vm.createBlock({ timestamp: T });
   block.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 400 });
@@ -172,7 +172,7 @@ test("deploy พร้อม value: โปรแกรมใช้เงิน�
   assert.equal(native(vm, "alice"), 750);
 });
 
-test("deploy พร้อม value + ค่าแก๊ส: value + ค่าแก๊ส ต้องไม่เกินยอดที่มี", () => {
+test("deploy with value + gas: value + gas must not exceed the balance", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 500 });
   assert.equal(vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 500 }).error.code, "OUT_OF_GAS");
   const res = vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 300 });
@@ -180,7 +180,7 @@ test("deploy พร้อม value + ค่าแก๊ส: value + ค่าแ
   assert.deepEqual(nativeWrites(res), { "alice:sended": 300, "funded:received": 300, "alice:consumed": 100, [`${VM.BURN_ADDRESS}:received`]: 100 });
 });
 
-test("value ทั้งสาย: deploy → init → call พร้อม value → transferNative กลับ", () => {
+test("value end to end: deploy → init → call with value → transferNative back", () => {
   const vm = setup({}, { alice: 1000 });
   const block = vm.createBlock({ timestamp: T });
   block.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 100 });
@@ -199,10 +199,10 @@ test("value ทั้งสาย: deploy → init → call พร้อม valu
 });
 
 // ---------------------------------------------------------------------------
-//  ยอดสะสม 3 ช่อง (received / sended / consumed)
+//  3 cumulative counters (received / sended / consumed)
 // ---------------------------------------------------------------------------
 
-test("native: ยอดคงเหลือ = received - sended - consumed และทุกช่องเพิ่มอย่างเดียว", () => {
+test("native: balance = received - sended - consumed, and every counter only increases", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 1000 });
   assert.deepEqual(balanceOf(vm, "alice"), { received: 1000, sended: 0, consumed: 0, balance: 1000 });
 
@@ -218,22 +218,22 @@ test("native: ยอดคงเหลือ = received - sended - consumed แ�
   for (const value of [alice.received, alice.sended, alice.consumed, bob.received, bob.sended, bob.consumed]) assert.ok(value >= 0);
 });
 
-test("native: address ที่ไม่เคยมีอะไรเลย → ทุกช่องเป็น 0", () => {
+test("native: an address that never had anything → every counter is 0", () => {
   const vm = setup();
-  assert.deepEqual(balanceOf(vm, "ไม่มีใคร"), { received: 0, sended: 0, consumed: 0, balance: 0 });
+  assert.deepEqual(balanceOf(vm, "nobody"), { received: 0, sended: 0, consumed: 0, balance: 0 });
 });
 
-test("native: โปรแกรมก็มี 3 ช่องเหมือน wallet", () => {
+test("native: programs have the same 3 counters as wallets", () => {
   const vm = setup({}, { alice: 1000 });
   vm.commit(vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 400 }).writes);
   vm.commit(vm.init({ programUuid: "funded" }).writes);
   vm.commit(vm.call({ programUuid: "funded", functionName: "payBack", input: { amount: 150 }, context: user("alice") }).writes);
 
   assert.deepEqual(balanceOf(vm, "funded"), { received: 400, sended: 150, consumed: 0, balance: 250 });
-  assert.deepEqual(balanceOf(vm, "alice"), { received: 1150, sended: 400, consumed: 0, balance: 750 }); // 1000 ตั้งต้น + 150 ที่ได้คืน
+  assert.deepEqual(balanceOf(vm, "alice"), { received: 1150, sended: 400, consumed: 0, balance: 750 }); // 1000 initial + 150 returned
 });
 
-test("native: ยอดรวมของทั้งระบบ = เงินที่ใส่เข้ามา - ค่าแก๊สที่ถูกเผา", () => {
+test("native: system-wide total = funds put in - gas burned", () => {
   const vm = setup({ chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 50 }, { alice: 10_000 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner", burnPercent: 50 });
   block.transfer({ from: "alice", to: "bob", amount: 100 });

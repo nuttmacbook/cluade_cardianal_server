@@ -1,21 +1,21 @@
 /**
- * โปรแกรมตัวอย่างของ dev/scenario-full.js — ทุกตัวประกาศ metadata.abi (explorer สร้างฟอร์ม Interact / ถอด event ได้สวย)
- * และตั้ง namespace + description ตอน initialization (ชื่ออ่านง่ายทั้งใน explorer ของเรา และ Blockscout ผ่าน /evm)
+ * Sample programs for dev/scenario-full.js — each declares metadata.abi (so the explorer builds Interact forms / decodes events nicely)
+ * and sets namespace + description at initialization (readable names in our explorer and in Blockscout via /evm)
  *
- *   COUNTER_V1 / COUNTER_V2  ตัวนับที่อัปเกรดได้ (upgrader ตั้งตอน deploy) · V2 เพิ่ม decrement + migrate(bonus, tag)
- *   LAB_PROGRAM              เรียกโปรแกรมซ้อน (runProgram) · STATICCALL ที่ห้ามเขียน (FORBIDDEN) · catch call ชั้นในที่ล้ม
- *                            · probe(): อ่าน API ของเชนทุกตัว (BlockHash … Math.random) เก็บลง storage + emit
- *   GAS_LAB_PROGRAM          burn(rounds) ใช้แก๊สมากให้ base fee ขึ้น · spin() ลูปไม่รู้จบ (OUT_OF_GAS)
- *                            · กับดัก: arm() แล้ว loopIfArmed() / memoryIfArmed() → OUT_OF_GAS / OUT_OF_MEMORY "ใน block"
- *                              (simulate ที่ /sendtx รันบน state ก่อน arm จึงผ่าน · ใน block arm รันก่อน → ล้มจริง เสียค่าแก๊ส)
- *   NOTE_TEMPLATE            ต้นแบบของ cloneProgram (โน้ตของเจ้าของ 1 คน)
- *   FACTORY_PROGRAM          create({ template, salt, label }) → cloneProgram แบบ CREATE2 (address ทำนายได้ก่อน)
- *   REJECTABLE_PROGRAM       โปรแกรมที่ทีมงานจะ reject (deploy พร้อม value → ได้เงินคืน)
+ *   COUNTER_V1 / COUNTER_V2  upgradeable counter (upgrader set at deploy) · V2 adds decrement + migrate(bonus, tag)
+ *   LAB_PROGRAM              nested program calls (runProgram) · STATICCALL that forbids writes (FORBIDDEN) · catches a failing inner call
+ *                            · probe(): reads every chain API (BlockHash … Math.random), stores them in storage + emits
+ *   GAS_LAB_PROGRAM          burn(rounds) uses lots of gas to push the base fee up · spin() infinite loop (OUT_OF_GAS)
+ *                            · traps: arm() then loopIfArmed() / memoryIfArmed() → OUT_OF_GAS / OUT_OF_MEMORY "in the block"
+ *                              (the simulation at /sendtx runs on the state before arm, so it passes · in the block arm runs first → really fails, gas is charged)
+ *   NOTE_TEMPLATE            template for cloneProgram (a note owned by 1 person)
+ *   FACTORY_PROGRAM          create({ template, salt, label }) → CREATE2-style cloneProgram (address predictable in advance)
+ *   REJECTABLE_PROGRAM       a program the team will reject (deployed with value → refunded)
  *
- * กติกาของ autoreview: ห้าม obj[key] / class / this / new (ยกเว้น Error, Date) · ตัวเลขเป็น BigInt เท่านั้น
+ * autoreview rules: no obj[key] / class / this / new (except Error, Date) · numbers are BigInt only
  */
 
-// ---------- ตัวช่วยสร้าง ABI (metadata.abi) ----------
+// ---------- ABI (metadata.abi) builder helpers ----------
 const field = ([name, type, description]) => ({ name, type, ...(description ? { description } : {}) });
 const fn = (name, inputs = [], outputs = [], extra = {}) => ({ name, inputs: inputs.map(field), outputs: outputs.map(([name, type]) => ({ name, type })), ...extra });
 const event = (name, fields, description) => ({ name, fields: fields.map(([name, type, indexed]) => ({ name, type, ...(indexed ? { indexed: true } : {}) })), ...(description ? { description } : {}) });
@@ -77,7 +77,7 @@ ${COUNTER_COMMON}
     emit("Decremented", { caller: params.context.sender, by: by, count: count }, { indexed: ["caller"] })
     return count
   }
-  // รันครั้งเดียวตอนทีมงานอนุมัติการอัปเกรด (เรียกจากภายนอกไม่ได้)
+  // runs once when the team approves the upgrade (cannot be called from outside)
   function migrate(params) {
     writeDB("migratedTag", params.input.tag || "none")
     writeDB("count", get() + (params.input.bonus || 0n))
@@ -215,9 +215,9 @@ export const GAS_LAB_PROGRAM = `function program() {
     while (true) i = i + 1n
   }
 
-  // ข้อมูลใหม่ทุกก้อนคิดแก๊สตามขนาด (1 gas ต่อ 32 ตัวอักษร) → 32 MB ≈ 1.05M gas
-  // ส่งด้วย gasLimit ≥ 1.5M → ถึงเพดานหน่วยความจำ (OUT_OF_MEMORY) ก่อนแก๊สหมด · gasLimit น้อยกว่านั้น = OUT_OF_GAS
-  // (repeat / padStart ถูก autoreview ห้าม → สร้างก้อน 1 MB ด้วย s + s แล้วคัดลอกใหม่ทุกรอบด้วย join)
+  // every new chunk of data is charged by size (1 gas per 32 characters) → 32 MB ≈ 1.05M gas
+  // sent with gasLimit ≥ 1.5M → hits the memory cap (OUT_OF_MEMORY) before gas runs out · a smaller gasLimit = OUT_OF_GAS
+  // (repeat / padStart are banned by autoreview → build a 1 MB chunk with s + s, then copy it fresh every iteration with join)
   function grow() {
     let s = "x"
     while (s.length < 1048576) s = s + s

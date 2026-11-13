@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/deploy.js [แก้ได้ · หน้าตา]
-   หน้า deploy โปรแกรมใหม่ (#deploy): ช่องโค้ด + input + upgrader แล้วเซ็นส่ง */
+/* explorerscan/ui/pages/deploy.js [editable · look]
+   Deploy new program page (#deploy): code box + input + upgrader, then sign and send */
 
 // ---------- deploy a program (signed by the wallet, then waits for review) ----------
 let deployDraft = { code: "function program() {\n  function initialization(params) {}\n  function ping(params) { return 1n; }\n  return { ping };\n}", input: "{}", value: "0", upgrader: "", gasLimit: "" };

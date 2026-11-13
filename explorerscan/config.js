@@ -1,22 +1,22 @@
-/* explorerscan/config.js [แก้ได้ · ตั้งค่า]
-   ค่าที่ต้องเปลี่ยนเมื่อเอา explorer ไปใช้กับเชนตัวเอง · สีอยู่ใน theme/colors.css · ชื่อ / โลโก้ / เมนูอยู่ใน index.html */
+/* explorerscan/config.js [editable · settings]
+   Values to change when using the explorer with your own chain · colors are in theme/colors.css · name / logo / menu are in index.html */
 const EXPLORER = {
-  /** ที่อยู่ของ node ที่ explorer อ่านข้อมูล เช่น "https://chain.example.com" · "" = เครื่องเดียวกับที่เปิดหน้านี้ (server.js เสิร์ฟให้) */
+  /** Address of the node the explorer reads from, e.g. "https://chain.example.com" · "" = the same host that serves this page (served by server.js) */
   api: "",
-  /** สีจุดหน้าชื่อโปรแกรมในเมนูข้าง (วนตามลำดับ) */
+  /** Dot colors before program names in the sidebar (cycled in order) */
   sideColors: ["#2f6df0", "#db2777", "#7c5ce6", "#0d9488", "#d97706", "#4d53d0", "#16a34a", "#e11d48"],
   /**
-   * Reown (WalletConnect) — ปุ่ม Connect wallet เปิดหน้าต่างเลือกกระเป๋าของ Reown: กระเป๋าในเบราว์เซอร์ (MetaMask / Brave / Rabby …)
-   * + สแกน QR ด้วยกระเป๋ามือถือ (MetaMask / Trust / OKX / Bitget … กว่า 500 ตัว) · มือถือที่ไม่มีกระเป๋าในเบราว์เซอร์ก็เชื่อมได้
-   * ขอ Project ID ฟรีที่ https://cloud.reown.com (สร้าง project แบบ AppKit · ใส่โดเมนของ explorer ใน Domain allowlist)
-   * "" = ไม่ใช้ Reown (เชื่อมกับกระเป๋าในเบราว์เซอร์ตรง ๆ แบบเดิม)
+   * Reown (WalletConnect) — the Connect wallet button opens Reown's wallet picker: browser wallets (MetaMask / Brave / Rabby …)
+   * + scan a QR code with a mobile wallet (MetaMask / Trust / OKX / Bitget … over 500 wallets) · works on phones without a browser wallet too
+   * Get a free Project ID at https://cloud.reown.com (create an AppKit project · add the explorer's domain to the Domain allowlist)
+   * "" = don't use Reown (connect to the browser wallet directly, as before)
    */
   reownProjectId: "",
-  /** ถามสถานะเชนทุกกี่ ms (เลข block ที่หัวเว็บ · หน้าแรกอัปเดตเอง) */
+  /** Chain status poll interval in ms (block number in the header · home page auto-refresh) */
   pollMs: 2000,
   /**
-   * โปรแกรมกลางของเชน → หน้า #system (System programs) · หา address จากชื่อ (namespace) ที่ scripts/deploy-system.js ตั้งให้
-   * เปลี่ยนเหรียญหลักเป็นสัญลักษณ์อื่น (SYMBOL=BNB) → ชื่อ wbwsc เป็น wbnb · ลบ / เพิ่มบรรทัดได้
+   * The chain's system programs → #system page (System programs) · addresses are looked up by the name (namespace) set by scripts/deploy-system.js
+   * If the native coin uses another symbol (SYMBOL=BNB) → wbwsc becomes wbnb · lines can be removed / added
    */
   systemPrograms: [
     { name: "multicall", title: "Multicall", about: "Read many values from many programs in one request (like Multicall3)" },

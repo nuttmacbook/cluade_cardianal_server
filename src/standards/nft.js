@@ -1,28 +1,28 @@
 /**
- * มาตรฐาน NFT (คล้าย ERC-721) — 1 tokenId = ของชิ้นเดียว มีเจ้าของคนเดียว
+ * NFT standard (similar to ERC-721) — 1 tokenId = a single item with a single owner
  *
- * ฟังก์ชันที่ต้องมี (อ่านอย่างเดียว)
+ * Required functions (read-only)
  *   name() / symbol()                         → string
- *   balanceOf({ owner })                      → bigint   จำนวนชิ้นที่ owner ถือ
- *   ownerOf({ tokenId })                      → address  (ไม่มีชิ้นนี้ → throw "token does not exist")
+ *   balanceOf({ owner })                      → bigint   number of items the owner holds
+ *   ownerOf({ tokenId })                      → address  (no such item → throw "token does not exist")
  *   getApproved({ tokenId })                  → address | null
  *   isApprovedForAll({ owner, operator })     → boolean
- *   tokenURI({ tokenId })                     → string   (uri ของชิ้นนั้น หรือ baseURI + tokenId)
- * ฟังก์ชันที่เปลี่ยน state
- *   approve({ to, tokenId })                  → true     (to = null / zero address = ยกเลิก) เจ้าของหรือ operator เท่านั้น
+ *   tokenURI({ tokenId })                     → string   (the item's uri, or baseURI + tokenId)
+ * State-changing functions
+ *   approve({ to, tokenId })                  → true     (to = null / zero address = revoke) owner or operator only
  *   setApprovalForAll({ operator, approved }) → true
- *   transferFrom({ from, to, tokenId })       → true     เจ้าของ / ผู้ได้ approve / operator
- *   safeTransferFrom({ from, to, tokenId, data? }) → true  ปลายทางเป็นโปรแกรม → ต้องตอบ onERC721Received เป็น "0x150b7a02"
- * ฟังก์ชันเสริมใน NFT_PROGRAM
- *   mint({ to, tokenId?, uri? }) → tokenId   เจ้าของโปรแกรม / minter เท่านั้น · ไม่ส่ง tokenId = เลขถัดไป (เริ่ม 1n)
+ *   transferFrom({ from, to, tokenId })       → true     owner / approved address / operator
+ *   safeTransferFrom({ from, to, tokenId, data? }) → true  program recipient → must return "0x150b7a02" from onERC721Received
+ * Extra functions in NFT_PROGRAM
+ *   mint({ to, tokenId?, uri? }) → tokenId   program owner / minter only · tokenId omitted = next number (starting at 1n)
  *   burn({ tokenId }) → true · setMinter({ minter, allowed }) · owner() · totalSupply() · supportsInterface({ interfaceId })
- * event ที่ต้อง emit
- *   Transfer { from, to, tokenId }            ทุกครั้งที่ย้าย · mint from = ZERO_ADDRESS · burn to = ZERO_ADDRESS
+ * Events that must be emitted
+ *   Transfer { from, to, tokenId }            on every move · mint from = ZERO_ADDRESS · burn to = ZERO_ADDRESS
  *   Approval { owner, approved, tokenId }
  *   ApprovalForAll { owner, operator, approved }
  *
- * tokenId เป็น bigint เสมอ ("5n" ใน input) · storage: owners:<id> · owned:<owner>:<id> (ให้ explorer ไล่ของที่ address ถือได้) · balances:<owner>
- * /evm แปลง Transfer → log ERC-721 (topic ที่ 4 = tokenId) — ดู src/node/evm-rpc.js
+ * tokenId is always a bigint ("5n" in input) · storage: owners:<id> · owned:<owner>:<id> (lets the explorer list an address's holdings) · balances:<owner>
+ * /evm maps Transfer → ERC-721 log (4th topic = tokenId) — see src/node/evm-rpc.js
  */
 import { ZERO_ADDRESS, checkStandard } from "./token.js";
 import { ERC721_RECEIVED } from "./wallet.js";
@@ -30,15 +30,15 @@ import { ERC721_RECEIVED } from "./wallet.js";
 export const NFT_FUNCTIONS = ["name", "symbol", "balanceOf", "ownerOf", "getApproved", "isApprovedForAll", "tokenURI",
   "approve", "setApprovalForAll", "transferFrom", "safeTransferFrom"];
 export const NFT_EVENTS = ["Transfer", "Approval", "ApprovalForAll"];
-/** interface id แบบ ERC-165: ERC-165 / ERC-721 / ERC-721 Metadata */
+/** ERC-165 interface ids: ERC-165 / ERC-721 / ERC-721 Metadata */
 export const NFT_INTERFACES = ["0x01ffc9a7", "0x80ac58cd", "0x5b5e139f"];
 
-/** โค้ดนี้ทำตามมาตรฐาน NFT ไหม → { ok, missing: [] } */
+/** does this code follow the NFT standard? → { ok, missing: [] } */
 export const checkNftStandard = (code) => checkStandard(code, NFT_FUNCTIONS, NFT_EVENTS);
 
 /**
- * โปรแกรม NFT ตามมาตรฐาน — input ตอน deploy: { name, symbol, baseURI?, owner?, namespace?, icon?, url?, contact?, description? }
- * owner (ไม่ส่ง = ผู้ deploy) (mint ได้ และตั้ง minter คนอื่นได้)
+ * Standard NFT program — input on deploy: { name, symbol, baseURI?, owner?, namespace?, icon?, url?, contact?, description? }
+ * owner (omitted = the deployer) (can mint and set other minters)
  */
 export const NFT_PROGRAM = `function program() {
   const ZERO = "${ZERO_ADDRESS}"
@@ -47,7 +47,7 @@ export const NFT_PROGRAM = `function program() {
     writeDB("name", params.input.name)
     writeDB("symbol", params.input.symbol)
     writeDB("baseURI", params.input.baseURI || "")
-    const owner = params.input.owner || params.context.sender   // โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง
+    const owner = params.input.owner || params.context.sender   // a factory cloning the template passes owner = the creator
     if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
     writeDB("owner", owner)
     writeDB("totalSupply", 0n)

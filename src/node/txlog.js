@@ -1,31 +1,31 @@
 /**
- * บันทึกสถานะของ tx ที่ "ไม่ได้เข้า block" แบบ off-chain (ไม่อยู่ใน block · ไม่เข้า hash / stateRoot · รูปแบบเชนเหมือนเดิม)
- *   - rejected: ถูกปฏิเสธหลังตรวจลายเซ็นแล้ว (nonce ผิด / โควตาเต็ม / ส่งถี่ / simulate ไม่ผ่าน / TIMEOUT ตอนปิด block / หมดอายุในคิว)
- *   - replaced: ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า
+ * Off-chain log of the status of txs that "didn't make it into a block" (not in blocks · not in hash / stateRoot · chain format unchanged)
+ *   - rejected: rejected after signature verification (bad nonce / quota full / too frequent / simulate failed / TIMEOUT while sealing a block / expired in the queue)
+ *   - replaced: replaced by a tx with the same nonce and a higher gas price
  *
  *   const log = new TxLog({ file: "data/rejected-tx.jsonl", maxEntries: 100_000, maxAgeMs: 30 * 86_400_000 });
- *   log.record({ hash, sender, nonce, action, reason, stage });   // hash เดิมซ้ำ = แทนที่ค่าเดิม (ล่าสุดชนะ)
+ *   log.record({ hash, sender, nonce, action, reason, stage });   // same hash again = replaces the old value (latest wins)
  *   log.get(hash);                                              // → entry | null
- *   log.list({ address, limit, cursor });                       // ใหม่ไปเก่า → { items, next }
+ *   log.list({ address, limit, cursor });                       // newest to oldest → { items, next }
  *
- * เก็บลงดิสก์เป็น JSON lines (1 บรรทัด = 1 entry ต่อท้ายไฟล์) · ไม่ส่ง file = อยู่ในหน่วยความจำอย่างเดียว
- * มีขอบเขตเสมอ: ไม่เกิน maxEntries รายการ และไม่เก่ากว่า maxAgeMs (เก่าสุดถูกทิ้งก่อน)
- * ไฟล์ถูกเขียนใหม่ (compact) เมื่อจำนวนบรรทัดเกิน 2 เท่าของที่เก็บอยู่ → ขนาดไฟล์ไม่โตไม่รู้จบ
+ * Stored on disk as JSON lines (1 line = 1 entry appended to the file) · no file = in memory only
+ * Always bounded: at most maxEntries entries and nothing older than maxAgeMs (oldest dropped first)
+ * The file is rewritten (compacted) when the line count exceeds twice what is kept → the file doesn't grow without bound
  */
 import fs from "node:fs";
 import path from "node:path";
 
 export const DEFAULT_TX_LOG = {
   maxEntries: 100_000,
-  maxAgeMs: 30 * 24 * 60 * 60_000,   // 30 วัน
-  maxScan: 10_000,                   // list() ไล่ไม่เกินเท่านี้ต่อครั้ง (ข้ามรายการที่ถูกแทนที่แล้ว) → ต้นทุนต่อ request มีเพดาน
-  maxText: 500,                      // ตัด string ยาว ๆ (เช่น reason) ไม่ให้ไฟล์โต
+  maxAgeMs: 30 * 24 * 60 * 60_000,   // 30 days
+  maxScan: 10_000,                   // list() scans at most this many per call (skipping replaced entries) → bounded cost per request
+  maxText: 500,                      // truncate long strings (e.g. reason) to keep the file small
 };
 export const MAX_LIST_LIMIT = 100;
 
 const lower = (value) => (typeof value === "string" ? value.toLowerCase() : value ?? null);
 
-/** ลำดับ seq จากน้อยไปมาก + ตัวชี้หัว (ทิ้งของเก่าโดยไม่ต้อง shift ทั้ง array) */
+/** seq in ascending order + a head pointer (drops old entries without shifting the whole array) */
 class SeqList {
   items = [];
   head = 0;
@@ -36,9 +36,9 @@ class SeqList {
     this.head += 1;
     if (this.head > 1024 && this.head * 2 > this.items.length) { this.items = this.items.slice(this.head); this.head = 0; }
   }
-  /** ตำแหน่งสุดท้ายที่ seq < cursor (ไม่มี = -1) · ไม่ส่ง cursor = ตัวท้ายสุด */
+  /** last position with seq < cursor (none = -1) · no cursor = the very last */
   lastBefore(cursor) {
-    let lo = this.head, hi = this.items.length;   // หาตัวแรกที่ >= cursor
+    let lo = this.head, hi = this.items.length;   // find the first one >= cursor
     if (cursor === undefined) return hi - 1;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (this.items[mid] < cursor) lo = mid + 1; else hi = mid; }
     return lo - 1;
@@ -49,11 +49,11 @@ export class TxLog {
   #file;
   #options;
   #entries = new Map();   // seq → entry
-  #byHash = new Map();    // hash → seq ล่าสุด
+  #byHash = new Map();    // hash → latest seq
   #order = new SeqList();
   #bySender = new Map();  // sender → SeqList
   #nextSeq = 1;
-  #lines = 0;             // จำนวนบรรทัดในไฟล์ (นับรวมบรรทัดที่ถูกแทนที่ / หมดอายุแล้ว)
+  #lines = 0;             // lines in the file (including replaced / expired lines)
 
   constructor({ file = null, ...options } = {}) {
     this.#file = file ? path.resolve(file) : null;
@@ -69,7 +69,7 @@ export class TxLog {
     return this.#file;
   }
 
-  /** บันทึก (hash เดิม = แทนที่ของเดิม) · คืน entry ที่เก็บ */
+  /** record (same hash = replaces the old one) · returns the stored entry */
   record(raw, { now = Date.now() } = {}) {
     if (typeof raw?.hash !== "string" || !raw.hash) return null;
     const entry = this.#clean({ ...raw, at: raw.at ?? now, seq: this.#nextSeq });
@@ -83,7 +83,7 @@ export class TxLog {
     return { ...entry };
   }
 
-  /** entry ของ hash นี้ (ไม่มี / หมดอายุแล้ว → null) */
+  /** the entry for this hash (none / expired → null) */
   get(hash, { now = Date.now() } = {}) {
     const seq = this.#byHash.get(lower(hash));
     const entry = seq === undefined ? undefined : this.#entries.get(seq);
@@ -92,8 +92,8 @@ export class TxLog {
   }
 
   /**
-   * ใหม่ไปเก่า · address = เฉพาะของผู้ส่งคนนี้ · cursor = ค่า next ของหน้าก่อน
-   * ไล่ไม่เกิน maxScan ตำแหน่งต่อครั้ง (ได้ไม่ครบ limit แต่ยังมีต่อ → next ชี้ไปตำแหน่งที่หยุด)
+   * newest to oldest · address = only this sender's · cursor = the previous page's next value
+   * scans at most maxScan positions per call (fewer than limit but more remain → next points to where it stopped)
    */
   list({ address, limit = 20, cursor, now = Date.now() } = {}) {
     const size = Math.min(Math.max(Math.floor(Number(limit)) || 20, 1), MAX_LIST_LIMIT);
@@ -121,7 +121,7 @@ export class TxLog {
     if (this.#file) this.#compact();
   }
 
-  // ---------- ภายใน ----------
+  // ---------- internals ----------
 
   #clean(entry) {
     const max = this.#options.maxText;
@@ -137,7 +137,7 @@ export class TxLog {
 
   #insert(entry) {
     const old = this.#byHash.get(entry.hash);
-    if (old !== undefined) this.#entries.delete(old);   // seq เก่ายังค้างใน SeqList → ถูกข้ามตอน list / prune
+    if (old !== undefined) this.#entries.delete(old);   // the old seq stays in SeqList → skipped during list / prune
     this.#entries.set(entry.seq, entry);
     this.#byHash.set(entry.hash, entry.seq);
     this.#order.push(entry.seq);
@@ -148,7 +148,7 @@ export class TxLog {
     this.#nextSeq = Math.max(this.#nextSeq, entry.seq + 1);
   }
 
-  /** ทิ้งจากหัว (เก่าสุด) จนกว่าจะไม่เกิน maxEntries และไม่มีอันที่เก่ากว่า maxAgeMs */
+  /** drop from the head (oldest) until within maxEntries and nothing is older than maxAgeMs */
   #prune(now) {
     const { maxEntries, maxAgeMs } = this.#options;
     while (this.#order.length) {
@@ -177,7 +177,7 @@ export class TxLog {
     const lines = text.split("\n").filter(Boolean);
     for (const line of lines) {
       let entry;
-      try { entry = JSON.parse(line); } catch { continue; }   // บรรทัดเสีย (เช่นเครื่องดับกลางการเขียน) → ข้าม
+      try { entry = JSON.parse(line); } catch { continue; }   // corrupt line (e.g. power loss mid-write) → skip
       if (typeof entry?.hash !== "string" || !Number.isSafeInteger(entry.seq) || entry.seq < this.#nextSeq) continue;
       this.#insert(this.#clean(entry));
     }
@@ -186,7 +186,7 @@ export class TxLog {
     if (this.#lines > Math.max(1000, this.#entries.size * 2)) this.#compact();
   }
 
-  /** เขียนไฟล์ใหม่จากรายการที่ยังเก็บอยู่ (เขียนไฟล์ชั่วคราวแล้ว rename → ไม่มีช่วงที่ไฟล์ว่าง) */
+  /** rewrite the file from the entries still kept (write a temp file then rename → the file is never empty) */
   #compact() {
     const live = [...this.#entries.values()].sort((a, b) => a.seq - b.seq);
     const temp = `${this.#file}.tmp`;

@@ -1,39 +1,39 @@
 /**
- * ประเมินผล tx ก่อนรับเข้าคิว — ไม่ commit อะไรเลย
+ * Estimates a tx's outcome before it enters the queue — commits nothing
  *
  *   const verified = verifyTransaction({ tx, signature });
  *   const result = simulate(vm, verified);
  *   if (!result.ok) return reply.status(400).send(result);
  *
- * หมายเหตุ: รันบน state ปัจจุบันของ DB ไม่ได้นับผลของ tx ที่ยังรออยู่ในคิว
- * จึงเป็น "การประเมิน" ไม่ใช่การรับประกัน
+ * Note: runs on the DB's current state and doesn't account for txs still waiting in the queue
+ * so it is an "estimate", not a guarantee
  */
 
 const MINER = "0x1111111111111111111111111111111111111111";
 
 /**
  * @param {import("../core/virtualmachine.js").VirtualMachine} vm
- * @param {{ method: string, request: object }} item ผลจาก verifyTransaction
+ * @param {{ method: string, request: object }} item the result of verifyTransaction
  */
 export function simulate(vm, item, { feeRecipient = MINER, timestamp = Date.now() } = {}) {
-  // จำลองเป็น block ถัดไปเสมอ: BlockNumber() / BlockHash() ในโปรแกรมได้ค่าเดียวกับตอนเข้า block จริง
-  // (เดิมใช้ number: null → BlockNumber() เป็น null ตอน simulate → โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธที่ /sendtx ทั้งที่ใน block รันได้)
-  // และอนุมัติการอัปเกรดแบบมี timelock ต้องรู้เลข block (นัดเปิดใช้ที่ block + N)
+  // always simulate as the next block: BlockNumber() / BlockHash() in programs get the same values as when actually included
+  // (previously number: null → BlockNumber() was null during simulate → programs computing with the block number were rejected at /sendtx even though they ran fine in a block)
+  // and approving a timelocked upgrade needs the block number (scheduled for activation at block + N)
   const preview = vm.createBlock({
     timestamp,
     feeRecipient,
-    number: (vm.latestBlockNumber() ?? 0) + 1,   // ไม่จองเลขจริง (recordBlocks: false · ไม่ commit)
-    checkChain: false,     // ไม่ตรวจสายของ block
+    number: (vm.latestBlockNumber() ?? 0) + 1,   // doesn't reserve a real number (recordBlocks: false · no commit)
+    checkChain: false,     // don't check the block chain linkage
     recordBlocks: false,
     recordHistory: false,
   });
 
-  // nonce ถูกตรวจที่ /sendtx แล้ว (นับใบที่รออยู่ในคิวด้วย)
-  // ตรงนี้จำลองด้วย nonce ปัจจุบันของ DB เพื่อให้ใบที่ 2, 3 ของคนเดิมรันได้
+  // the nonce was already checked at /sendtx (counting txs waiting in the queue)
+  // here we simulate with the DB's current nonce so the sender's 2nd, 3rd tx can run
   const { expectedNonce } = vm.checkTransaction(item.request);
   const request = expectedNonce === null ? item.request : { ...item.request, nonce: expectedNonce };
 
-  const result = preview[item.method](request);   // ไม่ commit → DB ไม่เปลี่ยน
+  const result = preview[item.method](request);   // no commit → DB unchanged
 
   return {
     ok: result.status === "success",
@@ -42,11 +42,11 @@ export function simulate(vm, item, { feeRecipient = MINER, timestamp = Date.now(
     result: result.result ?? null,
     error: result.error?.message ?? null,
     errorCode: result.error?.code ?? null,
-    debug: result.debug ?? null,        // ข้อความจริงจาก V8 ไว้ให้ผู้เขียนโปรแกรมแก้
+    debug: result.debug ?? null,        // the raw V8 message, for program authors to debug
     gasUsed: result.gasUsed,
     fee: result.fee,
     events: (result.events ?? []).map(({ name, data }) => ({ name, data })),
     trace: (result.calls ?? []).map((call) => `${call.depth} ${call.programUuid}.${call.functionName} ${call.status}`),
-    note: "ประเมินบน state ปัจจุบัน ผลจริงขึ้นกับลำดับใน block",
+    note: "estimated on current state; the real result depends on the order within the block",
   };
 }

@@ -1,28 +1,28 @@
 /**
- * ค่าที่ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน — ล็อกไว้ใน genesis.json (อยู่ใน genesis hash)
+ * Values every machine in the network must set identically — locked in genesis.json (part of the genesis hash)
  *
  *   { "chainId": 1, "balances": { … }, "config": { "burnPercent": 100, "admins": ["0x…"], "producers": ["0x…"], … } }
  *
  *   const { settings, errors } = resolveSettings(genesis, process.env);
  *
- * ค่าแต่ละตัว = genesis ก่อน → env → ค่าเริ่มต้น
- * genesis มีค่าแล้วแต่ env ตั้งเป็นค่าอื่น → errors (server ไม่ยอมเริ่ม) — กันเครื่องหนึ่งตั้งต่างจากเครือข่ายจน hash ไม่ตรง
- * genesis ไม่มี config (ช่วงพัฒนา) = ไม่ล็อกอะไร ใช้ env ตามเดิม
- * genesis.forks = { "<ชื่อ>": <block> } ตาราง fork (ดู FORKS ใน virtualmachine.js) → settings.forks · ไม่อยู่ใน genesis hash เพิ่มทีหลังได้
- * genesis.producerSchedule = [{ fromBlock, producers }] เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (เอา key ที่หลุดออก / ใส่ key ใหม่)
- *   → settings.producerSchedule · ไม่อยู่ใน genesis hash · producersAt(settings, n) = รายชื่อที่ใช้กับ block n
+ * Each value = genesis first → env → default
+ * genesis has a value but env sets a different one → errors (the server refuses to start) — stops one machine diverging from the network until hashes mismatch
+ * genesis without config (during development) = nothing locked, env is used as before
+ * genesis.forks = { "<name>": <block> } fork table (see FORKS in virtualmachine.js) → settings.forks · not part of the genesis hash, can be added later
+ * genesis.producerSchedule = [{ fromBlock, producers }] changes the producer list from a given block (remove a leaked key / add a new key)
+ *   → settings.producerSchedule · not part of the genesis hash · producersAt(settings, n) = the list used for block n
  */
 
 const list = (value) => (Array.isArray(value) ? value : String(value).split(","))
   .map((item) => String(item).trim().toLowerCase()).filter(Boolean);
 const integer = (value) => {
   const number = Number(value);
-  if (!Number.isSafeInteger(number)) throw new Error(`ต้องเป็นจำนวนเต็ม (ได้ ${value})`);
+  if (!Number.isSafeInteger(number)) throw new Error(`must be an integer (got ${value})`);
   return number;
 };
 const wei = (value) => BigInt(String(value).replace(/n$/, ""));
 
-/** ชื่อใน genesis → { env, parse, default } · chainId อยู่ชั้นบนของ genesis (ที่เดิม) ที่เหลืออยู่ใน genesis.config */
+/** genesis name → { env, parse, default } · chainId is at the top level of genesis (as before), the rest is in genesis.config */
 export const GENESIS_SETTINGS = {
   chainId: { env: "CHAIN_ID", parse: integer, default: 41234 },
   burnPercent: { env: "BURN_PERCENT", parse: integer, default: 100 },
@@ -30,7 +30,7 @@ export const GENESIS_SETTINGS = {
   gasTarget: { env: "GAS_TARGET", parse: integer, default: null },
   baseFeeDenominator: { env: "BASE_FEE_DENOMINATOR", parse: integer, default: 8 },
   blockMs: { env: "BLOCK_MS", parse: integer, default: 2000 },
-  maxBlockGas: { env: "MAX_BLOCK_GAS", parse: integer, default: 5_000_000 },   // gasTarget ไม่ตั้ง = ครึ่งหนึ่งของค่านี้ (มีผลกับ base fee → ทุกเครื่องต้องเหมือนกัน)
+  maxBlockGas: { env: "MAX_BLOCK_GAS", parse: integer, default: 5_000_000 },   // gasTarget unset = half of this (affects the base fee → must match on every machine)
   upgradeDelayBlocks: { env: "UPGRADE_DELAY_BLOCKS", parse: integer, default: 0 },
   memoryLimitMb: { env: "MEMORY_LIMIT_MB", parse: integer, default: 32 },
   stackLimitKb: { env: "STACK_LIMIT_KB", parse: integer, default: 256 },
@@ -41,7 +41,7 @@ export const GENESIS_SETTINGS = {
 const same = (a, b) => JSON.stringify(a, (_, v) => (typeof v === "bigint" ? `${v}` : v)) === JSON.stringify(b, (_, v) => (typeof v === "bigint" ? `${v}` : v));
 const sameSet = (a, b) => same([...a].sort(), [...b].sort());
 
-/** genesis + env → { settings, locked: ชื่อที่ genesis ล็อก, errors: ข้อความ } */
+/** genesis + env → { settings, locked: names genesis locks, errors: messages } */
 export function resolveSettings(genesis = {}, env = {}) {
   const settings = {};
   const locked = [];
@@ -59,16 +59,16 @@ export function resolveSettings(genesis = {}, env = {}) {
     if (fromGenesis !== undefined) {
       locked.push(name);
       const equal = Array.isArray(fromGenesis) ? Array.isArray(fromEnv) && sameSet(fromGenesis, fromEnv) : same(fromGenesis, fromEnv);
-      if (fromEnv !== undefined && !equal) errors.push(`${envName}=${envRaw} ไม่ตรงกับ genesis (${name} = ${Array.isArray(raw) ? raw.join(",") : raw}) — ลบ env นี้ออก หรือแก้ genesis`);
+      if (fromEnv !== undefined && !equal) errors.push(`${envName}=${envRaw} does not match genesis (${name} = ${Array.isArray(raw) ? raw.join(",") : raw}) — remove this env var or edit genesis`);
       settings[name] = fromGenesis;
     } else {
       settings[name] = fromEnv ?? fallback;
     }
   }
-  // ตาราง fork (กติกาใหม่ตั้งแต่ block ที่กำหนด · ไม่อยู่ใน genesis hash · ไม่มี env) — VM ตรวจว่ารู้จักชื่อ
+  // fork table (new rules from a given block · not part of the genesis hash · no env) — the VM checks the names are known
   const forks = genesis?.forks ?? {};
   if (typeof forks !== "object" || Array.isArray(forks) || Object.values(forks).some((block) => !Number.isSafeInteger(block) || block < 0)) {
-    errors.push("genesis forks: ต้องเป็น { \"ชื่อ fork\": เลข block (จำนวนเต็ม ≥ 0) }");
+    errors.push("genesis forks: must be { \"fork name\": block number (integer ≥ 0) }");
     settings.forks = {};
   } else {
     settings.forks = { ...forks };
@@ -79,34 +79,34 @@ export function resolveSettings(genesis = {}, env = {}) {
   return { settings, locked, errors };
 }
 
-/** genesis.producerSchedule → { entries: [{ fromBlock, producers }] เรียงตาม block, error } */
+/** genesis.producerSchedule → { entries: [{ fromBlock, producers }] sorted by block, error } */
 export function parseProducerSchedule(raw, base = null) {
   if (raw === undefined || raw === null) return { entries: [] };
-  if (!Array.isArray(raw)) return { entries: [], error: "ต้องเป็น [{ \"fromBlock\": เลข block, \"producers\": [\"0x…\"] }]" };
-  if (raw.length && !base?.length) return { entries: [], error: "ต้องมี config.producers (รายชื่อตั้งแต่ block 1) ก่อน" };
+  if (!Array.isArray(raw)) return { entries: [], error: "must be [{ \"fromBlock\": block number, \"producers\": [\"0x…\"] }]" };
+  if (raw.length && !base?.length) return { entries: [], error: "config.producers (the list from block 1) is required first" };
   const entries = [];
   for (const item of raw) {
     const fromBlock = item?.fromBlock;
     const producers = Array.isArray(item?.producers) ? list(item.producers) : [];
-    if (!Number.isSafeInteger(fromBlock) || fromBlock < 2) return { entries: [], error: `fromBlock ต้องเป็นจำนวนเต็ม ≥ 2 (ได้ ${fromBlock})` };
+    if (!Number.isSafeInteger(fromBlock) || fromBlock < 2) return { entries: [], error: `fromBlock must be an integer ≥ 2 (got ${fromBlock})` };
     if (!producers.length || producers.some((address) => !/^0x[0-9a-f]{40}$/.test(address))) {
-      return { entries: [], error: `block ${fromBlock}: producers ต้องเป็น address อย่างน้อย 1 ตัว` };
+      return { entries: [], error: `block ${fromBlock}: producers must be at least 1 address` };
     }
     entries.push({ fromBlock, producers });
   }
   entries.sort((a, b) => a.fromBlock - b.fromBlock);
-  if (entries.some((entry, index) => index > 0 && entry.fromBlock === entries[index - 1].fromBlock)) return { entries: [], error: "fromBlock ซ้ำกัน" };
+  if (entries.some((entry, index) => index > 0 && entry.fromBlock === entries[index - 1].fromBlock)) return { entries: [], error: "duplicate fromBlock" };
   return { entries };
 }
 
-/** รายชื่อผู้ผลิตที่ใช้กับ block number (config.producers แล้วแทนด้วย producerSchedule ที่ถึงแล้ว) · null = ไม่บังคับ */
+/** the producer list for a block number (config.producers, then replaced by producerSchedule entries already reached) · null = not enforced */
 export function producersAt({ producers = null, producerSchedule = [] } = {}, number) {
   let current = producers?.length ? producers : null;
   for (const entry of producerSchedule ?? []) if (number >= entry.fromBlock) current = entry.producers;
   return current;
 }
 
-/** ตัวตรวจผู้ผลิตตาม block จาก genesis ดิบ (startSync / loadSnapshot / client) → (number) => รายชื่อ | null · ไม่มีรายชื่อ = null */
+/** per-block producer checker from raw genesis (startSync / loadSnapshot / client) → (number) => list | null · no list = null */
 export function producerSetOf(genesis) {
   const producers = genesis?.config?.producers ? list(genesis.config.producers) : null;
   if (!producers?.length) return null;
@@ -116,33 +116,33 @@ export function producerSetOf(genesis) {
 }
 
 /**
- * ปัญหาที่ทำให้ server ไม่ควรเริ่ม (ว่าง = เริ่มได้)
- *   dev = true (DEV=1) → ข้ามข้อบังคับของเครือข่ายจริง (ADMINS / PRODUCER_KEY)
- *   follow = true (FOLLOW) → ไม่ต้องมี PRODUCER_KEY · nextBlock = block ที่จะผลิตถัดไป (ตรวจ key กับ producerSchedule) · null = ไม่ตรวจรายชื่อ
+ * Problems that should stop the server from starting (empty = OK to start)
+ *   dev = true (DEV=1) → skips real-network requirements (ADMINS / PRODUCER_KEY)
+ *   follow = true (FOLLOW) → PRODUCER_KEY not required · nextBlock = the next block to produce (checks the key against producerSchedule) · null = don't check the list
  */
 export function startupProblems({ settings, errors = [], dev = false, producer = null, follow = false, nextBlock = 1 }) {
   const problems = [...errors];
   if (!dev) {
-    if (!settings.admins?.length) problems.push("ต้องตั้ง ADMINS (หรือ config.admins ใน genesis) — ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้ · ช่วงพัฒนาใช้ DEV=1");
-    if (!producer && !follow) problems.push("ต้องตั้ง PRODUCER_KEY (key ที่ใช้เซ็น block) · ช่วงพัฒนาใช้ DEV=1 · เครื่องสำรองใช้ FOLLOW=<url>");
-    // address ผิดรูปแบบ (เช่นลืมแก้ค่าตัวอย่างใน genesis) = ไม่มีใครเป็น admin / ผู้ผลิตได้จริง และแก้ทีหลังต้องล้างเชน
+    if (!settings.admins?.length) problems.push("ADMINS must be set (or config.admins in genesis) — unset = anyone can approve deploy / upgrade · use DEV=1 during development");
+    if (!producer && !follow) problems.push("PRODUCER_KEY must be set (the key that signs blocks) · use DEV=1 during development · standby machines use FOLLOW=<url>");
+    // malformed address (e.g. forgot to edit the sample value in genesis) = nobody can actually be admin / producer, and fixing it later means wiping the chain
     for (const [name, list] of [["admins", settings.admins], ["producers", settings.producers]]) {
       const bad = (list ?? []).filter((address) => !/^0x[0-9a-f]{40}$/.test(address));
-      if (bad.length) problems.push(`config.${name} มีค่าที่ไม่ใช่ address: ${bad.join(", ")}`);
+      if (bad.length) problems.push(`config.${name} has values that are not addresses: ${bad.join(", ")}`);
     }
   }
-  const allowed = nextBlock === null ? null : producersAt(settings, nextBlock);   // null = ตรวจทีหลัง (FAILOVER_FROM: หลังซิงก์)
+  const allowed = nextBlock === null ? null : producersAt(settings, nextBlock);   // null = check later (FAILOVER_FROM: after syncing)
   if (producer && !follow && allowed && !allowed.includes(producer.toLowerCase())) {
-    problems.push(`PRODUCER_KEY เป็นของ ${producer} ซึ่งไม่อยู่ในรายชื่อผู้ผลิตของ block ${nextBlock} (${allowed.join(", ")})`);
+    problems.push(`PRODUCER_KEY belongs to ${producer}, who is not in the producer list for block ${nextBlock} (${allowed.join(", ")})`);
   }
   return problems;
 }
 
-/** ข้อควรระวังที่ไม่หยุด server (พิมพ์เตือนตอนเริ่ม) */
+/** warnings that don't stop the server (printed at startup) */
 export function startupWarnings({ settings, dev = false }) {
   const warnings = [];
   if (!dev && settings.producers?.length === 1) {
-    warnings.push("config.producers มี key เดียว — key หาย = ผลิต block ต่อไม่ได้ (ต้องล้างเชน) · ใส่ key สำรองที่เก็บ offline ไว้ในรายชื่อด้วย");
+    warnings.push("config.producers has a single key — losing it = no more blocks can be produced (the chain must be wiped) · add an offline backup key to the list");
   }
   return warnings;
 }

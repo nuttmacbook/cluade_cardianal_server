@@ -1,14 +1,14 @@
 /**
- * deploy ชุดโปรแกรมกลาง (src/standards/system.js) ตามลำดับ nonce ของกระเป๋า deployer → address รู้ล่วงหน้า
+ * Deploy the system program set (src/standards/system.js) in the deployer wallet's nonce order → addresses known in advance
  *
- *   ดู address ก่อน (ไม่ส่ง tx):   DEPLOYER_KEY=0x… node scripts/deploy-system.js http://localhost:3000 --plan
- *                                  (หรือ --deployer 0x… --chain-id 41234 โดยไม่ต้องมี key / ไม่ต้องต่อ node)
- *   deploy จริง:                  DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js http://localhost:3000
- *     DEPLOYER_KEY  กระเป๋าใหม่ที่ไม่เคยส่ง tx (nonce 0) ต้องมีเงินพอจ่ายแก๊ส · ใช้ deploy ชุดนี้อย่างเดียว
- *     ADMIN_KEY     (ไม่บังคับ) key ที่อยู่ใน ADMINS → อนุมัติให้ทันที · ไม่ส่ง = ค้างรอ admin อนุมัติเอง (หน้า Programs ของ explorer)
- *     SYMBOL        สัญลักษณ์เหรียญหลัก (ไม่ส่ง = nativeCurrency.symbol จาก GET /evm → EVM_SYMBOL ของ server) → WBWSC / WBNB …
- *     --out <ไฟล์>  ที่เขียนผล (ค่าเริ่ม deploy/system-programs.json)
- *   รันซ้ำได้: ข้ามตัวที่ deploy / อนุมัติแล้ว · ถ้า nonce ของ deployer ถูกใช้กับอย่างอื่นไป address จะไม่ตรงแผน → หยุด
+ *   preview addresses (no txs):   DEPLOYER_KEY=0x… node scripts/deploy-system.js http://localhost:3000 --plan
+ *                                  (or --deployer 0x… --chain-id 41234, no key / no node connection needed)
+ *   real deploy:                  DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js http://localhost:3000
+ *     DEPLOYER_KEY  a fresh wallet that has never sent a tx (nonce 0) with enough funds for gas · used only to deploy this set
+ *     ADMIN_KEY     (optional) a key listed in ADMINS → approves immediately · omitted = waits for an admin to approve (explorer's Programs page)
+ *     SYMBOL        native coin symbol (omitted = nativeCurrency.symbol from GET /evm → the server's EVM_SYMBOL) → WBWSC / WBNB …
+ *     --out <file>  where to write the result (default deploy/system-programs.json)
+ *   re-runnable: skips programs already deployed / approved · if a deployer nonce was used for something else the addresses won't match the plan → stops
  */
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -34,20 +34,20 @@ const die = (message) => {
   process.exit(1);
 };
 
-const deployer = (option("--deployer") ?? (DEPLOYER_KEY ? sign.addressOf(DEPLOYER_KEY) : die("ต้องตั้ง DEPLOYER_KEY (หรือ --deployer 0x… กับ --plan)"))).toLowerCase();
+const deployer = (option("--deployer") ?? (DEPLOYER_KEY ? sign.addressOf(DEPLOYER_KEY) : die("DEPLOYER_KEY must be set (or --deployer 0x… with --plan)"))).toLowerCase();
 const chainId = offline ? Number(option("--chain-id")) : (await get("/genesis")).chainId;
 const symbol = process.env.SYMBOL ?? (offline ? "BWSC" : (await get("/evm").catch(() => null))?.nativeCurrency?.symbol ?? "BWSC");
 const predictor = new VirtualMachine(new MemoryDB(), { chainId });
 const plan = systemPrograms({ addressAt: (nonce) => predictor.programAddressFor(deployer, nonce), symbol });
 
-console.log(`เชน ${chainId} · deployer ${deployer} · เหรียญหลัก ${symbol}\n`);
+console.log(`chain ${chainId} · deployer ${deployer} · native coin ${symbol}\n`);
 for (const item of plan) console.log(`  nonce ${item.nonce}  ${item.address}  ${item.namespace.padEnd(20)} ${item.title}`);
 console.log();
 if (flag("--plan")) process.exit(0);
-if (!DEPLOYER_KEY) die("ต้องตั้ง DEPLOYER_KEY เพื่อ deploy จริง");
+if (!DEPLOYER_KEY) die("DEPLOYER_KEY must be set for a real deploy");
 
 const { baseFee } = await get("/genesis");
-// 2 เท่าของ base fee ถัดไป (เผื่อขึ้นระหว่างรอ) · ไม่มีค่า = 1 gwei · ไม่ล็อกขั้นต่ำ 1 gwei (admin ลด base fee ด้วย setGasConfig ได้)
+// 2× the next base fee (headroom in case it rises while waiting) · no value = 1 gwei · no 1 gwei floor (admins can lower the base fee via setGasConfig)
 const gasPrice = String(baseFee === undefined || baseFee === null ? 10n ** 9n : BigInt(String(baseFee).replace(/n$/, "")) * 2n);
 
 async function send(key, fields) {
@@ -56,12 +56,12 @@ async function send(key, fields) {
   const tx = { chainId, from, to: "", method: "", input: {}, value: 0, gasLimit: 1_500_000, gasPrice, nonce, ...fields };
   const body = { tx, signature: sign.signTransaction(tx, key) };
   let result = await post("/sendtx", body);
-  // mempool จำกัดจำนวน tx ต่อผู้ส่งต่อช่วงเวลา (ส่งถี่เกินกำหนด) → รอแล้วส่งใบเดิมซ้ำ
-  for (let i = 0; i < 30 && !result.queued && /ถี่/.test(result.reason ?? ""); i += 1) {
+  // the mempool limits txs per sender per window ("sending too frequently") → wait and resend the same tx
+  for (let i = 0; i < 30 && !result.queued && /too frequently/.test(result.reason ?? ""); i += 1) {
     await wait(1000);
     result = await post("/sendtx", body);
   }
-  if (!result.queued) die(`${tx.action} ไม่เข้าคิว: ${JSON.stringify(result).slice(0, 300)}`);
+  if (!result.queued) die(`${tx.action} not queued: ${JSON.stringify(result).slice(0, 300)}`);
   return { hash: result.hash, nonce };
 }
 
@@ -69,18 +69,18 @@ async function confirm(hash, timeoutMs = 60_000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     const found = await get(`/tx/${hash}`);
-    if (found?.status === "rejected") die(`tx ${hash} ถูกปฏิเสธ: ${JSON.stringify(found.error ?? found.reason ?? found).slice(0, 300)}`);
+    if (found?.status === "rejected") die(`tx ${hash} rejected: ${JSON.stringify(found.error ?? found.reason ?? found).slice(0, 300)}`);
     if (found?.blockNumber) {
       const receipt = await get(`/tx/${hash}/receipt`);
-      if (receipt.status !== "success") die(`tx ${hash} ล้ม: ${JSON.stringify(receipt.error).slice(0, 300)}`);
+      if (receipt.status !== "success") die(`tx ${hash} failed: ${JSON.stringify(receipt.error).slice(0, 300)}`);
       return receipt;
     }
     await wait(500);
   }
-  return die(`รอ tx ${hash} นานเกินไป (server ปิด block อยู่หรือเปล่า)`);
+  return die(`waited too long for tx ${hash} (is the server sealing blocks?)`);
 }
 
-/** approved = มีโค้ดแล้ว · pending = รอ admin · missing = ยังไม่ deploy */
+/** approved = has code · pending = waiting for an admin · missing = not deployed yet */
 async function stateOf(address) {
   const program = await fetch(`${API}/program/${address}`);
   if (program.ok) return "approved";
@@ -88,10 +88,10 @@ async function stateOf(address) {
   return pending.items?.some((item) => item.address === address) ? "pending" : "missing";
 }
 
-// ชื่อต้องว่าง (หรือเป็นของ address ตามแผนอยู่แล้ว) ไม่งั้น initialization ล้ม
+// the name must be free (or already belong to the planned address), otherwise initialization fails
 for (const item of plan) {
   const { address } = await get(`/name/${item.namespace}`);
-  if (address && address !== item.address) die(`ชื่อ '${item.namespace}' ถูก ${address} ใช้ไปแล้ว`);
+  if (address && address !== item.address) die(`name '${item.namespace}' is already used by ${address}`);
 }
 
 const { nonce: firstNonce } = await get(`/nonce/${deployer}`);
@@ -99,20 +99,20 @@ const states = {};
 for (const item of plan) {
   states[item.key] = await stateOf(item.address);
   if (item.nonce < firstNonce && states[item.key] === "missing") {
-    die(`nonce ${item.nonce} ของ deployer ถูกใช้กับอย่างอื่นไปแล้ว (ไม่มีโปรแกรมที่ ${item.address}) · ใช้กระเป๋า deployer ใหม่ที่ไม่เคยส่ง tx`);
+    die(`deployer nonce ${item.nonce} was already used for something else (no program at ${item.address}) · use a fresh deployer wallet that has never sent a tx`);
   }
 }
 const native = (await get(`/address/${deployer}`)).native?.balance;
 if (firstNonce < plan.length && (native === undefined || BigInt(String(native).replace(/n$/, "")) === 0n)) {
-  die(`deployer ${deployer} ไม่มีเงินจ่ายแก๊ส · โอนเหรียญหลักให้ก่อน (ครบ 14 ตัวใช้ราว 120 ${symbol} ที่ base fee 10,000 gwei · สคริปต์ตั้งราคา 2 เท่า · แนะนำโอน ~130 ${symbol})`);
+  die(`deployer ${deployer} has no funds for gas · send it native coin first (all 14 take about 120 ${symbol} at a 10,000 gwei base fee · the script bids 2× · ~130 ${symbol} recommended)`);
 }
 
 for (const item of plan.filter((p) => p.nonce >= firstNonce)) {
   const { hash, nonce } = await send(DEPLOYER_KEY, { action: "deploy", code: item.code, input: item.input });
-  if (nonce !== item.nonce) die(`nonce ไม่ตรงแผน (ได้ ${nonce} ต้องเป็น ${item.nonce})`);
+  if (nonce !== item.nonce) die(`nonce does not match the plan (got ${nonce}, expected ${item.nonce})`);
   const receipt = await confirm(hash);
   const address = receipt.result?.programUuid ?? receipt.result;
-  if (address !== item.address) die(`${item.key} ได้ address ${address} ไม่ตรงแผน ${item.address}`);
+  if (address !== item.address) die(`${item.key} got address ${address}, not the planned ${item.address}`);
   states[item.key] = "pending";
   console.log(`deploy  ${item.namespace.padEnd(20)} ${address}`);
 }
@@ -121,7 +121,7 @@ if (ADMIN_KEY) {
   for (const item of plan.filter((p) => states[p.key] === "pending")) {
     await confirm((await send(ADMIN_KEY, { action: "init", to: item.address })).hash);
     states[item.key] = "approved";
-    console.log(`อนุมัติ  ${item.namespace.padEnd(20)} ${item.address}`);
+    console.log(`approve  ${item.namespace.padEnd(20)} ${item.address}`);
   }
 }
 
@@ -132,6 +132,6 @@ const result = {
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
 const waiting = plan.filter((item) => states[item.key] !== "approved");
-console.log(`\nเขียน ${OUT} แล้ว`);
-if (waiting.length) console.log(`รอ admin อนุมัติ ${waiting.length} ตัว: ${waiting.map((item) => item.namespace).join(", ")} (รันซ้ำพร้อม ADMIN_KEY หรืออนุมัติในหน้า Programs)`);
-else console.log("ครบทุกตัว · explorer หน้า System programs แสดงชื่อให้เอง");
+console.log(`\nwrote ${OUT}`);
+if (waiting.length) console.log(`${waiting.length} waiting for admin approval: ${waiting.map((item) => item.namespace).join(", ")} (re-run with ADMIN_KEY or approve on the Programs page)`);
+else console.log("all done · the explorer's System programs page shows the names automatically");

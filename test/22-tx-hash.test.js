@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
-/* hash ของ tx: คำนวณจาก request ของ user เท่านั้น จึงรู้ได้ตั้งแต่ก่อนส่ง และ tx ที่ล้มก็มี hash */
+/* tx hash: computed only from the user's request, so it is known before sending, and failed txs have a hash too */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -24,30 +24,30 @@ const callTx = (nonce = 0, amount = 30) => ({
 });
 
 // ---------------------------------------------------------------------------
-//  คุณสมบัติพื้นฐาน
+//  basic properties
 // ---------------------------------------------------------------------------
 
-test("hash: รูปแบบ 0x + 64 hex และได้ค่าเดิมทุกครั้ง", () => {
+test("hash: format 0x + 64 hex and the same value every time", () => {
   const vm = setup();
   const hash = vm.hashTransaction(callTx());
   assert.match(hash, /^0x[0-9a-f]{64}$/);
   assert.equal(vm.hashTransaction(callTx()), hash);
 });
 
-test("hash: ไม่ขึ้นกับลำดับ field ที่ใส่มา", () => {
+test("hash: independent of field order", () => {
   const vm = setup();
   const a = { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 30 }, context: { sender: "alice", origin: "alice" }, nonce: 0 };
   const b = { nonce: 0, context: { origin: "alice", sender: "alice" }, input: { amount: 30, to: "bob" }, functionName: "transfer", programUuid: "token" };
   assert.equal(vm.hashTransaction(a), vm.hashTransaction(b));
 });
 
-test("hash: address ตัวพิมพ์ต่างกันได้ hash เดียวกัน", () => {
+test("hash: addresses in different case give the same hash", () => {
   const vm = setup();
   const upper = { ...callTx(), programUuid: "TOKEN", context: user("ALICE") };
   assert.equal(vm.hashTransaction(upper), vm.hashTransaction(callTx()));
 });
 
-test("hash: เปลี่ยนอะไรก็ได้ hash ใหม่", () => {
+test("hash: any change gives a new hash", () => {
   const vm = setup();
   const base = vm.hashTransaction(callTx());
   const variants = [
@@ -63,18 +63,18 @@ test("hash: เปลี่ยนอะไรก็ได้ hash ใหม่",
   assert.equal(new Set([base, ...hashes]).size, variants.length + 1);
 });
 
-test("hash: chainId ต่างกัน → hash ต่างกัน (กัน replay ข้ามระบบ)", () => {
+test("hash: different chainId → different hash (prevents cross-system replay)", () => {
   const one = setup({ chainId: 1 });
   const two = setup({ chainId: 2 });
   assert.notEqual(one.hashTransaction(callTx()), two.hashTransaction(callTx()));
 });
 
-test("hash: tx เหมือนกันเป๊ะต้องต่างกันที่ nonce เท่านั้น", () => {
+test("hash: otherwise identical txs differ only by nonce", () => {
   const vm = setup();
   assert.notEqual(vm.hashTransaction(callTx(0)), vm.hashTransaction(callTx(1)));
 });
 
-test("hash: เปลี่ยนไปใช้ hash ตัวอื่นได้ (เช่น keccak256)", () => {
+test("hash: another hash function can be used (e.g. keccak256)", () => {
   const fake = (text) => `0x${createHash("sha512").update(text).digest("hex").slice(0, 64)}`;
   const vm = setup({ hashFunction: fake });
   assert.equal(vm.hashTransaction(callTx()), fake(VM.canonicalJson(vm.transactionPayload(callTx()))));
@@ -82,10 +82,10 @@ test("hash: เปลี่ยนไปใช้ hash ตัวอื่นไ�
 });
 
 // ---------------------------------------------------------------------------
-//  แต่ละ action
+//  per action
 // ---------------------------------------------------------------------------
 
-test("hash: transfer / deploy / call ใช้ payload คนละชุด", () => {
+test("hash: transfer / deploy / call use different payloads", () => {
   const vm = setup();
   const transfer = { from: "alice", to: "bob", amount: 100, nonce: 0 };
   assert.deepEqual(vm.transactionPayload(transfer), {
@@ -99,17 +99,17 @@ test("hash: transfer / deploy / call ใช้ payload คนละชุด", (
   const deploy = { programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 1 }, nonce: 3, value: 50 };
   const payload = vm.transactionPayload(deploy);
   assert.equal(payload.action, "deploy");
-  assert.equal(payload.code, VM.toOneLine(COUNTER)); // โค้ดถูกทำเป็นบรรทัดเดียวก่อน hash
+  assert.equal(payload.code, VM.toOneLine(COUNTER)); // code is made one-line before hashing
   assert.deepEqual([payload.from, payload.to, payload.value, payload.nonce], ["alice", "counter", 50, 3]);
 });
 
-test("hash: deploy ที่โค้ดต่างกันแค่การขึ้นบรรทัด (CRLF) ได้ hash เดียวกัน", () => {
+test("hash: deploys whose code differs only in line endings (CRLF) get the same hash", () => {
   const vm = setup();
   const make = (code) => ({ programUuid: "counter", code, context: user("alice"), nonce: 0 });
   assert.equal(vm.hashTransaction(make(COUNTER)), vm.hashTransaction(make(COUNTER.replace(/\n/g, "\r\n"))));
 });
 
-test("hash: init / reject ใช้ blockNumber + index เพราะไม่มี nonce", () => {
+test("hash: init / reject use blockNumber + index because they have no nonce", () => {
   const vm = setup();
   const request = { programUuid: "counter" };
   const first = vm.hashTransaction(request, { action: "init", blockNumber: 10, index: 0 });
@@ -118,7 +118,7 @@ test("hash: init / reject ใช้ blockNumber + index เพราะไม่
   assert.notEqual(first, vm.hashTransaction(request, { action: "reject", blockNumber: 10, index: 0 }));
 });
 
-test("hash: เดา action เองได้จากหน้าตาของ request", () => {
+test("hash: infers the action from the request's shape", () => {
   const vm = setup();
   assert.equal(vm.transactionPayload({ from: "a", to: "b", amount: 1 }).action, "transfer");
   assert.equal(vm.transactionPayload({ programUuid: "p", code: "x", context: user("a") }).action, "deploy");
@@ -126,10 +126,10 @@ test("hash: เดา action เองได้จากหน้าตาขอ
 });
 
 // ---------------------------------------------------------------------------
-//  hash ใน receipt
+//  hash in the receipt
 // ---------------------------------------------------------------------------
 
-test("receipt: hash ตรงกับที่คำนวณก่อนส่ง ทั้ง tx ที่สำเร็จและที่ล้ม", () => {
+test("receipt: hash matches the one computed before sending, for both successful and failed txs", () => {
   const vm = setup();
   const good = callTx(0);
   const bad = callTx(1, 99999);
@@ -144,7 +144,7 @@ test("receipt: hash ตรงกับที่คำนวณก่อนส่
   assert.deepEqual(receipt.transactions.map((tx) => tx.status), ["success", "throw"]);
 });
 
-test("receipt: tx ที่ถูกปฏิเสธเพราะ nonce ผิด ก็ยังมี hash", () => {
+test("receipt: a tx rejected for a wrong nonce still has a hash", () => {
   const vm = setup();
   const request = callTx(9);
   const result = vm.call(request, { timestamp: T });
@@ -152,11 +152,11 @@ test("receipt: tx ที่ถูกปฏิเสธเพราะ nonce ผ�
   assert.equal(vm.buildReceipt(request, result).hash, vm.hashTransaction(request));
 });
 
-test("receipt: hash ของทุก tx ใน block ไม่ซ้ำกัน", () => {
+test("receipt: every tx hash in a block is unique", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.call(callTx(0, 1));
-  block.call(callTx(1, 1));             // เหมือนกันทุกอย่างยกเว้น nonce
+  block.call(callTx(1, 1));             // identical except for nonce
   block.transfer({ from: "alice", to: "carol", amount: 1, nonce: 2 });
   block.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), nonce: 3 });
   block.init({ programUuid: "counter" });
@@ -167,7 +167,7 @@ test("receipt: hash ของทุก tx ใน block ไม่ซ้ำกั�
   assert.ok(hashes.every((hash) => /^0x[0-9a-f]{64}$/.test(hash)));
 });
 
-test("receipt: hash เดียวกันเมื่อรัน block ซ้ำด้วย request ชุดเดิม", () => {
+test("receipt: same hash when re-running the block with the same requests", () => {
   const first = setup();
   const second = setup();
   const requests = [callTx(0, 5), callTx(1, 6)];
@@ -179,15 +179,15 @@ test("receipt: hash เดียวกันเมื่อรัน block ซ�
   assert.deepEqual(run(first), run(second));
 });
 
-test("canonicalJson: เรียง key และข้าม undefined", () => {
+test("canonicalJson: sorts keys and skips undefined", () => {
   assert.equal(VM.canonicalJson({ b: 1, a: 2 }), '{"a":2,"b":1}');
   assert.equal(VM.canonicalJson({ a: undefined, b: 1 }), '{"b":1}');
   assert.equal(VM.canonicalJson([1, "a", null, { z: 1, y: 2 }]), '[1,"a",null,{"y":2,"z":1}]');
   assert.equal(VM.canonicalJson(undefined), "null");
-  assert.equal(VM.canonicalJson("ไทย 🎉"), JSON.stringify("ไทย 🎉"));
+  assert.equal(VM.canonicalJson("中文 🎉"), JSON.stringify("中文 🎉"));   // non-ASCII is intentional: tests Unicode handling
 });
 
-test("hash: address ที่อยู่ใน input ก็ถูก normalize ก่อน hash", () => {
+test("hash: addresses inside input are normalized before hashing too", () => {
   const vm = setup();
   const lower = { ...callTx(), input: { to: "0xfabb0ac9", amount: 30 } };
   const upper = { ...callTx(), input: { to: "0xFABB0Ac9", amount: 30 } };

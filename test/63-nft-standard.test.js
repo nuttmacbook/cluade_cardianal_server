@@ -7,7 +7,7 @@ import { MULTICALL_PROGRAM } from "../src/standards/multicall.js";
 import { TOKEN_PROGRAM, ZERO_ADDRESS, checkTokenStandard } from "../src/standards/token.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* มาตรฐาน NFT (คล้าย ERC-721): mint / transferFrom / safeTransferFrom / approve / setApprovalForAll / tokenURI / burn + event */
+/* NFT standard (like ERC-721): mint / transferFrom / safeTransferFrom / approve / setApprovalForAll / tokenURI / burn + event */
 
 const N = "0x00000000000000000000000000000000000000f2";
 const W = "0x00000000000000000000000000000000000000e1";
@@ -43,7 +43,7 @@ function chain() {
 const ok = (res) => { assert.equal(res.status, "success", JSON.stringify(res.error)); return res; };
 const fails = (res, message) => { assert.equal(res.status, "throw"); assert.match(res.error.message, message); return res; };
 
-test("NFT_PROGRAM ผ่านมาตรฐาน NFT และ autoreview · ไม่ถูกนับเป็น token (ERC-20) · โค้ดที่ขาดฟังก์ชัน / event บอกว่าขาดอะไร", () => {
+test("NFT_PROGRAM meets the NFT standard and autoreview · not counted as a token (ERC-20) · code missing functions / events reports what is missing", () => {
   assert.deepEqual(checkNftStandard(NFT_PROGRAM), { ok: true, missing: [] });
   assert.deepEqual(reviewProgram(NFT_PROGRAM).issues, []);
   assert.equal(checkTokenStandard(NFT_PROGRAM).ok, false);
@@ -53,7 +53,7 @@ test("NFT_PROGRAM ผ่านมาตรฐาน NFT และ autoreview · 
   assert.deepEqual(checkNftStandard(NFT_PROGRAM.replace("tokenURI, supportsInterface", "supportsInterface")).missing, ["tokenURI"]);
 });
 
-test("mint: เจ้าของ / minter เท่านั้น · tokenId ถัดไปอัตโนมัติ (1n, 2n …) หรือระบุเอง · ซ้ำไม่ได้ · emit Transfer จาก zero address", () => {
+test("mint: owner / minter only · next tokenId is automatic (1n, 2n …) or explicit · no duplicates · emits Transfer from the zero address", () => {
   const { call, read } = chain();
   assert.equal(read("name").result, "Siam Art");
   assert.equal(read("symbol").result, "SART");
@@ -61,7 +61,7 @@ test("mint: เจ้าของ / minter เท่านั้น · tokenId �
   assert.equal(first.result, "1n");
   assert.deepEqual(first.events.map((e) => [e.name, e.data]), [["Transfer", { from: ZERO_ADDRESS, to: BOB, tokenId: "1n" }]]);
   assert.equal(ok(call(OWNER, "mint", { to: BOB, tokenId: "10n", uri: "ipfs://special" })).result, "10n");
-  assert.equal(ok(call(OWNER, "mint", { to: CAROL })).result, "11n");   // ข้ามเลขที่ระบุเองไปแล้ว
+  assert.equal(ok(call(OWNER, "mint", { to: CAROL })).result, "11n");   // skips the explicitly used id
   fails(call(OWNER, "mint", { to: CAROL, tokenId: "10n" }), /token already minted/);
   fails(call(BOB, "mint", { to: BOB }), /only owner or minter/);
   ok(call(OWNER, "setMinter", { minter: MINTER, allowed: true }));
@@ -77,7 +77,7 @@ test("mint: เจ้าของ / minter เท่านั้น · tokenId �
   assert.match(read("ownerOf", { tokenId: "99n" }).error.message, /token does not exist/);
 });
 
-test("tokenURI: uri ของชิ้นนั้นก่อน ไม่มีแล้วใช้ baseURI + tokenId · supportsInterface ตาม ERC-165", () => {
+test("tokenURI: the token's own uri first, otherwise baseURI + tokenId · supportsInterface per ERC-165", () => {
   const { call, read } = chain();
   ok(call(OWNER, "mint", { to: BOB }));
   ok(call(OWNER, "mint", { to: BOB, uri: "https://x.test/2.json" }));
@@ -88,7 +88,7 @@ test("tokenURI: uri ของชิ้นนั้นก่อน ไม่ม�
   assert.equal(read("supportsInterface", { interfaceId: "0xd9b67a26" }).result, false);
 });
 
-test("transferFrom: เจ้าของ / ผู้ได้ approve / operator ย้ายได้ · approve ถูกล้างหลังย้าย · คนอื่นย้ายไม่ได้", () => {
+test("transferFrom: owner / approved / operator can move it · approval is cleared after a move · others cannot move it", () => {
   const { call, read } = chain();
   ok(call(OWNER, "mint", { to: BOB }));
   ok(call(OWNER, "mint", { to: BOB }));
@@ -106,7 +106,7 @@ test("transferFrom: เจ้าของ / ผู้ได้ approve / operato
   assert.equal(read("ownerOf", { tokenId: "1n" }).result, CAROL);
   assert.deepEqual([read("balanceOf", { owner: BOB }).result, read("balanceOf", { owner: CAROL }).result], ["1n", "1n"]);
 
-  // operator ย้ายได้ทุกชิ้นของเจ้าของ และ approve แทนเจ้าของได้
+  // an operator can move all of the owner's tokens and approve on the owner's behalf
   const all = ok(call(BOB, "setApprovalForAll", { operator: OWNER, approved: true }));
   assert.deepEqual(all.events[0].data, { owner: BOB, operator: OWNER, approved: true });
   assert.equal(read("isApprovedForAll", { owner: BOB, operator: OWNER }).result, true);
@@ -117,7 +117,7 @@ test("transferFrom: เจ้าของ / ผู้ได้ approve / operato
   fails(call(BOB, "setApprovalForAll", { operator: BOB, approved: true }), /approve to caller/);
 });
 
-test("safeTransferFrom: ส่งให้กระเป๋าคน = เหมือน transferFrom · ส่งให้โปรแกรมที่ตอบ onERC721Received ได้ · โปรแกรมที่ไม่ตอบ → ทั้ง tx ล้ม", () => {
+test("safeTransferFrom: to a user wallet = like transferFrom · to a program that answers onERC721Received works · a program that does not answer → the whole tx fails", () => {
   const { call, read } = chain();
   ok(call(OWNER, "mint", { to: BOB }));
   ok(call(OWNER, "mint", { to: BOB }));
@@ -127,11 +127,11 @@ test("safeTransferFrom: ส่งให้กระเป๋าคน = เห�
   assert.deepEqual(hook.input, { operator: BOB, from: BOB, tokenId: "2n", data: "hello" });
   assert.equal(read("ownerOf", { tokenId: "2n" }).result, W);
   ok(call(CAROL, "transferFrom", { from: CAROL, to: BOB, tokenId: "1n" }));
-  fails(call(BOB, "safeTransferFrom", { from: BOB, to: M, tokenId: "1n" }), /onERC721Received/);   // multicall ไม่มี hook
-  assert.equal(read("ownerOf", { tokenId: "1n" }).result, BOB);   // ย้อนทั้งหมด
+  fails(call(BOB, "safeTransferFrom", { from: BOB, to: M, tokenId: "1n" }), /onERC721Received/);   // multicall has no hook
+  assert.equal(read("ownerOf", { tokenId: "1n" }).result, BOB);   // fully reverted
 });
 
-test("burn: เจ้าของ / ผู้ได้ approve · emit Transfer ไป zero address · ลด supply และหายจาก ownerOf", () => {
+test("burn: owner / approved · emits Transfer to the zero address · lowers supply and disappears from ownerOf", () => {
   const { call, read } = chain();
   ok(call(OWNER, "mint", { to: BOB, uri: "ipfs://one" }));
   fails(call(CAROL, "burn", { tokenId: "1n" }), /not owner nor approved/);
@@ -142,7 +142,7 @@ test("burn: เจ้าของ / ผู้ได้ approve · emit Transfer 
   assert.equal(read("ownerOf", { tokenId: "1n" }).status, "throw");
 });
 
-test("ดัชนีของที่ถือ: owned:<owner>:<id> ตามเจ้าของปัจจุบัน · event Transfer ทำ holding ให้ทั้งผู้ส่งและผู้รับ", () => {
+test("holdings index: owned:<owner>:<id> by current owner · Transfer events create holdings for both sender and recipient", () => {
   const { call, vm } = chain();
   ok(call(OWNER, "mint", { to: BOB }));
   ok(call(OWNER, "mint", { to: BOB }));

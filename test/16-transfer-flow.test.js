@@ -4,12 +4,12 @@ import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN } from "./programs.js";
 
 /*
- * ข้อมูล block ของโปรแกรมที่เรียก transfer ของโปรแกรมอื่นหลายอัน และเรียกต่อกันสลับไปมา
- * ใช้เป็นตัวอย่างข้อมูลสำหรับทำ explorer แสดงเส้นทางการโอนเงิน
+ * block data for programs that call transfer on several other programs, calling back and forth
+ * serves as sample data for building an explorer view of transfer paths
  *
- *   swap    : ดึง tokenA จาก trader เข้าตัวเอง แล้วจ่าย tokenB ของตัวเองคืน (เรียก 2 โปรแกรม)
- *   router  : เรียก swap ต่อกันหลายทอด (router → swap → token สลับกันไปมา)
- *   payroll : โอนให้หลายคนด้วย token เดียว (เรียกโปรแกรมเดียวซ้ำหลายครั้ง)
+ *   swap    : pulls tokenA from the trader into itself, then pays out its own tokenB (calls 2 programs)
+ *   router  : chains several swaps (router → swap → token, back and forth)
+ *   payroll : pays many people with one token (calls one program repeatedly)
  */
 
 const SWAP = `
@@ -99,8 +99,8 @@ const bal = (token, account) => `${token}:storage:balances:${account}`;
 let endpointCounter = 0;
 
 /**
- * โลกตัวอย่าง: tokenA / tokenB / tokenC, swap 2 ตัว (A→B, B→C), router, payroll
- * alice มี tokenA 1000 และ approve ให้ทุกโปรแกรมแล้ว
+ * sample world: tokenA / tokenB / tokenC, 2 swaps (A→B, B→C), router, payroll
+ * alice holds 1000 tokenA and has approved every program
  */
 function setup() {
   const vm = new VM.VirtualMachine(new MemoryDB());
@@ -122,7 +122,7 @@ function setup() {
   for (const [token, spender] of [["tokena", "swapab"], ["tokenb", "swapbc"], ["tokena", "payroll"]]) {
     block.call({ programUuid: token, functionName: "approve", input: { spender, amount: 100000 }, context: user("alice") });
   }
-  assert.ok(block.results().every((r) => r.status === "success"), "setup ต้องสำเร็จทั้งหมด");
+  assert.ok(block.results().every((r) => r.status === "success"), "setup must fully succeed");
   block.commit();
   return vm;
 }
@@ -131,21 +131,21 @@ const swapTx = (swapId, amount, sender = "alice") => ({ programUuid: swapId, fun
 const routeTx = (path, amount, fn = "route") => ({ programUuid: "router", functionName: fn, input: { path, amount }, context: user("alice") });
 const payTx = (items, fn = "pay") => ({ programUuid: "payroll", functionName: fn, input: { items }, context: user("alice") });
 
-/** สรุป trace ให้อ่านง่าย: "depth program.fn (sender→origin) status" */
+/** readable trace summary: "depth program.fn (sender→origin) status" */
 const trace = (result) => result.calls.map((c) => `${c.depth} ${c.programUuid}.${c.functionName} (${c.sender}→${c.origin}) ${c.status}`);
 
-/** เส้นทางการโอนของ token หนึ่ง: คำนวณจาก afterValues (ยอดก่อน → ยอดหลัง) */
+/** transfer path of one token: computed from afterValues (balance before → after) */
 function balanceDeltas(summary, token) {
   return summary.afterValues
     .filter((v) => v.dbKey.startsWith(`${token}:storage:balances:`))
-    .map((v) => ({ account: v.dbKey.split(":").pop(), after: v.afterValue ?? "0n" }));   // ค่าใน DB เป็น "123n"
+    .map((v) => ({ account: v.dbKey.split(":").pop(), after: v.afterValue ?? "0n" }));   // DB values look like "123n"
 }
 
 // ---------------------------------------------------------------------------
-//  1 tx: เรียก transfer ของ 2 โปรแกรมในการทำงานเดียว
+//  1 tx: calls transfer on 2 programs in one execution
 // ---------------------------------------------------------------------------
 
-test("swap: tx เดียวเรียก tokenA.transferFrom และ tokenB.transfer", () => {
+test("swap: one tx calls tokenA.transferFrom and tokenB.transfer", () => {
   const vm = setup();
   const res = vm.call(swapTx("swapab", 100), { timestamp: T });
 
@@ -167,10 +167,10 @@ test("swap: tx เดียวเรียก tokenA.transferFrom และ toke
 });
 
 // ---------------------------------------------------------------------------
-//  เรียกต่อกันสลับไปมา: router → swap → token
+//  calling back and forth: router → swap → token
 // ---------------------------------------------------------------------------
 
-test("router: 2 ทอด (A→B→C) สลับ router / swap / token ครบทุกชั้น", () => {
+test("router: 2 hops (A→B→C) alternating router / swap / token at every level", () => {
   const vm = setup();
   const res = vm.call(routeTx(["swapab", "swapbc"], 50), { timestamp: T });
 
@@ -185,20 +185,20 @@ test("router: 2 ทอด (A→B→C) สลับ router / swap / token คร�
     "2 tokenc.transfer (swapbc→alice) success",
   ]);
 
-  // ยอดสุทธิของแต่ละ token หลัง tx
+  // net balances of each token after the tx
   assert.deepEqual(balanceDeltas(res, "tokena"), [{ account: "alice", after: "950n" }, { account: "swapab", after: "50n" }]);
   assert.deepEqual(balanceDeltas(res, "tokenb"), [{ account: "swapab", after: "900n" }, { account: "alice", after: "0n" }, { account: "swapbc", after: "100n" }]);
   assert.deepEqual(balanceDeltas(res, "tokenc"), [{ account: "swapbc", after: "700n" }, { account: "alice", after: "300n" }]);
-  // alice ได้ tokenB มา 100 แล้วจ่ายออกทั้งหมดใน tx เดียวกัน → เหลือ 0 (เดิมไม่มี key จึงนับว่า changed)
+  // alice receives 100 tokenB and pays it all out in the same tx → 0 left (the key did not exist, so it counts as changed)
   assert.deepEqual(res.afterValues.find((v) => v.dbKey === bal("tokenb", "alice")), { dbKey: bal("tokenb", "alice"), afterValue: "0n", changed: true });
 });
 
-test("router: ทอดที่สองล้ม ไม่มีใคร catch → ทั้ง tx ล้ม ไม่มีอะไรเปลี่ยน", () => {
+test("router: second hop fails with no catch → the whole tx fails, nothing changes", () => {
   const vm = setup();
-  const res = vm.call(routeTx(["swapab", "swapbc"], 300), { timestamp: T }); // ทอดแรกผ่าน แต่ swapbc มี tokenC ไม่พอ (300×2×3 = 1800)
+  const res = vm.call(routeTx(["swapab", "swapbc"], 300), { timestamp: T }); // the first hop passes, but swapbc lacks tokenC (300×2×3 = 1800)
 
   assert.equal(res.status, "throw");
-  assert.deepEqual(res.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(res.error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.deepEqual(trace(res), [
     "0 router.route (alice→alice) throw",
     "1 swapab.swap (router→alice) success",
@@ -211,7 +211,7 @@ test("router: ทอดที่สองล้ม ไม่มีใคร catc
   assert.deepEqual(res.writes, []);
 });
 
-test("router: ทอดที่สองล้มแต่ router catch → เก็บเฉพาะผลของทอดแรก", () => {
+test("router: second hop fails but router catches → only the first hop's effects are kept", () => {
   const vm = setup();
   const res = vm.call(routeTx(["swapab", "swapbc"], 300, "routeSafe"), { timestamp: T });
 
@@ -226,7 +226,7 @@ test("router: ทอดที่สองล้มแต่ router catch → เ
     "2 tokenb.transferFrom (swapbc→alice) success",
     "2 tokenc.transfer (swapbc→alice) throw",
   ]);
-  // ทั้งกิ่งของ swapbc ถูกย้อน เหลือเฉพาะ swapab + log ของ router
+  // swapbc's whole branch reverts, only swapab + router's log remain
   assert.deepEqual(res.writes.map((w) => w.dbKey), [
     "tokena:storage:allowance:alice:swapab",
     "tokena:storage:balances:alice",
@@ -240,10 +240,10 @@ test("router: ทอดที่สองล้มแต่ router catch → เ
 });
 
 // ---------------------------------------------------------------------------
-//  เรียกโปรแกรมเดียวซ้ำหลายครั้งใน tx เดียว
+//  calling one program repeatedly in a single tx
 // ---------------------------------------------------------------------------
 
-test("payroll: โอนให้หลายคนใน tx เดียว (เรียก tokenA.transferFrom 3 ครั้งเรียงกัน)", () => {
+test("payroll: pays many people in one tx (calls tokenA.transferFrom 3 times in a row)", () => {
   const vm = setup();
   const items = [{ to: "bob", amount: 10 }, { to: "carol", amount: 20 }, { to: "dave", amount: 30 }];
   const res = vm.call(payTx(items), { timestamp: T });
@@ -263,7 +263,7 @@ test("payroll: โอนให้หลายคนใน tx เดียว (�
   ]);
 });
 
-test("payroll: บางรายการล้มแต่ catch ไว้ → เฉพาะรายการที่ล้มถูกย้อน", () => {
+test("payroll: some items fail but are caught → only the failed items revert", () => {
   const vm = setup();
   const items = [{ to: "bob", amount: 10 }, { to: "carol", amount: 99999 }, { to: "dave", amount: 30 }];
   const res = vm.call(payTx(items, "paySafe"), { timestamp: T });
@@ -275,7 +275,7 @@ test("payroll: บางรายการล้มแต่ catch ไว้ →
     "1 tokena.transferFrom (payroll→alice) throw",
     "1 tokena.transferFrom (payroll→alice) success",
   ]);
-  // carol ไม่ถูกแตะเลย เพราะ token ตรวจยอดไม่พอก่อนเขียน → ไม่มีใน afterValues
+  // carol is never touched, because token checks the balance before writing → not in afterValues
   assert.equal(res.afterValues.some((v) => v.dbKey === bal("tokena", "carol")), false);
   assert.deepEqual(balanceDeltas(res, "tokena"), [
     { account: "alice", after: "960n" },
@@ -286,22 +286,22 @@ test("payroll: บางรายการล้มแต่ catch ไว้ →
 });
 
 // ---------------------------------------------------------------------------
-//  ข้อมูลระดับ block
+//  block-level data
 // ---------------------------------------------------------------------------
 
-test("block: หลาย tx ผสมกัน — ข้อมูลของ block ใช้สร้างภาพรวมการโอนได้", () => {
+test("block: mixed txs — block data can build a transfer overview", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
-  block.call(swapTx("swapab", 100));                                    // tx0 สำเร็จ
-  block.call(routeTx(["swapab", "swapbc"], 50));                        // tx1 สำเร็จ
-  block.call(payTx([{ to: "bob", amount: 10 }, { to: "carol", amount: 20 }])); // tx2 สำเร็จ
-  block.call(routeTx(["swapab", "swapbc"], 300));                       // tx3 ล้มทั้ง tx
-  block.call(swapTx("swapbc", 150));                                    // tx4 alice ใช้ tokenB ที่ได้มาใน block นี้
+  block.call(swapTx("swapab", 100));                                    // tx0 succeeds
+  block.call(routeTx(["swapab", "swapbc"], 50));                        // tx1 succeeds
+  block.call(payTx([{ to: "bob", amount: 10 }, { to: "carol", amount: 20 }])); // tx2 succeeds
+  block.call(routeTx(["swapab", "swapbc"], 300));                       // tx3 fails entirely
+  block.call(swapTx("swapbc", 150));                                    // tx4 alice spends tokenB received in this block
 
   const summary = block.summary();
   assert.deepEqual(summary.results.map((r) => r.status), ["success", "success", "success", "throw", "success"]);
 
-  // จำนวนครั้งที่แต่ละโปรแกรมถูกเรียกทั้ง block (ใช้ทำหน้า "โปรแกรมที่ถูกเรียกมากที่สุด")
+  // how many times each program was called in the block (for a "most called programs" page)
   const callCount = {};
   for (const result of summary.results) {
     for (const call of result.calls) callCount[`${call.programUuid}.${call.functionName}`] = (callCount[`${call.programUuid}.${call.functionName}`] ?? 0) + 1;
@@ -317,7 +317,7 @@ test("block: หลาย tx ผสมกัน — ข้อมูลของ 
     "tokenc.transfer": 3,
   });
 
-  // ยอดสุทธิของทั้ง block (ก่อน block → หลัง block)
+  // net balances over the whole block (before → after)
   const net = Object.fromEntries(summary.afterValues
     .filter((v) => v.dbKey.includes(":balances:"))
     .map((v) => [v.dbKey.replace(":storage:balances", ""), v.afterValue]));
@@ -333,7 +333,7 @@ test("block: หลาย tx ผสมกัน — ข้อมูลของ 
     "tokenc:alice": "750n",
   });
 
-  // ยอดรวมของแต่ละ token ต้องคงที่ 1000 เสมอ
+  // each token's total supply must stay at 1000
   for (const token of ["tokena", "tokenb", "tokenc"]) {
     const total = summary.afterValues
       .filter((v) => v.dbKey.startsWith(`${token}:storage:balances:`))
@@ -345,20 +345,20 @@ test("block: หลาย tx ผสมกัน — ข้อมูลของ 
   for (const { dbKey, afterValue } of summary.afterValues) assert.deepEqual(vm.db.readKeys([dbKey])[0], afterValue, dbKey);
 });
 
-test("block: tx ที่ล้มไม่ปรากฏในข้อมูลรวมของ block แต่ยังมี trace ให้ explorer แสดง", () => {
+test("block: failed txs are absent from the block's aggregate data but still have a trace for the explorer", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
-  block.call(routeTx(["swapab", "swapbc"], 300)); // ล้ม
-  block.call(swapTx("swapab", 10));               // สำเร็จ
+  block.call(routeTx(["swapab", "swapbc"], 300)); // fails
+  block.call(swapTx("swapab", 10));               // succeeds
 
   const summary = block.summary();
   assert.deepEqual(summary.loadValues.map((v) => v.dbKey).filter((k) => k.startsWith("tokenc")), []);
   assert.deepEqual(summary.writes.map((w) => w.dbKey).filter((k) => k.startsWith("tokenc")), []);
-  assert.equal(summary.results[0].calls.length, 7); // trace ของ tx ที่ล้มยังครบ
+  assert.equal(summary.results[0].calls.length, 7); // the failed tx's trace is still complete
   assert.equal(summary.results[0].calls.filter((c) => c.status === "throw").length, 3);
 });
 
-test("block เท่ากับรันทีละ tx แล้ว commit ทีละอัน (สถานการณ์ผสม)", () => {
+test("a block equals running each tx and committing one by one (mixed scenario)", () => {
   const txs = [
     swapTx("swapab", 100),
     routeTx(["swapab", "swapbc"], 50),
@@ -385,10 +385,10 @@ test("block เท่ากับรันทีละ tx แล้ว commit �
 });
 
 // ---------------------------------------------------------------------------
-//  ข้อจำกัดของข้อมูลสำหรับ explorer
+//  data limits for the explorer
 // ---------------------------------------------------------------------------
 
-test("calls มี input / value / result / gasUsed ของการเรียกซ้อนทุกชั้น — เห็นจำนวนเงินของแต่ละเส้น", () => {
+test("calls include input / value / result / gasUsed for every nested level — amounts visible on each path", () => {
   const vm = setup();
   const res = vm.call(routeTx(["swapab", "swapbc"], 50), { timestamp: T });
 
@@ -398,7 +398,7 @@ test("calls มี input / value / result / gasUsed ของการเรี�
     assert.notEqual(call.result, undefined);
     assert.ok(call.gasUsed > 0);
   }
-  // gas ของชั้นนอกรวมของชั้นในไว้แล้ว
+  // outer-level gas already includes the inner levels
   assert.ok(res.calls[0].gasUsed >= res.calls[1].gasUsed + res.calls[2].gasUsed);
   assert.ok(res.calls[0].gasUsed <= res.gasUsed);
   assert.equal(res.result, "300n");

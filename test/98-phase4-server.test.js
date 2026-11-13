@@ -8,18 +8,18 @@ import { createClient, keySigner } from "../client-sdk/index.js";
 import { startSync } from "../src/node/sync.js";
 
 /*
- * ระยะ 4 ผ่าน server: GET /proof + client.verifiedState (ไม่ต้องเชื่อ node) · cardianal_getProof / eth_getProof ของ /evm
- *   SNAPSHOT_EVERY → GET /snapshot (+ ไฟล์) · node ใหม่ startSync({ snapshot: true }) เริ่มจาก snapshot แล้วซิงก์ต่อ
+ * Phase 4 through the server: GET /proof + client.verifiedState (no need to trust the node) · cardianal_getProof / eth_getProof on /evm
+ *   SNAPSHOT_EVERY → GET /snapshot (+ files) · a new node with startSync({ snapshot: true }) starts from a snapshot and keeps syncing
  */
 
-const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // มียอดใน genesis.json
+const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // funded in genesis.json
 const BOB = "0x00000000000000000000000000000000000000b0";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase4-server-"));
 process.env.SNAPSHOT_EVERY = "2";
 process.env.SNAPSHOT_DIR = dir;
 
-test("server: /proof ตรวจเองได้ · /evm cardianal_getProof · /snapshot → node ใหม่เริ่มจาก snapshot แล้วซิงก์ต่อ", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("server: /proof is self-verifiable · /evm cardianal_getProof · /snapshot → a new node starts from the snapshot and keeps syncing", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner, mempool, snapshots, genesis } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -44,7 +44,7 @@ test("server: /proof ตรวจเองได้ · /evm cardianal_getProof �
     assert.deepEqual(Object.values(checked.values), [vm.read(keys[0]), vm.read(keys[1]), undefined]);
     assert.equal(checked.values[keys[0]], "6n");
 
-    // node ที่โกหกค่า → ตรวจไม่ผ่าน
+    // a node that lies about values → verification fails
     const liar = createClient({ url, fetch: async (target, init) => {
       const response = await fetch(target, init);
       if (!String(target).includes("/proof")) return response;
@@ -52,7 +52,7 @@ test("server: /proof ตรวจเองได้ · /evm cardianal_getProof �
       body.proofs[0].proof[body.proofs[0].proof.length - 1] = body.proofs[1].proof.at(-1);
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     } });
-    await assert.rejects(liar.verifiedState(keys), /หลักฐาน/);
+    await assert.rejects(liar.verifiedState(keys), /proof/);
     assert.equal((await fetch(`${url}/proof`)).status, 400);
 
     const rpc = (method, params) => fetch(`${url}/evm`, { method: "POST", headers: { "content-type": "application/json" },
@@ -62,12 +62,12 @@ test("server: /proof ตรวจเองได้ · /evm cardianal_getProof �
     assert.deepEqual(viaRpc.result.proofs.map((item) => item.dbKey), [keys[0], `0xprog:storage:balances:${BOB}`]);
     assert.match((await rpc("eth_getProof", [BOB, [], "latest"])).error.message, /cardianal_getProof/);
 
-    // snapshot ทุก 2 block → มีของ block 2
+    // snapshot every 2 blocks → block 2 has one
     const info = await (await fetch(`${url}/snapshot`)).json();
     assert.deepEqual([info.number, info.hash, info.stateRoot], [2, vm.getBlock(2).hash, vm.getBlock(2).stateRoot]);
     assert.equal((await fetch(`${url}/snapshot/999`)).status, 404);
     await client.send({ action: "transfer", to: BOB, value: "4n", gasLimit: 21_000 }, signer);
-    await mine();   // block 4 → snapshot ใหม่ · เก็บไว้ 2 ไฟล์
+    await mine();   // block 4 → a new snapshot · 2 files kept
     assert.equal((await (await fetch(`${url}/snapshot`)).json()).number, 4);
     assert.equal(fs.readdirSync(dir).length, 2);
     await client.send({ action: "transfer", to: BOB, value: "5n", gasLimit: 21_000 }, signer);
@@ -78,7 +78,7 @@ test("server: /proof ตรวจเองได้ · /evm cardianal_getProof �
     const loaded = await new Promise((resolve, reject) => {
       const stop = startSync(reader, { url, genesis, intervalMs: 20, snapshot: true,
         onSnapshot: (manifest) => resolve(manifest), onError: (error) => { stop(); reject(error); } });
-      setTimeout(() => { stop(); reject(new Error("ไม่ได้โหลด snapshot")); }, 5000);
+      setTimeout(() => { stop(); reject(new Error("snapshot was not loaded")); }, 5000);
       reader.stopSync = stop;
     });
     assert.equal(loaded.number, 4);

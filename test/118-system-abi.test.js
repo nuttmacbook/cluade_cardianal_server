@@ -9,12 +9,12 @@ import { systemPrograms } from "../src/standards/system.js";
 import { createEvmRpc } from "../src/node/evm-rpc.js";
 
 /*
- * ABI ของโปรแกรมแถม (src/standards/system-abi.js): node ตอบให้จากโค้ด (ไม่ได้เก็บบนเชน)
- *   ตรงกับโค้ด: ฟังก์ชันครบทุกตัวที่ export · ชื่อ input มีในโค้ด · event ตรงกับ emit ทุกจุด (ชื่อ field + ลำดับ + indexed)
- *   ใช้งานจริง: deploy ชุดเต็ม → /evm ตอบ cardianal_getAbi · eth_call ตาม ABI · log ถอดด้วย ethers ได้ · clone ได้ ABI ด้วย
+ * ABIs of the bundled programs (src/standards/system-abi.js): the node serves them from code (not stored on-chain)
+ *   matches the code: every exported function present · input names appear in the code · events match every emit (field names + order + indexed)
+ *   real use: full deploy → /evm answers cardianal_getAbi · eth_call per ABI · logs decode with ethers · clones get an ABI too
  */
 
-/** emit("Name", { a: …, b: … }, { indexed: [...] }) ทุกจุดในโค้ด → [{ name, fields, indexed }] */
+/** emit("Name", { a: …, b: … }, { indexed: [...] }) every occurrence in the code → [{ name, fields, indexed }] */
 function emitsOf(code) {
   const found = [];
   const pattern = /emit\(\s*"(\w+)"\s*,\s*\{/g;
@@ -26,7 +26,7 @@ function emitsOf(code) {
       else if ("})]".includes(code[i])) depth -= 1;
     }
     const body = code.slice(pattern.lastIndex, i - 1);
-    // key ชั้นแรกของ object: "key:" ที่ไม่อยู่ในวงเล็บ / ternary
+    // top-level object keys: "key:" not inside brackets / ternary
     const fields = [];
     let level = 0;
     for (const part of body.split(/(?=[,{}()[\]])/)) {
@@ -42,23 +42,23 @@ function emitsOf(code) {
 }
 
 for (const { key, code, abi } of SYSTEM_ABIS) {
-  test(`system abi ${key}: ผ่าน checkAbi · ฟังก์ชันครบตามที่ export · event ตรงกับ emit`, () => {
+  test(`system abi ${key}: passes checkAbi · all exported functions present · events match emit`, () => {
     checkAbi(abi);
     const functions = abi.functions ?? [];
-    assert.deepEqual(functions.map((fn) => fn.name).sort(), exportedFunctions(code).sort(), "ฟังก์ชันใน ABI ต้องตรงกับที่โปรแกรม export");
+    assert.deepEqual(functions.map((fn) => fn.name).sort(), exportedFunctions(code).sort(), "ABI functions must match the program's exports");
     for (const fn of functions) {
-      for (const input of fn.inputs ?? []) assert.match(code, new RegExp(`\\b${input.name}\\b`), `${fn.name}: ไม่มี input '${input.name}' ในโค้ด`);
+      for (const input of fn.inputs ?? []) assert.match(code, new RegExp(`\\b${input.name}\\b`), `${fn.name}: input '${input.name}' not found in the code`);
     }
     const emitted = emitsOf(code);
     const events = new Map((abi.events ?? []).map((event) => [event.name, event]));
     for (const emit of emitted) {
       const event = events.get(emit.name);
-      assert.ok(event, `ABI ไม่มี event ${emit.name}`);
-      assert.deepEqual(event.fields.map((field) => field.name), emit.fields, `${emit.name}: ชื่อ / ลำดับ field ต้องตรงกับ emit`);
-      assert.deepEqual(event.fields.filter((field) => field.indexed).map((field) => field.name), emit.indexed, `${emit.name}: indexed ต้องตรงกับ emit`);
+      assert.ok(event, `ABI is missing event ${emit.name}`);
+      assert.deepEqual(event.fields.map((field) => field.name), emit.fields, `${emit.name}: field names / order must match emit`);
+      assert.deepEqual(event.fields.filter((field) => field.indexed).map((field) => field.name), emit.indexed, `${emit.name}: indexed must match emit`);
     }
-    for (const name of events.keys()) assert.ok(emitted.some((emit) => emit.name === name), `ABI มี event ${name} ที่โปรแกรมไม่ได้ emit`);
-    new Interface(toEvmAbi(abi));   // ethers อ่าน ABI ได้ (ไม่มีชื่อ / signature ซ้ำ)
+    for (const name of events.keys()) assert.ok(emitted.some((emit) => emit.name === name), `ABI has event ${name} that the program never emits`);
+    new Interface(toEvmAbi(abi));   // ethers can read the ABI (no duplicate names / signatures)
   });
 }
 
@@ -66,7 +66,7 @@ const DEPLOYER = "0x00000000000000000000000000000000000000d1";
 const ALICE = "0x00000000000000000000000000000000000000a1";
 const COIN = 10n ** 18n;
 
-test("system abi: deploy ชุดเต็ม → ทุกตัวได้ ABI จากโค้ดในเชน · eth_call ตาม ABI · log ถอดด้วย ethers · clone ได้ ABI", () => {
+test("system abi: full deploy → every program gets an ABI from its on-chain code · eth_call per ABI · logs decode with ethers · clones get an ABI", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, requireNonce: true, recordTransactions: true, recordBlocks: true, recordHistory: true });
   vm.db.load(Object.fromEntries([DEPLOYER, ALICE].map((a) => [VM.nativeKey(a, "received"), `${1000n * COIN}n`])));
   const nonces = {};
@@ -94,7 +94,7 @@ test("system abi: deploy ชุดเต็ม → ทุกตัวได้ A
   const iface = (address) => new Interface(call("cardianal_getAbi", [address]));
   for (const { key } of SYSTEM_ABIS) assert.ok(call("cardianal_getAbi", [at[key]]), key);
 
-  // eth_call ตาม ABI (ethers เข้ารหัส / ถอด)
+  // eth_call per ABI (ethers encodes / decodes)
   const read = (address, fn, args = []) => {
     const contract = iface(address);
     return contract.decodeFunctionResult(fn, call("eth_call", [{ to: address, data: contract.encodeFunctionData(fn, args) }, "latest"]));
@@ -106,7 +106,7 @@ test("system abi: deploy ชุดเต็ม → ทุกตัวได้ A
   assert.equal(read(at.staking, "poolCount")[0], 0n);
   assert.equal(read(at.dex, "wrapped")[0].toLowerCase(), at.wcard);
 
-  // factory.createToken + createMultisig → log Created ถอดด้วย ABI · multisig ที่ clone ได้ ABI ด้วย
+  // factory.createToken + createMultisig → Created log decodes with the ABI · the cloned multisig gets an ABI too
   const created = block((b) => ok(b.call({ programUuid: at.factory, functionName: "createToken", context: { sender: ALICE, origin: ALICE }, nonce: nonce(ALICE),
     input: { name: "Coin", ticker: "C", decimals: "18n", supply: "1000n" }, gasLimit: 3_000_000 })));
   const multisig = block((b) => ok(b.call({ programUuid: at.factory, functionName: "createMultisig", context: { sender: ALICE, origin: ALICE }, nonce: nonce(ALICE),

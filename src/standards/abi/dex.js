@@ -1,4 +1,4 @@
-/** metadata.abi ของโปรแกรมแถม: DEX pair (LP token) · DEX router/factory · token lock — ดู src/standards/system-abi.js */
+/** metadata.abi of the bundled programs: DEX pair (LP token) · DEX router/factory · token lock — see src/standards/system-abi.js */
 
 const io = (spec) => spec.split(",").filter(Boolean).map((item) => {
   const [name, type] = item.trim().split(":");
@@ -12,7 +12,7 @@ const event = (name, fields, indexed = [], description) => ({
   ...(description ? { description } : {}),
 });
 
-// TOKEN_CORE (src/standards/token.js) — LP token ของ pair
+// TOKEN_CORE (src/standards/token.js) — the pair's LP token
 const TOKEN_CORE_FUNCTIONS = [
   view("name", "", ":string"),
   view("ticker", "", ":string"),

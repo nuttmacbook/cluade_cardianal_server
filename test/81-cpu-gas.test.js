@@ -5,17 +5,17 @@ import { instrument, METER_FNS, PLAIN_HELPERS, BIGINT_MAX_BITS } from "../src/co
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 
 /*
- * แก๊สตามงานของ CPU: regex / BigInt ใหญ่ (src/core/gasmeter.js · src/core/sandbox.js "BigInt: แก๊สตามงานของ CPU")
- * เดิม regex แบบ backtrack ทวีคูณ และ BigInt ใหญ่ (2n ** 10n ** 9n, toString ของ 300k bit) เผา CPU เป็นวินาทีด้วยแก๊สหลักร้อย
- *   หยุดได้แค่ timeout ตามเวลาจริง (ผลไม่แน่นอนข้ามเครื่อง)
- * ตอนนี้: regex ปิดทั้งหมด · BigInt คิดแก๊สตามขนาด (คิดก่อนทำสำหรับ ** << และการแปลง string) · เพดาน 8192 bit
- *   ค่า ≤ 512 bit ไม่คิดเพิ่ม → แก๊สของโปรแกรมเดิม (token / uint256) เท่าเดิม
+ * gas by CPU work: regex / large BigInt (src/core/gasmeter.js · src/core/sandbox.js "BigInt: gas by CPU work")
+ * previously exponential-backtracking regexes and large BigInts (2n ** 10n ** 9n, toString of 300k bits) burned seconds of CPU for a few hundred gas
+ *   and could only be stopped by a wall-clock timeout (results varied across machines)
+ * now: regex fully disabled · BigInt gas by size (charged up front for ** << and string conversion) · 8192-bit cap
+ *   values ≤ 512 bits cost nothing extra → existing programs (token / uint256) keep their gas
  */
 
 const T = 1_700_000_000_000;
 const as = (who) => ({ sender: who, origin: who });
 const TIMEOUT_MS = 20_000;
-const FAST_MS = 3_000;   // หยุดด้วยแก๊สเร็วกว่า timeout มาก (เดิมแต่ละกรณีใช้ ≥ 1 วินาทีหรือ timeout)
+const FAST_MS = 3_000;   // stopping by gas is much faster than the timeout (each case used to take ≥ 1 second or time out)
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: TIMEOUT_MS, ...options });
@@ -40,16 +40,16 @@ const program = (fns) => `function program() {
   return { ${Object.keys(fns).join(", ")} }
 }`;
 
-const TYPE_ERROR = "โปรแกรมทำงานผิดพลาด (TypeError)";
-const RANGE_ERROR = "โปรแกรมทำงานผิดพลาด (RangeError)";
+const TYPE_ERROR = "program error (TypeError)";
+const RANGE_ERROR = "program error (RangeError)";
 
-test("regex: literal ถูกปฏิเสธตอน deploy · RegExp / match / search / matchAll / species ใช้ไม่ได้แม้ปิด autoreview · replace / split ด้วย string ยังได้", () => {
+test("regex: literals are rejected at deploy · RegExp / match / search / matchAll / species fail even with autoreview off · replace / split with strings still work", () => {
   const { vm, activate, call } = setup({ maxTxGas: 3_000_000 });
   const literal = vm.deploy({ programUuid: "lit", code: program({ f: "return /(a+)+$/.test('a')" }), context: as("owner") }, { timestamp: T });
   assert.equal(literal.status, "throw");
-  assert.match(literal.error.message, /regular expression ใช้ในโปรแกรมไม่ได้/);
+  assert.match(literal.error.message, /regular expressions are not allowed in programs/);
 
-  const evil = `const s = "a".repeat(30) + "b";`;   // (a+)+$ กับ a×30 + b = backtrack ~2^30 ขั้น (เดิม ~2 วินาทีที่ 24 ตัว)
+  const evil = `const s = "a".repeat(30) + "b";`;   // (a+)+$ on a×30 + b = ~2^30 backtracking steps (it used to take ~2 seconds at 24 chars)
   activate("re", program({
     ctor: `${evil} return new RegExp("(a+)+$").test(s)`,
     call: `${evil} return RegExp("(a+)+$").test(s)`,
@@ -70,11 +70,11 @@ test("regex: literal ถูกปฏิเสธตอน deploy · RegExp / mat
   assert.equal(call("re", "strings").result, "3,a+b,x-b-x,true,2");
 });
 
-test("BigInt ใหญ่หมดแก๊สเร็ว (คิดก่อนคำนวณ) แทนที่จะรอ timeout", () => {
+test("large BigInt runs out of gas fast (charged before computing) instead of waiting for the timeout", () => {
   const { activate, call } = setup({ maxTxGas: 3_000_000 });
   const prep = `const B = (1n << 8191n) - 12345n; const H = (1n << 4095n) - 77n; const S = String(B); const o = {}; let sink;`;
   const attacks = {
-    powHuge: "sink = 2n ** 1000000000n",          // เดิม: คำนวณจริงจน RangeError / timeout
+    powHuge: "sink = 2n ** 1000000000n",          // previously: actually computed until RangeError / timeout
     pow10M: "for (;;) sink = 2n ** 10000000n",
     powCap: "for (;;) sink = 3n ** 5000n",
     shlHuge: "for (;;) { try { sink = 1n << 100000000n } catch (e) {} }",
@@ -96,18 +96,18 @@ test("BigInt ใหญ่หมดแก๊สเร็ว (คิดก่อ�
     assert.equal(res.error?.code, "OUT_OF_GAS", `${fn}: ${JSON.stringify(res.error)}`);
     assert.ok(res.ms < FAST_MS, `${fn} ${res.ms}ms`);
   }
-  // ** ที่ผลลัพธ์เกินเพดานแน่นอนคิดแก๊สทั้งก้อนก่อนคำนวณ → 2n ** 10n ** 9n หมดแก๊สในครั้งเดียว
+  // ** whose result surely exceeds the cap is charged in full before computing → 2n ** 10n ** 9n runs out of gas in one step
   assert.ok(call("big", "powHuge").gasUsed > 1e14);
 });
 
-test("เพดาน BigInt 8192 bit: literal ใหญ่ถูกปฏิเสธ · ผลเกินเพดาน RangeError · ค่าที่พอดีเพดานใช้ได้", () => {
+test("8192-bit BigInt cap: large literals rejected · results over the cap → RangeError · values exactly at the cap work", () => {
   assert.equal(BIGINT_MAX_BITS, 8192);
   const { vm, activate, call } = setup();
   const lit = vm.deploy({ programUuid: "lit", code: program({ f: `return 0x${"f".repeat(2049)}n` }), context: as("owner") }, { timestamp: T });
   assert.equal(lit.status, "throw");
-  assert.match(lit.error.message, /BigInt ใหญ่เกิน 8192 bit/);
+  assert.match(lit.error.message, /BigInt exceeds 8192 bits/);
   activate("cap", program({
-    max: "const m = ((1n << 8191n) - 1n) * 2n + 1n; return BigInt(m.toString(16).length)",   // 2^8192 − 1 (1n << 8192n เองเกินแล้ว)
+    max: "const m = ((1n << 8191n) - 1n) * 2n + 1n; return BigInt(m.toString(16).length)",   // 2^8192 − 1 (1n << 8192n itself is already over)
     shl: "return 1n << 8192n",
     mul: "const h = 1n << 4096n; return h * h",
     add: "const m = ((1n << 8191n) - 1n) * 2n + 1n; return m + 1n",
@@ -122,9 +122,9 @@ test("เพดาน BigInt 8192 bit: literal ใหญ่ถูกปฏิเ
   assert.equal(call("cap", "caught").result, true);
 });
 
-test("ราคา BigInt ตามสูตร: ×  ⌈Wa·Wb/4⌉ · ÷ %  ⌈(Wa−Wb+1)·Wb/4⌉ · ** ⌈Wr²/4⌉ · → string W² · string → BigInt W² · ค่า ≤ 512 bit ไม่คิดเพิ่ม", () => {
+test("BigInt pricing formula: ×  ⌈Wa·Wb/4⌉ · ÷ %  ⌈(Wa−Wb+1)·Wb/4⌉ · ** ⌈Wr²/4⌉ · → string W² · string → BigInt W² · values ≤ 512 bits cost nothing extra", () => {
   const { activate, call } = setup();
-  // A = k bit, B = 2k−1 bit · เทียบแก๊สของ op กับ base ที่เตรียมข้อมูลเหมือนกัน แล้วหักส่วนที่เป็นค่าเล็ก (k = 8) → เหลือราคาตามขนาดล้วน
+  // A = k bits, B = 2k−1 bits · compare the op's gas with a base that prepares the same data, then subtract the small-value case (k = 8) → leaves the pure size-based price
   const prep = `const k = BigInt(params.input.bits); const A = (1n << k) - 1n; const B = (1n << (2n * k - 1n)) - 12345n; const S = String(B); let sink;`;
   const ops = {
     mul: "sink = A * A", div: "sink = B / A", mod: "sink = B % A", add: "sink = B + 1n",
@@ -137,24 +137,24 @@ test("ราคา BigInt ตามสูตร: ×  ⌈Wa·Wb/4⌉ · ÷ %  ⌈
   const words = (bits) => Math.ceil(bits / 64);
   const digits = (bits) => String((1n << BigInt(2 * bits - 1)) - 12345n).length;
 
-  // ≤ 512 bit (uint256 × uint256 ไม่ถึง) → ไม่คิดเพิ่ม
+  // ≤ 512 bits (uint256 × uint256 stays under) → no extra cost
   for (const fn of ["mul", "div", "mod", "add", "str", "parse", "lt"]) assert.equal(price(fn, 200), 0, fn);
   const k = 2048;   // A = 32 word, B = 4095 bit = 64 word
   assert.equal(price("mul", k), Math.ceil(32 * 32 / 4));                  // 256
   assert.equal(price("div", k), Math.ceil((64 - 32 + 1) * 32 / 4));       // 264
   assert.equal(price("mod", k), Math.ceil((64 - 32 + 1) * 32 / 4));
-  assert.equal(price("add", k), 64);                                       // ≥ 2^1024: 64 (เส้นตรง)
+  assert.equal(price("add", k), 64);                                       // ≥ 2^1024: 64 (linear)
   assert.equal(price("str", k), 64 * 64);                                  // 4096
-  // 1233 หลัก → 65 word → 4225 · บวกค่าแปลงผลลัพธ์ใหญ่ 64² (BigInt ถูกเรียกจาก engine ได้ เช่น { toString: BigInt.bind(…) })
+  // 1233 digits → 65 words → 4225 · plus 64² for converting the large result (the engine can call BigInt, e.g. { toString: BigInt.bind(…) })
   assert.equal(price("parse", k), Math.ceil(digits(k) / 19) ** 2 + 64 * 64);
-  assert.equal(price("lt", k), 0);                                         // เทียบค่าไม่คิดเพิ่ม (งานเส้นตรงเร็วมาก)
-  // ** คิดจากขนาดผลลัพธ์ก่อนคำนวณ: 3 = 2 bit → 3n ** 2k ≤ 4k bit
+  assert.equal(price("lt", k), 0);                                         // comparisons cost nothing extra (linear work, very fast)
+  // ** is charged by result size before computing: 3 = 2 bits → 3n ** 2k ≤ 4k bits
   const powUnits = (bits) => { const w = words(2 * 2 * bits); return w > 8 ? Math.max(16, Math.ceil(w * w / 4)) : 0; };
   assert.equal(price("pow", 1500), powUnits(1500) - powUnits(8));
   assert.equal(words(4095), 64);
 });
 
-test("แก๊สแน่นอน: งาน BigInt / string / หมดแก๊ส ได้แก๊สเท่ากันทุกครั้ง ทุก VM", () => {
+test("deterministic gas: BigInt / string / out-of-gas work gives the same gas every time, on every VM", () => {
   const code = program({
     work: `let x = (1n << 4000n) + 12345n, acc = 0n, s = "";
       for (let i = 0n; i < 20n; i++) { x = (x * x) % ((1n << 4001n) - 1n); acc += x >> 3000n; s += String(x % 1000n); }
@@ -176,7 +176,7 @@ test("แก๊สแน่นอน: งาน BigInt / string / หมดแ�
   assert.equal(first[0].gasUsed, first[1].gasUsed);
 });
 
-test("token transfer ทำงานเหมือนเดิม แก๊สเท่าเดิม (ค่า uint256 ไม่ถูกคิดเพิ่ม)", () => {
+test("token transfer works as before with the same gas (uint256 values cost nothing extra)", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   const OWNER = "0x00000000000000000000000000000000000000a1";
   const BOB = "0x00000000000000000000000000000000000000b2";
@@ -195,7 +195,7 @@ test("token transfer ทำงานเหมือนเดิม แก๊ส�
     vm.commit(res.writes);
     return res.gasUsed;
   };
-  // ตัวเลขเดียวกับก่อนเปลี่ยน (main 90facdb) — ค่า uint256 อยู่ในช่วง ≤ 512 bit ที่ไม่คิดเพิ่ม · บวก stateKey ของ balance 2 key (ผู้ส่ง / ผู้รับ)
+  // same numbers as before the change (main 90facdb); uint256 values are within the free ≤ 512-bit range · plus stateKey for 2 balance keys (sender / recipient)
   const { stateKey } = VM.DEFAULT_GAS;
   assert.equal(send(1000n), 2722 + 2 * stateKey);
   assert.equal(send(2n ** 254n + 12345n), 2875 + 2 * stateKey);
@@ -205,13 +205,13 @@ test("token transfer ทำงานเหมือนเดิม แก๊ส�
   assert.equal(balance.result, String(2n ** 254n + 12345n + 1000n) + "n");
 });
 
-test("number ไม่เปลี่ยนราคา · โค้ดที่แปลง operator / compound / key / return ให้ผลเหมือน JavaScript เดิมทุกกรณี", () => {
-  // แก๊สของ number: 1 ต่อ node เหมือนเดิม (ตัวช่วย operator ไม่คิดแก๊สเอง)
+test("number prices unchanged · code with rewritten operators / compound assignments / keys / returns behaves exactly like plain JavaScript", () => {
+  // number gas: 1 per node as before (operator helpers charge no gas themselves)
   let gas = 0;
   const helpers = { ...PLAIN_HELPERS, __gas: (n) => { gas += n; } };
   const run = (body) => new Function(...METER_FNS, instrument(body))(...METER_FNS.map((name) => helpers[name]));
   const gasOf = (body) => { gas = 0; const result = run(body); return [String(result), gas]; };
-  // ตัวเลขเดียวกับก่อนเปลี่ยน (main 90facdb)
+  // same numbers as before the change (main 90facdb)
   assert.deepEqual(gasOf("let x = 0; for (let i = 0; i < 100; i++) x = x + i * 2 - 1; return x"), ["9800", 1512]);
   assert.deepEqual(gasOf("let s = 0, o = { a: 1, b: [1, 2, 3] }; for (let i = 0; i < 50; i++) { s += o.b[i % 3] * 3 / 2; o.a <<= 1; o.a %= 1000; if (s > 10 && i in o.b) s -= 1 } return s"), ["148.5", 2124]);
   assert.deepEqual(gasOf("const m = 10n ** 18n; let t = 0n; for (let i = 0n; i < 30n; i++) t = t + i * m / 7n; return t"), ["62142857142857142845", 468]);

@@ -1,30 +1,30 @@
 /**
- * Token Lock — ล็อก token / LP token (แบบ PinkLock ของ PinkSale) · ใช้ได้กับทุกโปรแกรมที่ทำตามมาตรฐาน token (src/standards/token.js)
- *   LP token ของ DEX ก็เป็น token มาตรฐานธรรมดา → ล็อกสภาพคล่องได้ด้วยฟังก์ชันเดียวกัน
- *   ไม่มีเจ้าของ / admin · ไม่มีทางอัปเกรด · ไม่มีใคร (รวมผู้ deploy) ดึง token ออกก่อนเวลาได้
- *   input ตอน deploy: { namespace?, icon?, url?, contact?, description? }
+ * Token Lock — lock tokens / LP tokens (like PinkSale's PinkLock) · works with any program that follows the token standard (src/standards/token.js)
+ *   DEX LP tokens are ordinary standard tokens → liquidity can be locked with the same functions
+ *   no owner / admin · no upgrade path · nobody (including the deployer) can pull tokens out early
+ *   input on deploy: { namespace?, icon?, url?, contact?, description? }
  *
- * เวลา (unlockAt / tgeAt / cycleSeconds) เป็น **วินาที** unix (bigint) · เทียบกับ params.block.timestamp / 1000n
- *   ค่า ≥ 100_000_000_000n (ปี ~5138) ถือว่าส่งมิลลิวินาทีมาผิด → throw
+ * Times (unlockAt / tgeAt / cycleSeconds) are unix **seconds** (bigint) · compared with params.block.timestamp / 1000n
+ *   values ≥ 100_000_000_000n (year ~5138) are treated as milliseconds passed by mistake → throw
  *
- * ฟังก์ชันที่เปลี่ยน state (ต้อง approve token ให้โปรแกรมนี้ก่อน lock / vestingLock / increaseLock)
+ * State-changing functions (approve the token to this program before lock / vestingLock / increaseLock)
  *   lock({ token, amount, unlockAt, owner?, description? }) → id
- *       ดึงด้วย token.transferFrom · บันทึกยอดที่ "ได้รับจริง" (ยอด token ของโปรแกรมก่อน/หลัง → รองรับ token หักค่าธรรมเนียม)
- *       owner = ผู้ถอนได้ (ไม่ส่ง = ผู้เรียก) · unlockAt ต้องอยู่ในอนาคต · description ≤ 200 ตัวอักษร
+ *       pulls via token.transferFrom · records the amount "actually received" (program's token balance before/after → supports fee-on-transfer tokens)
+ *       owner = who can withdraw (omitted = caller) · unlockAt must be in the future · description ≤ 200 characters
  *   vestingLock({ token, amount, tgeAt, tgeBps, cycleSeconds, cycleBps, owner?, description? }) → id
- *       ปลด tgeBps/10000 ของยอดที่ tgeAt แล้วปลดเพิ่ม cycleBps ทุก cycleSeconds จนครบ 100 %
- *       bps แต่ละตัว 1..10000 และ tgeBps + cycleBps ≤ 10000 · คิดเป็น bps ก่อนคูณยอด (ปัดลง ครบ 10000 bps = ยอดเต็ม ไม่มีเศษค้าง)
- *   unlock({ id }) → amount     owner ถอนทุกส่วนที่ปลดแล้วและยังไม่ได้ถอน (ก่อนเวลา / ไม่มีให้ถอน → throw)
- *   extendLock({ id, unlockAt }) → true          owner · lock ธรรมดาเท่านั้น · unlockAt ใหม่ต้องมากกว่าเดิมและอยู่ในอนาคต
- *   increaseLock({ id, amount }) → ยอดที่ได้รับจริง  owner · lock ธรรมดาที่ยังไม่ถึงเวลาปลด
- *   transferLockOwnership({ id, newOwner }) → true  owner โอนสิทธิ์ถอน (newOwner ≠ zero / ≠ ตัวเอง)
- *   renounceLockOwnership({ id }) → true           ⚠️ owner = zero address → ไม่มีใครถอนได้อีก token ถูกล็อกถาวร (เผาสภาพคล่อง)
- * ฟังก์ชันอ่าน
+ *       releases tgeBps/10000 of the amount at tgeAt, then another cycleBps every cycleSeconds until 100 %
+ *       each bps is 1..10000 and tgeBps + cycleBps ≤ 10000 · computed in bps before multiplying the amount (rounded down; 10000 bps = full amount, no dust left)
+ *   unlock({ id }) → amount     owner withdraws everything released and not yet withdrawn (too early / nothing to withdraw → throw)
+ *   extendLock({ id, unlockAt }) → true          owner · plain locks only · the new unlockAt must be later than the old one and in the future
+ *   increaseLock({ id, amount }) → amount actually received  owner · plain locks not yet unlocked
+ *   transferLockOwnership({ id, newOwner }) → true  owner transfers the withdrawal right (newOwner ≠ zero / ≠ self)
+ *   renounceLockOwnership({ id }) → true           ⚠️ owner = zero address → nobody can ever withdraw, tokens locked forever (burns the liquidity)
+ * Read functions
  *   getLock({ id }) → { id, token, owner, creator, amount, withdrawn, withdrawable, lockedAt, unlockAt,
- *                       vesting, tgeAt, tgeBps, cycleSeconds, cycleBps, description }   (vesting: unlockAt = เวลาที่ปลดครบ)
- *   lockCount() → bigint · withdrawableOf({ id }) → bigint · totalLocked({ token }) → bigint (ยอดที่ยังอยู่ในล็อกของ token นั้น)
+ *                       vesting, tgeAt, tgeBps, cycleSeconds, cycleBps, description }   (vesting: unlockAt = time fully released)
+ *   lockCount() → bigint · withdrawableOf({ id }) → bigint · totalLocked({ token }) → bigint (amount still locked for that token)
  *   locksOf({ owner, start?, limit? }) / locksForToken({ token, start?, limit? }) → [lock, …]
- *       start ค่าเริ่ม 0n · limit ค่าเริ่ม 20n สูงสุด 50n · lock ที่ถอนครบแล้วยังอยู่ในรายการ (withdrawn = amount)
+ *       start defaults to 0n · limit defaults to 20n, max 50n · fully withdrawn locks stay in the list (withdrawn = amount)
  * event
  *   Locked { id, token, owner, creator, amount, unlockAt, vesting }      indexed id, token, owner
  *   Unlocked { id, token, owner, amount }                                indexed id, token, owner
@@ -32,16 +32,16 @@
  *   LockIncreased { id, amount, total }                                  indexed id
  *   LockOwnerChanged { id, previousOwner, newOwner }                     indexed id, previousOwner, newOwner
  * storage
- *   count · locks:<id> · total:<token> · entered (กันเรียกซ้อนระหว่างเรียก token)
- *   ownerCount:<owner> · ownerLocks:<owner>:<i> → id · ownerIndex:<id> → i   (โอนสิทธิ์ = ย้ายออก แบบสลับตัวท้าย)
+ *   count · locks:<id> · total:<token> · entered (reentrancy guard while calling tokens)
+ *   ownerCount:<owner> · ownerLocks:<owner>:<i> → id · ownerIndex:<id> → i   (ownership transfer = removed by swapping in the last one)
  *   tokenCount:<token> · tokenLocks:<token>:<i> → id
  *
- * ความปลอดภัย
- *   ยอดในล็อกแยกตาม token และนับจากยอดที่โปรแกรมได้รับจริง · token ที่ส่งเข้ามาตรง ๆ (ไม่ผ่าน lock) ติดอยู่ถาวร
- *   ตอนถอน: บันทึก withdrawn ก่อนเรียก token.transfer · ยอดของโปรแกรมต้องลดไม่เกินที่ถอน (กัน token ดึงเงินล็อกอื่นของ token เดียวกัน)
- *   token ที่ยอดลดเองได้ (rebase ลบ) ไม่รองรับ
- *   ทุกฟังก์ชันที่เปลี่ยน state กันเรียกซ้อน (reentrancy) ด้วย flag entered
- *   แก๊ส: ทุกฟังก์ชันทำงานคงที่ · ลูปมีเฉพาะ read แบบแบ่งหน้า (≤ 50 lock ต่อครั้ง)
+ * Security
+ *   locked amounts are tracked per token and counted from what the program actually received · tokens sent in directly (not via lock) are stuck forever
+ *   on withdrawal: withdrawn is recorded before calling token.transfer · the program's balance must drop by no more than the withdrawal (stops a token draining other locks of the same token)
+ *   tokens whose balances can shrink on their own (negative rebase) are not supported
+ *   every state-changing function has a reentrancy guard via the entered flag
+ *   gas: every function does constant work · loops only in paginated reads (≤ 50 locks per call)
  */
 import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 import { ZERO_ADDRESS } from "./token.js";
@@ -54,7 +54,7 @@ export const TOKEN_LOCK_READS = ["getLock", "lockCount", "locksOf", "locksForTok
 export const TOKEN_LOCK_EVENTS = ["Locked", "Unlocked", "LockExtended", "LockIncreased", "LockOwnerChanged"];
 
 export const TOKEN_LOCK_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const BPS = 10000n
@@ -129,7 +129,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     if (typeof balance !== "bigint" || balance < 0n) throw new Error("token balanceOf must return a bigint")
     return balance
   }
-  // ดึง token เข้ามาแล้วคืนยอดที่ได้รับจริง
+  // pull tokens in and return the amount actually received
   function pull(token, from, amount) {
     const before = tokenBalance(token)
     const ok = runProgram(token, "transferFrom", { from: from, to: ThisAddress(), amount: amount })
@@ -156,7 +156,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return item.amount * bps / BPS
   }
   function withdrawableNow(item, now) {
-    if (item.owner === ZERO) return 0n   // สละสิทธิ์แล้ว = ไม่มีใครถอนได้ (หน้า UI / ตัวตรวจ lock ต้องไม่เห็นเป็นถอนได้)
+    if (item.owner === ZERO) return 0n   // renounced = nobody can withdraw (UIs / lock checkers must not see it as withdrawable)
     const unlocked = unlockedAmount(item, now)
     return unlocked > item.withdrawn ? unlocked - item.withdrawn : 0n
   }
@@ -328,7 +328,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return true
   }
 
-  // ⚠️ ไม่มีใครถอนได้อีก — token ในล็อกนี้ติดอยู่ตลอดไป
+  // ⚠️ nobody can withdraw anymore — the tokens in this lock are stuck forever
   function renounceLockOwnership(params) { rejectValue(params);
     enter()
     const item = load(params.input.id)

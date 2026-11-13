@@ -1,14 +1,14 @@
 /**
- * ABI ของโปรแกรมแถม (ชุด deploy-system) — node ตอบให้เองจากโค้ดของโปรแกรม ไม่ได้เก็บบนเชน
+ * ABI of the bundled programs (the deploy-system set) — the node serves it from the program code itself, it is not stored on-chain
  *
- *   systemAbiOf(code) → metadata.abi ของโปรแกรมแถมที่โค้ดตรงทุกตัวอักษร · ไม่ใช่ = null
- *   resolveAbi(read, address) → metadata.abi ที่โปรแกรมประกาศเอง ?? ABI ของโปรแกรมแถม (ใช้ทุกที่ที่อ่าน ABI: /evm · /program · explorer)
+ *   systemAbiOf(code) → metadata.abi of the bundled program whose code matches character for character · otherwise = null
+ *   resolveAbi(read, address) → the program's own metadata.abi ?? the bundled program ABI (used everywhere ABI is read: /evm · /program · explorer)
  *
- * ทำไมไม่เก็บบนเชน: โปรแกรมแถมไม่มี upgrader (แก้โค้ดไม่ได้) · ABI ที่ฝังในโค้ด = แก้ไม่ได้ตลอดไป
- *   และ clone (คู่เทรดของ dex / multisig จาก factory) ต้องจ่ายแก๊สเขียน ABI ทุกตัว
- *   ที่นี่ผูกกับโค้ด (โค้ดเดียวกัน = ABI เดียวกัน) → clone ได้ด้วย · แก้ ABI ได้ใน node รุ่นถัดไปโดยไม่แตะเชน
- * token / NFT / multi-token ต้นแบบไม่อยู่ในชุดนี้: /evm รู้จักแบบ ERC-20 / ERC-721 / ERC-1155 อยู่แล้ว
- * ชนิด: uint / int / address / bool / string / bytes · object / array / any = string ที่เป็น JSON (ดู checkAbi)
+ * Why not on-chain: bundled programs have no upgrader (code can't change) · an ABI embedded in code = unchangeable forever
+ *   and clones (dex pairs / multisigs from the factory) would each have to pay gas to write the ABI
+ *   Here it is bound to the code (same code = same ABI) → works for clones too · the ABI can be fixed in the next node release without touching the chain
+ * Template token / NFT / multi-token are not in this set: /evm already knows them as ERC-20 / ERC-721 / ERC-1155
+ * Types: uint / int / address / bool / string / bytes · object / array / any = a JSON string (see checkAbi)
  */
 import { toOneLine, metadataKey, codeKey } from "../core/virtualmachine.js";
 import { MULTICALL_PROGRAM } from "./multicall.js";
@@ -23,7 +23,7 @@ import { MULTICALL_ABI, WCARD_ABI, MULTISIG_ABI, FACTORY_ABI, MULTISENDER_ABI } 
 import { DEX_PAIR_ABI, DEX_ABI, TOKEN_LOCK_ABI } from "./abi/dex.js";
 import { STAKING_ABI, LIMIT_ORDER_ABI, NFT_MARKET_ABI } from "./abi/markets.js";
 
-/** key ตรงกับ systemPrograms() ใน system.js */
+/** keys match systemPrograms() in system.js */
 export const SYSTEM_ABIS = [
   { key: "multicall", code: MULTICALL_PROGRAM, abi: MULTICALL_ABI },
   { key: "wcard", code: WCARD_PROGRAM, abi: WCARD_ABI },
@@ -39,20 +39,20 @@ export const SYSTEM_ABIS = [
 ];
 
 let byCode = null;
-/** โค้ดที่เก็บในเชน (แบบบรรทัดเดียว) → ABI · โค้ดไม่ตรงทุกตัวอักษร = null */
+/** code stored on-chain (single-line form) → ABI · code not matching character for character = null */
 export function systemAbiOf(code) {
   if (typeof code !== "string") return null;
   byCode ??= new Map(SYSTEM_ABIS.map((item) => [toOneLine(item.code), item.abi]));
   return byCode.get(code) ?? null;
 }
 
-/** ABI ของ address: ที่ประกาศใน metadata.abi ก่อน แล้วจึงโปรแกรมแถม · read(dbKey) อ่าน state (ล่าสุด หรือ ณ block) */
+/** ABI of an address: the one declared in metadata.abi first, then the bundled program · read(dbKey) reads state (latest, or at a block) */
 export function resolveAbi(read, address) {
   const lower = String(address ?? "").toLowerCase();
   return read(metadataKey(lower, "abi")) ?? systemAbiOf(read(codeKey(lower)));
 }
 
-/** metadata ของ address + abi ของโปรแกรมแถม (ถ้าไม่ได้ประกาศเอง) — สำหรับ response ที่ explorer อ่าน metadata.abi */
+/** metadata of an address + the bundled program's abi (if it declares none) — for responses where the explorer reads metadata.abi */
 export function withSystemAbi(metadata, read, address) {
   if (!metadata || metadata.abi) return metadata;
   const abi = systemAbiOf(read(codeKey(String(address ?? "").toLowerCase())));

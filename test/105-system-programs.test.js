@@ -11,8 +11,8 @@ import { approvedProgramAddresses } from "../src/node/explorer-api.js";
 import { ERC1271_MAGIC_VALUE, ERC1271_INVALID_VALUE } from "../src/standards/wallet.js";
 
 /*
- * ชุดโปรแกรมกลาง (src/standards/system.js): Multicall · WCARD · Multisig · ต้นแบบ token / NFT / multi-token · Factory
- *   deploy ตามลำดับ nonce ของ deployer → address ตรงกับแผน (systemPrograms) · ชื่อ (namespace) ตั้งตอน initialization
+ * the shared program suite (src/standards/system.js): Multicall · WCARD · Multisig · token / NFT / multi-token templates · Factory
+ *   deployed in the deployer's nonce order → addresses match the plan (systemPrograms) · names (namespace) set during initialization
  */
 
 const T = Date.parse("2026-10-27T00:00:00Z");
@@ -58,7 +58,7 @@ function setup() {
   return { vm, plan, at, send, ok, query, balance };
 }
 
-test("system: deploy ตามลำดับ nonce → address ตรงแผน · มีชื่อ · อนุมัติแล้ว · ไม่มี upgrader", () => {
+test("system: deploy in nonce order → addresses match the plan · named · approved · no upgrader", () => {
   const t = setup();
   assert.deepEqual(t.plan.map((item) => item.key), ["multicall", "wcard", "multisigTemplate", "tokenTemplate", "nftTemplate", "multiTokenTemplate", "factory",
     "multisender", "tokenLock", "dexPairTemplate", "dex", "staking", "limitOrder", "nftMarket"]);
@@ -68,24 +68,24 @@ test("system: deploy ตามลำดับ nonce → address ตรงแผ�
     assert.equal(item.address, t.vm.programAddressFor(DEPLOYER, item.nonce));
     assert.ok(approved.includes(item.address), item.key);
     assert.equal(t.vm.resolveNamespace(item.namespace), item.address, item.namespace);
-    assert.equal(t.vm.getMetadata(item.address).upgrader, undefined, `${item.key} แก้ไม่ได้`);
+    assert.equal(t.vm.getMetadata(item.address).upgrader, undefined, `${item.key} is immutable`);
   }
   assert.deepEqual(t.plan.map((item) => item.namespace),
     ["multicall", "wbwsc", "multisig-template", "token-template", "nft-template", "multitoken-template", "factory",
       "multisender", "token-lock", "dex-pair-template", "dex", "staking", "limit-order", "nft-market"]);
-  // dex ผูกกับต้นแบบคู่เทรด + WBWSC ของชุดเดียวกัน
+  // dex is bound to the pair template + WBWSC of the same suite
   assert.equal(t.query(t.at.dex, "pairTemplate"), t.at.dexPairTemplate);
   assert.equal(t.query(t.at.dex, "wrapped"), t.at.wcard);
   assert.deepEqual(t.query(t.at.factory, "templates"),
     { token: t.at.tokenTemplate, nft: t.at.nftTemplate, multiToken: t.at.multiTokenTemplate, multisig: t.at.multisigTemplate });
-  // ต้นแบบ token ไม่มี supply (ไม่มี event Transfer ตอนสร้าง)
+  // the token template has no supply (no Transfer event on creation)
   assert.equal(t.query(t.at.tokenTemplate, "totalSupply"), "0n");
-  // Multicall อ่านหลายค่าในครั้งเดียว
+  // Multicall reads several values at once
   assert.deepEqual(t.query(t.at.multicall, "aggregate", { readonly: true, calls: [
     { target: t.at.wcard, fn: "ticker" }, { target: t.at.factory, fn: "count" }] }), ["WBWSC", "0n"]);
 });
 
-test("system: สัญลักษณ์เหรียญหลักเปลี่ยนได้ → ชื่อ WCARD ตาม (เช่น WBNB / wbnb)", () => {
+test("system: the native coin symbol is configurable → the WCARD name follows (e.g. WBNB / wbnb)", () => {
   const plan = systemPrograms({ addressAt: (n) => `0x${String(n).padStart(40, "0")}`, symbol: "BNB" });
   const wrapped = plan.find((item) => item.key === "wcard");
   assert.equal(wrapped.namespace, "wbnb");
@@ -93,7 +93,7 @@ test("system: สัญลักษณ์เหรียญหลักเปล
   assert.equal(wrapped.input.name, "Wrapped BNB");
 });
 
-test("system: โค้ดทุกตัวผ่าน autoreview และทำตามมาตรฐานที่เกี่ยวข้อง", () => {
+test("system: all code passes autoreview and follows the relevant standards", () => {
   for (const code of [MULTICALL_PROGRAM, WCARD_PROGRAM, MULTISIG_PROGRAM, FACTORY_PROGRAM]) {
     const result = reviewProgram(code);
     assert.ok(result.ok, result.message);
@@ -101,7 +101,7 @@ test("system: โค้ดทุกตัวผ่าน autoreview และท
   assert.deepEqual(checkTokenStandard(WCARD_PROGRAM), { ok: true, missing: [] });
 });
 
-test("WCARD: ฝากได้ 1:1 · โอนได้ · ถอนคืนเป็นเหรียญหลัก", () => {
+test("WCARD: deposit 1:1 · transferable · withdraw back to native coin", () => {
   const t = setup();
   const before = t.balance(ALICE);
   const dep = t.ok(t.send(ALICE, t.at.wcard, "deposit", {}, { value: `${5n * COIN}` }));
@@ -125,22 +125,22 @@ test("WCARD: ฝากได้ 1:1 · โอนได้ · ถอนคืน�
   t.ok(t.send(CAROL, t.at.wcard, "withdrawTo", { to: DAVE, amount: `${COIN}n` }));
   assert.equal(t.balance(DAVE), 1001n * COIN);
   assert.equal(t.query(t.at.wcard, "totalSupply"), `${3n * COIN}n`);
-  assert.equal(t.balance(t.at.wcard), 3n * COIN, "เหรียญหลักที่ฝากอยู่ = totalSupply");
+  assert.equal(t.balance(t.at.wcard), 3n * COIN, "deposited native coin = totalSupply");
 
-  assert.equal(t.send(BOB, t.at.wcard, "withdraw", { amount: "1n" }).status, "throw", "ถอนเกินยอด");
-  assert.equal(t.send(BOB, t.at.wcard, "deposit", {}).status, "throw", "ฝากโดยไม่แนบ value");
+  assert.equal(t.send(BOB, t.at.wcard, "withdraw", { amount: "1n" }).status, "throw", "withdraw more than the balance");
+  assert.equal(t.send(BOB, t.at.wcard, "deposit", {}).status, "throw", "deposit without attaching value");
 });
 
-test("factory: ใครก็สร้าง token ได้ทันที (ไม่ต้องรอ admin) · supply เป็นของผู้สร้าง · address รู้ล่วงหน้า", () => {
+test("factory: anyone can create a token immediately (no admin wait) · supply goes to the creator · address known in advance", () => {
   const t = setup();
   const code = t.vm.read(VM.codeKey(t.at.tokenTemplate));
   const expected = t.vm.cloneAddressFor(t.at.factory, factorySalt(ALICE, "#0"), code);
-  const res = t.ok(t.send(ALICE, t.at.factory, "createToken", { name: "Alice Coin", ticker: "ALC", decimals: "6n", supply: "1000000n", description: "เหรียญของ alice" }));
+  const res = t.ok(t.send(ALICE, t.at.factory, "createToken", { name: "Alice Coin", ticker: "ALC", decimals: "6n", supply: "1000000n", description: "alice's coin" }));
   const token = res.result;
   assert.equal(token, expected);
   assert.ok(approvedProgramAddresses(t.vm).includes(token));
   assert.equal(t.vm.getMetadata(token).template, t.at.tokenTemplate);
-  assert.equal(t.vm.getMetadata(token).description, "เหรียญของ alice");
+  assert.equal(t.vm.getMetadata(token).description, "alice's coin");
   assert.deepEqual(checkTokenStandard(code), { ok: true, missing: [] });
   assert.equal(t.query(token, "balanceOf", { who: ALICE }), "1000000n");
   assert.equal(t.query(token, "name"), "Alice Coin");
@@ -155,21 +155,21 @@ test("factory: ใครก็สร้าง token ได้ทันที (�
   assert.equal(t.query(t.at.factory, "createdBy", { creator: ALICE, index: "0n" }), token);
   assert.equal(t.query(t.at.factory, "kindOf", { address: token }), "token");
 
-  // salt เอง: address = f(ผู้สร้าง + salt) · ใช้ซ้ำไม่ได้ · คนอื่นใช้ salt เดียวกันได้ address คนละตัว
+  // custom salt: address = f(creator + salt) · no reuse · others using the same salt get a different address
   const mine = t.ok(t.send(ALICE, t.at.factory, "createToken", { name: "A2", ticker: "A2", decimals: "0n", supply: "1n", salt: "launch" })).result;
   assert.equal(mine, t.vm.cloneAddressFor(t.at.factory, factorySalt(ALICE, "launch"), code));
   assert.equal(t.send(ALICE, t.at.factory, "createToken", { name: "A3", ticker: "A3", decimals: "0n", supply: "1n", salt: "launch" }).status, "throw");
   const bobs = t.ok(t.send(BOB, t.at.factory, "createToken", { name: "B", ticker: "B", decimals: "0n", supply: "1n", salt: "launch" })).result;
   assert.notEqual(bobs, mine);
 
-  // ตรวจค่า
+  // validation
   for (const bad of [{ name: "", ticker: "X", decimals: "0n", supply: "1n" }, { name: "X", ticker: "X", decimals: "37n", supply: "1n" },
     { name: "X", ticker: "X", decimals: "0n", supply: "-1n" }, { name: "X", ticker: "X", decimals: "0n", supply: "1n", salt: "#9" }]) {
     assert.equal(t.send(CAROL, t.at.factory, "createToken", bad).status, "throw", JSON.stringify(bad));
   }
 });
 
-test("factory: NFT / multi-token ที่สร้างแล้ว ผู้สร้างเป็น owner (mint ได้) คนอื่น mint ไม่ได้", () => {
+test("factory: for created NFT / multi-token, the creator is owner (can mint), others cannot mint", () => {
   const t = setup();
   const nft = t.ok(t.send(ALICE, t.at.factory, "createNft", { name: "Alice Art", symbol: "AART", baseURI: "https://a.example/" })).result;
   assert.deepEqual(checkNftStandard(t.vm.read(VM.codeKey(nft))), { ok: true, missing: [] });
@@ -188,23 +188,23 @@ test("factory: NFT / multi-token ที่สร้างแล้ว ผู้�
   assert.equal(t.query(t.at.factory, "kindOf", { address: items }), "multiToken");
 });
 
-test("multisig: 2 ใน 3 · ยืนยันครบก่อนถึงทำได้ · โอนเหรียญหลัก + เรียกโปรแกรม", () => {
+test("multisig: 2 of 3 · executes only once fully confirmed · native transfer + program call", () => {
   const t = setup();
   const safe = t.ok(t.send(ALICE, t.at.factory, "createMultisig", { owners: [ALICE, BOB, CAROL], threshold: "2n", namespace: "team-safe" })).result;
   assert.equal(t.vm.resolveNamespace("team-safe"), safe);
   assert.deepEqual(t.query(safe, "owners"), [ALICE, BOB, CAROL]);
   assert.equal(t.query(safe, "threshold"), "2n");
 
-  // เติมเงินเข้ากระเป๋าทีม
+  // fund the team wallet
   t.ok(t.send(DAVE, safe, "deposit", {}, { value: `${10n * COIN}` }));
   assert.equal(t.balance(safe), 10n * COIN);
 
-  // โอน 3 เหรียญให้ dave: alice เสนอ (ยืนยัน 1) → ยังทำไม่ได้ → bob ยืนยัน → ทำได้
+  // send 3 coins to dave: alice proposes (1 confirmation) → cannot execute yet → bob confirms → executes
   const id = t.ok(t.send(ALICE, safe, "submit", { target: DAVE, value: `${3n * COIN}n` })).result;
   assert.equal(id, "0n");
-  assert.equal(t.send(ALICE, safe, "execute", { id: "0n" }).status, "throw", "ยืนยันยังไม่ครบ");
-  assert.equal(t.send(DAVE, safe, "confirm", { id: "0n" }).status, "throw", "คนนอกยืนยันไม่ได้");
-  assert.equal(t.send(ALICE, safe, "confirm", { id: "0n" }).status, "throw", "ยืนยันซ้ำไม่ได้");
+  assert.equal(t.send(ALICE, safe, "execute", { id: "0n" }).status, "throw", "not enough confirmations");
+  assert.equal(t.send(DAVE, safe, "confirm", { id: "0n" }).status, "throw", "outsiders cannot confirm");
+  assert.equal(t.send(ALICE, safe, "confirm", { id: "0n" }).status, "throw", "no double confirmation");
   t.ok(t.send(BOB, safe, "confirm", { id: "0n" }));
   assert.equal(t.query(safe, "getTransaction", { id: "0n" }).confirmations, "2n");
   const daveBefore = t.balance(DAVE);
@@ -212,27 +212,27 @@ test("multisig: 2 ใน 3 · ยืนยันครบก่อนถึง�
   assert.equal(t.balance(DAVE), daveBefore + 3n * COIN);
   assert.equal(t.balance(safe), 7n * COIN);
   assert.equal(t.query(safe, "getTransaction", { id: "0n" }).executed, true);
-  assert.equal(t.send(BOB, safe, "execute", { id: "0n" }).status, "throw", "ทำซ้ำไม่ได้");
+  assert.equal(t.send(BOB, safe, "execute", { id: "0n" }).status, "throw", "no repeated execution");
 
-  // เรียกโปรแกรม: กระเป๋าทีมฝากเข้า WCARD (แนบ value) → WCARD เป็นของกระเป๋าทีม
+  // program call: the team wallet deposits into WCARD (with value) → the WCARD belongs to the team wallet
   t.ok(t.send(BOB, safe, "submit", { target: t.at.wcard, fn: "deposit", value: `${2n * COIN}n` }));
   t.ok(t.send(CAROL, safe, "confirm", { id: "1n" }));
   t.ok(t.send(BOB, safe, "execute", { id: "1n" }));
   assert.equal(t.query(t.at.wcard, "balanceOf", { who: safe }), `${2n * COIN}n`);
 
-  // revoke: ถอนแล้วยืนยันไม่ครบ
+  // revoke: after revoking, confirmations are insufficient
   t.ok(t.send(ALICE, safe, "submit", { target: DAVE, value: "1n" }));
   t.ok(t.send(BOB, safe, "confirm", { id: "2n" }));
   t.ok(t.send(BOB, safe, "revoke", { id: "2n" }));
   assert.equal(t.send(ALICE, safe, "execute", { id: "2n" }).status, "throw");
 
-  assert.equal(t.send(DAVE, safe, "submit", { target: DAVE, value: "1n" }).status, "throw", "คนนอกเสนอไม่ได้");
+  assert.equal(t.send(DAVE, safe, "submit", { target: DAVE, value: "1n" }).status, "throw", "outsiders cannot propose");
 });
 
-test("multisig: เปลี่ยนเจ้าของ / threshold / รับรองลายเซ็น ได้เฉพาะผ่านรายการของ multisig เอง", () => {
+test("multisig: owners / threshold / signature approval can change only through the multisig's own transactions", () => {
   const t = setup();
   const safe = t.ok(t.send(ALICE, t.at.factory, "createMultisig", { owners: [ALICE, BOB], threshold: "2n" })).result;
-  assert.equal(t.send(ALICE, safe, "addOwner", { owner: CAROL }).status, "throw", "เรียกตรงไม่ได้");
+  assert.equal(t.send(ALICE, safe, "addOwner", { owner: CAROL }).status, "throw", "cannot be called directly");
 
   const run = (input) => {
     const id = t.ok(t.send(ALICE, safe, "submit", { target: safe, ...input })).result;
@@ -243,16 +243,16 @@ test("multisig: เปลี่ยนเจ้าของ / threshold / รั�
   assert.deepEqual(t.query(safe, "owners"), [ALICE, BOB, CAROL]);
   assert.equal(t.query(safe, "threshold"), "3n");
 
-  // threshold 3: ต้องครบ 3 คน
+  // threshold 3: all 3 required
   const id = t.ok(t.send(ALICE, safe, "submit", { target: safe, fn: "removeOwner", input: { owner: BOB } })).result;
   t.ok(t.send(BOB, safe, "confirm", { id }));
   assert.equal(t.send(BOB, safe, "execute", { id }).status, "throw");
   t.ok(t.send(CAROL, safe, "confirm", { id }));
   t.ok(t.send(CAROL, safe, "execute", { id }));
   assert.deepEqual(t.query(safe, "owners"), [ALICE, CAROL]);
-  assert.equal(t.query(safe, "threshold"), "2n", "threshold ลดลงตามจำนวนเจ้าของ");
+  assert.equal(t.query(safe, "threshold"), "2n", "threshold drops with the owner count");
 
-  // ERC-1271: digest ที่ทีมรับรองแล้ว → magic
+  // ERC-1271: a digest the team approved → magic
   const hash = `0x${"ab".repeat(32)}`;
   assert.equal(t.query(safe, "isValidSignature", { hash, signature: "0x" }), ERC1271_INVALID_VALUE);
   const approveId = t.ok(t.send(ALICE, safe, "submit", { target: safe, fn: "approveHash", input: { hash } })).result;
@@ -261,7 +261,7 @@ test("multisig: เปลี่ยนเจ้าของ / threshold / รั�
   assert.equal(t.query(safe, "isValidSignature", { hash, signature: "0x" }), ERC1271_MAGIC_VALUE);
 });
 
-test("multisig: ค่าเริ่มต้นผิด → สร้างไม่ได้ · ต้นแบบไม่มีเจ้าของ ทำอะไรไม่ได้", () => {
+test("multisig: bad initial values → cannot be created · the template has no owners and can do nothing", () => {
   const t = setup();
   for (const bad of [{ owners: [], threshold: "1n" }, { owners: [ALICE, ALICE], threshold: "1n" }, { owners: [ALICE], threshold: "2n" },
     { owners: [ALICE], threshold: "0n" }, { owners: ["alice"], threshold: "1n" }]) {
@@ -271,7 +271,7 @@ test("multisig: ค่าเริ่มต้นผิด → สร้าง�
   assert.equal(t.send(DEPLOYER, t.at.multisigTemplate, "submit", { target: ALICE, value: "1n" }).status, "throw");
 });
 
-test("system: โปรแกรมแถมใช้ร่วมกันได้ · token จาก factory → ใส่สภาพคล่องกับ BWSC ที่ dex → swap · ล็อก LP ที่ token-lock", () => {
+test("system: bundled programs work together · token from factory → add liquidity with BWSC on dex → swap · lock LP in token-lock", () => {
   const t = setup();
   const token = t.ok(t.send(ALICE, t.at.factory, "createToken", { name: "Alpha", ticker: "ALP", decimals: "18n", supply: `${1000n * COIN}n` })).result;
   const deadline = `${BigInt(T) / 1000n + 3600n}n`;
@@ -282,7 +282,7 @@ test("system: โปรแกรมแถมใช้ร่วมกันได
   assert.match(pair, /^0x[0-9a-f]{40}$/);
   const swap = t.ok(t.send(BOB, t.at.dex, "swapExactNativeForTokens", { amountOutMin: "1n", path: [t.at.wcard, token], to: BOB, deadline }, { value: `${COIN}n` }));
   assert.ok(BigInt(String(t.query(token, "balanceOf", { who: BOB })).replace(/n$/, "")) > 0n, JSON.stringify(swap.result));
-  // ล็อก LP ครึ่งหนึ่งไว้ที่ token-lock
+  // lock half the LP in token-lock
   const lp = BigInt(String(t.query(pair, "balanceOf", { who: ALICE })).replace(/n$/, ""));
   t.ok(t.send(ALICE, pair, "approve", { spender: t.at.tokenLock, amount: `${lp}n` }));
   const unlock = `${BigInt(T) / 1000n + 86_400n}n`;

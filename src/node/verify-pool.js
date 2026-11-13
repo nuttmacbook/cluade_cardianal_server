@@ -1,14 +1,14 @@
 /**
- * ตรวจลายเซ็นของ tx ใน worker thread (ระยะ 2.3)
+ * Verifies tx signatures in worker threads (phase 2.3)
  *
  *   const pool = new VerifyPool({ size: 2 });
- *   const verified = await pool.verify({ tx, signature });   // = verifyTransaction({ tx, signature }) แต่ไม่บล็อก thread หลัก
+ *   const verified = await pool.verify({ tx, signature });   // = verifyTransaction({ tx, signature }) without blocking the main thread
  *
- * recover ลายเซ็น secp256k1 ใช้ ~2 ms ต่อ tx → ถ้าทำบน thread หลัก /sendtx รับได้ไม่เกิน ~400 tx/วิ และ RPC อื่นต้องรอ
- * ผลเหมือน verifyTransaction ทุกไบต์ (ส่งกลับด้วย structured clone: ข้อมูล JSON + BigInt) · ลายเซ็นผิด = reject ด้วยข้อความเดิม
+ * recovering a secp256k1 signature takes ~2 ms per tx → on the main thread /sendtx tops out at ~400 tx/s and other RPCs must wait
+ * results are byte-for-byte identical to verifyTransaction (returned via structured clone: JSON data + BigInt) · bad signature = rejects with the same message
  *
- * size 0 = ตรวจบน thread หลัก (แบบเดิม) · worker สร้างเมื่อใช้ครั้งแรก และ unref ไว้ ไม่กันโปรเซสจบ
- * worker ตาย → งานที่ค้างของตัวนั้น reject แล้วสร้างใหม่ตอนใช้ครั้งต่อไป
+ * size 0 = verify on the main thread (the old way) · workers are created on first use and unref'd so they don't keep the process alive
+ * a worker dies → its pending jobs reject and it is recreated on next use
  */
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import os from "node:os";
@@ -39,11 +39,11 @@ export class VerifyPool {
       slot.pending.set(id, { resolve, reject });
       if (slot.pending.size === 1) slot.worker.ref();
       try { slot.worker.postMessage({ id, tx, signature, sponsorSignature }); }
-      catch (error) { this.#settle(slot, id, { error: error.message }); }   // ส่งข้อมูลข้าม thread ไม่ได้ (เช่น function)
+      catch (error) { this.#settle(slot, id, { error: error.message }); }   // data can't cross threads (e.g. a function)
     });
   }
 
-  /** ปิด worker ทั้งหมด (งานที่ค้าง reject) */
+  /** close all workers (pending jobs reject) */
   async close() {
     const workers = this.#workers.splice(0);
     await Promise.all(workers.filter(Boolean).map((slot) => slot.worker.terminate()));
@@ -55,13 +55,13 @@ export class VerifyPool {
   }
 
   #spawn(index) {
-    // execArgv: [] = ไม่รับ flag ของโปรเซสหลัก (เช่น --input-type / --test)
+    // execArgv: [] = don't inherit the main process's flags (e.g. --input-type / --test)
     const slot = { worker: new Worker(new URL(import.meta.url), { execArgv: [] }), pending: new Map() };
     slot.worker.unref();
     slot.worker.on("message", ({ id, ...result }) => this.#settle(slot, id, result));
     const fail = (error) => {
       if (this.#workers[index] === slot) this.#workers[index] = undefined;
-      for (const { reject } of slot.pending.values()) reject(new Error(`verify worker หยุดทำงาน: ${error?.message ?? error}`));
+      for (const { reject } of slot.pending.values()) reject(new Error(`verify worker stopped: ${error?.message ?? error}`));
       slot.pending.clear();
     };
     slot.worker.on("error", fail);

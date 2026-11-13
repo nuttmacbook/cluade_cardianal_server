@@ -5,7 +5,7 @@ import { COUNTER, NO_INIT, INIT_THROWS, INIT_LOOPS, INIT_CALLS_REGISTRY, REGISTR
 
 beforeEach(resetVM);
 
-test("init: รัน initialization ด้วย context / initInput ตอน deploy แล้วบันทึกโปรแกรม", () => {
+test("init: runs initialization with the deploy context / initInput, then saves the program", () => {
   ok(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 10 } }));
   const res = ok(vm.init({ programUuid: "counter" }));
 
@@ -32,7 +32,7 @@ test("init: รัน initialization ด้วย context / initInput ตอน 
   assert.equal(stored("counter", "count"), "10n");
 });
 
-test("init: โปรแกรมไม่มี initialization → ไม่มี calls แต่บันทึกโปรแกรม", () => {
+test("init: program without initialization → no calls, but the program is saved", () => {
   ok(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }));
   const res = ok(vm.init({ programUuid: "p" }));
   assert.deepEqual(res.calls, []);
@@ -44,41 +44,41 @@ test("init: โปรแกรมไม่มี initialization → ไม่ม
   ]);
 });
 
-test("init: initialization throw → ไม่มี writes, pending ยังอยู่, init ใหม่ได้หลังแก้ข้อมูล", () => {
+test("init: initialization throws → no writes, pending remains, init again after fixing the data", () => {
   ok(vm.deploy({ programUuid: "p", code: INIT_THROWS, context: user("a"), initInput: { ok: false } }));
   const res = fails(vm.init({ programUuid: "p" }), "PROGRAM_ERROR", "init failed");
   assert.deepEqual(trace(res), ["0:p.initialization:throw:PROGRAM_ERROR"]);
   assert.ok(mockData.has("pending:p"));
   assert.equal(stored("p", "partial"), undefined);
 
-  mockData.get("pending:p").initInput = { ok: true }; // สมมติว่าแก้ข้อมูล pending ใน DB
+  mockData.get("pending:p").initInput = { ok: true }; // pretend the pending data was fixed in the DB
   ok(vm.init({ programUuid: "p" }));
   assert.equal(stored("p", "partial"), "1n");
 });
 
-test("init: initialization วนไม่รู้จบ → TIMEOUT", () => {
+test("init: initialization loops forever → TIMEOUT", () => {
   ok(vm.deploy({ programUuid: "p", code: INIT_LOOPS, context: user("a") }));
   const res = fails(vm.init({ programUuid: "p" }), "TIMEOUT");
   assert.deepEqual(trace(res), ["0:p.initialization:throw:TIMEOUT"]);
   assert.ok(mockData.has("pending:p"));
 });
 
-test("init: ไม่มี pending / init ซ้ำ → NOT_FOUND", () => {
-  fails(vm.init({ programUuid: "nothing" }), "NOT_FOUND", "ไม่พบโปรแกรมที่รอรีวิว");
+test("init: no pending / repeated init → NOT_FOUND", () => {
+  fails(vm.init({ programUuid: "nothing" }), "NOT_FOUND", "no program pending review");
   activate("p", NO_INIT);
   fails(vm.init({ programUuid: "p" }), "NOT_FOUND");
   fails(vm.init({ programUuid: "a:b" }), "INVALID_REQUEST");
   fails(vm.init(), "INVALID_REQUEST");
 });
 
-test("init: ถ้าไม่บันทึก writes ของ init รอบแรก init ซ้ำจะรัน initialization ใหม่", () => {
+test("init: if the first init's writes are not saved, a repeated init runs initialization again", () => {
   ok(vm.deploy({ programUuid: "c", code: COUNTER, context: user("a") }));
-  const first = vm.init({ programUuid: "c" }, { timestamp: 1 }); // ไม่ save
+  const first = vm.init({ programUuid: "c" }, { timestamp: 1 }); // not saved
   const second = vm.init({ programUuid: "c" }, { timestamp: 1 });
   assert.deepEqual(first, second);
 });
 
-test("initialization เรียกโปรแกรมอื่นได้ โดย sender = โปรแกรมใหม่", () => {
+test("initialization can call other programs, with sender = the new program", () => {
   activate("registry", REGISTRY);
   ok(vm.deploy({ programUuid: "newbie", code: INIT_CALLS_REGISTRY, context: user("alice"), initInput: { registry: "registry" } }));
   const res = ok(vm.init({ programUuid: "newbie" }));
@@ -88,12 +88,12 @@ test("initialization เรียกโปรแกรมอื่นได้ �
   assert.equal(stored("registry", "members", "newbie"), "alice");
 });
 
-test("initialization: user และโปรแกรมอื่นเรียกเองไม่ได้", () => {
+test("initialization: users and other programs cannot call it", () => {
   activate("token", TOKEN, { initInput: { supply: 100 } });
-  fails(vm.call({ programUuid: "token", functionName: "initialization", context: user("owner") }), "FORBIDDEN", "เรียก 'initialization' ไม่ได้ (ไม่มีหรือไม่ได้ export)");
+  fails(vm.call({ programUuid: "token", functionName: "initialization", context: user("owner") }), "FORBIDDEN", "cannot call 'initialization' (missing or not exported)");
 });
 
-test("reject: ลบ pending, reject ซ้ำ NOT_FOUND, deploy id เดิมใหม่ได้", () => {
+test("reject: removes pending, repeated reject is NOT_FOUND, the same id can be deployed again", () => {
   ok(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }));
   const res = ok(vm.reject({ programUuid: "p" }));
   assert.deepEqual(res.result, { programUuid: "p", state: "rejected", refund: "0n" });
@@ -103,7 +103,7 @@ test("reject: ลบ pending, reject ซ้ำ NOT_FOUND, deploy id เดิม
   ok(vm.deploy({ programUuid: "p", code: COUNTER, context: user("a") }));
 });
 
-test("reject: โปรแกรมที่ active แล้ว reject ไม่ได้", () => {
+test("reject: an active program cannot be rejected", () => {
   activate("p", NO_INIT);
   fails(vm.reject({ programUuid: "p" }), "NOT_FOUND");
 });

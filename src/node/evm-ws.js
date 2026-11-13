@@ -1,17 +1,17 @@
 /**
- * WebSocket ของ /evm (ws://host/evm) — ให้ Blockscout / ethers รับ block ใหม่แบบ realtime ด้วย eth_subscribe
+ * WebSocket for /evm (ws://host/evm) — lets Blockscout / ethers receive new blocks in realtime via eth_subscribe
  *
  *   attachEvmWebSocket(server, { rpc, vm, allow: (ip) => limiter.allow(ip) });
  *
- * อ่านอย่างเดียวเหมือน POST /evm: ทุก method อื่นส่งต่อให้ rpc.handle
- *   - eth_subscribe("newHeads")            → header ของทุก block ใหม่
- *   - eth_subscribe("logs", { address, topics }) → log ของ block ใหม่ที่ตรงเงื่อนไข
- *   - eth_subscribe("newPendingTransactions"[, true]) → hash ของ tx ที่เพิ่งเข้า mempool ทันที (true = ทั้งใบแบบ eth_getTransactionByHash)
+ * Read-only like POST /evm: every other method is forwarded to rpc.handle
+ *   - eth_subscribe("newHeads")            → the header of every new block
+ *   - eth_subscribe("logs", { address, topics }) → logs of new blocks matching the filter
+ *   - eth_subscribe("newPendingTransactions"[, true]) → hashes of txs as soon as they enter the mempool (true = full tx like eth_getTransactionByHash)
  *   - eth_unsubscribe(id)
- * กันโหลด: allow(ip) นับทุกคำขอ (batch นับทุกตัว) · allowSend(ip) นับ eth_sendRawTransaction เพิ่ม (โควตาเดียวกับ /sendtx)
- *   batch ไม่เกิน maxBatch · subscription ต่อการเชื่อมต่อไม่เกิน maxSubscriptions · การเชื่อมต่อต่อ IP ไม่เกิน maxConnectionsPerIp
- * ไม่ใช้ไลบรารีนอก: handshake + frame ตาม RFC 6455 (เฉพาะ text / ping / close ไม่รับ frame แตกส่วน)
- * block ใหม่ตรวจจาก vm.latestBlockNumber() ทุก pollMs เฉพาะตอนที่มีคน subscribe อยู่ (ไม่แตะตัวสร้าง block)
+ * Load protection: allow(ip) counts every request (a batch counts each item) · allowSend(ip) additionally counts eth_sendRawTransaction (same quota as /sendtx)
+ *   batches at most maxBatch · subscriptions per connection at most maxSubscriptions · connections per IP at most maxConnectionsPerIp
+ * No external library: handshake + frames per RFC 6455 (text / ping / close only, no fragmented frames)
+ * new blocks are detected from vm.latestBlockNumber() every pollMs, only while someone is subscribed (doesn't touch the block producer)
  */
 import crypto from "node:crypto";
 import { EVM_ERROR, parseError } from "./evm-rpc.js";
@@ -29,7 +29,7 @@ function frame(opcode, payload = Buffer.alloc(0)) {
   return Buffer.concat([head, payload]);
 }
 
-/** ตัด frame ที่ครบออกจาก buffer → { frames, rest } · frame ผิดรูปแบบ → null */
+/** cut complete frames off the buffer → { frames, rest } · malformed frame → null */
 function readFrames(buffer) {
   const frames = [];
   let offset = 0;
@@ -50,7 +50,7 @@ function readFrames(buffer) {
       length = Number(big);
       at += 8;
     }
-    if (!masked || length > MAX_PAYLOAD || (first & 0x80) === 0) return null;   // client ต้อง mask · ไม่รับ frame แตกส่วน
+    if (!masked || length > MAX_PAYLOAD || (first & 0x80) === 0) return null;   // clients must mask · no fragmented frames
     if (buffer.length < at + 4 + length) break;
     const mask = buffer.subarray(at, at + 4);
     const payload = Buffer.from(buffer.subarray(at + 4, at + 4 + length));
@@ -73,7 +73,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
 
   const subscribed = () => [...clients].some((client) => client.subscriptions.size > 0);
   const call = (method, params) => rpc.handle({ jsonrpc: "2.0", id: 0, method, params }).result;
-  // tx เข้า mempool → ส่งทันที (ไม่ต้องรอ poll) · กรองตอนส่ง: ไม่มีใคร subscribe = ไม่ทำอะไร
+  // a tx enters the mempool → send immediately (no waiting for poll) · filtered at send time: nobody subscribed = nothing to do
   const stopPending = rpc.onPendingTransaction?.((hash) => {
     let full;
     for (const client of clients) {
@@ -119,7 +119,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
       if (kind !== "newHeads" && kind !== "logs" && kind !== "newPendingTransactions") {
         return { jsonrpc: "2.0", id, error: { code: EVM_ERROR.PARAMS, message: `unsupported subscription: ${kind}` } };
       }
-      if (kind === "logs") {   // ตรวจ filter ก่อน (address ผิด → error ทันที)
+      if (kind === "logs") {   // validate the filter first (bad address → error immediately)
         const check = rpc.handle({ jsonrpc: "2.0", id, method: "eth_getLogs", params: [{ ...filter, fromBlock: "latest", toBlock: "latest" }] });
         if (check.error) return check;
       }
@@ -149,7 +149,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
     }
     const ip = clientIp(request);
     if ([...clients].filter((other) => other.ip === ip).length >= maxConnectionsPerIp) {
-      socket.end("HTTP/1.1 429 Too Many Requests\r\n\r\n");   // เปิดค้างไว้หลายอันต่อ IP ไม่ได้
+      socket.end("HTTP/1.1 429 Too Many Requests\r\n\r\n");   // can't keep many connections open per IP
       return;
     }
     const accept = crypto.createHash("sha1").update(key + GUID).digest("base64");
@@ -184,7 +184,7 @@ export function attachEvmWebSocket(server, { rpc, vm, path = "/evm", pollMs = 10
           client.send({ jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.REQUEST, message: `batch too large (max ${maxBatch})` } });
           continue;
         }
-        if (Array.isArray(body) && body.slice(1).some(() => !allow(ip))) {   // ตัวแรกนับไปแล้วข้างบน
+        if (Array.isArray(body) && body.slice(1).some(() => !allow(ip))) {   // the first one was already counted above
           client.send({ jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.LIMIT, message: "Too many requests, try again later" } });
           continue;
         }

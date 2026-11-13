@@ -1,159 +1,159 @@
-# ใช้ Blockscout ดูเชนนี้ (ในเครื่องตัวเอง)
+# Viewing this chain with Blockscout (locally)
 
-Blockscout ต่อเข้ากับ `/evm` ของเชน (ตัวแปลง JSON-RPC แบบอ่านอย่างเดียว ดู `HANDOFF.md` หัวข้อ `/evm`)
-ใช้ docker-compose ของ Blockscout เอง (repo `blockscout/blockscout` โฟลเดอร์ `docker-compose/`) ไม่ต้อง build อะไร
-รันจริงสำเร็จบน Mac + colima กับ image `ghcr.io/blockscout/blockscout:latest` (9.0.x) เมื่อ 2026-10-11 · index ครบทุก block, หน้าเว็บแสดง block / tx / token / ยอดกระเป๋า
+Blockscout connects to the chain's `/evm` (a read-only JSON-RPC adapter, see the `/evm` section of `HANDOFF.md`)
+It uses Blockscout's own docker-compose (repo `blockscout/blockscout`, folder `docker-compose/`), nothing to build
+Successfully run on Mac + colima with image `ghcr.io/blockscout/blockscout:latest` (9.0.x) on 2026-10-11 · indexed every block; the web UI shows blocks / txs / tokens / wallet balances
 
-## ต้องมี
-- Docker ที่รันอยู่: Docker Desktop หรือบน Mac `brew install colima docker docker-compose && colima start` (เช็กด้วย `docker ps`)
-- Docker Compose: `docker compose` (v2) หรือ `docker-compose` — คู่มือนี้ใช้ `docker-compose` ถ้าเครื่องมี v2 จะใช้ `docker compose` แทนก็ได้
-- พอร์ต 80 ว่าง (หน้าเว็บ Blockscout) · เชนรันที่พอร์ต 3000 ตามเดิม
-- RAM ประมาณ 4 GB ขึ้นไปสำหรับ container ทั้งชุด
+## Requirements
+- Docker running: Docker Desktop, or on Mac `brew install colima docker docker-compose && colima start` (check with `docker ps`)
+- Docker Compose: `docker compose` (v2) or `docker-compose` — this guide uses `docker-compose`; with v2 you can use `docker compose` instead
+- port 80 free (the Blockscout web UI) · the chain runs on port 3000 as usual
+- about 4 GB+ RAM for the whole container set
 
-## 1. รันเชน
+## 1. Run the chain
 ```bash
-DEV=1 EVM_RATE_LIMIT=0 node server.js  # หรือใส่ EVM_RATE_LIMIT=0 ใน .env แล้ว node --env-file=.env server.js
+DEV=1 EVM_RATE_LIMIT=0 node server.js  # or put EVM_RATE_LIMIT=0 in .env and run node --env-file=.env server.js
 ```
-- `EVM_RATE_LIMIT=0` สำคัญ: indexer ยิงถี่มาก ถ้าเปิด limit ไว้ 600/นาที จะโดน 429
-- อยากมีข้อมูลให้ดู: อีกหน้าต่างรัน `node dev/seed.js http://localhost:3000` (หรือ `npm run simulate` / `npm run scenario` — ต้องเปิดเชนด้วย `GAS_PRICE=1000000000` + genesis ที่ไม่มี `forks` ดู `HANDOFF.md` หัวข้อ 10)
-- จด chainId ของเชนไว้ (ค่าเริ่มต้น + `genesis.json` = 41234) ต้องใส่ให้ตรงกันใน Blockscout
+- `EVM_RATE_LIMIT=0` matters: the indexer polls very frequently; with the 600/min limit on it gets 429s
+- want data to look at: in another window run `node dev/seed.js http://localhost:3000` (or `npm run simulate` / `npm run scenario` — these need the chain started with `GAS_PRICE=1000000000` + a genesis without `forks`, see section 10 of `HANDOFF.md`)
+- note the chain's chainId (default + `genesis.json` = 41234); it must match in Blockscout
 
-เช็กว่า `/evm` ตอบ:
+Check that `/evm` answers:
 ```bash
 curl -s -X POST localhost:3000/evm -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 ```
 
-## 2. เอา Blockscout มา
+## 2. Get Blockscout
 ```bash
 git clone --depth 1 https://github.com/blockscout/blockscout.git
 cd blockscout/docker-compose
 ```
-คำสั่งทุกตัวจากนี้รันในโฟลเดอร์ `blockscout/docker-compose`
+All commands from here on run in the `blockscout/docker-compose` folder
 
-## 3. ตั้งค่า backend: `envs/common-blockscout.env`
-แก้บรรทัดที่มีอยู่แล้ว (เอา `#` หน้าบรรทัดออกถ้ามี) บรรทัดที่ไม่มีให้เพิ่มท้ายไฟล์:
+## 3. Backend config: `envs/common-blockscout.env`
+Edit lines that already exist (remove a leading `#` if present); append any missing lines to the end of the file:
 ```
 ETHEREUM_JSONRPC_VARIANT=geth
 ETHEREUM_JSONRPC_HTTP_URL=http://host.docker.internal:3000/evm
 ETHEREUM_JSONRPC_TRACE_URL=http://host.docker.internal:3000/evm
 ETHEREUM_JSONRPC_WS_URL=ws://host.docker.internal:3000/evm
-CHAIN_ID=41234                               # ให้ตรงกับ chainId ของเชน
+CHAIN_ID=41234                               # must match the chain's chainId
 COIN=BWSC
 COIN_NAME=Bluewolfchain
-INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer   # ค่าเริ่มต้นก็เป็นค่านี้อยู่แล้ว
-INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true    # ใช้ trace_block ซึ่ง /evm ไม่มี
-ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false   # Blockscout 9.x บีบ gzip คำขอ debug_* / eth_getBlockReceipts แต่ /evm อ่าน gzip ไม่ได้
-ECTO_USE_SSL=false                           # image 9.0.x ใช้ตัวแปรนี้ (ไม่ใช่ ECTO_SSL_MODE ในไฟล์) ไม่งั้น backend ต่อ db ไม่ได้: "ssl not available"
+INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer   # already the default
+INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true    # it uses trace_block, which /evm doesn't have
+ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false   # Blockscout 9.x gzips debug_* / eth_getBlockReceipts requests, but /evm can't read gzip
+ECTO_USE_SSL=false                           # image 9.0.x uses this variable (not ECTO_SSL_MODE from the file), otherwise the backend can't reach the db: "ssl not available"
 ```
-- `host.docker.internal` = เครื่องของคุณเอง มองจากใน container (ไฟล์ `services/backend.yml` ตั้ง `host-gateway` ไว้ให้แล้ว)
-- Linux: เชนต้องฟังทุก interface ไม่ใช่แค่ 127.0.0.1 (`server.js` ฟังทุก interface อยู่แล้ว)
+- `host.docker.internal` = your own machine as seen from inside the container (`services/backend.yml` already sets `host-gateway`)
+- Linux: the chain must listen on all interfaces, not just 127.0.0.1 (`server.js` already listens on all interfaces)
 
-## 4. ตั้งค่าหน้าเว็บ: `envs/common-frontend.env`
+## 4. Frontend config: `envs/common-frontend.env`
 ```
 NEXT_PUBLIC_NETWORK_NAME=Bluewolfchain
 NEXT_PUBLIC_NETWORK_SHORT_NAME=Bluewolfchain
 NEXT_PUBLIC_NETWORK_ID=41234                 # = CHAIN_ID
 NEXT_PUBLIC_NETWORK_CURRENCY_NAME=Bluewolfchain
 NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=BWSC
-NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # เชนเก็บ native เป็น wei 18 ทศนิยม
-NEXT_PUBLIC_NETWORK_RPC_URL=http://localhost:3000/evm   # ไม่มีในไฟล์ → เพิ่มเป็นบรรทัดใหม่ (ใช้กับปุ่ม Add to MetaMask · ไม่ใส่ก็ได้)
-NEXT_PUBLIC_IS_TESTNET=false                 # ไฟล์ตั้งไว้ true → หน้าเว็บขึ้นป้าย Testnet
+NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18     # the chain stores native as 18-decimal wei
+NEXT_PUBLIC_NETWORK_RPC_URL=http://localhost:3000/evm   # not in the file → add it as a new line (used by the Add to MetaMask button · optional)
+NEXT_PUBLIC_IS_TESTNET=false                 # the file sets true → the UI shows a Testnet badge
 ```
-- บรรทัดอื่นปล่อยไว้ตามเดิม โดยเฉพาะ `NEXT_PUBLIC_STATS_API_HOST=http://localhost:8080` (service สถิติของ Blockscout เอง **ไม่ใช่** `/evm`)
+- leave the other lines as they are, especially `NEXT_PUBLIC_STATS_API_HOST=http://localhost:8080` (Blockscout's own stats service, **not** `/evm`)
 
-## 5. Mac + colima: เก็บฐานข้อมูลใน docker volume (ทำครั้งเดียว)
-postgres ใน colima เปลี่ยนสิทธิ์โฟลเดอร์ของ Mac ไม่ได้ (`db` วน Restarting + log `initdb: … Operation not permitted`) จึงต้องย้ายข้อมูลไป docker volume:
+## 5. Mac + colima: keep the databases in docker volumes (once)
+postgres in colima can't change permissions on Mac folders (`db` keeps Restarting + log `initdb: … Operation not permitted`), so move the data to docker volumes:
 ```bash
 sed -i '' 's#\./blockscout-db-data:#blockscout-db-data:#; s#\./stats-db-data:#stats-db-data:#' services/db.yml services/stats.yml
 printf '  blockscout-db-data:\n  stats-db-data:\n' >> geth.yml
 ```
-Docker Desktop หรือ Linux ข้ามข้อนี้ได้
+Docker Desktop or Linux can skip this step
 
-## 6. รันครั้งแรก
+## 6. First run
 ```bash
-docker-compose -f geth.yml up -d             # ใช้ image สำเร็จรูป ไม่ต้อง build
-docker-compose -f geth.yml ps                # ทุกตัวต้อง Up (user-ops-indexer วน Restarting ได้ ไม่เกี่ยว)
-docker-compose -f geth.yml logs -f backend   # ดู log ของ indexer (Ctrl+C ออก)
+docker-compose -f geth.yml up -d             # uses prebuilt images, no build
+docker-compose -f geth.yml ps                # everything must be Up (user-ops-indexer may keep Restarting, unrelated)
+docker-compose -f geth.yml logs -f backend   # follow the indexer log (Ctrl+C to exit)
 ```
-เปิด http://localhost รอสักพักให้ indexer ไล่ block ตั้งแต่ 0
+Open http://localhost and wait for the indexer to walk blocks from 0
 
-เช็กว่า index ครบ (จำนวน block ต้องเท่ากับ block ล่าสุดของเชน + 1 และ `missing_block_ranges` ว่าง):
+Check indexing is complete (block count must equal the chain's latest block + 1 and `missing_block_ranges` must be empty):
 ```bash
 docker-compose -f geth.yml exec db psql -U blockscout -d blockscout \
   -c "select count(*), min(number), max(number) from blocks;" -c "select * from missing_block_ranges;"
 ```
-log `Index already caught up` แปลว่าไม่มี block ค้างให้ดึง ไม่ใช่ error
+The log line `Index already caught up` means there are no blocks left to fetch, not an error
 
-## เปิด-ปิดประจำวัน
-| ต้องการ | คำสั่ง |
+## Daily start / stop
+| Want | Command |
 |---|---|
-| เปิด | `colima start` (ถ้าปิดไว้) → รันเชน `DEV=1 EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
-| หน้าเว็บขึ้น 502 หลังเปิด | `docker-compose -f geth.yml restart proxy` |
-| ปิด (ข้อมูลที่ index ไว้ยังอยู่) | `docker-compose -f geth.yml down` · ปิด colima ด้วย `colima stop` |
-| ปิด + ล้างข้อมูล Blockscout | `docker-compose -f geth.yml down -v` ⚠ ลบข้อมูลที่ index ไว้ทั้งหมด |
+| start | `colima start` (if stopped) → run the chain `DEV=1 EVM_RATE_LIMIT=0 node server.js` → `docker-compose -f geth.yml up -d` |
+| web UI shows 502 after starting | `docker-compose -f geth.yml restart proxy` |
+| stop (indexed data is kept) | `docker-compose -f geth.yml down` · stop colima with `colima stop` |
+| stop + wipe Blockscout data | `docker-compose -f geth.yml down -v` ⚠ deletes all indexed data |
 
-- เชนดับระหว่างที่ Blockscout เปิดอยู่ ไม่ต้องทำอะไร เปิดเชนกลับมาแล้ว Blockscout ไล่ดึง block ต่อเอง
-- **ล้างเชนใหม่ทุกครั้ง ต้อง `down -v` Blockscout ด้วย** ไม่งั้นจะเห็น block เก่าค้าง (hash ไม่ตรงกับเชนใหม่)
+- if the chain goes down while Blockscout runs, do nothing; once the chain is back Blockscout resumes fetching blocks by itself
+- **every time you wipe the chain, also `down -v` Blockscout**, otherwise stale old blocks remain (hashes don't match the new chain)
 
-## สิ่งที่ควรเห็น
-| หน้าใน Blockscout | มาจาก |
+## What you should see
+| Blockscout page | Comes from |
 |---|---|
-| Blocks / Transactions | `eth_getBlockByNumber`, receipt |
-| Token transfers + หน้า token (ชื่อ, symbol, supply, holders) | log `Transfer` + `eth_call` ของ token มาตรฐาน (ERC-20) |
-| NFT / multi-token (ERC-721 / ERC-1155) | log `Transfer` / `TransferSingle` / `TransferBatch` แบบ indexed + `eth_call` (`ownerOf` `tokenURI` `uri` …) |
-| แท็บ Logs ของ tx / กระเป๋า | **ทุก event** ของทุกโปรแกรม: emit แบบ indexed → topic0 = keccak(`ชื่อ(ชนิด,…)`) + topic ของ field ที่ indexed · ไม่มี indexed → topic0 = keccak(ชื่อ), data = JSON เป็น hex |
-| Coin balance history ของกระเป๋า (กราฟยอด) | `eth_getBalance` ตามเลข block |
-| Internal txns (เรียกซ้อน, transferNative) | `debug_traceBlockByNumber` / `debug_traceTransaction` |
-| Contract code (แท็บ Contract) | `eth_getCode` = ซอร์ส JS เป็น UTF-8 hex · Blockscout (v9.0.2 / frontend 2.3.5) แสดงเป็น hex อย่างเดียว ไม่มีปุ่มสลับ UTF-8 · "Contract creation code" = input ของ tx deploy (JSON) · อ่านซอร์สได้ตามหัวข้อ "อ่านโค้ดโปรแกรม" ข้างล่าง |
-| Input data ของ tx | JSON `{action, method, input}` เป็น hex · หน้า tx มีตัวเลือก Hex / UTF-8 ที่ช่อง Raw input |
-| Base fee / gas price ของ block และ tx (EIP-1559) | `baseFeePerGas` ใน block · tx type `0x2` + `effectiveGasPrice` ใน receipt · burnt fees ที่ Blockscout คำนวณ = baseFee × gasUsed (ตรงกับเชนเมื่อ `BURN_PERCENT=100`) |
-| tx ที่ถูกปฏิเสธ | อยู่ใน block ที่บันทึก (ครั้งเดียวต่อ hash) เป็น status `0x0` gasUsed `0` · มีแค่ใบที่ถูกปฏิเสธ เชนจะพักไว้จนมี tx จริงหรือครบ `REJECTED_HOLD_MS` (60 วิ) |
+| Blocks / Transactions | `eth_getBlockByNumber`, receipts |
+| Token transfers + token pages (name, symbol, supply, holders) | `Transfer` logs + `eth_call` on standard tokens (ERC-20) |
+| NFT / multi-token (ERC-721 / ERC-1155) | indexed `Transfer` / `TransferSingle` / `TransferBatch` logs + `eth_call` (`ownerOf` `tokenURI` `uri` …) |
+| Logs tab of a tx / wallet | **every event** of every program: indexed emit → topic0 = keccak(`name(type,…)`) + topics for indexed fields · no indexed → topic0 = keccak(name), data = JSON as hex |
+| a wallet's coin balance history (balance chart) | `eth_getBalance` by block number |
+| Internal txns (nested calls, transferNative) | `debug_traceBlockByNumber` / `debug_traceTransaction` |
+| Contract code (Contract tab) | `eth_getCode` = the JS source as UTF-8 hex · Blockscout (v9.0.2 / frontend 2.3.5) shows hex only, with no UTF-8 toggle · "Contract creation code" = the deploy tx input (JSON) · read the source per "Reading program code" below |
+| tx input data | JSON `{action, method, input}` as hex · the tx page has a Hex / UTF-8 option on the Raw input field |
+| base fee / gas price of blocks and txs (EIP-1559) | `baseFeePerGas` in blocks · tx type `0x2` + `effectiveGasPrice` in receipts · the burnt fees Blockscout computes = baseFee × gasUsed (matches the chain when `BURN_PERCENT=100`) |
+| rejected txs | in the block that recorded them (once per hash) as status `0x0` gasUsed `0` · when there are only rejected txs, the chain holds them until a real tx arrives or `REJECTED_HOLD_MS` (60 s) passes |
 
-ที่จะไม่เห็น / ใช้ไม่ได้ (ตามที่คาดไว้):
-- ปุ่ม Read/Write contract และ verify contract (Blockscout ต้องการ bytecode แบบ EVM + ซอร์ส Solidity) · ABI ของโปรแกรมดูได้ที่ explorer ของเชนเอง หรือ `cardianal_getAbi`
-- ชื่อ event ที่ถอดแล้วในแท็บ Logs สำหรับ event ที่ไม่ใช่มาตรฐาน (เห็นเป็น topic / data ดิบ เพราะ Blockscout ถอดได้เฉพาะ ABI ที่ verify แล้ว)
-- ปุ่มเขียน (Write) ของ Blockscout · ส่ง tx จากกระเป๋าทำได้ผ่าน `eth_sendRawTransaction` (โอน native · token มาตรฐาน · ฟังก์ชันตาม `metadata.abi`) แต่ไม่ใช่ผ่านหน้า Blockscout
+What you won't see / can't use (as expected):
+- the Read/Write contract and verify contract buttons (Blockscout needs EVM bytecode + Solidity source) · program ABIs are available in the chain's own explorer or via `cardianal_getAbi`
+- decoded event names in the Logs tab for non-standard events (shown as raw topics / data, since Blockscout can only decode verified ABIs)
+- Blockscout's Write buttons · wallets can send txs via `eth_sendRawTransaction` (native transfers · standard tokens · functions per `metadata.abi`), but not through the Blockscout UI
 
-อ่านโค้ดโปรแกรม (ซอร์ส JS) เมื่อ Blockscout แสดงเป็น hex:
-- explorer ของเชน: `http://localhost:3000/#address/<address>` → แท็บ Code
+Reading program code (JS source) when Blockscout shows hex:
+- the chain's explorer: `http://localhost:3000/#address/<address>` → Code tab
 - `curl -s localhost:3000/program/<address>`
-- ถอด `eth_getCode` เอง:
+- decode `eth_getCode` yourself:
   ```bash
   curl -s localhost:3000/evm -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["<address>","latest"]}' \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(Buffer.from(JSON.parse(s).result.slice(2),"hex").toString("utf8")))'
   ```
-- ใน Console ของ browser (กดปุ่ม copy ของช่อง Deployed bytecode ใน Blockscout แล้ววางแทน `0x...`):
+- in the browser console (click copy on the Deployed bytecode field in Blockscout and paste it in place of `0x...`):
   ```js
   new TextDecoder().decode(Uint8Array.from("0x...".slice(2).match(/../g), (h) => parseInt(h, 16)))
   ```
 
-## ดูว่า Blockscout ถามอะไร /evm ตอบอะไร: `dev/evm-proxy.mjs`
-ตัวดักที่ log ทุกคำขอ JSON-RPC (แตก gzip ให้) แล้วส่งต่อไปที่ `/evm` — ไม่แตะเชน
+## Seeing what Blockscout asks and what /evm answers: `dev/evm-proxy.mjs`
+An interceptor that logs every JSON-RPC request (un-gzipping them) and forwards it to `/evm` — doesn't touch the chain
 ```bash
-node dev/evm-proxy.mjs   # ฟัง :3001 ส่งต่อไป http://127.0.0.1:3000/evm (แก้ด้วย PORT= / TARGET=)
+node dev/evm-proxy.mjs   # listens on :3001, forwards to http://127.0.0.1:3000/evm (change with PORT= / TARGET=)
 ```
-ใน `envs/common-blockscout.env` เปลี่ยน `ETHEREUM_JSONRPC_HTTP_URL` และ `ETHEREUM_JSONRPC_TRACE_URL` เป็น `http://host.docker.internal:3001` แล้ว
+In `envs/common-blockscout.env` change `ETHEREUM_JSONRPC_HTTP_URL` and `ETHEREUM_JSONRPC_TRACE_URL` to `http://host.docker.internal:3001`, then
 ```bash
 docker-compose -f geth.yml up -d --force-recreate backend
 docker-compose -f geth.yml restart proxy
 ```
-ดูเสร็จแล้วเปลี่ยนกลับเป็น `:3000/evm` แล้วรันสองคำสั่งนี้อีกรอบ
+When done, change them back to `:3000/evm` and run these two commands again
 
-## ถ้ามีปัญหา
-| อาการ | สาเหตุ / วิธีแก้ |
+## Troubleshooting
+| Symptom | Cause / fix |
 |---|---|
-| `unknown shorthand flag: 'f' in -f` | ไม่มี Compose v2 → ใช้ `docker-compose` (มีขีดกลาง) · `brew install docker-compose` |
-| `failed to connect to the docker API at unix:///var/run/docker.sock` | Docker ยังไม่รัน → เปิด Docker Desktop หรือ `colima start` |
-| warning `the attribute version is obsolete` | ข้ามได้ |
-| `db` / `stats-db` วน Restarting, log `initdb: … Operation not permitted` | ลืมทำข้อ 5 → `down` แล้วทำข้อ 5 แล้ว `up -d` |
-| backend log `Postgrex.Error) ssl not available` | ขาด `ECTO_USE_SSL=false` (ข้อ 3) → เพิ่มแล้ว `up -d --force-recreate backend` |
-| หน้าเว็บ "Something went wrong" / "No data", console มี `/api/v2/* 502` | backend ยังไม่ขึ้น (ดู `logs backend`) หรือเพิ่ง recreate backend แล้ว nginx จำ IP เก่า → `docker-compose -f geth.yml restart proxy` |
-| `user-ops-indexer` วน Restarting | ไม่เกี่ยว (เชนนี้ไม่มี ERC-4337) · ปิดด้วย `docker-compose -f geth.yml stop user-ops-indexer` |
-| log `429` | ลืม `EVM_RATE_LIMIT=0` ตอนรันเชน |
-| connection refused ไปที่ `host.docker.internal:3000` | เชนไม่ได้รัน หรือ firewall บล็อกพอร์ต 3000 จาก docker |
-| internal txns / receipts ไม่มา, ตัวดักขึ้น `[gzip]` | ขาด `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (ข้อ 3) |
-| หน้าเว็บขึ้นป้าย Testnet | `NEXT_PUBLIC_IS_TESTNET=false` (ข้อ 4) แล้ว `docker-compose -f geth.yml up -d --force-recreate frontend` + `restart proxy` |
-| พอร์ต 80 ชน | แก้ `published: 80` ใน `services/nginx.yml` |
-| log `deadlock_detected` ตอนสร้าง index | เป็นเรื่องภายในฐานข้อมูลของ Blockscout เอง ไม่กระทบการ index |
+| `unknown shorthand flag: 'f' in -f` | no Compose v2 → use `docker-compose` (with a hyphen) · `brew install docker-compose` |
+| `failed to connect to the docker API at unix:///var/run/docker.sock` | Docker isn't running → start Docker Desktop or `colima start` |
+| warning `the attribute version is obsolete` | ignore it |
+| `db` / `stats-db` keep Restarting, log `initdb: … Operation not permitted` | step 5 was skipped → `down`, do step 5, then `up -d` |
+| backend log `Postgrex.Error) ssl not available` | missing `ECTO_USE_SSL=false` (step 3) → add it, then `up -d --force-recreate backend` |
+| web UI "Something went wrong" / "No data", console shows `/api/v2/* 502` | the backend isn't up yet (check `logs backend`), or the backend was just recreated and nginx remembers the old IP → `docker-compose -f geth.yml restart proxy` |
+| `user-ops-indexer` keeps Restarting | unrelated (this chain has no ERC-4337) · stop it with `docker-compose -f geth.yml stop user-ops-indexer` |
+| log `429` | forgot `EVM_RATE_LIMIT=0` when starting the chain |
+| connection refused to `host.docker.internal:3000` | the chain isn't running, or a firewall blocks port 3000 from docker |
+| internal txns / receipts missing, the interceptor shows `[gzip]` | missing `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (step 3) |
+| the web UI shows a Testnet badge | `NEXT_PUBLIC_IS_TESTNET=false` (step 4), then `docker-compose -f geth.yml up -d --force-recreate frontend` + `restart proxy` |
+| port 80 conflict | change `published: 80` in `services/nginx.yml` |
+| log `deadlock_detected` while building indexes | internal to Blockscout's own database, doesn't affect indexing |

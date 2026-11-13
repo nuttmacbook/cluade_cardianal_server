@@ -6,15 +6,15 @@ import { COUNTER } from "./programs.js";
 beforeEach(resetVM);
 
 
-test("MemoryDB.readKeys: คืน array ตามลำดับ key, ไม่มี → undefined", () => {
+test("MemoryDB.readKeys: returns an array in key order, missing → undefined", () => {
   const db = new MemoryDB();
   db.writeKeys([{ type: "put", dbKey: "a", value: 1 }, { type: "put", dbKey: "b", value: { x: [1] } }]);
   assert.deepEqual(db.readKeys(["b", "missing", "a"]), [{ x: [1] }, undefined, 1]);
   assert.deepEqual(db.readKeys([]), []);
-  assert.throws(() => db.readKeys("a"), /keys ต้องเป็น array/);
+  assert.throws(() => db.readKeys("a"), /keys must be an array/);
 });
 
-test("MemoryDB.writeKeys: put / del / เขียน key เดิมหลายครั้งใช้ค่าสุดท้าย", () => {
+test("MemoryDB.writeKeys: put / del / writing the same key repeatedly keeps the last value", () => {
   const db = new MemoryDB();
   assert.equal(db.writeKeys([
     { type: "put", dbKey: "a", value: 1 },
@@ -25,7 +25,7 @@ test("MemoryDB.writeKeys: put / del / เขียน key เดิมหลา�
   assert.deepEqual(db.snapshot(), { a: 3 });
 });
 
-test("MemoryDB.writeKeys: มีรายการผิด → ไม่บันทึกอะไรเลย (atomic)", () => {
+test("MemoryDB.writeKeys: a bad entry → nothing is saved (atomic)", () => {
   const db = new MemoryDB();
   const bad = [
     [{ type: "put", dbKey: "a", value: 1 }, { type: "put", dbKey: "b" }],
@@ -33,12 +33,12 @@ test("MemoryDB.writeKeys: มีรายการผิด → ไม่บั�
     [{ type: "put", dbKey: 1, value: 1 }],
     [null],
   ];
-  for (const writes of bad) assert.throws(() => db.writeKeys(writes), /write ไม่ถูกต้อง/);
-  assert.throws(() => db.writeKeys("x"), /writes ต้องเป็น array/);
+  for (const writes of bad) assert.throws(() => db.writeKeys(writes), /Invalid write/);
+  assert.throws(() => db.writeKeys("x"), /writes must be an array/);
   assert.deepEqual(db.snapshot(), {});
 });
 
-test("MemoryDB: ค่าที่อ่าน / เขียนถูก copy", () => {
+test("MemoryDB: read / written values are copied", () => {
   const db = new MemoryDB();
   const value = { n: 1 };
   db.writeKeys([{ type: "put", dbKey: "a", value }]);
@@ -47,14 +47,14 @@ test("MemoryDB: ค่าที่อ่าน / เขียนถูก copy",
   assert.deepEqual(db.readKeys(["a"]), [{ n: 1 }]);
 });
 
-test("MemoryDB: สร้างพร้อมข้อมูลตั้งต้นได้ และแต่ละตัวแยกกัน", () => {
+test("MemoryDB: can be created with initial data, and instances are separate", () => {
   const a = new MemoryDB({ k: "seed" });
   const b = new MemoryDB();
   assert.deepEqual(a.readKeys(["k"]), ["seed"]);
   assert.deepEqual(b.readKeys(["k"]), [undefined]);
 });
 
-test("VM: อ่านผ่าน db.readKeys และ commit ผ่าน db.writeKeys", () => {
+test("VM: reads via db.readKeys and commits via db.writeKeys", () => {
   const reads = [];
   const commits = [];
   const inner = new MemoryDB();
@@ -79,15 +79,15 @@ test("VM: อ่านผ่าน db.readKeys และ commit ผ่าน db.
 test("VM: readKeys throw → INTERNAL", () => {
   const vm = new VM.VirtualMachine({ readKeys: () => { throw new Error("503"); }, writeKeys: () => {} });
   const res = vm.call({ programUuid: "p", functionName: "f", context: user("a") });
-  assert.deepEqual(res.error, { code: "INTERNAL", message: "อ่านข้อมูลจาก DB ไม่สำเร็จ: 503" });
+  assert.deepEqual(res.error, { code: "INTERNAL", message: "failed to read from DB: 503" });
 });
 
-test("VM: commit ส่ง error ของ writeKeys ออกมาตรง ๆ ให้ผู้เรียกจัดการ", () => {
+test("VM: commit passes writeKeys errors straight through to the caller", () => {
   const vm = new VM.VirtualMachine({ readKeys: (keys) => keys.map(() => undefined), writeKeys: () => { throw new Error("write failed"); } });
   assert.throws(() => vm.commit([{ type: "put", dbKey: "a", value: 1 }]), /write failed/);
 });
 
-test("VM: แต่ละ key ถูกอ่านจาก DB ครั้งเดียวต่อ request แม้โปรแกรมอ่านซ้ำหลายครั้ง", () => {
+test("VM: each key is read from the DB once per request, even if the program reads it repeatedly", () => {
   const reads = [];
   const inner = new MemoryDB();
   const vm = new VM.VirtualMachine({ readKeys: (keys) => { reads.push(...keys); return inner.readKeys(keys); }, writeKeys: (w) => inner.writeKeys(w) });
@@ -95,15 +95,15 @@ test("VM: แต่ละ key ถูกอ่านจาก DB ครั้ง�
   vm.commit(vm.init({ programUuid: "c" }).writes);
 
   reads.length = 0;
-  vm.call({ programUuid: "c", functionName: "addTwice", input: { amount: 1 }, context: user("a") }); // อ่าน count 2 ครั้ง + เขียน 2 ครั้ง
+  vm.call({ programUuid: "c", functionName: "addTwice", input: { amount: 1 }, context: user("a") }); // reads count twice + writes twice
   assert.deepEqual(reads, ["c:code", "c:storage:count"]);
 });
 
 // ---------------------------------------------------------------------------
-//  เครื่องมือ debug ของ MemoryDB
+//  MemoryDB debug tools
 // ---------------------------------------------------------------------------
 
-test("MemoryDB: snapshot / listKeys / size / has — ดูข้อมูลทั้งหมดและเลือกด้วย prefix", () => {
+test("MemoryDB: snapshot / listKeys / size / has — view all data and filter by prefix", () => {
   const db = new MemoryDB();
   db.load({
     "token:code": "",
@@ -118,10 +118,10 @@ test("MemoryDB: snapshot / listKeys / size / has — ดูข้อมูลท
   assert.deepEqual(db.listKeys(), ["alice:native:received", "token:code", "token:storage:balances:alice", "token:storage:balances:bob"]);
   assert.deepEqual(db.listKeys("token:storage:"), ["token:storage:balances:alice", "token:storage:balances:bob"]);
   assert.deepEqual(db.snapshot("alice"), { "alice:native:received": "1000n" });
-  assert.deepEqual(Object.keys(db.snapshot()), db.listKeys()); // เรียงตาม key เสมอ
+  assert.deepEqual(Object.keys(db.snapshot()), db.listKeys()); // always sorted by key
 });
 
-test("MemoryDB: tree — จัดกลุ่มตาม address", () => {
+test("MemoryDB: tree — grouped by address", () => {
   const db = new MemoryDB();
   db.load({
     "token:code": "code",
@@ -152,7 +152,7 @@ test("MemoryDB: tree — จัดกลุ่มตาม address", () => {
   assert.deepEqual(Object.keys(db.tree("token")), ["token"]);
 });
 
-test("MemoryDB: dump / toJSON / toString — ดูเป็น JSON ได้", () => {
+test("MemoryDB: dump / toJSON / toString — viewable as JSON", () => {
   const db = new MemoryDB();
   db.load({ "alice:nonce": 1, "token:storage:x": { a: [1, 2] } });
 
@@ -164,17 +164,17 @@ test("MemoryDB: dump / toJSON / toString — ดูเป็น JSON ได้",
   assert.equal(db.dump({ indent: 0 }).includes("\n"), false);
 });
 
-test("MemoryDB: dump ตัด string ยาว ๆ ได้ (เช่นโค้ดโปรแกรม)", () => {
+test("MemoryDB: dump can truncate long strings (e.g. program code)", () => {
   const db = new MemoryDB();
   db.load({ "token:code": "x".repeat(500), "token:storage:n": 1 });
 
   const short = JSON.parse(db.dump({ maxStringLength: 20 }));
-  assert.equal(short["token:code"], `${"x".repeat(20)}… (500 ตัวอักษร)`);
+  assert.equal(short["token:code"], `${"x".repeat(20)}… (500 chars)`);
   assert.equal(short["token:storage:n"], 1);
-  assert.equal(JSON.parse(db.dump())["token:code"].length, 500); // ไม่ตัดถ้าไม่สั่ง
+  assert.equal(JSON.parse(db.dump())["token:code"].length, 500); // not truncated unless asked
 });
 
-test("MemoryDB: load / clear และข้อมูลที่คืนมาเป็น copy", () => {
+test("MemoryDB: load / clear, and returned data is a copy", () => {
   const db = new MemoryDB();
   db.load({ "a:storage:x": { n: 1 } });
   db.snapshot()["a:storage:x"].n = 99;
@@ -185,7 +185,7 @@ test("MemoryDB: load / clear และข้อมูลที่คืนมา
   assert.deepEqual(db.snapshot(), {});
 });
 
-test("MemoryDB: ใช้ดูสถานะหลังรัน VM ได้", () => {
+test("MemoryDB: can inspect state after running the VM", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 5 } }).writes);
   vm.commit(vm.init({ programUuid: "counter" }).writes);

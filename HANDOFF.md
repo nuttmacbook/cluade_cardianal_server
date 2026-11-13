@@ -1,147 +1,147 @@
 # HANDOFF — Program VM + Explorer
 
-เอกสารส่งต่อโปรเจคให้ agent หรือทีมอื่นทำงานต่อ อ่านไฟล์นี้ไฟล์เดียวแล้วทำงานต่อได้ทันที
+Project handoff document for another agent or team to continue the work. Read this one file and you can pick up right away
 
-> **สรุป 30 วินาที**
-> blockchain ที่ smart contract เขียนด้วย JavaScript ธรรมดา เซ็น tx ด้วย EIP-712 (MetaMask ใช้ได้)
-> VM เป็น sync ทั้งหมด + deterministic, เก็บข้อมูลลง LMDB แบบ key/value แบน
-> มี server จริง (node:http) + explorer (`explorerscan/`) + ชุด SDK สำหรับคนเขียนโปรแกรม
-> **มีแก๊สนับขั้น + sandbox จริงแล้ว (QuickJS ใน WebAssembly — หัวข้อ 4 "Sandbox")** · ก่อนเปิดให้คนนอก deploy ดูหัวข้อ 11
+> **30-second summary**
+> A blockchain whose smart contracts are written in plain JavaScript, with txs signed using EIP-712 (MetaMask works)
+> The VM is fully sync + deterministic, storing data in LMDB as flat key/value
+> There is a real server (node:http) + explorer (`explorerscan/`) + an SDK for program authors
+> **Step-counting gas + a real sandbox are in place (QuickJS in WebAssembly — section 4 "Sandbox")** · before letting outsiders deploy, see section 11
 
 | | |
 |---|---|
-| ภาษา / runtime | JavaScript (ESM), Node 22 เท่านั้น (`engines: >=22 <23`) |
-| dependency | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (ตรึงเวอร์ชัน 0.32.0 ห้ามขยับเอง ดูหัวข้อ 4) (+`ethers` เป็น dev) |
-| โค้ดทั้งหมด | ~16,600 บรรทัด ใน `src/` `server.js` และ SDK ทั้งสอง (VM เอง ~4,300) |
-| ภาษาในโค้ด | comment / error message เป็นภาษาไทย ชื่อตัวแปรเป็นอังกฤษ — **รักษาสไตล์นี้ไว้** |
-| เทสต์ | `npm test` → 1045 เคส + `npm run test:e2e` 34 เคส |
+| Language / runtime | JavaScript (ESM), Node 22 only (`engines: >=22 <23`) |
+| Dependencies | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (pinned to 0.32.0, do not bump it yourself, see section 4) (+`ethers` as dev) |
+| Total code | ~16,600 lines in `src/` `server.js` and both SDKs (the VM itself ~4,300) |
+| Language in code | comments / error messages are English, variable names are English — **keep this style** · consensus text (deployed program source, VM execution messages in `src/core/`) is part of the chain: changing it needs a chain reset |
+| Tests | `npm test` → 1045 cases + `npm run test:e2e` 34 cases |
 
 ---
 
-## 1. เริ่มต้นใน 2 นาที
+## 1. Getting started in 2 minutes
 
 ```bash
 npm install
-npm test                         # 1045 เคส ควรผ่านหมดก่อนเริ่มแก้อะไร
+npm test                         # 1045 cases, all should pass before you change anything
 
-npm run dev                      # server + explorer ที่ http://localhost:3000 (ข้อมูลอยู่ใน memory · DEV=1 ไม่บังคับ ADMINS / PRODUCER_KEY)
-node dev/seed.js             # อีก terminal: สร้างโทเคนตัวอย่าง + tx ทุกประเภท
-node dev/demo-market.js      # ตลาด NFT + โทเคน + native, user 4 คน, ~23 block
+npm run dev                      # server + explorer at http://localhost:3000 (data in memory · DEV=1 does not require ADMINS / PRODUCER_KEY)
+node dev/seed.js             # in another terminal: creates a sample token + txs of every type
+node dev/demo-market.js      # NFT market + token + native, 4 users, ~23 blocks
 ```
-⚠️ `demo-market` / `demo-chain` ตั้งราคาแก๊ส 1 gwei แต่ขั้นต่ำของเชนตอนนี้ 10,000 gwei → เปิด server ด้วย `GAS_PRICE=1000000000 npm run dev` (`seed.js` อ่านราคาจาก `/genesis` เอง)
+⚠️ `demo-market` / `demo-chain` set the gas price to 1 gwei but the chain minimum is now 10,000 gwei → start the server with `GAS_PRICE=1000000000 npm run dev` (`seed.js` reads the price from `/genesis` itself)
 
-สองสคริปต์ด้านบนรับ URL เป็น argument ตัวแรก (`node dev/seed.js http://localhost:3100`)
-`npm run seed` / `npm run demo:market` ก็เรียกได้แต่จะยิงไปที่ `http://localhost:3000` เท่านั้น
+Both scripts above take the URL as their first argument (`node dev/seed.js http://localhost:3100`)
+`npm run seed` / `npm run demo:market` also work but only target `http://localhost:3000`
 
-env ของ server: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (ค่าเริ่ม 2000) `MAX_BLOCK_GAS` (5M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` (41234) `GAS_PRICE` (base fee ต่ำสุด ค่าเริ่ม 10,000 gwei) `TIMEOUT_MS` (ค่าเริ่ม 5000) `RATE_LIMIT` (POST ต่อ IP ต่อนาที ค่าเริ่ม 120, 0 = ไม่จำกัด · `eth_sendRawTransaction` นับในโควตานี้) `VERIFY_WORKERS` (worker ตรวจลายเซ็น ค่าเริ่ม CPU − 1 ไม่เกิน 4 · 0 = thread หลัก) `SANDBOX_WARM_CACHE` (ภาพอุ่นของโปรแกรม ค่าเริ่ม 32 ≈ 110 MB RAM · 0 = คอมไพล์ทุก tx) `EVM_RATE_LIMIT` (request ของ `/evm` ต่อ IP ต่อนาที ค่าเริ่ม 600 · 0 = ไม่จำกัด · ทดสอบในเครื่องที่มี MetaMask + Blockscout ใช้ 0) `EVM_MAX_BATCH` (คำขอต่อ batch ของ `/evm` ค่าเริ่ม 1000 · batch นับ `EVM_RATE_LIMIT` ทุกตัว) `MAX_BODY_BYTES` (body ของ POST ค่าเริ่ม 1 MB · เกิน = 413) `EVM_NAME` `EVM_SYMBOL` (ชื่อ / สัญลักษณ์ที่ปุ่ม Add network ส่งให้กระเป๋า) `HOST` (ไม่ตั้ง = ทุก interface · เปิดจริงหลัง nginx ใช้ 127.0.0.1) `TRUST_PROXY` (ชั้นของ reverse proxy ข้างหน้า ค่าเริ่ม 0) `HISTORY_KEEP_BLOCKS` (pruning · ไม่ตั้ง = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (snapshot ของ state) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (เครื่องสำรอง / ย้ายผู้ผลิต) · ที่เหลืออยู่หัวไฟล์ `server.js` + `GENESIS_SETTINGS` ใน `src/node/genesis.js` (`CHAIN_ID` `PRODUCERS` ไม่อยู่หัว server.js)
-`npm start` (ไม่มี `DEV=1`) ไม่ยอมเริ่มถ้าไม่ตั้ง `ADMINS` และ `PRODUCER_KEY` — ดู "เปิดเครือข่ายจริง" ข้างล่าง · ไฟล์ตั้งค่าครบชุดสำหรับเปิดจริงอยู่ใน `deploy/` (อ่าน `deploy/README.md`)
-ไม่ใส่ `DATA` = `MemoryDB` (หายเมื่อปิด), ใส่ = LMDB ที่ path นั้น
-ยอดเงินตั้งต้นอ่านจาก `genesis.json` — key ของ address `0x7099…79c8` ที่ scripts ใช้คือ
-`0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (key ทดสอบของ Hardhat account #1)
+Server env: `PORT` `DATA` `DEV` `GENESIS` `PRODUCER_KEY` `MINER` `ADMINS` `BLOCK_MS` (default 2000) `MAX_BLOCK_GAS` (5M) `MAX_TX_GAS` (= MAX_BLOCK_GAS) `MAX_TX_PER_BLOCK` (500) `CHAIN_ID` (41234) `GAS_PRICE` (minimum base fee, default 10,000 gwei) `TIMEOUT_MS` (default 5000) `RATE_LIMIT` (POSTs per IP per minute, default 120, 0 = unlimited · `eth_sendRawTransaction` counts toward this quota) `VERIFY_WORKERS` (signature-check workers, default CPU − 1, max 4 · 0 = main thread) `SANDBOX_WARM_CACHE` (warm program images, default 32 ≈ 110 MB RAM · 0 = compile every tx) `EVM_RATE_LIMIT` (`/evm` requests per IP per minute, default 600 · 0 = unlimited · local testing with MetaMask + Blockscout uses 0) `EVM_MAX_BATCH` (requests per `/evm` batch, default 1000 · every request in a batch counts toward `EVM_RATE_LIMIT`) `MAX_BODY_BYTES` (POST body, default 1 MB · over = 413) `EVM_NAME` `EVM_SYMBOL` (name / symbol the Add network button sends to the wallet) `HOST` (unset = all interfaces · in production behind nginx use 127.0.0.1) `TRUST_PROXY` (number of reverse proxy layers in front, default 0) `HISTORY_KEEP_BLOCKS` (pruning · unset = archive) `SNAPSHOT_EVERY` `SNAPSHOT_DIR` `SNAPSHOT_KEEP` (state snapshots) `FOLLOW` `FOLLOW_SNAPSHOT` `FAILOVER_FROM` (standby machine / producer migration) · the rest are at the top of `server.js` + `GENESIS_SETTINGS` in `src/node/genesis.js` (`CHAIN_ID` `PRODUCERS` are not at the top of server.js)
+`npm start` (without `DEV=1`) refuses to start unless `ADMINS` and `PRODUCER_KEY` are set — see "Launching a real network" below · the full set of config files for production is in `deploy/` (read `deploy/README.md`)
+No `DATA` = `MemoryDB` (lost on shutdown); set = LMDB at that path
+Initial balances are read from `genesis.json` — the key for address `0x7099…79c8` used by the scripts is
+`0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` (Hardhat test key, account #1)
 
-สคริปต์อื่น: `dev/demo.js` (สนามทดลองใน process เดียว), `dev/examples.js` (ตัวอย่าง request ทุกประเภท), `dev/demo-chain.js`
+Other scripts: `dev/demo.js` (single-process playground), `dev/examples.js` (sample requests of every type), `dev/demo-chain.js`
 
-### เปิดเครือข่ายจริง (เทสต์ `85-genesis-producer` `86-ops`)
-- **Bluewolfchain (BWSC)**: ค่าตั้งต้นของ server = chainId 41234 · 10,000 gwei · block 2 วิ · block 5M แก๊ส · `genesis.json` เปิด fork `bluewolf` ตั้งแต่ block 0 (ราคาต่อหน่วย ×2.5 ของภาระเครื่องจริง + `gas.tx` 15,000 ต่อ tx · โอนเหรียญหลัก 17,300 แก๊ส) · ชื่อใน /evm = Bluewolfchain / BWSC · ห่อเหรียญ = WBWSC (`wbwsc`) · เทสต์ที่เปิด server ตั้ง `GAS_PRICE=1 gwei` เพื่อใช้ตัวเลขช่วงพัฒนา
-- **genesis.config** ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (อยู่ใน genesis hash): `chainId` (ชั้นบน) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `maxBlockGas` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
-  `genesis.forks` = ตาราง fork `{ ชื่อ: block }` (ไม่อยู่ใน genesis hash · เพิ่มทีหลังได้ · ดูหัวข้อค่าแก๊ส "fork ตาม block height")
-  `genesis.producerSchedule` = `[{ fromBlock, producers }]` เปลี่ยนรายชื่อผู้ผลิตตั้งแต่ block ที่กำหนด (ไม่อยู่ใน genesis hash · ดู "ผู้ผลิตเสีย / key หาย / key หลุด" ข้างล่าง)
-  ค่า = genesis → env → ค่าเริ่ม · env ตั้งต่างจาก genesis = server ไม่ยอมเริ่ม · genesis ที่ไม่มี `config` (ไฟล์ในrepo ช่วงพัฒนา) = ไม่ล็อกอะไร · `GENESIS=path` เลือกไฟล์
-- **ไม่ใช่ `DEV=1`** → ต้องมี `ADMINS` (ไม่ตั้ง = ใครก็อนุมัติ deploy / upgrade ได้) และ `PRODUCER_KEY` · producer ต้องอยู่ใน `config.producers` ถ้า genesis กำหนด
-- **ผู้ผลิตเซ็น block**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → header มี `producer` (อยู่ใน hash · block ที่ไม่มีผู้ผลิต hash เหมือนเดิมทุกไบต์) + `producerSignature` (r‖s‖v บน hash ของ block · อยู่นอก hash)
-  `sync.js`: `verifyProducer(header, producers)` · ส่ง `producers` → block ต้องมีผู้ผลิตในรายชื่อ + ลายเซ็นถูก · `startSync({ genesis })` อ่าน `genesis.config.producers` ให้เอง · `/genesis` บอก `producer` / `producers`
-  replay / rebuild ใช้ producer + ลายเซ็นจาก header เดิม (เครื่องที่ไม่มี key rebuild ได้ hash เดิม) · explorer หน้า block แสดง Producer
-- **ผู้ผลิตเสีย / key หาย / key หลุด** (เทสต์ `100-producer-failover` · อธิบายเต็มใน producer-key.md ของโปรเจกต์)
-  เครื่องเสีย: เครื่องสำรอง `FOLLOW=<url ผู้ผลิต>` (+ `DATA`) ซิงก์ตามตลอด ไม่ผลิต block ไม่รับ tx (`/sendtx` 503 · `eth_sendRawTransaction` error) ไม่ต้องมี `PRODUCER_KEY` · `FOLLOW_SNAPSHOT=1` = เริ่มจาก snapshot
-  ย้ายมาผลิต: restart เครื่องสำรองด้วย `PRODUCER_KEY` + `FAILOVER_FROM=<url เครื่องเดิม>` (ไม่ตั้ง `FOLLOW`) → `prepareFailover` (`src/node/failover.js`) ถาม `/health` ของเครื่องเดิมก่อน: `role: "producer"` (หรือรุ่นเก่าไม่บอก role) = **ไม่ยอมเริ่ม** · ไม่ผลิตแล้ว = ซิงก์ที่ขาดให้ครบก่อน · ติดต่อไม่ได้ = เริ่ม + เตือน (เครือข่ายขาดแต่เครื่องเดิมยังผลิต = เชนแยก ผู้ดูแลต้องแน่ใจว่าดับจริง) · ห้ามเปิดเครื่องเดิมเป็นผู้ผลิตอีก ให้กลับมาเป็น `FOLLOW=<เครื่องใหม่>`
-  key หาย: ใส่ key สำรอง (เก็บ offline) ไว้ใน `config.producers` ตั้งแต่ล้างเชน → ผลิตต่อด้วย key สำรองได้ทันที · มี key เดียว = server เตือนตอนเริ่ม (`startupWarnings`)
-  key หลุด: เพิ่ม `producerSchedule: [{ fromBlock: N, producers: [key ใหม่] }]` ใน genesis.json ของ**ทุก node** แล้ว restart (genesis hash เดิม) → ตั้งแต่ block N key เดิมผลิตไม่ได้ (ลายเซ็นถูกก็ปฏิเสธ) · block ก่อน N ยังซิงก์ได้ · ผู้ผลิตที่ถูกถอดหยุดผลิตเอง (`/health` `role: "retired"` + problem `miner`) · key ใหม่เริ่มด้วย `FAILOVER_FROM`
-  `producersAt(settings, n)` / `producerSetOf(genesis)` → `(n) => รายชื่อ` · `verifyProducer` / `startSync` / `loadSnapshot` / `client.verifiedState({ producers })` รับทั้งรายชื่อและฟังก์ชัน · `/genesis` บอก `producers` (ของ block ถัดไป) `baseProducers` `producerSchedule` `role`
-- **timeout ตอน replay / sync**: tx รันด้วย `replayTimeoutMs` (ค่าเริ่ม 60 วิ) แทน `timeoutMs` ของผู้ผลิต — ผู้ผลิตกรอง TIMEOUT ออกก่อนเข้า block แล้ว (`code === TIMEOUT → accepted: false`) เครื่องที่ช้ากว่าจึงไม่ได้ผลต่าง · แก๊สยังเป็นตัวหยุดหลัก (3M แก๊สใช้ราว 0.1 วิ)
-- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db }` · มีปัญหา = **HTTP 503**
-  `role`: `producer` / `follower` (FOLLOW) / `retired` (key ถูกถอดด้วย producerSchedule) / `standby` (รอ prepareFailover)
-  problems: `stalled` (มี tx รอแต่ไม่มี block ใหม่เกิน `HEALTH_STALL_MS` ค่าเริ่ม max(10 × BLOCK_MS, 30 วิ)) · `miner` (ปิด block ล้มเหลวติดกัน) · `follow` (เครื่องสำรองซิงก์หยุด เช่น block ไม่ตรง) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT` ค่าเริ่ม 90%)
-- **`npm run monitor -- --url … [--webhook URL] [--interval 30] [--once]`** เตือนเมื่อสถานะเปลี่ยน (POST `{ text, url, problems, health }` ไปที่ webhook) · `--once` exit 1 = มีปัญหา (ใช้กับ cron)
-- **`npm run backup -- --data ./data --out ./backups [--keep 7] [--compact]`** สำรอง LMDB ขณะ server ทำงาน (`DB.backup` = mdb_env_copy อ่าน snapshot เดียว) + `replaced-tx.jsonl` + `manifest.json`
-  ตรวจทุกครั้ง: block ล่าสุดตรง manifest · parentHash ต่อกัน 1,000 block ล่าสุด · blockhash ชี้กลับ · `--verify <ชุด>` ตรวจอย่างเดียว
-  กู้: หยุด server แล้ว `npm run backup -- --restore <ชุด> --data ./data` (มีของเดิม → `--force` ย้ายไป `<data>.before-restore-<เวลา>`)
-- TLS: server เป็น `http` ล้วน ต้องมี reverse proxy (nginx / Caddy) ทำ HTTPS ข้างหน้า · rate limit นับต่อ IP ในหน่วยความจำของแต่ละโปรเซส
-- **อยู่หลัง proxy ต้องตั้ง `TRUST_PROXY=1`** (CDN + nginx = 2) · ไม่ตั้ง = ทุกคนได้ IP ของ proxy → ใช้โควตา `RATE_LIMIT` / `EVM_RATE_LIMIT` ร่วมกันทั้งเครือข่าย (`src/node/client-ip.js` · เทสต์ `95-client-ip`)
-  IP = นับจากขวาของ `X-Forwarded-For` + socket (ผู้ใช้ปลอมได้แค่ส่วนซ้ายที่ proxy ไม่ได้เติม) · nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` · Caddy เติมให้เอง
-  ⚠️ ตั้ง `TRUST_PROXY` > 0 แล้วต้องเปิด port ของ server ให้เฉพาะ proxy (ไม่งั้นผู้ใช้ส่ง header ปลอม IP ได้)
+### Launching a real network (tests `85-genesis-producer` `86-ops`)
+- **Bluewolfchain (BWSC)**: server defaults = chainId 41234 · 10,000 gwei · 2 s blocks · 5M gas blocks · `genesis.json` enables the `bluewolf` fork from block 0 (unit prices ×2.5 of the real machine cost + `gas.tx` 15,000 per tx · native transfer 17,300 gas) · name in /evm = Bluewolfchain / BWSC · wrapped coin = WBWSC (`wbwsc`) · tests that start a server set `GAS_PRICE=1 gwei` to use development-era numbers
+- **genesis.config** locks values every machine must share (part of the genesis hash): `chainId` (top level) · `burnPercent` `minBaseFee` `gasTarget` `baseFeeDenominator` `blockMs` `maxBlockGas` `upgradeDelayBlocks` `memoryLimitMb` `stackLimitKb` `admins` `producers` (`src/node/genesis.js`)
+  `genesis.forks` = fork table `{ name: block }` (not part of the genesis hash · can be added later · see the gas section "forks by block height")
+  `genesis.producerSchedule` = `[{ fromBlock, producers }]` changes the producer list from a given block (not part of the genesis hash · see "Producer down / key lost / key leaked" below)
+  Values = genesis → env → default · env differing from genesis = server refuses to start · a genesis without `config` (the in-repo development file) = locks nothing · `GENESIS=path` picks the file
+- **Not `DEV=1`** → requires `ADMINS` (unset = anyone can approve deploys / upgrades) and `PRODUCER_KEY` · the producer must be in `config.producers` if genesis defines it
+- **Producer signs blocks**: `new VirtualMachine(db, { producer: { address, sign(hash) } })` → the header has `producer` (part of the hash · blocks without a producer hash byte-for-byte as before) + `producerSignature` (r‖s‖v over the block hash · outside the hash)
+  `sync.js`: `verifyProducer(header, producers)` · pass `producers` → blocks must have a listed producer + a valid signature · `startSync({ genesis })` reads `genesis.config.producers` itself · `/genesis` reports `producer` / `producers`
+  replay / rebuild use the producer + signature from the original header (a machine without the key rebuilds the same hash) · the explorer block page shows Producer
+- **Producer down / key lost / key leaked** (test `100-producer-failover` · fully explained in the project's producer-key.md)
+  Machine down: a standby machine with `FOLLOW=<producer url>` (+ `DATA`) keeps syncing, does not produce blocks or accept txs (`/sendtx` 503 · `eth_sendRawTransaction` error), needs no `PRODUCER_KEY` · `FOLLOW_SNAPSHOT=1` = start from a snapshot
+  Take over production: restart the standby with `PRODUCER_KEY` + `FAILOVER_FROM=<old machine url>` (no `FOLLOW`) → `prepareFailover` (`src/node/failover.js`) first asks the old machine's `/health`: `role: "producer"` (or an old version that reports no role) = **refuses to start** · no longer producing = syncs whatever is missing first · unreachable = starts + warns (network partition while the old machine still produces = chain split, the operator must be sure it is really down) · never start the old machine as a producer again, bring it back as `FOLLOW=<new machine>`
+  Key lost: put a backup key (kept offline) in `config.producers` from the chain reset → you can keep producing with the backup key immediately · only one key = the server warns at startup (`startupWarnings`)
+  Key leaked: add `producerSchedule: [{ fromBlock: N, producers: [new key] }]` to genesis.json on **every node** and restart (genesis hash unchanged) → from block N the old key cannot produce (rejected even with a valid signature) · blocks before N still sync · a removed producer stops producing on its own (`/health` `role: "retired"` + problem `miner`) · the new key starts with `FAILOVER_FROM`
+  `producersAt(settings, n)` / `producerSetOf(genesis)` → `(n) => list` · `verifyProducer` / `startSync` / `loadSnapshot` / `client.verifiedState({ producers })` accept either a list or a function · `/genesis` reports `producers` (for the next block) `baseProducers` `producerSchedule` `role`
+- **Timeout during replay / sync**: txs run with `replayTimeoutMs` (default 60 s) instead of the producer's `timeoutMs` — the producer already filters TIMEOUT out before inclusion (`code === TIMEOUT → accepted: false`), so slower machines don't get different results · gas is still the main stopper (3M gas takes about 0.1 s)
+- **`/health`** → `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db }` · any problem = **HTTP 503**
+  `role`: `producer` / `follower` (FOLLOW) / `retired` (key removed by producerSchedule) / `standby` (waiting for prepareFailover)
+  problems: `stalled` (txs waiting but no new block for over `HEALTH_STALL_MS`, default max(10 × BLOCK_MS, 30 s)) · `miner` (block sealing failed repeatedly) · `follow` (standby sync stopped, e.g. block mismatch) · `disk` (LMDB ≥ `HEALTH_DISK_PERCENT`, default 90%)
+- **`npm run monitor -- --url … [--webhook URL] [--interval 30] [--once]`** alerts when status changes (POSTs `{ text, url, problems, health }` to the webhook) · `--once` exit 1 = problem (for cron)
+- **`npm run backup -- --data ./data --out ./backups [--keep 7] [--compact]`** backs up LMDB while the server runs (`DB.backup` = mdb_env_copy reading one snapshot) + `replaced-tx.jsonl` + `manifest.json`
+  Verified every time: latest block matches the manifest · parentHash chain over the latest 1,000 blocks · blockhash points back · `--verify <set>` verifies only
+  Restore: stop the server then `npm run backup -- --restore <set> --data ./data` (existing data → `--force` moves it to `<data>.before-restore-<time>`)
+- TLS: the server is plain `http`, it needs a reverse proxy (nginx / Caddy) in front for HTTPS · rate limits count per IP in each process's memory
+- **Behind a proxy you must set `TRUST_PROXY=1`** (CDN + nginx = 2) · unset = everyone gets the proxy's IP → the whole network shares one `RATE_LIMIT` / `EVM_RATE_LIMIT` quota (`src/node/client-ip.js` · test `95-client-ip`)
+  IP = counted from the right of `X-Forwarded-For` + socket (users can only forge the left part the proxy did not add) · nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` · Caddy adds it itself
+  ⚠️ With `TRUST_PROXY` > 0 the server port must be open only to the proxy (otherwise users can send a forged IP header)
 
 ---
 
-## 2. แผนผังไฟล์ — แก้อะไรต้องไปไฟล์ไหน
+## 2. File map — where to go to change what
 
 ```
-src/core/virtualmachine.js   4,293 บรรทัด  ตรรกะทั้งหมดของ chain (ดูหัวข้อ 4)
-src/core/sandbox.js          2,159        sandbox ของโปรแกรม: QuickJS (WebAssembly) + snapshot ต่อ tx + ตัวแปลงค่าข้ามเขตแดน
-src/core/autoreview.js         204        ตรวจโค้ดด้วยบัญชีขาว — standalone ใช้ได้เอง
+src/core/virtualmachine.js   4,293 lines   all chain logic (see section 4)
+src/core/sandbox.js          2,159        program sandbox: QuickJS (WebAssembly) + per-tx snapshot + cross-boundary value converters
+src/core/autoreview.js         204        whitelist code review — usable standalone
 src/storage/db.js              242        DB (LMDB) + MemoryDB — readKeys / writeKeys / listKeys
-src/crypto/signature.js        302        EIP-712 + secp256k1 (domain ไม่มี chainId · หัวข้อ 6)
-src/crypto/program-signature.js           ลายเซ็นที่โปรแกรมตรวจ: signPermit (EIP-712 / ERC-2612) / signWalletHash / signTypedDataDigest / signProgramMessage
-src/crypto/eip712.js                      EIP-712 แบบ eth_signTypedData_v4 (= ethers TypedDataEncoder) ไม่พึ่ง VM: eip712Digest / eip712DomainSeparator / recoverAddress
-src/standards/                            โปรแกรมมาตรฐาน: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
-                                          · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (หัวข้อ 8 "มาตรฐาน NFT / …")
-                                          · system (WBWSC · Multisig · Factory + แผน deploy ชุดโปรแกรมกลาง · หัวข้อ 8 "โปรแกรมกลางของเชน")
-                                          · multisender · tokenlock · dex · staking · limitorder · nftmarket (โปรแกรมกลางอีก 6 ตัว · หัวข้อ 8)
-scripts/deploy-system.js                  deploy โปรแกรมกลางทั้งชุดตามลำดับ nonce ของ deployer → deploy/system-programs.json
-scripts/set-gas.js                        admin ปรับขั้นต่ำของ gas price กลางทาง (tx setGasConfig · มีผล block ถัดไป)
-src/node/mempool.js            415        คิว tx: rate limit, TTL, กันซ้ำ, เรียงตาม tip จริง (EIP-1559), แทนที่ใบ nonce เดิม
-src/node/ratelimit.js           54        rate limit ต่อ key (server ใช้จำกัด POST ต่อ IP)
-src/node/simulate.js            52        ลองรัน tx ก่อนรับเข้าคิว
-src/node/sync.js               129        node ผู้อ่าน: ดึง block มารันเองแล้วเทียบ hash
-server.js                      590        server จริง (node:http) — ตัวที่ใช้งานอยู่
-explorerscan/                  ~2,300     explorer: index.html + theme/ (สี) + ui/ (หน้าตา) + core/ (ระบบ) · ดู explorerscan/README.md
-index.js                        12        จุดเข้าเดียวสำหรับ import เป็น library
-scripts/                                  คำสั่งดูแลเชนจริง: preflight · deploy-system · set-gas · backup · snapshot · monitor
-dev/                                      ทดสอบเท่านั้น (ลบได้): demo · seed · scenario · simulate · load-test · bench · fuzz · evm-proxy · ดู dev/README.md
-test/                                     เทสต์ (ลบได้ เชนไม่ได้ใช้) · genesis.json ที่ root = genesis ช่วงพัฒนา ห้ามใช้เปิดเชนจริง
+src/crypto/signature.js        302        EIP-712 + secp256k1 (domain has no chainId · section 6)
+src/crypto/program-signature.js           signatures that programs verify: signPermit (EIP-712 / ERC-2612) / signWalletHash / signTypedDataDigest / signProgramMessage
+src/crypto/eip712.js                      eth_signTypedData_v4-style EIP-712 (= ethers TypedDataEncoder), no VM dependency: eip712Digest / eip712DomainSeparator / recoverAddress
+src/standards/                            standard programs: token (ERC-20 + permit) · nft (ERC-721) · multitoken (ERC-1155)
+                                          · wallet (ERC-1271 + SIGNATURE_CHECKER) · multicall (section 8 "NFT standards / …")
+                                          · system (WBWSC · Multisig · Factory + system-program deploy plan · section 8 "Chain system programs")
+                                          · multisender · tokenlock · dex · staking · limitorder · nftmarket (6 more system programs · section 8)
+scripts/deploy-system.js                  deploys the whole system-program set in the deployer's nonce order → deploy/system-programs.json
+scripts/set-gas.js                        admin adjusts the gas price minimum mid-flight (setGasConfig tx · takes effect next block)
+src/node/mempool.js            415        tx queue: rate limit, TTL, dedup, ordered by effective tip (EIP-1559), replaces same-nonce txs
+src/node/ratelimit.js           54        per-key rate limit (the server uses it to limit POSTs per IP)
+src/node/simulate.js            52        dry-runs a tx before accepting it into the queue
+src/node/sync.js               129        reader node: fetches blocks, executes them itself, and compares hashes
+server.js                      590        the real server (node:http) — the one in use
+explorerscan/                  ~2,300     explorer: index.html + theme/ (colors) + ui/ (look) + core/ (logic) · see explorerscan/README.md
+index.js                        12        single entry point for importing as a library
+scripts/                                  live-chain operations: preflight · deploy-system · set-gas · backup · snapshot · monitor
+dev/                                      tests only (can be deleted): demo · seed · scenario · simulate · load-test · bench · fuzz · evm-proxy · see dev/README.md
+test/                                     tests (can be deleted, the chain doesn't use them) · genesis.json at root = development genesis, never use it to launch a real chain
 ```
 
-แบ่ง 3 กลุ่ม (ตาราง README หัวข้อ "โครงสร้าง"): ใช้กับเชนจริง = server.js · src/ · explorerscan/ · deploy/ · scripts/ · เครื่องมือนักพัฒนา = client-sdk/ · program-sdk/ · docs/ · ทดสอบเท่านั้น = test/ · dev/ · genesis.json
+Split into 3 groups (README table, section "Layout"): used by the live chain = server.js · src/ · explorerscan/ · deploy/ · scripts/ · developer tools = client-sdk/ · program-sdk/ · docs/ · tests only = test/ · dev/ · genesis.json
 
-ทิศทางการพึ่งพาเป็นทางเดียวเสมอ **`node` → `crypto` → `core` → `storage`**
-`core` ไม่รู้จักลายเซ็น / HTTP / คิว · `storage` ไม่รู้ความหมายของ key — อย่าทำให้ทิศทางนี้พัง
+Dependencies always go one way: **`node` → `crypto` → `core` → `storage`**
+`core` knows nothing about signatures / HTTP / queues · `storage` does not know what keys mean — don't break this direction
 
-| อยากแก้เรื่อง | ไปที่ |
+| What you want to change | Go to |
 |---|---|
-| ค่าแก๊ส, ตารางราคา | `DEFAULT_GAS` ท้ายหัวข้อ "ค่าที่ปรับบ่อย" ใน `virtualmachine.js` |
-| ค่าตั้งต้นของ VM | `DEFAULT_OPTIONS` ในไฟล์เดียวกัน |
-| ข้อความ error | `ERRORS` ในไฟล์เดียวกัน (ทุกข้อความรวมไว้ที่เดียว) |
-| รูปแบบ key ใน DB | กลุ่มฟังก์ชัน `*Key()` ประมาณบรรทัด 430–490 + `decodeDbKey()` |
-| โครงสร้างโปรแกรมที่ยอมรับ | `PROGRAM_WRAPPER_PATTERN` / `Compiler.parse` |
-| API ที่โปรแกรมเรียกได้ | `PROGRAM_API_NAMES` + `createProgramApi()` + `API_OPS` ใน `sandbox.js` + `PROGRAM_API` ใน `autoreview.js` (**ต้องแก้ทั้ง 4 ที่**) |
-| หน่วยความจำ / stack / การแยกโปรแกรม | `src/core/sandbox.js` (หัวข้อ 4 "Sandbox") |
-| กฎการตรวจโค้ด | `ALLOWED_NODES` / `ALLOWED_MEMBERS` / `BANNED_*` ใน `autoreview.js` |
-| endpoint | `ROUTES` + `DYNAMIC` + `handlePost` ใน `server.js` |
-| หน้าเว็บ | `explorerscan/` — สี `theme/colors.css` · หน้าตา `theme/style.css` + `ui/` · ระบบ (อ่านเชน / กระเป๋า / ลายเซ็น) `core/` |
+| Gas, price table | `DEFAULT_GAS` at the end of the "Frequently tuned values" section in `virtualmachine.js` |
+| VM defaults | `DEFAULT_OPTIONS` in the same file |
+| Error messages | `ERRORS` in the same file (all messages in one place) |
+| DB key formats | the `*Key()` function group around lines 430–490 + `decodeDbKey()` |
+| Accepted program structure | `PROGRAM_WRAPPER_PATTERN` / `Compiler.parse` |
+| APIs programs can call | `PROGRAM_API_NAMES` + `createProgramApi()` + `API_OPS` in `sandbox.js` + `PROGRAM_API` in `autoreview.js` (**all 4 places must be changed**) |
+| Memory / stack / program isolation | `src/core/sandbox.js` (section 4 "Sandbox") |
+| Code review rules | `ALLOWED_NODES` / `ALLOWED_MEMBERS` / `BANNED_*` in `autoreview.js` |
+| Endpoints | `ROUTES` + `DYNAMIC` + `handlePost` in `server.js` |
+| Web pages | `explorerscan/` — colors `theme/colors.css` · look `theme/style.css` + `ui/` · logic (chain reads / wallet / signatures) `core/` |
 
-### ส่วนที่มีสองชุดและต้องระวัง
+### Parts that exist twice — be careful
 
-**canonical JSON**: มีทั้งใน `virtualmachine.js` (`canonicalJson`) และเขียนซ้ำใน `explorerscan/core/wallet.js` (`canonical`)
-**ถ้าแก้ตัวใดตัวหนึ่งแล้วไม่แก้อีกตัว ลายเซ็นจากหน้าเว็บจะใช้ไม่ได้ทั้งหมด**
+**canonical JSON**: exists in `virtualmachine.js` (`canonicalJson`) and is rewritten in `explorerscan/core/wallet.js` (`canonical`)
+**If you change one without the other, every signature from the web page will be invalid**
 
-(`src/node/routes.js` ตัวอย่าง Fastify และโฟลเดอร์ `client/` ที่ซ้ำกับ `program-sdk/` ถูกลบไปแล้ว — server จริงคือ `server.js` ตัวเดียว)
+(`src/node/routes.js`, the Fastify example, and the `client/` folder that duplicated `program-sdk/` have been removed — the real server is `server.js` alone)
 
 ---
 
-## 3. โครงสร้างโปรแกรม (smart contract)
+## 3. Program structure (smart contract)
 
-โปรแกรมคือ **JavaScript ที่ valid ทั้งไฟล์ อยู่ใน scope เดียว** ส่งผ่าน API เป็น string ได้ตรง ๆ
+A program is **a whole-file valid JavaScript in a single scope**, sent through the API directly as a string
 
 ```js
 function program() {
-  function initialization(params) {       // รันครั้งเดียวตอน init — เรียกจากภายนอกไม่ได้เด็ดขาด
+  function initialization(params) {       // runs once at init — can never be called externally
     writeDB("owner", params.context.sender)
     writeDB(map("balances", params.context.sender), params.input.supply)
   }
 
-  function helper() {}                    // ไม่อยู่ใน return = internal
+  function helper() {}                    // not in return = internal
 
-  const onlyOwner = (fn) => (params) => { // modifier ใช้ได้ (const ที่มีค่าเป็นฟังก์ชัน)
-    if (readDB("owner") !== params.context.sender) throw new Error("ไม่ใช่เจ้าของ")
+  const onlyOwner = (fn) => (params) => { // modifiers work (consts whose value is a function)
+    if (readDB("owner") !== params.context.sender) throw new Error("not the owner")
     return fn(params)
   }
 
@@ -149,301 +149,301 @@ function program() {
 
   function transfer(params) {
     const balance = readDB(map("balances", params.context.sender)) || 0n
-    if (balance < params.input.amount) throw new Error("ยอดไม่พอ")
+    if (balance < params.input.amount) throw new Error("insufficient balance")
     // …
     emit("Transfer", { to: params.input.to, amount: params.input.amount })
     return true
   }
 
-  return { transfer, mint }               // ← บรรทัดสุดท้าย: รายชื่อที่เรียกจากภายนอกได้
+  return { transfer, mint }               // ← last line: the names callable externally
 }
 ```
 
-กติกา
-- ชื่อฟังก์ชันครอบเป็นอะไรก็ได้ · `const program = () => { … }` ก็ได้ · **ห้าม `import` / `export`**
-- `return { … }` ต้องเป็น**บรรทัดสุดท้าย**ของฟังก์ชันครอบ (regex จับท้ายไฟล์)
-- ห้าม export `initialization`
-- `migrate(params)` (ถ้ามี) รันครั้งเดียวตอนอนุมัติการอัปเกรดเท่านั้น — อยู่ใน `return { … }` ก็ถูกตัดออก **เรียกจากภายนอกไม่ได้** เหมือน `initialization`
-- `params` ที่ทุกฟังก์ชันได้รับ: `{ input, context: { sender, origin }, value, block: { timestamp } }`
-  (เลข block ไม่ได้อยู่ใน `params` — เรียก `BlockNumber()` แทน)
+Rules
+- The wrapping function can have any name · `const program = () => { … }` works too · **no `import` / `export`**
+- `return { … }` must be the **last line** of the wrapping function (a regex matches the end of the file)
+- Do not export `initialization`
+- `migrate(params)` (if present) runs once, only when an upgrade is approved — it is stripped even if listed in `return { … }`, **cannot be called externally**, just like `initialization`
+- `params` passed to every function: `{ input, context: { sender, origin }, value, block: { timestamp } }`
+  (the block number is not in `params` — call `BlockNumber()` instead)
 
-### อัปเกรดโปรแกรม (upgrade) — เทสต์ `56-upgrade`
+### Program upgrades — test `56-upgrade`
 
-**ไม่มี upgrader = แก้ไม่ได้ตลอดไป** · โปรแกรมทุกตัวที่มีอยู่เดิมไม่มี upgrader จึงแก้ไม่ได้
-- **ตั้ง upgrader ตอน deploy เท่านั้น**: `vm.deploy({ …, upgrader: "0x…" })` / tx ที่เซ็น `{ action: "deploy", …, upgrader: "0x…" }`
-  → เก็บใน `pending:<id>` (field `upgrader` มีเฉพาะเมื่อส่งมา) → ตอน `init` เขียนเป็น `metadata.upgrader`
-  (`upgrader` / `version` / `template` เป็นฟิลด์ของระบบ — ผู้ใช้ส่งผ่าน metadata / โปรแกรม `setMetadata` เองไม่ได้)
-- **โอนสิทธิ์ / สละสิทธิ์**: `vm.setUpgrader({ programUuid, upgrader, context })` — ต้องเป็น upgrader คนปัจจุบัน · `upgrader: null` = สละ → แก้ไม่ได้อีก
-  tx ที่เซ็น: `{ action: "setUpgrader", to: <program>, input: { upgrader: "0x…" | null } }`
-- **ส่งโค้ดใหม่**: `vm.upgrade({ programUuid, code, migrateInput, context })` จาก upgrader · ตรวจแบบ deploy ทุกอย่าง (ขนาด / syntax / autoreview / แก๊ส `call + code × byte`)
-  → `pending-upgrade:<id>` `{ code, context, migrateInput }` (ทีละ 1 รายการต่อโปรแกรม) · tx ที่เซ็น: `{ action: "upgrade", to, code, input: migrateInput }`
-- **ทีมงานอนุมัติ / ปฏิเสธ**: `vm.initUpgrade({ programUuid, context })` / `vm.rejectUpgrade(…)` — **กติกาผู้อนุมัติเหมือน init / reject ทุกอย่าง** (`admins`, ไม่มี context = เรียกภายใน)
-  tx ที่เซ็น: `action: "initUpgrade"` / `"rejectUpgrade"` · upgrader ต้องยังเป็นคนที่ส่งโค้ดมา (โอน / สละไปแล้ว → อนุมัติไม่ได้ ให้ reject ทิ้ง)
-- **ตอนอนุมัติ** (`applyUpgrade`): แทน `<id>:code` → เก็บ `<id>:codeversion:<n>` `{ version, code, blockNumber, timestamp }`
-  (เวอร์ชัน 1 ถูกเก็บตอนถูกแทนที่ครั้งแรก `blockNumber: null`) → `metadata.version` + 1 (ไม่มี = 1)
-  → รัน `migrate(params)` ครั้งเดียว (`input = migrateInput`, `sender = upgrader`, เห็นโค้ดใหม่แล้ว) · **migrate throw = อนุมัติล้ม ไม่มีอะไรเปลี่ยน** (pending ยังอยู่)
-  storage เดิมอยู่ครบ · cache คอมไพล์ผูกกับเนื้อโค้ด (โค้ดใหม่ = คอมไพล์ใหม่) และลืมโค้ดเก่าด้วย `compiler.forget()`
-- **timelock** — option `upgradeDelayBlocks` (server: env `UPGRADE_DELAY_BLOCKS`, ค่าเริ่ม 0)
-  - `0` → ใช้โค้ดใหม่ทันทีใน tx ที่อนุมัติ (tx ถัดไปใน block เดียวกันเห็นโค้ดใหม่)
-  - `N > 0` → อนุมัติที่ block B: ลบ pending เขียน `scheduled-upgrade:<id>` `{ …, approvedAt: B, activateAt: B + N }` + ดัชนี `upgradeat:<B+N>` `[id…]`
-    คืน `{ state: "scheduled", activateAt }` · โค้ดเดิมทำงานต่อ · ส่งโค้ดใหม่ซ้ำไม่ได้จนกว่าจะเปิดใช้
-  - **เปิดใช้ตอนสร้าง block B+N** (`Block` constructor → `#activateUpgrades` → `vm.activateUpgrade`) ก่อน tx ใบแรก แม้ block นั้นไม่มี tx
-    ไม่ใช่ tx (ไม่มี hash / ผู้จ่าย / ไม่อยู่ใน body) แต่ writes อยู่ใน state ของ block → เข้า stateRoot + history → **replay / rebuild ได้ผลเดิม**
-    `header.upgrades = [{ program, status, version, error }]` (มีเฉพาะ block ที่มีการเปิดใช้) · migrate ล้มตอนนั้น → ยกเลิกการอัปเกรด โค้ดเดิมทำงานต่อ
-  - ต้องมีเลข block (`recordBlocks` / ส่ง `number`) · อนุมัตินอก block → error · `simulate` ของ `initUpgrade` จำลองเป็น block ถัดไปให้เอง
-- อ่านย้อนหลัง: `vm.listCodeVersions(addr)` · `vm.getCodeVersion(addr, n)` · `vm.codeAt(blockNumber, addr)` (= `stateAt` ของ `<id>:code`)
-  `replayBlock` ของ block ก่อนอัปเกรดใช้โค้ด ณ ตอนนั้นเสมอ (อ่าน `<id>:code` ผ่าน history)
+**No upgrader = immutable forever** · every pre-existing program has no upgrader, so none of them can be changed
+- **The upgrader is set only at deploy**: `vm.deploy({ …, upgrader: "0x…" })` / signed tx `{ action: "deploy", …, upgrader: "0x…" }`
+  → stored in `pending:<id>` (the `upgrader` field exists only when sent) → at `init` it is written as `metadata.upgrader`
+  (`upgrader` / `version` / `template` are system fields — users cannot set them via metadata / a program's `setMetadata`)
+- **Transfer / renounce the right**: `vm.setUpgrader({ programUuid, upgrader, context })` — must be the current upgrader · `upgrader: null` = renounce → immutable from then on
+  Signed tx: `{ action: "setUpgrader", to: <program>, input: { upgrader: "0x…" | null } }`
+- **Submit new code**: `vm.upgrade({ programUuid, code, migrateInput, context })` from the upgrader · checked exactly like a deploy (size / syntax / autoreview / gas `call + code × byte`)
+  → `pending-upgrade:<id>` `{ code, context, migrateInput }` (one at a time per program) · signed tx: `{ action: "upgrade", to, code, input: migrateInput }`
+- **Team approves / rejects**: `vm.initUpgrade({ programUuid, context })` / `vm.rejectUpgrade(…)` — **approver rules are exactly the same as init / reject** (`admins`, no context = internal call)
+  Signed tx: `action: "initUpgrade"` / `"rejectUpgrade"` · the upgrader must still be the one who submitted the code (transferred / renounced → cannot be approved, reject it)
+- **On approval** (`applyUpgrade`): replaces `<id>:code` → stores `<id>:codeversion:<n>` `{ version, code, blockNumber, timestamp }`
+  (version 1 is stored the first time it is replaced, `blockNumber: null`) → `metadata.version` + 1 (missing = 1)
+  → runs `migrate(params)` once (`input = migrateInput`, `sender = upgrader`, already sees the new code) · **migrate throws = approval fails, nothing changes** (pending stays)
+  Existing storage is intact · the compile cache is keyed by code content (new code = recompile) and the old code is dropped with `compiler.forget()`
+- **timelock** — option `upgradeDelayBlocks` (server: env `UPGRADE_DELAY_BLOCKS`, default 0)
+  - `0` → the new code is used immediately in the approving tx (the next tx in the same block sees the new code)
+  - `N > 0` → approved at block B: deletes pending, writes `scheduled-upgrade:<id>` `{ …, approvedAt: B, activateAt: B + N }` + index `upgradeat:<B+N>` `[id…]`
+    Returns `{ state: "scheduled", activateAt }` · the old code keeps running · new code cannot be submitted again until activation
+  - **Activated when block B+N is created** (`Block` constructor → `#activateUpgrades` → `vm.activateUpgrade`) before the first tx, even if that block has no txs
+    Not a tx (no hash / payer / not in the body), but its writes are in the block state → included in stateRoot + history → **replay / rebuild give the same result**
+    `header.upgrades = [{ program, status, version, error }]` (only on blocks with an activation) · migrate fails at that point → the upgrade is cancelled, the old code keeps running
+  - Requires a block number (`recordBlocks` / pass `number`) · approval outside a block → error · `simulate` of `initUpgrade` simulates the next block itself
+- Historical reads: `vm.listCodeVersions(addr)` · `vm.getCodeVersion(addr, n)` · `vm.codeAt(blockNumber, addr)` (= `stateAt` of `<id>:code`)
+  `replayBlock` of a block before an upgrade always uses the code as of that time (reads `<id>:code` through history)
 
-### cloneProgram — โรงงานสร้างโปรแกรม (แบบ CREATE2) — เทสต์ `57-clone`
+### cloneProgram — program factory (CREATE2-style) — test `57-clone`
 
 ```js
-const address = cloneProgram(template, initInput, { salt, value })   // ในโปรแกรม (factory)
+const address = cloneProgram(template, initInput, { salt, value })   // inside a program (factory)
 ```
-- `template` = โปรแกรมใดก็ได้ที่**อนุมัติแล้ว** (มี `<id>:code`) · pending / rejected / ไม่มี → `NOT_FOUND`
-- address = `addressFromHash(hashData({ chainId, factory, salt, codeHash: keccak256(code) }))` — รู้ได้ก่อนสร้างด้วย `vm.cloneAddressFor(factory, salt, code)`
-  `salt` = string ที่ไม่ว่าง หรือ BigInt (ใช้ค่าตัวเลขเป็น string) · salt ซ้ำ (address มีอยู่แล้ว) → `INVALID_REQUEST`
-- **copy** โค้ดไปไว้ที่ address ใหม่ (อัปเกรด template ภายหลังไม่กระทบ clone) แล้วรัน `initialization` ทันทีใน tx เดียวกัน
-  `context.sender = factory` · `origin` เดิม · `value` (ไม่บังคับ) โอน native จาก factory → clone ก่อน initialization (เห็นที่ `params.value`)
-- metadata: `type: "program"`, `creator: factory`, `createdAt`, `template` · อนุมัติทันที (มี `<id>:this` → นับใน `/programs/approved`) · ไม่มี upgrader = แก้ไม่ได้
-- แก๊ส: `call` (ใน initialization) + `code × byte` ของโค้ด (เหมือน deploy) + `write × 7` + read 1 · ความลึกนับเหมือน `runProgram` (`maxCallDepth`)
-- **ล้มที่ไหนย้อนทั้งหมด**: initialization throw / กิ่งที่เรียก clone throw แล้วชั้นบน catch → ไม่เหลือ code / metadata / เงินที่โอน
-- trace: รายการของ clone มี `type: "create"` (`tx.calls` → receipt `trace[].type` → `txto` action `create` → callTracer `CREATE`)
-  call ธรรมดาไม่มี field `type` (receipt เดิมไม่เปลี่ยน) · template ไม่มี initialization ก็ยังมีรายการ create (`functionName: "create"`)
+- `template` = any **approved** program (has `<id>:code`) · pending / rejected / missing → `NOT_FOUND`
+- address = `addressFromHash(hashData({ chainId, factory, salt, codeHash: keccak256(code) }))` — known before creation via `vm.cloneAddressFor(factory, salt, code)`
+  `salt` = a non-empty string or a BigInt (its numeric value is used as a string) · duplicate salt (address already exists) → `INVALID_REQUEST`
+- **copies** the code to the new address (later template upgrades don't affect the clone), then runs `initialization` immediately in the same tx
+  `context.sender = factory` · `origin` unchanged · `value` (optional) transfers native from factory → clone before initialization (visible as `params.value`)
+- metadata: `type: "program"`, `creator: factory`, `createdAt`, `template` · approved immediately (has `<id>:this` → counted in `/programs/approved`) · no upgrader = immutable
+- Gas: `call` (in initialization) + `code × byte` of the code (like deploy) + `write × 7` + 1 read · depth is counted like `runProgram` (`maxCallDepth`)
+- **A failure anywhere rolls back everything**: initialization throws / the branch calling clone throws and an upper level catches → no code / metadata / transferred funds remain
+- trace: the clone entry has `type: "create"` (`tx.calls` → receipt `trace[].type` → `txto` action `create` → callTracer `CREATE`)
+  Plain calls have no `type` field (existing receipts unchanged) · a template without initialization still gets a create entry (`functionName: "create"`)
 
-### params / ค่าที่ส่งกลับ — ตัวเลขเป็น BigInt
+### params / return values — numbers are BigInt
 
-**ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น** — VM ทำงานแบบนี้เสมอ (ตัวเลือก `bigintValues` / โหมด number ถูกตัดออกแล้ว)
+**Numbers in programs must be BigInt only** — the VM always works this way (the `bigintValues` option / number mode has been removed)
 
-- `10` → error `numberNotAllowed` · ต้องเขียน `10n`
-- เก็บลง DB เป็น string `"123n"` แปลงกลับเป็น BigInt อัตโนมัติตอนอ่าน
-- ค่าที่ออกไปทาง JSON ของ API ก็เป็น `"123n"` → **ฝั่ง client ห้ามใช้ `Number()`** ใช้ `BigInt(v.slice(0,-1))`
-- ยอด native เป็น BigInt หน่วย wei (18 ทศนิยม, 1 เหรียญ = 10^18) เก็บใน DB / receipt / tx record เป็น `"123n"`
-  `value` / `gasPrice` ที่ส่งเข้ามารับได้ทั้ง number, BigInt, `"123"` และ `"123n"` · ราคาแก๊สเริ่มต้นของ server 10,000 gwei (`GAS_PRICE`)
-- ค่าของระบบที่เหลือ (gasUsed, gasLimit, nonce, เลข block, timestamp) ยังเป็น `number` ปกตินอกโปรแกรม
-  (ในโปรแกรม `params.block.timestamp` / `BlockNumber()` เป็น BigInt · `Date.now()` ยังเป็น number ต้องห่อ `BigInt()` ก่อนเก็บ)
+- `10` → error `numberNotAllowed` · you must write `10n`
+- Stored in the DB as the string `"123n"`, converted back to BigInt automatically on read
+- Values leaving via API JSON are also `"123n"` → **clients must not use `Number()`**, use `BigInt(v.slice(0,-1))`
+- Native balances are BigInt in wei (18 decimals, 1 coin = 10^18), stored in DB / receipt / tx record as `"123n"`
+  Incoming `value` / `gasPrice` accept number, BigInt, `"123"` and `"123n"` · the server's default gas price is 10,000 gwei (`GAS_PRICE`)
+- The remaining system values (gasUsed, gasLimit, nonce, block number, timestamp) are still plain `number` outside programs
+  (inside programs `params.block.timestamp` / `BlockNumber()` are BigInt · `Date.now()` is still a number, wrap it in `BigInt()` before storing)
 
-### API ในโปรแกรม (36 ตัว)
+### In-program API (36 functions)
 
 ```
 readDB(key) / writeDB(key, value) / deleteDB(key) / map(...parts)
-runProgram(target, functionName, input, { value })      เรียกโปรแกรมอื่น
-runProgram(target, functionName, input, { readonly: true })   แบบ STATICCALL: ปลายทาง + ทุกชั้นที่เรียกต่อแก้ state ไม่ได้
-cloneProgram(template, initInput, { salt, value })      สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address (ดูหัวข้อ cloneProgram)
-transferNative(to, amount)                              โอนเหรียญหลักจากโปรแกรม
-setMetadata(field, value) / emit(name, data, { indexed: ["from", "to"] }?)   indexed = field ที่ค้นด้วยค่าได้ (ไม่เกิน 3 · ดูหัวข้อ event แบบ indexed)
+runProgram(target, functionName, input, { value })      call another program
+runProgram(target, functionName, input, { readonly: true })   STATICCALL-style: the target + every nested level cannot modify state
+cloneProgram(template, initInput, { salt, value })      create a new program from an approved template → address (see the cloneProgram section)
+transferNative(to, amount)                              transfer the native coin from the program
+setMetadata(field, value) / emit(name, data, { indexed: ["from", "to"] }?)   indexed = fields searchable by value (at most 3 · see the indexed events section)
 keccak256(value) / ecrecover(value, signature)
 ThisAddress() / ThisBalance() / BalanceOf(addr) / IsProgram(addr) / MetadataOf(addr, field) / BlockNumber()
-Date        เวลาของ block (Date.now() ได้ค่าเดียวกันทุก tx ใน block)
-Math        random() ผูกกับ tx hash → รันซ้ำได้ผลเดิม
-sha256(value) / ripemd160(value) / blake2b(value)        precompile hash (รับแบบเดียวกับ keccak256 · blake2b = BLAKE2b-512)
-modexp(base, exponent, modulus)                          BigInt · modulus 0n → 0n · แต่ละค่า ≤ 1024 byte (MODEXP_MAX_BYTES)
+Date        block time (Date.now() returns the same value for every tx in the block)
+Math        random() tied to the tx hash → replays give the same result
+sha256(value) / ripemd160(value) / blake2b(value)        hash precompiles (same input as keccak256 · blake2b = BLAKE2b-512)
+modexp(base, exponent, modulus)                          BigInt · modulus 0n → 0n · each value ≤ 1024 bytes (MODEXP_MAX_BYTES)
 BlockHash(n) / ChainId() / Coinbase() / BlockGasLimit() / GasPrice() / BaseFee() / GasLeft()
-CodeHashOf(addr) / CodeSizeOf(addr)                      keccak256 / byte ของโค้ดที่เก็บ · ไม่ใช่โปรแกรม → null / 0n
-keccak256Bytes("0x…")                                    keccak256 ของ byte ดิบ (hex) → "0x…" 32 byte (keccak256(value) เดิม hash UTF-8 ของข้อความเสมอ)
-ecrecoverDigest(digest, signature)                       ecrecover แบบ EVM จาก digest 32 byte ตรง ๆ → address | null
-eip712Digest(domain, types, primaryType, message)        digest ที่ MetaMask eth_signTypedData_v4 เซ็น (= ethers TypedDataEncoder.hash)
+CodeHashOf(addr) / CodeSizeOf(addr)                      keccak256 / bytes of the stored code · not a program → null / 0n
+keccak256Bytes("0x…")                                    keccak256 of raw bytes (hex) → "0x…" 32 bytes (the original keccak256(value) always hashes the UTF-8 text)
+ecrecoverDigest(digest, signature)                       EVM-style ecrecover directly from a 32-byte digest → address | null
+eip712Digest(domain, types, primaryType, message)        the digest MetaMask eth_signTypedData_v4 signs (= ethers TypedDataEncoder.hash)
 eip712DomainSeparator(domain, types?)                    domainSeparator (= TypedDataEncoder.hashDomain)
 ```
 
-**byte ดิบ / EIP-712** (`src/crypto/eip712.js` · เทสต์ `78-eip712`) — เพิ่มแบบไม่แตะของเดิม: `keccak256` / `ecrecover` เดิมรับข้อความ / object (hash UTF-8 / canonical JSON) **พฤติกรรมและแก๊สเท่าเดิมทุกหน่วย** โปรแกรมเก่า replay ได้ผลเดิม
+**Raw bytes / EIP-712** (`src/crypto/eip712.js` · test `78-eip712`) — added without touching the existing ones: the original `keccak256` / `ecrecover` take text / objects (UTF-8 hash / canonical JSON), **behavior and gas unchanged to the unit**, old programs replay with the same result
 
-| API | พฤติกรรม | แก๊ส |
+| API | Behavior | Gas |
 |---|---|---|
-| `keccak256Bytes(hex)` | `"0x"` + ไบต์เต็ม (ตัวพิมพ์ใหญ่ / เล็กได้ · `"0x"` = byte ว่าง) · ผิดรูปแบบ → `INVALID_REQUEST` (catch ได้) | `hash` + `byte` × จำนวน byte |
-| `ecrecoverDigest(digest, sig)` | digest `"0x"` + 64 hex · sig r‖s‖v 65 byte v = 27 / 28 (ตัวกู้ตัวเดียวกับ `ecrecover` เดิม — `recoverAddress()` · s สูงก็กู้ได้เหมือนเดิม) · ลายเซ็นใช้ไม่ได้ → `null` · รูปแบบผิด → throw | `recover` (3000) |
-| `eip712Digest(domain, types, primaryType, message)` | กติกา encodeData ของ EIP-712 ครบ: `address` `bool` `uintN` `intN` `bytesN` `bytes` `string` struct ซ้อน array `T[]` / `T[k]` ซ้อน · types มี / ไม่มี `EIP712Domain` ก็ได้ (ไม่มี = เอา field ของ domain ที่มีค่าตามลำดับ name, version, chainId, verifyingContract, salt แบบ ethers) · ตัวเลขต้องเป็น BigInt (number → error แบบ API อื่น) · field เกินถูกข้าม ขาด / ผิดชนิด / เกินช่วง / struct วน → `INVALID_REQUEST: EIP-712: …` (catch ได้) · struct ≤ 64 ชนิด · field ≤ 128 · ซ้อน ≤ 32 ชั้น (กัน stack ของ host ให้ทุกเครื่องล้มที่จุดเดียวกัน) · `primaryType = "EIP712Domain"` → digest ของ domain อย่างเดียวแบบ MetaMask | `hash` × จำนวนครั้งที่ keccak + `byte` × byte ทั้งหมดที่ถูก hash (typeHash ทุก struct, string / bytes, array, struct, digest) — คิดหลังคำนวณ (งานเป็นเส้นตรงกับข้อมูลที่โปรแกรมจ่ายแก๊สสร้างมาแล้ว) |
-| `eip712DomainSeparator(domain, types?)` | เหมือนข้างบนแต่คืน hashStruct ของ domain | แบบเดียวกัน |
+| `keccak256Bytes(hex)` | `"0x"` + whole bytes (upper / lower case ok · `"0x"` = empty bytes) · malformed → `INVALID_REQUEST` (catchable) | `hash` + `byte` × byte count |
+| `ecrecoverDigest(digest, sig)` | digest `"0x"` + 64 hex · sig r‖s‖v 65 bytes, v = 27 / 28 (the same recoverer as the original `ecrecover` — `recoverAddress()` · high s still recovers as before) · unusable signature → `null` · malformed → throw | `recover` (3000) |
+| `eip712Digest(domain, types, primaryType, message)` | full EIP-712 encodeData rules: `address` `bool` `uintN` `intN` `bytesN` `bytes` `string`, nested structs, nested arrays `T[]` / `T[k]` · types may or may not include `EIP712Domain` (absent = use the domain fields that have values in the order name, version, chainId, verifyingContract, salt, like ethers) · numbers must be BigInt (number → error like other APIs) · extra fields are skipped; missing / wrong type / out of range / recursive struct → `INVALID_REQUEST: EIP-712: …` (catchable) · ≤ 64 struct types · ≤ 128 fields · ≤ 32 nesting levels (protects the host stack so every machine fails at the same point) · `primaryType = "EIP712Domain"` → digest of the domain only, like MetaMask | `hash` × number of keccak calls + `byte` × all bytes hashed (typeHash of every struct, string / bytes, array, struct, digest) — charged after computing (work is linear in data the program already paid gas to build) |
+| `eip712DomainSeparator(domain, types?)` | same as above but returns the domain's hashStruct | same |
 
-ตัวอย่างจาก EIP-712 (Mail): `eip712Digest({ name: "Ether Mail", version: "1", chainId: 1n, verifyingContract }, { Person: […], Mail: […] }, "Mail", message)` = `0xbe609aee…` ตามตัวอย่างใน EIP-712
+Example from EIP-712 (Mail): `eip712Digest({ name: "Ether Mail", version: "1", chainId: 1n, verifyingContract }, { Person: […], Mail: […] }, "Mail", message)` = `0xbe609aee…`, matching the example in EIP-712
 
-API ที่เทียบกับ EVM (ทุกตัว deterministic · คืน BigInt / string / null):
+APIs compared to EVM (all deterministic · return BigInt / string / null):
 
-| API | EVM | พฤติกรรม | แก๊ส |
+| API | EVM | Behavior | Gas |
 |---|---|---|---|
-| `BlockHash(n)` | BLOCKHASH | `block:<n>.hash` ย้อนได้ 256 block (`BLOCK_HASH_WINDOW`) · block ปัจจุบัน / อนาคต / เก่ากว่า / block 0 → `null` · query นอก block นับ block ถัดจากล่าสุดเป็นปัจจุบัน · `n` ต้องเป็น BigInt | `read` |
+| `BlockHash(n)` | BLOCKHASH | `block:<n>.hash`, up to 256 blocks back (`BLOCK_HASH_WINDOW`) · current / future / older / block 0 → `null` · a query outside a block treats the block after the latest as current · `n` must be BigInt | `read` |
 | `ChainId()` | CHAINID | `vm.chainId` | `env` 10 |
-| `Coinbase()` | COINBASE | `feeRecipient` ของ block (null ถ้าไม่มี) | `env` |
-| `BlockGasLimit()` | GASLIMIT | `vm.maxBlockGas` (null = ไม่จำกัด · ใช้ค่าของ VM ไม่ใช่ของ Block จึง replay ได้ผลเดิม) | `env` |
-| `GasPrice()` | GASPRICE | `tx.gasPrice` = ราคาจริงต่อแก๊ส `min(maxFee, baseFee + priority)` | `env` |
-| `BaseFee()` | BASEFEE | base fee ของ block ที่ tx อยู่ (`tx.baseFee` · query นอก block = base fee ของ block ถัดไป) | `env` |
-| `GasLeft()` | GAS | `gasLimit - gasUsed` หลังหัก `env` ของตัวเอง (null ถ้าไม่มีเพดาน) | `env` |
-| `CodeHashOf(a)` | EXTCODEHASH | `keccak256(<a>:code)` = codeHash เดียวกับที่ `cloneProgram` ใช้คำนวณ address | `read` + `hash` + `byte` × ขนาดโค้ด |
-| `CodeSizeOf(a)` | EXTCODESIZE | byte ของ `<a>:code` | `read` |
-| `sha256` / `ripemd160` / `blake2b` | precompile 0x02 / 0x03 / (BLAKE2F) | hex `0x…` | `sha256` 100 / `ripemd160` 300 / `blake2b` 100 + `byte` × ขนาดข้อมูล |
-| `modexp` | precompile 0x05 | square-and-multiply | `modexp` 200 + ⌊word² × max(bit ของ exp, 1) ÷ 3⌋ (คิดก่อนคำนวณ) |
-| `runProgram(..., { readonly: true })` | STATICCALL | `caller.readonly` ส่งต่อทุกชั้น · `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` → `ERRORS.readonlyCall` (FORBIDDEN, catch ได้) · แนบ value ไม่ได้ (`readonlyValue`) · trace `type: "staticcall"` → callTracer `STATICCALL` | เท่า call ปกติ |
+| `Coinbase()` | COINBASE | the block's `feeRecipient` (null if none) | `env` |
+| `BlockGasLimit()` | GASLIMIT | `vm.maxBlockGas` (null = unlimited · uses the VM's value, not the Block's, so replay gives the same result) | `env` |
+| `GasPrice()` | GASPRICE | `tx.gasPrice` = actual price per gas `min(maxFee, baseFee + priority)` | `env` |
+| `BaseFee()` | BASEFEE | base fee of the tx's block (`tx.baseFee` · a query outside a block = base fee of the next block) | `env` |
+| `GasLeft()` | GAS | `gasLimit - gasUsed` after deducting its own `env` (null if there is no cap) | `env` |
+| `CodeHashOf(a)` | EXTCODEHASH | `keccak256(<a>:code)` = the same codeHash `cloneProgram` uses to compute addresses | `read` + `hash` + `byte` × code size |
+| `CodeSizeOf(a)` | EXTCODESIZE | bytes of `<a>:code` | `read` |
+| `sha256` / `ripemd160` / `blake2b` | precompile 0x02 / 0x03 / (BLAKE2F) | hex `0x…` | `sha256` 100 / `ripemd160` 300 / `blake2b` 100 + `byte` × data size |
+| `modexp` | precompile 0x05 | square-and-multiply | `modexp` 200 + ⌊word² × max(exp bits, 1) ÷ 3⌋ (charged before computing) |
+| `runProgram(..., { readonly: true })` | STATICCALL | `caller.readonly` propagates to every level · `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` → `ERRORS.readonlyCall` (FORBIDDEN, catchable) · cannot attach value (`readonlyValue`) · trace `type: "staticcall"` → callTracer `STATICCALL` | same as a normal call |
 
-**เพิ่ม API ใหม่ต้องแก้ 4 ที่**: `PROGRAM_API_NAMES`, `createProgramApi()` (ทั้งคู่ใน `virtualmachine.js`), `API_OPS` ใน `sandbox.js` (ชื่อ + ชนิด argument — ไม่มี = โปรแกรมเรียกไม่ถึง host) และ `PROGRAM_API` ใน `autoreview.js` — ถ้าลืมที่สุดท้าย autoreview จะปฏิเสธโค้ดที่ใช้ API ใหม่ว่า "ไม่รู้จัก" · อย่าลืม API ปลอมใน `program-sdk/lib/program-globals.js` และ README ของ SDK
+**Adding a new API requires changes in 4 places**: `PROGRAM_API_NAMES`, `createProgramApi()` (both in `virtualmachine.js`), `API_OPS` in `sandbox.js` (name + argument types — missing = the program cannot reach the host) and `PROGRAM_API` in `autoreview.js` — forget the last one and autoreview rejects code using the new API as unknown · don't forget the fake APIs in `program-sdk/lib/program-globals.js` and the SDK README
 
 ---
 
-## 4. ภายใน virtualmachine.js
+## 4. Inside virtualmachine.js
 
-4 class ในไฟล์เดียว:
+4 classes in one file:
 
-| class | หน้าที่ |
+| class | Role |
 |---|---|
-| `VirtualMachine` | เจ้าของ option / DB, เมธอดสาธารณะทั้งหมด, สร้าง Block และ Transaction |
-| `Block` | ชุด tx ที่จะ commit พร้อมกัน — คิดค่า hash, ประกอบ header/body, เขียน history |
-| `Transaction` | tx หนึ่งใบ: cache การอ่าน, สะสม writes, นับค่าแก๊ส, รองรับ rollback ของกิ่ง |
-| `Compiler` | แปลง string โค้ด → ฟังก์ชันที่เรียกได้ (`parse` + `compile`) |
+| `VirtualMachine` | owns options / DB, all public methods, creates Blocks and Transactions |
+| `Block` | the set of txs committed together — computes hashes, assembles header/body, writes history |
+| `Transaction` | a single tx: read cache, accumulated writes, gas counting, branch rollback support |
+| `Compiler` | turns a code string → a callable function (`parse` + `compile`) |
 
-### Compiler ทำงานยังไง (ส่วนที่แก้พลาดง่ายที่สุด)
+### How the Compiler works (the easiest part to break)
 
-`Compiler.parse()` ใช้ regex ไม่ใช่ AST:
-1. ปฏิเสธถ้าเจอ `import`/`export` ขึ้นต้นบรรทัด
-2. `PROGRAM_WRAPPER_PATTERN` ดึงเนื้อในฟังก์ชันครอบออกมาเป็น `body`
-3. `RETURN_EXPORT_PATTERN` จับ `return { … }` **ท้ายสุด** → รายชื่อ export แล้วตัดบรรทัดนั้นออกจาก body
-4. เก็บชื่อผู้สมัคร (`candidateNames`) จาก `function ชื่อ(` และ `const/let ชื่อ =` (ตัวหลังคือที่ทำให้ modifier ใช้ได้)
+`Compiler.parse()` uses regexes, not an AST:
+1. rejects if it finds `import`/`export` at the start of a line
+2. `PROGRAM_WRAPPER_PATTERN` extracts the body of the wrapping function as `body`
+3. `RETURN_EXPORT_PATTERN` matches the **final** `return { … }` → the export list, then strips that line from the body
+4. collects candidate names (`candidateNames`) from `function name(` and `const/let name =` (the latter is what makes modifiers work)
 
-แล้วฉีดตัวนับแก๊ส (`gasmeter.js`) และประกอบเป็น **ซอร์ส** (string) ของ factory
+Then it injects the gas counter (`gasmeter.js`) and assembles the factory **source** (string)
 ```js
 (function (api) { "use strict"; const { readDB, writeDB, …, __gas, __str, __props, __spread, __add, …, __opm } = api; ${body} ;return { … }; })
 ```
-→ API ถูก destructure เป็น `const` ในขอบเขตเดียวกับโค้ด user (เขียนทับไม่ได้) · ซอร์สนี้ถูกรันใน sandbox (QuickJS) ไม่ใช่ใน V8 ของ server
-syntax ถูกตรวจทั้งกับ V8 (ข้อความ error เดิม) และกับ QuickJS (`checkGuestSyntax` — ตัวที่รันจริง) ก่อนรับโค้ด
+→ the API is destructured as `const` in the same scope as the user code (cannot be overwritten) · this source runs in the sandbox (QuickJS), not in the server's V8
+Syntax is checked against both V8 (the original error messages) and QuickJS (`checkGuestSyntax` — the one that actually runs) before the code is accepted
 
-`isTopLevelDeclaration()` ใช้ trick ที่ควรรู้ก่อนแก้: ต่อ `let <ชื่อ>;` เข้าท้ายโค้ดแล้วคอมไพล์
-ถ้า V8 ฟ้อง `'<ชื่อ>' has already been declared` = ชื่อนั้นถูกประกาศในระดับบนสุดจริง — ตรวจได้โดยไม่ต้องรันโค้ด
-ผลลัพธ์ compile (ซอร์สที่ฉีดตัวนับแล้ว) ถูก cache ตาม string โค้ด (`#cache`)
+`isTopLevelDeclaration()` uses a trick worth knowing before you change it: append `let <name>;` to the code and compile
+If V8 complains `'<name>' has already been declared` = the name really is declared at the top level — checked without running the code
+Compile results (the source with the counter injected) are cached by code string (`#cache`)
 
-### Sandbox (`src/core/sandbox.js` · เทสต์ `58-sandbox`)
+### Sandbox (`src/core/sandbox.js` · test `58-sandbox`)
 
-โค้ดของโปรแกรมรันใน **QuickJS ที่คอมไพล์เป็น WebAssembly** (`quickjs-emscripten` 0.32.0 แบบ sync, QuickJS 2025-09-13)
-ไม่ใช่ใน V8 ของ server → โปรแกรมไม่มีทางเห็น `process` / `require` / global ของ Node / object ใด ๆ ของ host
+Program code runs in **QuickJS compiled to WebAssembly** (`quickjs-emscripten` 0.32.0, sync variant, QuickJS 2025-09-13)
+not in the server's V8 → programs have no way to see `process` / `require` / Node globals / any host object
 
 | | |
 |---|---|
-| ตอน import | โหลด wasm ครั้งเดียว (top-level await) · สร้าง runtime 1 ตัว + context สำรอง 8 ตัวที่โหลด prelude แล้ว · ถ่าย **snapshot** ของ memory ของ wasm (~1.8 MB) · self-check ว่าคืน snapshot ได้จริง (ไม่ผ่าน = import ล้ม) |
-| ต้น tx | คืน memory เป็น snapshot (~0.13 ms) → ทุก tx เริ่มจาก heap เดียวกันทุกไบต์ ไม่มีอะไรจาก tx ก่อนค้าง (global ที่แก้ / ขยะของ GC) |
-| 1 tx ชั้นนอกสุด | = runtime เดียว · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียก (`runProgram` / init ของ `cloneProgram` ซ้อนรันใน runtime เดียวกัน) |
-| 1 โปรแกรมใน tx | = 1 context (global แยกกัน) · factory ถูกเรียกใหม่ทุก call → ตัวแปรระดับบนสุดไม่ค้างข้าม call |
-| ภาพอุ่น (เทสต์ `89-warm-sandbox`) | โปรแกรมแรกของ tx: ใช้ memory ที่ "snapshot ตั้งต้น + factory ของซอร์สนี้ถูกประเมินแล้ว" (LRU `SANDBOX_WARM_CACHE` ค่าเริ่ม 32 · `warmStats` / `clearWarmCache`) แทนการคอมไพล์ใหม่ · ภาพ = ผลของ (snapshot, source) อย่างเดียว → มี / ไม่มีใน cache ผลทุก tx เหมือนกันทุกไบต์ (รวมแก๊สและจุด OUT_OF_MEMORY) · token transfer 2.2 → 0.94 ms/tx (load test) · โปรแกรมที่สองของ tx (`runProgram`) คอมไพล์ใน tx ตามเดิม<br>ภาพละ ~3.4 MB → 32 ภาพ ≈ 110 MB RAM · ไม่มีในที่เก็บ: คอมไพล์แล้วใช้ memory ตอนนั้นต่อเลย (ไม่คืนภาพซ้ำ) แล้วถ่ายเก็บทับ buffer ของภาพที่ถูกไล่ออก · `0` = ไม่เก็บไม่คัดลอก (ต้นทุนเท่าคอมไพล์ทุก tx แบบเดิม) · โปรแกรมที่ใช้สลับกันเกิน limit = miss ทุกครั้ง ช้ากว่าไม่มี cache ~30% (เพิ่ม `SANDBOX_WARM_CACHE` ถ้ามีโปรแกรมยอดนิยมมากกว่า 32 ตัว) |
-| fuzz (เทสต์ `87-sandbox-fuzz`) | `npm run fuzz -- --iterations N --seed S`: สุ่มโปรแกรม + ค่าข้ามเขตแดน ตรวจ ไม่มี INTERNAL / throw หลุดถึงผู้เรียก · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · รอบยาว 20,000 รอบ (seed 1000) ไม่พบปัญหา |
-| ค่าข้ามเขตแดน | เป็นข้อความ JSON เสมอ (BigInt / undefined / NaN / -0 / map(...) ติดป้ายด้วย key `"\u0000"`) → ได้สำเนาใหม่ทุกครั้ง · function / symbol / object ที่ไม่ใช่ข้อมูลส่งเป็น "ไม่ใช่ข้อมูล" แล้ว host ปฏิเสธเหมือนเดิม · error ของ host ที่โปรแกรมได้รับเป็น `Error` ของฝั่งโปรแกรม (มี `code`) ถ้า throw ต่อ host ได้ error ตัวเดิมคืน |
-| global | built-in มาตรฐานของ JS + `Date` / `Math` ของ block (Math.random ถาม host) · `eval` / `new Function` / constructor ของ async / generator function ถูกปิด (EvalError) เพราะโค้ดที่สร้างตอนรันไม่ผ่านตัวนับแก๊ส · `console.*` เรียกได้แต่ไม่พิมพ์ · ไม่มี `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
-| แก๊ส | `__gas(n)` / `__str` / `__props` / `__spread` และเมธอดในตัวที่ถูกห่อไว้ ทำงานในฝั่งโปรแกรม (ไม่ข้ามไป host ทุกครั้ง) · ยอดค้างส่งให้ host ทุกครั้งที่เรียก API · ยอดค้างเกินที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดิม **ตัวเลขแก๊สเท่าเดิมทุกหน่วย** |
-| แก๊สหมด / หมดเวลา / DB พัง / หน่วยความจำเกิน | host ตอบ "ตาย" → ทุก `__gas` / API หลังจากนั้น throw ซ้ำ (ทุก catch / finally ขึ้นต้นด้วย `__gas`) จึง catch ไม่ได้ · ลูปที่ไม่เรียกอะไรเลยถูกหยุดด้วย interrupt handler ของ QuickJS (catch ไม่ได้เช่นกัน) |
-| stack | `maxStackBytes` ค่าเริ่ม 256 KB (~1,400 ชั้นของการเรียกซ้อน — V8 เดิม ~10,000) · ล้น = `PROGRAM_ERROR (RangeError)` ที่ catch ได้ · ตั้งได้ 16–256 KB เท่านั้น (512 KB ทำให้ stack ของ Node ล้นจน wasm พัง) |
-| หน่วยความจำ | `memoryLimitBytes` ค่าเริ่ม 32 MB ต่อ tx (ตั้งได้ 1 MB–1 GB) · เกิน = **`OUT_OF_MEMORY`** (code ใหม่) |
+| On import | loads the wasm once (top-level await) · creates 1 runtime + 8 spare contexts with the prelude loaded · takes a **snapshot** of the wasm memory (~1.8 MB) · self-checks that the snapshot can really be restored (fail = import fails) |
+| Start of a tx | restores memory to the snapshot (~0.13 ms) → every tx starts from the byte-identical heap, nothing left over from earlier txs (modified globals / GC garbage) |
+| 1 outermost tx | = one runtime · memory / stack / time are counted across the whole call chain (`runProgram` / `cloneProgram` init run nested in the same runtime) |
+| 1 program in a tx | = 1 context (separate globals) · the factory is called anew on every call → top-level variables don't persist across calls |
+| Warm images (test `89-warm-sandbox`) | the first program of a tx: uses the memory "initial snapshot + this source's factory already evaluated" (LRU `SANDBOX_WARM_CACHE`, default 32 · `warmStats` / `clearWarmCache`) instead of recompiling · the image = a pure function of (snapshot, source) → cache hit or miss, every tx result is byte-identical (including gas and the OUT_OF_MEMORY point) · token transfer 2.2 → 0.94 ms/tx (load test) · the second program in a tx (`runProgram`) compiles within the tx as before<br>~3.4 MB per image → 32 images ≈ 110 MB RAM · not cached: compile and keep using that memory directly (no extra restore), then capture it over the buffer of the evicted image · `0` = no storing or copying (cost equals compiling every tx, as before) · programs rotating beyond the limit = miss every time, ~30% slower than no cache (raise `SANDBOX_WARM_CACHE` if more than 32 programs are popular) |
+| fuzz (test `87-sandbox-fuzz`) | `npm run fuzz -- --iterations N --seed S`: random programs + cross-boundary values, checks no INTERNAL / throw leaks to the caller · identical results on two VMs · host not contaminated · results are pure data · sandbox remains usable · a long run of 20,000 iterations (seed 1000) found no issues |
+| Cross-boundary values | always JSON text (BigInt / undefined / NaN / -0 / map(...) tagged with the key `"\u0000"`) → a fresh copy every time · functions / symbols / non-data objects are sent as "not data" and the host rejects them as before · host errors the program receives are program-side `Error`s (with `code`); if rethrown, the host gets its original error back |
+| Globals | standard JS built-ins + the block's `Date` / `Math` (Math.random asks the host) · `eval` / `new Function` / async / generator function constructors are disabled (EvalError) because code created at run time bypasses the gas counter · `console.*` can be called but prints nothing · no `Intl` / `performance` / `setTimeout` / `queueMicrotask` / `structuredClone` / `Atomics` |
+| Gas | `__gas(n)` / `__str` / `__props` / `__spread` and the wrapped built-in methods run on the program side (no host round trip every time) · the pending total is sent to the host on every API call · pending total exceeds what is left → asks the host immediately → OUT_OF_GAS at the same point as before. **Gas numbers unchanged to the unit** |
+| Out of gas / timeout / DB failure / memory exceeded | the host answers "dead" → every `__gas` / API after that throws again (every catch / finally starts with `__gas`), so it cannot be caught · loops that call nothing are stopped by QuickJS's interrupt handler (also uncatchable) |
+| Stack | `maxStackBytes` default 256 KB (~1,400 levels of nested calls — the old V8 allowed ~10,000) · overflow = a catchable `PROGRAM_ERROR (RangeError)` · only 16–256 KB is allowed (512 KB overflows Node's stack and crashes the wasm) |
+| Memory | `memoryLimitBytes` default 32 MB per tx (1 MB–1 GB allowed) · exceeded = **`OUT_OF_MEMORY`** (new code) |
 
-**หน่วยความจำ — ทำไมไม่ใช้ memory limit ของ QuickJS**: บน emscripten `malloc_usable_size` ใช้ไม่ได้ QuickJS จึงนับแค่ ~8 ไบต์ต่อก้อน (ลองแล้ว ตั้ง 32 MB แต่จองได้ 2 GB · quickjs-ng ก็เหมือนกัน)
-จึงคุมที่ WebAssembly memory แทน: instance สำหรับรันโปรแกรมมี `WebAssembly.Memory` ของตัวเองที่ `grow` ถูกห่อไว้
-ต้น tx (หลังคืน snapshot) จอง "ลูกโป่ง" ให้เหลือที่ว่างพอดี `memoryLimitBytes` + ที่สำรองของ host 2 MB แล้วล็อกไม่ให้ memory โต
-→ malloc ล้มที่จุดเดียวกันทุกเครื่องเสมอ (heap ต้น tx เหมือนกันทุกไบต์ และไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · มีการแตะล็อกเมื่อไร = OUT_OF_MEMORY
-OUT_OF_MEMORY ทำตัวเหมือน OUT_OF_GAS: ทั้ง tx ล้ม catch / finally ไม่ได้ ไม่มี writes ของโปรแกรม **เข้า block (`accepted: true`) กิน nonce และเสียค่าแก๊สเท่าที่ใช้ไป**
-(ยอดแก๊สที่ยังค้างในฝั่งโปรแกรมตอน malloc ล้มถูกส่งกลับมาด้วย `"f<n>|"` → จอง 32 MB จ่ายจริง ~1,000,000 gas ไม่ใช่แค่ส่วนที่ส่งให้ host ไปแล้ว)
-⚠️ ทุก node ในเครือข่ายต้องตั้ง `MEMORY_LIMIT_MB` / `STACK_LIMIT_KB` เท่ากัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
+**Memory — why not use QuickJS's memory limit**: on emscripten `malloc_usable_size` does not work, so QuickJS only counts ~8 bytes per block (tested: set 32 MB but 2 GB could be allocated · quickjs-ng is the same)
+So it is controlled at the WebAssembly memory level instead: the instance that runs programs has its own `WebAssembly.Memory` whose `grow` is wrapped
+At the start of a tx (after restoring the snapshot) a "balloon" is allocated so that exactly `memoryLimitBytes` + a 2 MB host reserve remain free, then memory growth is locked
+→ malloc always fails at the same point on every machine (the tx-start heap is byte-identical and independent of how far memory had grown before) · any touch of the lock = OUT_OF_MEMORY
+OUT_OF_MEMORY behaves like OUT_OF_GAS: the whole tx fails, catch / finally cannot catch it, no program writes, **included in the block (`accepted: true`), consumes the nonce, and pays for the gas used**
+(gas still pending on the program side when malloc fails is sent back via `"f<n>|"` → allocating 32 MB actually costs ~1,000,000 gas, not just the part already sent to the host)
+⚠️ Every node in the network must set the same `MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`, otherwise memory-heavy txs will produce different results
 
-**snapshot — ข้อสมมติที่ต้องรู้ก่อนขยับเวอร์ชัน quickjs-emscripten**: memory ของ wasm = [ข้อมูล static ~90 KB | stack ของ C 5 MB | heap ของ dlmalloc]
-snapshot เก็บ 1 MB ล่าง (static) + heap ถึงก้อนว่างก้อนสุดท้าย (`top` ของ dlmalloc ซึ่งหาตำแหน่งจากการทดลองตอน import)
-self-check ตอน import ตรวจให้ ถ้าโครงสร้างเปลี่ยนจนคืนสถานะไม่ครบ server จะไม่ start (ไม่รันต่อแบบผิด ๆ) · หา `top` ไม่เจอ = เก็บ memory ทั้งก้อน (ถูกแต่ช้า)
-ห้าม `dispose` runtime ทั้งที่ยังมี handle ค้าง (QuickJS abort ทั้ง wasm) — runtime อยู่ตลอดอายุ process และ `Sandbox.dispose()` คืน handle / context ที่สร้างใน tx ทุกตัว
+**snapshot — assumptions to know before bumping the quickjs-emscripten version**: wasm memory = [static data ~90 KB | C stack 5 MB | dlmalloc heap]
+The snapshot stores the lower 1 MB (static) + the heap up to the last free chunk (dlmalloc's `top`, whose location is found experimentally at import)
+The self-check at import verifies this; if the layout changes so the state cannot be fully restored, the server will not start (rather than run incorrectly) · `top` not found = store the whole memory (correct but slow)
+Never `dispose` the runtime while handles are still alive (QuickJS aborts the whole wasm) — the runtime lives for the whole process and `Sandbox.dispose()` releases every handle / context created in the tx
 
-**ต่างจาก V8 เดิมที่โปรแกรมอาจเห็นได้** (ผลของ API / แก๊ส / error code เท่าเดิมหมด — เทียบด้วยชุด probe แล้ว):
-`Date()` / `toString()` ของ Date ไม่ต่อท้าย "(Coordinated Universal Time)" · `toLocaleString` / `localeCompare` ไม่ใช้ ICU · ไม่มี `Intl`
-ข้อความ error จาก engine ต่างกัน (`cannot read property 'x' of null`) แต่ชื่อเหมือนกัน (error ที่ไม่ใช่ `Error` ธรรมดาถูกเปลี่ยนเป็นชื่ออยู่แล้ว)
-stack ล้นเป็น `InternalError` ในฝั่งโปรแกรม (ข้ามเขตแดนแล้วเป็น RangeError เหมือนเดิม) · Promise ไม่มีวันถูก resolve (ไม่มี job queue — async ใช้ไม่ได้อยู่แล้ว)
-`debug.at` บอกบรรทัด / คอลัมน์ตาม stack ของ QuickJS
+**Differences from the old V8 that programs might notice** (API results / gas / error codes are all the same — compared with a probe suite):
+`Date()` / Date's `toString()` do not append "(Coordinated Universal Time)" · `toLocaleString` / `localeCompare` don't use ICU · no `Intl`
+Engine error messages differ (`cannot read property 'x' of null`) but names are the same (non-plain `Error` errors are already converted to their name)
+Stack overflow is an `InternalError` on the program side (a RangeError after crossing the boundary, as before) · Promises never resolve (no job queue — async doesn't work anyway)
+`debug.at` reports line / column from QuickJS's stack
 
-ตัวแปร server: `MEMORY_LIMIT_MB=32` `STACK_LIMIT_KB=256` (`TIMEOUT_MS` ยังเป็นด่านสุดท้ายของเวลา) · option `wallClock: true` ใส่ `performance.now()` จริงให้โปรแกรม — ใช้ในเทสต์เท่านั้น
+Server variables: `MEMORY_LIMIT_MB=32` `STACK_LIMIT_KB=256` (`TIMEOUT_MS` is still the last line of defense for time) · option `wallClock: true` gives programs the real `performance.now()` — tests only
 
-**บันทึกแผน / ทางที่ยังเปิดอยู่**
-- ความเร็ว: token transfer ~1.4 ms/tx (V8 เดิม ~0.6) ส่วนใหญ่คือคอมไพล์ factory ของโปรแกรมใหม่ทุก tx (~0.4 ms) + ตัวแปลภาษาของ QuickJS · งานคำนวณล้วนช้ากว่า V8 ~4–5 เท่า (~50 M gas/s) · วัดซ้ำด้วย `node dev/bench-vm.js`
-- ทางเร่งที่คิดไว้แต่ยังไม่ทำ: เก็บ context ที่คอมไพล์โปรแกรมยอดนิยมไว้แล้วใน snapshot — **ต้องระวัง** snapshot จะต่างกันตามประวัติของแต่ละ node → heap ต้น tx ไม่เหมือนกัน → จุดที่หน่วยความจำเกินอาจต่างกัน ต้องทำให้ชุดโปรแกรมใน snapshot เป็นส่วนหนึ่งของ state ของ chain ก่อน
-- bytecode ของ QuickJS ข้าม runtime / snapshot ไม่ได้ใน quickjs-emscripten (ไม่มี API อ่าน / เขียน bytecode) จึง cache เป็นซอร์สที่ฉีดตัวนับแล้วแทน
-- ถ้าจะใช้ memory limit ของ QuickJS เองในอนาคต ต้องเป็น build ที่มี `malloc_usable_size`
-- ~~`gasmeter.js` แปลง `(255).toString(36)` เป็นโค้ดที่ syntax ผิด~~ หมดไปแล้ว: ไม่มีการแปลงการเรียกเป็น `__call` อีก (เมธอดในตัวถูกห่อใน prelude แทน)
+**Plan notes / open paths**
+- Speed: token transfer ~1.4 ms/tx (old V8 ~0.6), mostly recompiling the program factory every tx (~0.4 ms) + QuickJS's interpreter · pure computation is ~4–5× slower than V8 (~50 M gas/s) · re-measure with `node dev/bench-vm.js`
+- A speedup considered but not done: keep contexts with popular programs precompiled in the snapshot — **careful**: the snapshot would then differ by each node's history → tx-start heaps differ → the out-of-memory point could differ; the set of programs in the snapshot must first become part of chain state
+- QuickJS bytecode cannot cross runtimes / snapshots in quickjs-emscripten (no API to read / write bytecode), so the counter-injected source is cached instead
+- Using QuickJS's own memory limit in the future requires a build with `malloc_usable_size`
+- ~~`gasmeter.js` turned `(255).toString(36)` into syntactically invalid code~~ gone now: calls are no longer rewritten to `__call` (built-in methods are wrapped in the prelude instead)
 
-### วงจรชีวิตของ tx หนึ่งใบ
+### Lifecycle of a single tx
 
 ```
 POST /sendtx
-  → postLimiter.allow(ip)       จำกัด POST ต่อ IP → เกินตอบ 429
-  → verifyTransaction()         ตรวจลายเซ็น → sender มาจากลายเซ็นเท่านั้น (ห้ามเชื่อ tx.from)
-  → mempool.add(…, { simulate }) rate limit + โควตา + ลำดับ nonce ก่อน แล้วจึงเรียก simulate:
-      reviewProgram(code)       เฉพาะ action deploy
-      simulate(vm, verified)    รันใน block ทิ้ง (number:null, ไม่ commit) → ถ้า error ตอบ 400
-                                ครั้งที่ simulate ไม่ผ่านก็ถูกนับใน rate limit ต่อ address
-  ⏱ ทุก BLOCK_MS (ค่าเริ่ม 2 วินาที)
+  → postLimiter.allow(ip)       limits POSTs per IP → over the limit returns 429
+  → verifyTransaction()         checks the signature → sender comes only from the signature (never trust tx.from)
+  → mempool.add(…, { simulate }) rate limit + quota + nonce order first, then calls simulate:
+      reviewProgram(code)       deploy action only
+      simulate(vm, verified)    runs in a throwaway block (number:null, no commit) → on error returns 400
+                                failed simulations also count toward the per-address rate limit
+  ⏱ every BLOCK_MS (default 2 seconds)
   → vm.createBlock() → mempool.take(block) → block.commit()
 ```
 
-`take()` เรียง tx ด้วย `sortPendingTransactions(items, { baseFee: block.baseFee })` (tip จริงมากก่อน) ข้ามใบที่ maxFee < base fee (ยังรอในคิว) แล้วเช็ค `block.checkTransaction()` ทีละใบ
+`take()` orders txs with `sortPendingTransactions(items, { baseFee: block.baseFee })` (highest effective tip first), skips those with maxFee < base fee (they stay queued), then checks `block.checkTransaction()` one by one
 
-**tx ที่ถูกปฏิเสธ (rejected) ถูกบันทึกใน block** — ใบที่ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน:
-- `stage: "sendtx"` ปฏิเสธตอน `/sendtx` (nonce ผิด / คิวเต็ม / ส่งถี่ / simulate หรือรีวิวโค้ดไม่ผ่าน / แทนที่ด้วยราคาต่ำไป)
-- `stage: "block"` VM ไม่รับตอนปิด block (TIMEOUT / แก๊สของ block เต็ม) · `stage: "expired"` ค้างในคิวเกิน `ttlMs`
-- ลายเซ็นผิด (hash / sender เชื่อไม่ได้) และส่งซ้ำ (hash มีสถานะจริงอยู่แล้ว) **ไม่**ถูกบันทึก
-- mempool จำตามลำดับที่เกิด (`#rejections`, ≤ `maxRejectedQueue` 100,000) → `take()` ใส่ลง block ด้วย `block.recordRejected(entry)`
-  ไม่เกิน `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, ค่าเริ่ม 1,000) ที่เหลือยกไป block ถัดไป
-  **มีแค่ใบที่ถูกปฏิเสธ → server พักไว้** ให้ติดไปกับ block ที่มี tx จริงใบถัดไป หรือปิด block เมื่อใบที่รอนานสุดครบ `REJECTED_HOLD_MS` (ค่าเริ่ม 60,000 · 0 = ปิดทันทีแบบเดิม) — `shouldMine()` ใน server.js ใช้ `mempool.oldestRejectionAt` (เวลาเก็บใน mempool เท่านั้น ไม่ลง block) · `/pending` บอก `rejectedHoldMs`
-  ส่งใบเดิมใหม่แล้วผ่าน → ถูกลบออกจากรายการที่รอ (ไม่ถูกบันทึกว่าปฏิเสธ)
-  **ใบเดิมเป๊ะ (hash เดิม) ที่บันทึกว่าถูกปฏิเสธใน block ก่อนแล้ว และยังไม่เคยเข้า block จริง → ไม่บันทึกซ้ำ** (ผู้ส่งยังได้ error เหมือนเดิม)
-  1 hash อยู่ใน block เดียว → explorer กับ `/evm` / Blockscout เห็นตรงกัน และส่งซ้ำรัว ๆ ไม่สร้าง block ใหม่ (เดิม `/evm` ย้าย hash ไป block ล่าสุด แต่ Blockscout index ไปแล้ว → เห็นไม่ตรงกัน)
-- entry: `{ hash, sender, nonce, action, to, gasPrice, reason (≤ 500 ตัว), code, stage }` · **ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส** (กติกาเชนเดิม)
-- header มี `rejectedCount` + `rejectedRoot` (= hash ของรายการตามลำดับ) **อยู่ใน hash ของ block** · block ที่ไม่มีรายการ hash เหมือนเดิมทุกไบต์
-- เก็บเป็นข้อมูล block: `blockrejected:<n>` (รายการ) · `rejtx:<hash>` · `rejfrom:<sender>:<n>:<i>` (ดัชนี อยู่ใน history/undo → `rebuildFrom` ล้างให้)
-- `replayBlock` / `rebuildFrom` / `sync` (`applyBlock(vm, { header, body, rejected })`, `/sync` ส่ง `rejected` มาด้วย) ใส่รายการเดิมแล้วเทียบ hash
-- `/evm`: ต่อท้าย tx จริงของ block เป็น tx ที่ล้ม (`status 0x0`, `gasUsed 0`, `effectiveGasPrice` จาก tx, ไม่มี log, `cumulativeGasUsed` = ของ tx จริงใบสุดท้าย)
-  index = จำนวน tx จริง + ลำดับ · hash ที่ภายหลังเข้า block จริง / ถูกปฏิเสธซ้ำใน block หลัง ไม่ถูกแสดงซ้ำ · `eth_getTransactionCount` ไม่เปลี่ยน
-- เทสต์ `60-rejected-in-block` · `61-rejected-server` · `77-rejected-once`
-- explorer หน้ารายการ block: block ที่มีใบถูกปฏิเสธแสดงป้าย `Rejected N` (block ที่มีแต่ใบถูกปฏิเสธไม่ขึ้น Empty)
+**Rejected txs are recorded in the block** — those that passed signature checks but were not executed:
+- `stage: "sendtx"` rejected at `/sendtx` (wrong nonce / queue full / sent too often / simulate or code review failed / replacement priced too low)
+- `stage: "block"` the VM refused at block sealing (TIMEOUT / block gas full) · `stage: "expired"` sat in the queue longer than `ttlMs`
+- Invalid signatures (hash / sender untrustworthy) and resubmissions (hash already has a real status) are **not** recorded
+- The mempool remembers them in order (`#rejections`, ≤ `maxRejectedQueue` 100,000) → `take()` puts them into the block with `block.recordRejected(entry)`
+  At most `maxRejectedPerBlock` (server `REJECTED_PER_BLOCK`, default 1,000), the rest carry over to the next block
+  **Only rejected txs → the server holds them** to ride along with the next block that has real txs, or seals a block once the oldest waiting one reaches `REJECTED_HOLD_MS` (default 60,000 · 0 = seal immediately, the old behavior) — `shouldMine()` in server.js uses `mempool.oldestRejectionAt` (time kept in the mempool only, not in the block) · `/pending` reports `rejectedHoldMs`
+  Resubmitting the same tx and it passes → removed from the waiting list (not recorded as rejected)
+  **The exact same tx (same hash) already recorded as rejected in an earlier block, and never included for real → not recorded again** (the sender still gets the same error)
+  1 hash lives in one block → the explorer and `/evm` / Blockscout agree, and rapid resubmission does not create new blocks (previously `/evm` moved the hash to the latest block but Blockscout had already indexed it → they disagreed)
+- entry: `{ hash, sender, nonce, action, to, gasPrice, reason (≤ 500 chars), code, stage }` · **not executed, does not touch state, does not consume the nonce, no gas charged** (existing chain rules)
+- The header has `rejectedCount` + `rejectedRoot` (= hash of the ordered list) **part of the block hash** · blocks without entries hash byte-for-byte as before
+- Stored as block data: `blockrejected:<n>` (list) · `rejtx:<hash>` · `rejfrom:<sender>:<n>:<i>` (indexes, in history/undo → `rebuildFrom` cleans them up)
+- `replayBlock` / `rebuildFrom` / `sync` (`applyBlock(vm, { header, body, rejected })`, `/sync` sends `rejected` too) insert the original list and compare hashes
+- `/evm`: appended after the block's real txs as failed txs (`status 0x0`, `gasUsed 0`, `effectiveGasPrice` from the tx, no logs, `cumulativeGasUsed` = that of the last real tx)
+  index = number of real txs + position · hashes later included for real / rejected again in a later block are not shown twice · `eth_getTransactionCount` unchanged
+- Tests `60-rejected-in-block` · `61-rejected-server` · `77-rejected-once`
+- Explorer block list: blocks with rejected txs show a `Rejected N` badge (blocks with only rejected txs don't show Empty)
 
-**แทนที่ tx ที่ยังรอในคิว (replace-by-fee)** — `mempool.add()` รับ nonce ในช่วง [nonce บนเชน, nonce บนเชน + จำนวนที่รออยู่]
-- nonce = ถัดไป → ต่อท้ายคิวเหมือนเดิม · ข้ามเลข → ปฏิเสธเหมือนเดิม (`nonce ต้องเป็น N`)
-- nonce = ใบที่รออยู่ของคนเดิม → แทนที่ได้เมื่อ**ทั้ง** maxFee และ priority ใหม่ ≥ เดิม × 1.1 (`replaceBumpPercent: 10`, คิดด้วย BigInt ปัดขึ้น · gasPrice แบบเดิม = ทั้งสองค่า)
-  ไม่ถึง (แบบเดิมทั้งสองใบ) → `ราคาแก๊สต่ำเกินไปสำหรับการแทนที่ (ต้องอย่างน้อย X)` · มีแบบ 1559 → `(ต้อง maxFeePerGas ≥ X และ maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
-  · ไม่ระบุ gasPrice = `vm.gas.price`
-- ใบใหม่เป็น action อะไรก็ได้ → **ยกเลิก = แทนที่ด้วยการโอน 0 ให้ตัวเอง** (`{ action: "transfer", to: <ตัวเอง>, value: 0 }`)
-  เชนรับโอน native 0 แบบ EVM: ยังคิดค่าแก๊สและกิน nonce · ติดลบ / ไม่ใช่จำนวนเต็ม → `amount ต้องเป็นจำนวนเต็มไม่ติดลบ`
-  (`transferNative` ในโปรแกรมยังไม่รับ 0 เหมือนเดิม)
-- ไม่กิน `maxPerSender` / `maxSize` เพิ่ม แต่นับ rate limit ต่อ address · ต้องผ่าน simulate ก่อน — ไม่ผ่าน → ใบเดิมยังอยู่
-- ใบเดิมออกจากคิวแต่ยังอยู่ใน "เคยเห็น" (ส่งใบเดิมกลับมาไม่ได้) · `mempool.replacedBy(hash)` จำในหน่วยความจำ `ttlMs`
-  แล้วถามต่อที่ `replacedLog` (`src/node/txlog.js`, off-chain ไม่เข้า block): server มี `DATA` → ไฟล์ `<DATA>/replaced-tx.jsonl`
-  (JSON lines ต่อท้าย · เก็บ ≤ `REPLACED_LOG_MAX` 100,000 รายการ / ≤ `REPLACED_LOG_DAYS` 30 วัน · เขียนไฟล์ใหม่เมื่อบรรทัดเกิน 2 เท่า) → **อยู่รอด restart** · ไม่มี DATA = ในหน่วยความจำมีเพดานเดียวกัน
-  → `GET /tx/:hash` ตอบ `{ status: "replaced", hash, replacedBy }` · explorer แสดง "Replaced by …"
-- ใบแทนที่ใช้ nonce เดิม → `take()` ยังหยิบของแต่ละ address ตามลำดับ nonce · `/nonce/:address` ไม่ขยับ
-- `/evm`: txpool เห็นแค่ใบใหม่ · `eth_getTransactionByHash` ของใบเดิมตอบ `null` (แบบ geth)
+**Replacing a queued tx (replace-by-fee)** — `mempool.add()` accepts nonces in the range [on-chain nonce, on-chain nonce + number queued]
+- nonce = next → appended to the queue as before · skipped number → rejected as before (`nonce must be N`)
+- nonce = a queued tx from the same sender → replaceable when **both** the new maxFee and priority ≥ old × 1.1 (`replaceBumpPercent: 10`, computed with BigInt rounding up · legacy gasPrice = both values)
+  Not enough (both legacy) → `gas price too low to replace (must be at least X)` · with 1559 → `(needs maxFeePerGas ≥ X and maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
+  · no gasPrice given = `vm.gas.price`
+- The new tx can be any action → **cancel = replace with a 0 transfer to yourself** (`{ action: "transfer", to: <yourself>, value: 0 }`)
+  The chain accepts EVM-style native transfers of 0: gas is still charged and the nonce consumed · negative / non-integer → `amount must be a non-negative integer` (VM consensus message)
+  (`transferNative` inside programs still does not accept 0, as before)
+- Does not use up more `maxPerSender` / `maxSize`, but counts toward the per-address rate limit · must pass simulate first — fails → the old tx stays
+- The old tx leaves the queue but stays in "seen" (it cannot be resubmitted) · `mempool.replacedBy(hash)` remembers it in memory for `ttlMs`
+  then falls back to `replacedLog` (`src/node/txlog.js`, off-chain, not in blocks): a server with `DATA` → file `<DATA>/replaced-tx.jsonl`
+  (appended JSON lines · keeps ≤ `REPLACED_LOG_MAX` 100,000 entries / ≤ `REPLACED_LOG_DAYS` 30 days · rewrites the file when lines exceed 2×) → **survives restarts** · no DATA = in memory with the same caps
+  → `GET /tx/:hash` returns `{ status: "replaced", hash, replacedBy }` · the explorer shows "Replaced by …"
+- The replacement uses the same nonce → `take()` still picks each address's txs in nonce order · `/nonce/:address` does not move
+- `/evm`: the txpool only sees the new tx · `eth_getTransactionByHash` of the old tx returns `null` (like geth)
 
-### เมธอดที่น่าจะต้องใช้
+### Methods you will probably need
 
 ```js
-// tx 5 ประเภท
+// 5 tx types
 vm.deploy({ programUuid?, code, context, initInput, value, metadata, nonce, gasLimit, gasPrice })
-vm.init({ programUuid, context, … })      // ทีมงานอนุมัติ → รัน initialization
-vm.reject({ programUuid, context, … })    // ปฏิเสธ + คืนเงิน
+vm.init({ programUuid, context, … })      // team approves → runs initialization
+vm.reject({ programUuid, context, … })    // reject + refund
 vm.call({ programUuid, functionName, input, context, value, … })
 vm.transfer({ from, to, amount, … })
 vm.setMetadata({ metadata, context, … })
-// อัปเกรด (ดูหัวข้อ "อัปเกรดโปรแกรม") — deploy รับ upgrader เพิ่ม
-vm.upgrade({ programUuid, code, migrateInput, context, … })          // upgrader ส่งโค้ดใหม่ → pending-upgrade
-vm.setUpgrader({ programUuid, upgrader /* null = สละสิทธิ์ */, context, … })
-vm.initUpgrade({ programUuid, context, … }) / vm.rejectUpgrade(…)    // ทีมงาน (กติกาเดียวกับ init / reject)
+// upgrades (see the "Program upgrades" section) — deploy also accepts upgrader
+vm.upgrade({ programUuid, code, migrateInput, context, … })          // upgrader submits new code → pending-upgrade
+vm.setUpgrader({ programUuid, upgrader /* null = renounce */, context, … })
+vm.initUpgrade({ programUuid, context, … }) / vm.rejectUpgrade(…)    // team (same rules as init / reject)
 vm.listCodeVersions(addr) / vm.getCodeVersion(addr, n) / vm.codeAt(blockNumber, addr) / vm.cloneAddressFor(factory, salt, code)
 
-// อ่านข้อมูล
+// reading data
 vm.read(dbKey) / vm.listKeys(prefix, opts) / vm.listEntries(prefix, opts)
 vm.getBlock(n) / vm.getBlockBody(n) / vm.getBlockByHash(h) / vm.listBlocks(opts) / vm.latestBlockNumber()
-vm.getTransaction(hashOrDigest)           // รับได้ทั้ง VM hash และ EIP-712 digest
-vm.listTransactionsOf(addr, opts)         // tx ที่ address ส่งออก
-vm.listTransactionsTo(addr, opts)         // ใครมา interact (รวม runProgram ซ้อนชั้น)
+vm.getTransaction(hashOrDigest)           // accepts both the VM hash and the EIP-712 digest
+vm.listTransactionsOf(addr, opts)         // txs sent by the address
+vm.listTransactionsTo(addr, opts)         // who interacted (including nested runProgram)
 vm.listEvents({ program, name, limit, start, reverse })
 vm.listProgramStorage(addr, opts) / vm.nativeBalanceOf(addr) / vm.getMetadata(addr) / vm.resolveNamespace(name)
 
-// query อ่านค่าโดยไม่เสียแก๊ส (readOnly: true, ไม่ commit)
+// query reads values without paying gas (readOnly: true, no commit)
 vm.query({ programUuid, functionName, input, context, value })
 
-// ย้อนหลัง / กู้ระบบ  (ต้องเปิด recordHistory)
-vm.stateAt(blockNumber, dbKey)            // ค่าของ key นั้น ณ block นั้น — อ่าน DB ≤3 ครั้ง
-vm.snapshotAt(blockNumber, prefix)        // ทั้ง prefix ณ block นั้น (ต้นทุนตามจำนวน key ไม่ใช่ความยาวเชน)
-vm.pageSnapshotAt(n, prefix, { limit, after })   // แบบแบ่งหน้า → { items: [[dbKey, value]], next }
-vm.historyFrom()                          // block แรกที่ย้อนดูได้ (key historyfrom · เช็คครั้งเดียว ไม่ไล่ blockundo)
-vm.replayBlock(n, { verify })             // รัน block ซ้ำจาก blockbody → receipt เต็ม + เทียบ hash
-vm.rebuildFrom(targetBlock, { verify, batch })   // ย้อน state กลับไปก่อน block 1 แล้วรันใหม่ทีละ block · ทุกขั้นทำทีละชุด (batch 10,000)
-vm.getBlockUndo(n)                        // รายชื่อ key ที่ block นั้นแตะ
+// history / recovery  (requires recordHistory)
+vm.stateAt(blockNumber, dbKey)            // value of that key as of that block — ≤3 DB reads
+vm.snapshotAt(blockNumber, prefix)        // the whole prefix as of that block (cost scales with key count, not chain length)
+vm.pageSnapshotAt(n, prefix, { limit, after })   // paginated → { items: [[dbKey, value]], next }
+vm.historyFrom()                          // first block that can be looked up (key historyfrom · checked once, no blockundo scan)
+vm.replayBlock(n, { verify })             // re-executes a block from blockbody → full receipt + hash comparison
+vm.rebuildFrom(targetBlock, { verify, batch })   // rolls state back to before block 1 then re-executes block by block · every step works in batches (batch 10,000)
+vm.getBlockUndo(n)                        // list of keys that block touched
 
-// ตรวจก่อนรับ
+// checks before accepting
 vm.checkTransaction({ from, nonce })      // → { ok, expectedNonce, reason }
 vm.applyGenesis(obj) / vm.genesisHash() / vm.checkGenesis(obj)
 ```
@@ -452,833 +452,834 @@ vm.applyGenesis(obj) / vm.genesisHash() / vm.checkGenesis(obj)
 
 ```js
 const block = vm.createBlock({ timestamp, feeRecipient, number?, parentHash?, checkChain?, recordBlocks?, recordHistory? });
-block.call(request)                       // และ deploy / init / reject / transfer / setMetadata / upgrade / setUpgrader / initUpgrade / rejectUpgrade
-block.upgrades()                          // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนสร้าง block นี้
-block.checkTransaction(request)           // เช็คโควตา + nonce ก่อนใส่จริง
+block.call(request)                       // and deploy / init / reject / transfer / setMetadata / upgrade / setUpgrader / initUpgrade / rejectUpgrade
+block.upgrades()                          // upgrades whose timelock expired and were activated when this block was created
+block.checkTransaction(request)           // checks quota + nonce before actually adding
 block.header() / block.body() / block.hashes() / block.txHashes()
-block.receipt({ number })                 // receipt ของทุก tx
-block.writes()                            // writes สุดท้าย (1 รายการต่อ key) + history
-block.commit()                            // เขียนทีเดียวผ่าน db.writeKeys (atomic) · รวม node ของ trie (stateRoot) · historyKeep → ตัด history เก่าต่อ
-vm.stateRoot() / vm.getProof([dbKey]) / vm.rebuildTrie() / vm.pruneHistory({ keep }) / vm.hashHeader(header)   // ระยะ 4
+block.receipt({ number })                 // receipts of every tx
+block.writes()                            // final writes (1 entry per key) + history
+block.commit()                            // writes once via db.writeKeys (atomic) · includes trie nodes (stateRoot) · historyKeep → prunes old history afterwards
+vm.stateRoot() / vm.getProof([dbKey]) / vm.rebuildTrie() / vm.pruneHistory({ keep }) / vm.hashHeader(header)   // phase 4
 ```
 
-### ค่าแก๊ส
+### Gas
 
 ```
 call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · topic 375 · hash 100 · recover 3000 · code 10/byte · node 1 · builtin 1 · tx 0 · price 1
 ```
-(= `DEFAULT_GAS` · Bluewolfchain เปิด fork `bluewolf` ตั้งแต่ block 0: call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 · tx 15000 · ที่เหลือเท่าเดิม · ค่าที่ใช้จริง `GET /genesis` → `gas`)
-`emit` = `event + byte × ขนาด data + topic × จำนวน field ที่ indexed`
-**`stateKey`** = ต่อ key ของ state ที่ tx เขียน / ลบครั้งแรก (`writeDB` / `deleteDB` · key เดิมซ้ำใน tx ไม่คิดซ้ำ · `tx.stateKeys`) — ค่าอัปเดต Merkle trie + history ตอนปิด block
-  ไม่มีตัวนี้ block 3M gas ที่อัด key ใหม่ล้วน (5,450 key) ปิด 1.9–2.5 วิ ที่ state 1 ล้าน key · มีแล้ว ≤ ~1,950 key ปิด 0.74–0.86 วิ (`test/99`) · token transfer +2,000 (2 key) · native transfer ไม่เปลี่ยน
-**fork ตาม block height** (`FORKS` ใน virtualmachine.js · `genesis.json` `"forks": { "<ชื่อ>": <block> }` · เทสต์ `99-trie-gas-forks`): เปลี่ยนกติกาตั้งแต่ block ที่กำหนดโดยไม่ล้างเชน
-  `forks` ไม่อยู่ใน genesis hash (`vm.hashGenesis`) → เพิ่มตารางทีหลังได้ · ชื่อที่โค้ดไม่รู้จัก = VM ไม่ยอมสร้าง (node ต้องอัปเดตโปรแกรมก่อน) · `/genesis` บอก `forks`
-  กติกา: `FORKS.<ชื่อ> = { description, gas: { ค่าแก๊สใหม่ } }` (ยกเว้น `price`) → `vm.gasAt(blockNumber)` · กติกาแบบอื่นเช็ค `vm.forkActive(ชื่อ, blockNumber)` ตรงจุดที่เปลี่ยน
-  block ก่อนหน้าใช้กติกาเดิม → `replayBlock` / sync / `rebuildFrom` ได้ผลเดิม · node ที่ตั้งตารางต่างกัน = hash ไม่ตรงตั้งแต่ block นั้น · ตอนนี้ `FORKS` มี `bluewolf` (ราคาแก๊สของ Bluewolfchain · `genesis.json` / `deploy/genesis.mainnet.example.json` เปิดตั้งแต่ block 0)
-**เจ้าของปรับขั้นต่ำของ gas price กลางทาง** (tx `setGasConfig` · `scripts/set-gas.js` · explorer เมนู "Gas settings" · เทสต์ `106-gas-config` + e2e): ไม่ต้อง fork / ล้างเชน / restart
-  ผู้เซ็นต้องอยู่ใน `admins` ของ genesis (เชนที่ไม่ตั้ง admins = ปรับไม่ได้) · input `{ minBaseFee: "wei" ≥ 1 | null }` (null = กลับไปค่าใน genesis)
-  **ราคาต่อหน่วย (DEFAULT_GAS) ปรับบนเชนไม่ได้** ส่ง `gas` มา = ปฏิเสธ → ใช้ fork เท่านั้น (key admin หลุดก็ตั้งเป็น 0 ให้ tx ฟรีไม่ได้)
-  เขียน state key `gasconfig` `{ minBaseFee, block, by }` (อยู่ใน stateRoot / history / snapshot) → **มีผลตั้งแต่ block ถัดไป**: `Block` คิด base fee จาก `vm.baseFeeAfter(previous, read)` ที่อ่าน state ก่อน block
-  · replay อ่าน `stateAt(n − 1)` ได้ผลเดิม · เครื่องตามซิงก์แล้วได้ hash เดิม · `vm.minBaseFeeNow()` = ขั้นต่ำที่ใช้อยู่
-  ลดขั้นต่ำ = ค่า tx ทุกแบบถูกลงตามสัดส่วน (แก๊สต่อ tx / ความจุ block เท่าเดิม) · base fee ยังขึ้นลงตามความเต็มของ block · ลงหาขั้นต่ำใหม่ทีละ ≤ 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
-  VM ที่ไม่ตั้ง admins ไม่อ่าน key นี้เลย · `/genesis` บอก `minBaseFee` `genesisMinBaseFee` `gasConfig` `gas` `admins` (`gasPrice` = ขั้นต่ำที่ใช้อยู่)
-**แก๊สนับขั้น** (`src/core/gasmeter.js`): ตอนคอมไพล์ฉีด `__gas(n)` ไว้ต้นฟังก์ชัน / ต้นทุกรอบลูป / ทุกทางของ if, switch, try
-(n = จำนวน node ของ AST ในช่วงนั้น × `node`) · โค้ดใน DB ไม่เปลี่ยน (ฉีดตอนคอมไพล์ทุกครั้ง)
-· ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้
+(= `DEFAULT_GAS` · Bluewolfchain enables the `bluewolf` fork from block 0: call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 · tx 15000 · the rest unchanged · values actually in use: `GET /genesis` → `gas`)
+`emit` = `event + byte × data size + topic × number of indexed fields`
+**`stateKey`** = per state key the tx writes / deletes for the first time (`writeDB` / `deleteDB` · repeated keys in a tx are not charged again · `tx.stateKeys`) — the cost of updating the Merkle trie + history at block sealing
+  Without it, a 3M-gas block packed with only new keys (5,450 keys) takes 1.9–2.5 s to seal at 1 million state keys · with it ≤ ~1,950 keys seals in 0.74–0.86 s (`test/99`) · token transfer +2,000 (2 keys) · native transfer unchanged
+**Forks by block height** (`FORKS` in virtualmachine.js · `genesis.json` `"forks": { "<name>": <block> }` · test `99-trie-gas-forks`): change rules from a given block without resetting the chain
+  `forks` is not part of the genesis hash (`vm.hashGenesis`) → the table can be added later · a name the code doesn't know = the VM refuses to start (nodes must upgrade the software first) · `/genesis` reports `forks`
+  Rules: `FORKS.<name> = { description, gas: { new gas values } }` (except `price`) → `vm.gasAt(blockNumber)` · other kinds of rules check `vm.forkActive(name, blockNumber)` at the point of change
+  Earlier blocks use the old rules → `replayBlock` / sync / `rebuildFrom` give the same result · nodes with different tables = hash mismatch from that block on · `FORKS` currently has `bluewolf` (Bluewolfchain gas prices · `genesis.json` / `deploy/genesis.mainnet.example.json` enable it from block 0)
+**The owner adjusts the gas price minimum mid-flight** (tx `setGasConfig` · `scripts/set-gas.js` · explorer menu "Gas settings" · test `106-gas-config` + e2e): no fork / chain reset / restart needed
+  The signer must be in genesis `admins` (chains without admins = cannot adjust) · input `{ minBaseFee: "wei" ≥ 1 | null }` (null = back to the genesis value)
+  **Unit prices (DEFAULT_GAS) cannot be adjusted on-chain**; sending `gas` = rejected → forks only (even a leaked admin key cannot set it to 0 to make txs free)
+  Writes state key `gasconfig` `{ minBaseFee, block, by }` (in stateRoot / history / snapshot) → **takes effect from the next block**: `Block` computes the base fee from `vm.baseFeeAfter(previous, read)`, which reads state before the block
+  · replay reads `stateAt(n − 1)` and gets the same result · following machines sync and get the same hash · `vm.minBaseFeeNow()` = the minimum currently in effect
+  Lowering the minimum = every tx type becomes proportionally cheaper (gas per tx / block capacity unchanged) · the base fee still moves with block fullness · it falls toward the new minimum by ≤ 12.5% per block · raising = applied immediately in the next block
+  VMs without admins never read this key · `/genesis` reports `minBaseFee` `genesisMinBaseFee` `gasConfig` `gas` `admins` (`gasPrice` = the minimum currently in effect)
+**Step-counting gas** (`src/core/gasmeter.js`): at compile time `__gas(n)` is injected at the start of each function / each loop iteration / every branch of if, switch, try
+(n = number of AST nodes in that range × `node`) · the code in the DB is unchanged (injected at every compile)
+· the names `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` are reserved
 
-**แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง** (เทสต์ `76-gas-bulk-copy`): `builtin` (1) ต่อ **หน่วย** · 1 หน่วย = 1 สมาชิก / property / argument หรือ 32 ตัวอักษร / byte (ปัดขึ้น) · ค่าเดี่ยว = 1
-- spread / rest: `[...a]` `f(...a)` `new F(...a)` `const [x, ...r] = a` → `__spread` คิด 1 ต่อสมาชิก · `{ ...o }` `const { x, ...r } = o` → `__props` คิด 1 ต่อ property
-  (rest ใน pattern ที่ไม่มีนิพจน์ให้ห่อ — พารามิเตอร์ / for-of / catch / ซ้อน → deploy ไม่ผ่าน · `function f(...args)` ใช้ได้)
-- `a + b` / `a += b` → `__str` คิดตามความยาวผลลัพธ์ถ้าเป็น string (QuickJS ต่อแบบ rope แล้วค่อยคัดลอก ก้อนใหญ่จึงต้องคิดตอนต่อ) · template ใช้ `"".concat` ที่ถูกห่อแล้ว
-- เมธอดในตัว (Array / TypedArray / String / Object / JSON / Reflect / Set / Map / Promise / URI …) ถูกห่อใน prelude ก่อนโค้ดของผู้ใช้รัน (RegExp ปิด — ดู "แก๊สตาม CPU")
-  ของจริงอยู่ใน closure เท่านั้น → `a.join()` / `.call` / `Reflect.apply` / เก็บใส่ตัวแปร คิดเท่ากัน · การแปลงเป็น string โดยนัย (`a + ""`, `${a}`) ผ่าน `join` ที่ห่อไว้
-  คิด `this` + argument ก่อนทำ และผลลัพธ์หลังทำ · `repeat` `padStart` `padEnd` `Array.from({length})` คิดขนาดผลลัพธ์ก่อนสร้าง
-- `ArrayBuffer` / typed array / `Set` / `Map` / `WeakSet` / `WeakMap` / `AggregateError` ถูกห่อด้วย Proxy (คิดก่อนจอง) · `Array(n)` ไม่คิด (ยังไม่จองจริง)
-- iterator ในตัวของ array / string / Set / Map ถูกล็อก (แก้ไม่ได้) → spread ใช้ทางคัดลอกเร็วของ engine และรู้จำนวนสมาชิกแน่นอน · Proxy ที่โปรแกรมสร้างถูกจดไว้ (spread แล้วคัดลอกเองทีละ property)
-- `runProgram` / `cloneProgram`: 1 ต่อ 32 byte ของ input (JSON) และของค่าที่ return
-- ผล: ลูป `a = [...a, ...a]` จาก ~230 gas ต่อ 32 MB → หมดแก๊สที่ 3M ก่อนถึงเพดานหน่วยความจำ · string / ArrayBuffer 32 MB ≈ 1,050,000 gas
-- ยังไม่ได้คิดตามขนาด: array-like ที่ getter ของ `length` โกหก (จองก่อนคิดหลังทำ — ถูกเพดานหน่วยความจำกันอยู่)
+**Gas by size of copied / created data** (test `76-gas-bulk-copy`): `builtin` (1) per **unit** · 1 unit = 1 element / property / argument or 32 chars / bytes (rounded up) · a scalar = 1
+- spread / rest: `[...a]` `f(...a)` `new F(...a)` `const [x, ...r] = a` → `__spread` charges 1 per element · `{ ...o }` `const { x, ...r } = o` → `__props` charges 1 per property
+  (rest in patterns with no expression to wrap — parameters / for-of / catch / nested → deploy fails · `function f(...args)` works)
+- `a + b` / `a += b` → `__str` charges by result length if it is a string (QuickJS concatenates as a rope and copies later, so large pieces must be charged at concat time) · templates use the wrapped `"".concat`
+- Built-in methods (Array / TypedArray / String / Object / JSON / Reflect / Set / Map / Promise / URI …) are wrapped in the prelude before user code runs (RegExp disabled — see "CPU-based gas")
+  The real ones live only in a closure → `a.join()` / `.call` / `Reflect.apply` / storing in a variable all cost the same · implicit string conversion (`a + ""`, `${a}`) goes through the wrapped `join`
+  Charges `this` + arguments before running and the result after · `repeat` `padStart` `padEnd` `Array.from({length})` charge the result size before creating it
+- `ArrayBuffer` / typed arrays / `Set` / `Map` / `WeakSet` / `WeakMap` / `AggregateError` are wrapped with a Proxy (charged before allocating) · `Array(n)` is not charged (not actually allocated yet)
+- The built-in iterators of array / string / Set / Map are locked (cannot be modified) → spread uses the engine's fast copy path and knows the exact element count · Proxies created by programs are tracked (spread then copies property by property)
+- `runProgram` / `cloneProgram`: 1 per 32 bytes of input (JSON) and of the return value
+- Result: the loop `a = [...a, ...a]` went from ~230 gas per 32 MB → runs out of gas at 3M before reaching the memory cap · a 32 MB string / ArrayBuffer ≈ 1,050,000 gas
+- Not yet charged by size: array-likes whose `length` getter lies (allocated first, charged after — bounded by the memory cap)
 
-**แก๊สตาม CPU: regex / BigInt** (เทสต์ `81-cpu-gas`) — เดิมสองอย่างนี้เผา CPU เป็นวินาทีด้วยแก๊สหลักร้อย หยุดได้แค่ timeout (ไม่แน่นอนข้ามเครื่อง)
-- **regex ปิดทั้งหมด** (backtrack ทวีคูณ คิดแก๊สแบบแน่นอนไม่ได้ — engine ไม่มีจุดให้นับขั้น): regex literal → deploy ไม่ผ่าน (`regular expression ใช้ในโปรแกรมไม่ได้`)
-  · `RegExp` / `new RegExp` / `Reflect.construct(RegExp)` → TypeError · `RegExp.prototype` เหลือแค่ `toString` (exec / test / `[Symbol.match|matchAll|replace|search|split]` throw)
-  · `String.prototype.match` / `matchAll` / `search` → TypeError (เดิมรับ pattern เป็น string แล้วสร้าง regex เอง **ผ่าน autoreview ได้**)
-  · `split` / `replace` / `replaceAll` ด้วย string ใช้ได้ตามเดิม (ใช้ `indexOf` / `includes` / `split` แทน regex)
-- **BigInt คิดตามขนาด** — ฉีดตอนคอมไพล์: `a op b` (`+ - * / % ** << >> < > <= >= == != in`) → `__op(a, b)` · `x op= y` → `x = __op(x, y)` (member ซับซ้อน → `__opm`)
-  · key ที่คำนวณ `o[k]` → `__key` (เฉพาะเมื่อ k ไม่ใช่ string / number) · ค่าที่ return → `__big` (BigInt ใหญ่ที่ host / engine จะแปลงเป็น string)
-  · ตัวช่วยไม่คิดแก๊สเอง: number / string / BigInt ≤ 512 bit **ราคาเท่าเดิมทุกหน่วย** (token / uint256 ไม่เปลี่ยน) — ทางเร็ว `typeof` ทั้งคู่เป็น number
-  · ราคา (`builtin` ต่อหน่วย, ขั้นต่ำ 16 เมื่อตัวตั้ง / ผลลัพธ์ > 512 bit) · W = จำนวน word 64 bit
+**CPU-based gas: regex / BigInt** (test `81-cpu-gas`) — previously these two burned seconds of CPU for a few hundred gas and could only be stopped by timeout (not deterministic across machines)
+- **regex is fully disabled** (exponential backtracking, gas cannot be charged deterministically — the engine has no hook to count steps): regex literal → deploy fails (`regular expressions are not allowed in programs …`; consensus message)
+  · `RegExp` / `new RegExp` / `Reflect.construct(RegExp)` → TypeError · `RegExp.prototype` keeps only `toString` (exec / test / `[Symbol.match|matchAll|replace|search|split]` throw)
+  · `String.prototype.match` / `matchAll` / `search` → TypeError (previously they took a string pattern and built a regex themselves, **passing autoreview**)
+  · `split` / `replace` / `replaceAll` with strings work as before (use `indexOf` / `includes` / `split` instead of regex)
+- **BigInt charged by size** — injected at compile time: `a op b` (`+ - * / % ** << >> < > <= >= == != in`) → `__op(a, b)` · `x op= y` → `x = __op(x, y)` (complex members → `__opm`)
+  · computed keys `o[k]` → `__key` (only when k is not a string / number) · return values → `__big` (large BigInts the host / engine would convert to strings)
+  · the helpers charge no gas themselves for: number / string / BigInt ≤ 512 bits, **prices unchanged to the unit** (token / uint256 unaffected) — fast path when `typeof` of both is number
+  · Prices (`builtin` per unit, minimum 16 when an operand / result > 512 bits) · W = number of 64-bit words
 
-  | op | หน่วย | คิดเมื่อ |
+  | op | Units | Charged when |
   |---|---|---|
-  | `+` `-` | 16 (≤ 1024 bit) · 64 | หลังทำ (ตัวตั้งไม่เกินเพดาน → งานจำกัด) |
-  | `*` | ⌈Wa·Wb / 4⌉ | หลังทำ |
-  | `/` `%` | ⌈max(1, Wa − Wb + 1) · Wb / 4⌉ | หลังทำ |
-  | `**` | ⌈Wr² / 4⌉ (Wr จาก bit × exponent) | **ก่อนคำนวณ** · ผลเกินเพดานแน่นอน → RangeError ไม่คำนวณ |
-  | `<<` `>>` | max(16, ⌈Wr / 2⌉) | ก่อนคำนวณ |
-  | BigInt → string (`String` / `toString` / template / `+ ""` / key / `join` / `Error(x)` …) | W² | ก่อนแปลง |
-  | string → BigInt (`BigInt(s)` / `s == 1n` / `s < 1n` / input `"123n"`) | W² (W = ⌈ความยาว / 19⌉ · ≤ 171 ตัวไม่คิด) | ก่อนแปลง |
-  | เทียบ `<` `==` … ระหว่าง BigInt | 0 (งานเส้นตรงเร็วมาก) | — |
+  | `+` `-` | 16 (≤ 1024 bits) · 64 | after (operands within the cap → bounded work) |
+  | `*` | ⌈Wa·Wb / 4⌉ | after |
+  | `/` `%` | ⌈max(1, Wa − Wb + 1) · Wb / 4⌉ | after |
+  | `**` | ⌈Wr² / 4⌉ (Wr from bits × exponent) | **before computing** · result certainly over the cap → RangeError without computing |
+  | `<<` `>>` | max(16, ⌈Wr / 2⌉) | before computing |
+  | BigInt → string (`String` / `toString` / template / `+ ""` / key / `join` / `Error(x)` …) | W² | before converting |
+  | string → BigInt (`BigInt(s)` / `s == 1n` / `s < 1n` / input `"123n"`) | W² (W = ⌈length / 19⌉ · ≤ 171 chars free) | before converting |
+  | comparisons `<` `==` … between BigInts | 0 (linear work, very fast) | — |
 
-  · **เพดาน 8192 bit** (= 1024 ไบต์ ขนาดเดียวกับ modexp) — ผลเกินเพดาน → RangeError `BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` (catch ได้) · literal เกิน → deploy ไม่ผ่าน
-    เพดานกันทางที่ engine แปลง BigInt เป็น string เองโดยไม่ผ่านตัวนับ: ครั้งละ ≤ ~0.4 ms (QuickJS เดิมรับได้ถึง ~1M bit = toString 0.7 วิ)
-  · เมธอดที่ engine แปลง BigInt ↔ string ข้างใน ถูกห่อ / เขียนใหม่ใน prelude ให้คิดตามตาราง: `join` `sort` (comparator เริ่มต้น) `toSorted` `Object.fromEntries`
-    `Error.prototype.toString` `String.raw` (เขียนใหม่ตามสเปก) · `Object.hasOwn` / `defineProperty` / `Reflect.*` / `Map.get` / `Array.pop` / `at` / `parseInt` / `Symbol` / `Error(x)` … (คิดค่า argument และผลลัพธ์)
-    · `BigInt64Array` / `BigUint64Array` ถูกลบ · `DataView.setBigInt64` คิดค่า parse · `BigInt.asUintN(n, ลบ)` คิด n ก่อนทำ (และ n > 8192 → RangeError)
-  · ขนาดวัดด้วย `Number(x)` (+ เลื่อนทีละ 1000 bit เมื่อ ≥ 2^1024) — ตรงขอบ 2^k ปัดได้ 1 bit แต่ได้ค่าเดียวกันทุกเครื่อง (wasm + IEEE 754) → แก๊สแน่นอน
-  · ผล: `2n ** 10n ** 9n` หมดแก๊สในครั้งเดียว (~2.4×10¹⁴) ภายใน ~10 ms · ลูป `x.toString()` / `H * H` / `B / H` ของค่า 8192 bit หมดแก๊ส 3M ใน ~0.1 วิ (เดิม timeout)
-  · ค่าใช้จ่าย: การเรียกตัวช่วยทำให้ลูปเลขล้วนช้าลง ~2–3 เท่า (ประมาณ 0.5 µs → 1 µs ต่อรอบ) · token transfer ~3.0 → ~3.5 ms (แก๊สเท่าเดิม)
-  · QuickJS: `BigInt.asUintN(n, -1n)` คืน `-1n` (บั๊กของ engine — ค่าจริงต้องเป็น 2^n − 1) อย่าพึ่งพาผลของ asUintN กับค่าติดลบ
-เพดานต่อ tx `maxTxGas` (ค่าเริ่มต้น 10,000,000, server = `MAX_BLOCK_GAS` 5,000,000) ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS ไม่ต้องรอ timeout (timeout server 5 วิ เหลือเป็นตัวกันสุดท้าย)
-ผู้จ่ายคือ sender ชั้นนอกสุดเสมอ · `gasLimit` / `gasPrice` (หรือ `maxFeePerGas` / `maxPriorityFeePerGas`) ส่งมาเองได้
-ส่วนที่เผา → **โอนเข้า `0x000…000` ไม่ได้หายไปเฉย ๆ** ที่เหลือเข้า `feeRecipient` (ดูหัวข้อถัดไป)
+  · **cap 8192 bits** (= 1024 bytes, same as modexp) — result over the cap → RangeError `BigInt exceeds 8192 bits (1024 bytes)` (consensus message) (catchable) · literal over the cap → deploy fails
+    The cap guards the paths where the engine converts BigInt to string itself without going through the counter: ≤ ~0.4 ms per conversion (stock QuickJS accepted up to ~1M bits = 0.7 s toString)
+  · Methods where the engine converts BigInt ↔ string internally are wrapped / rewritten in the prelude to charge per the table: `join` `sort` (default comparator) `toSorted` `Object.fromEntries`
+    `Error.prototype.toString` `String.raw` (rewritten per spec) · `Object.hasOwn` / `defineProperty` / `Reflect.*` / `Map.get` / `Array.pop` / `at` / `parseInt` / `Symbol` / `Error(x)` … (charge arguments and results)
+    · `BigInt64Array` / `BigUint64Array` are removed · `DataView.setBigInt64` charges the parse · `BigInt.asUintN(n, negative)` charges n before running (and n > 8192 → RangeError)
+  · Size is measured with `Number(x)` (+ shifting 1000 bits at a time when ≥ 2^1024) — at the 2^k boundary it may round by 1 bit, but gives the same value on every machine (wasm + IEEE 754) → deterministic gas
+  · Result: `2n ** 10n ** 9n` runs out of gas in one step (~2.4×10¹⁴) within ~10 ms · loops of `x.toString()` / `H * H` / `B / H` on 8192-bit values exhaust 3M gas in ~0.1 s (previously timeout)
+  · Cost: calling the helpers makes pure-number loops ~2–3× slower (roughly 0.5 µs → 1 µs per iteration) · token transfer ~3.0 → ~3.5 ms (same gas)
+  · QuickJS: `BigInt.asUintN(n, -1n)` returns `-1n` (engine bug — the correct value is 2^n − 1); don't rely on asUintN results with negative values
+Per-tx cap `maxTxGas` (default 10,000,000, server = `MAX_BLOCK_GAS` 5,000,000) applies even when gas isn't deducted → infinite loops end with OUT_OF_GAS without waiting for timeout (the server's 5 s timeout remains the last guard)
+The payer is always the outermost sender · `gasLimit` / `gasPrice` (or `maxFeePerGas` / `maxPriorityFeePerGas`) can be supplied
+The burned portion → **transferred to `0x000…000`, it doesn't just vanish**; the rest goes to `feeRecipient` (see the next section)
 
-### ค่าแก๊สแบบ EIP-1559 (เทสต์ `68-base-fee` `69-fee-mempool` `73-evm-fees`)
+### EIP-1559 gas (tests `68-base-fee` `69-fee-mempool` `73-evm-fees`)
 
-| ค่า (option ของ VM · env ของ server) | ค่าเริ่มต้น | ความหมาย |
+| Value (VM option · server env) | Default | Meaning |
 |---|---|---|
-| `minBaseFee` · `GAS_PRICE` | `gas.price` (server 10,000 gwei) | base fee ต่ำสุด (และ base fee ของ block แรก) |
-| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 2,500,000) | แก๊สเป้าหมายต่อ block · ไม่มี `maxBlockGas` และไม่ตั้ง = base fee คงที่ที่ขั้นต่ำ (พฤติกรรมเดิม) |
-| `baseFeeChangeDenominator` · `BASE_FEE_DENOMINATOR` | 8 | เปลี่ยนได้ไม่เกิน 1/8 = 12.5% ต่อ block |
-| `burnPercent` · `BURN_PERCENT` | 100 | % ของ**ส่วน base fee** ที่เผา (เดิม server ใช้ 50 ของค่าแก๊สทั้งหมด) |
+| `minBaseFee` · `GAS_PRICE` | `gas.price` (server 10,000 gwei) | minimum base fee (and the base fee of the first block) |
+| `gasTarget` · `GAS_TARGET` | `maxBlockGas / 2` (server 2,500,000) | target gas per block · no `maxBlockGas` and unset = base fee fixed at the minimum (old behavior) |
+| `baseFeeChangeDenominator` · `BASE_FEE_DENOMINATOR` | 8 | changes by at most 1/8 = 12.5% per block |
+| `burnPercent` · `BURN_PERCENT` | 100 | % of the **base fee portion** that is burned (the server previously used 50 of the total fee) |
 
-- base fee ของ block n = `nextBaseFee(header n−1)` ตามสูตร EIP-1559: `parent ± parent × |gasUsed − target| ÷ target ÷ denominator` (ขึ้นอย่างน้อย 1 · ไม่ต่ำกว่า `minBaseFee`)
-  คำนวณจาก header ก่อนหน้าเสมอ (ผู้ผลิตกำหนดเองไม่ได้) → replay / sync ได้ค่าเดิม · `vm.currentBaseFee()` = ของ block ถัดไป
-- tx แบบ 1559 ส่ง `maxFeePerGas` + `maxPriorityFeePerGas` · แบบเดิมส่ง `gasPrice` = ทั้งสองค่า · ไม่ส่งเลย = จ่าย base fee (tip 0)
-  · 1559 ไม่ส่ง maxFee = `baseFee + priority` · priority > maxFee → `INVALID_REQUEST` · maxFee / gasPrice < base fee → ปฏิเสธ (ไม่เข้า block)
-- **ราคาจริง** `effectiveGasPrice = min(maxFee, baseFee + priority)` = `tx.gasPrice` · ค่าแก๊ส = gasUsed × ราคาจริง
-- **แบ่งค่าแก๊ส**: `base = gasUsed × baseFee` (ส่วน base fee) → เผา `base × burnPercent / 100` · tip `fee − base` + base ส่วนที่ไม่เผา → `feeRecipient`
-  (ไม่มี feeRecipient = เผาทั้งหมด) · ผลของ tx / receipt มี `baseFee` `burnedFee` `producerFee` (+ `feeType: 2` `maxFeePerGas` `maxPriorityFeePerGas` ของแบบ 1559)
-  · ราคาเท่า base fee (tip 0) และ burnPercent 100 = เผาทั้งหมดเหมือนเดิม
-- mempool เรียงตาม tip จริงของ block `min(priority, maxFee − baseFee)` · ใบที่ maxFee < baseFee **ยังรอในคิว** ไม่ถูกหยิบจน base fee ลง
-  · แทนที่ใบเดิม (nonce เดียวกัน) ต้องเพิ่มทั้ง maxFee และ priority ≥ 10% แบบ geth (แบบเดิม ↔ แบบเดิม ข้อความเดิม)
-- header มี `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` (`baseFeePerGas` อยู่ใน hash)
+- The base fee of block n = `nextBaseFee(header n−1)` per the EIP-1559 formula: `parent ± parent × |gasUsed − target| ÷ target ÷ denominator` (rises by at least 1 · never below `minBaseFee`)
+  Always computed from the previous header (producers cannot set it) → replay / sync get the same value · `vm.currentBaseFee()` = the next block's
+- 1559 txs send `maxFeePerGas` + `maxPriorityFeePerGas` · legacy txs send `gasPrice` = both values · neither = pays the base fee (tip 0)
+  · 1559 without maxFee = `baseFee + priority` · priority > maxFee → `INVALID_REQUEST` · maxFee / gasPrice < base fee → rejected (not included in a block)
+- **Effective price** `effectiveGasPrice = min(maxFee, baseFee + priority)` = `tx.gasPrice` · fee = gasUsed × effective price
+- **Fee split**: `base = gasUsed × baseFee` (the base fee portion) → burns `base × burnPercent / 100` · tip `fee − base` + the unburned base portion → `feeRecipient`
+  (no feeRecipient = burn everything) · tx results / receipts include `baseFee` `burnedFee` `producerFee` (+ `feeType: 2` `maxFeePerGas` `maxPriorityFeePerGas` for 1559)
+  · price equal to the base fee (tip 0) and burnPercent 100 = burn everything, as before
+- The mempool orders by the block's effective tip `min(priority, maxFee − baseFee)` · txs with maxFee < baseFee **stay queued** and are not picked until the base fee drops
+  · replacing an existing tx (same nonce) requires raising both maxFee and priority by ≥ 10%, like geth (legacy ↔ legacy, same message as before)
+- The header has `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` (`baseFeePerGas` is part of the hash)
 
-### receiptsRoot / logsBloom ใน header (เทสต์ `70-header-roots`)
-- `receiptsRoot` = hash ของ receipt ย่อทุกใบตามลำดับ `{ hash, status, gasUsed, cumulativeGasUsed, effectiveGasPrice, fee, error (code), logs }`
-- `logsBloom` = bloom 2048 bit แบบ EVM ของ log ทุกใบ (address + ทุก topic · log จาก `eventLog(event)` ซึ่งไม่ขึ้นกับ state)
-- ทั้งคู่ + `baseFeePerGas` + `gasUsed` อยู่ใน `hashBlock` → replay / `rebuildFrom` / sync (`applyBlock`) รันเองแล้วเทียบ hash → ผู้ผลิตปลอม receipt / bloom ไม่ได้
-- /evm ใช้ค่าจาก header ตรง ๆ · `eth_getLogs` ข้าม block ที่ bloom ไม่มี address / topic ที่ขอ
+### receiptsRoot / logsBloom in the header (test `70-header-roots`)
+- `receiptsRoot` = hash of every condensed receipt in order `{ hash, status, gasUsed, cumulativeGasUsed, effectiveGasPrice, fee, error (code), logs }`
+- `logsBloom` = EVM-style 2048-bit bloom of every log (address + every topic · logs from `eventLog(event)`, which does not depend on state)
+- Both + `baseFeePerGas` + `gasUsed` are in `hashBlock` → replay / `rebuildFrom` / sync (`applyBlock`) execute themselves and compare hashes → producers cannot forge receipts / blooms
+- /evm uses the header values directly · `eth_getLogs` skips blocks whose bloom lacks the requested address / topic
 
-### event แบบ indexed (เทสต์ `71-indexed-events`)
-- `emit(name, data, { indexed: ["from", "to"] })` · ไม่เกิน 3 field (`MAX_INDEXED` เท่า LOG4) · ต้องมีใน data · ห้ามซ้ำ · event เก็บ `indexed` ไว้ด้วย
-- ดัชนี `eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>` → ค่า = dbKey ของ event · `topic = topicOf(value)` (address = เติม 0 เป็น 32 byte · ตัวเลข = uint256 · bool · string = keccak)
-  `eventsig:<topic0>:<program>:<name>` → `{ program, name, indexed }` (ให้ eth_getLogs หาโปรแกรมจาก topic0)
-- log แบบ EVM: มี indexed → topic0 = `keccak("Name(type,…)")` ของทุก field ตามลำดับใน data · topics ถัดไป = field ที่ indexed · data = ABI ของ field ที่เหลือ
-  · ไม่มี indexed → topic0 = keccak(ชื่อ) + data เป็น JSON (เหมือนเดิม) · token / NFT / multi-token มาตรฐาน index ตาม ERC (Transfer from / to (+ tokenId) · Approval · ApprovalForAll · TransferSingle/Batch · URI · OwnershipTransferred)
-- `vm.listIndexedEvents({ program, name, field, value, limit, cursor, fromBlock, toBlock })` · `GET /program/:a/events?name=Transfer&to=0x…` (หลาย field = AND) · `eth_getLogs` ใช้ดัชนีเมื่อมี topic0 + topic อื่น
-- ดัชนีไม่มี history และไม่อยู่ใน `blockundo` → `rebuildFrom` ลบดัชนีทั้งหมดแล้ว replay สร้างใหม่ (เทสต์ `83`)
+### Indexed events (test `71-indexed-events`)
+- `emit(name, data, { indexed: ["from", "to"] })` · at most 3 fields (`MAX_INDEXED`, same as LOG4) · must exist in data · no duplicates · the event also stores `indexed`
+- Index `eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>` → value = the event's dbKey · `topic = topicOf(value)` (address = zero-padded to 32 bytes · numbers = uint256 · bool · string = keccak)
+  `eventsig:<topic0>:<program>:<name>` → `{ program, name, indexed }` (lets eth_getLogs find the program from topic0)
+- EVM-style logs: with indexed → topic0 = `keccak("Name(type,…)")` of every field in data order · subsequent topics = indexed fields · data = ABI of the remaining fields
+  · no indexed → topic0 = keccak(name) + data as JSON (as before) · standard token / NFT / multi-token index per ERC (Transfer from / to (+ tokenId) · Approval · ApprovalForAll · TransferSingle/Batch · URI · OwnershipTransferred)
+- `vm.listIndexedEvents({ program, name, field, value, limit, cursor, fromBlock, toBlock })` · `GET /program/:a/events?name=Transfer&to=0x…` (multiple fields = AND) · `eth_getLogs` uses the index when topic0 + another topic are given
+- Indexes have no history and are not in `blockundo` → `rebuildFrom` deletes all indexes and replay recreates them (test `83`)
 
-### เชนยาว (เทสต์ `84-chain-scale`)
-- `historyfrom` = block แรกที่ history ครบต่อเนื่องถึงล่าสุด (block แรกที่เก็บ history · block ที่ไม่เก็บ → block ถัดไป) → `replayBlock` / `snapshotAt` เช็คครั้งเดียว แทนการอ่าน `blockundo` ทุก block ที่ใหม่กว่า
-- `snapshotAt` / `pageSnapshotAt`: key = ที่มีตอนนี้ ∪ ที่มี history (ไล่ `history:<prefix>` แบบกระโดดข้าม history ของแต่ละ key) → ไม่อ่าน `blockundo`
-  ข้อจำกัด: key ลูกที่ส่วนถัดไปเป็นตัวเลขขึ้นต้นด้วย 0 ยาวพอ ๆ กับเลข block 12 หลัก (เช่น `map("a", "0000000001")`) และถูกลบไปแล้ว อาจไม่ขึ้น
-- `rebuildFrom`: คืน state จาก history รายการแรกของแต่ละ key → ลบ history / ดัชนี → รัน block 1..target ทับของเดิม (`createBlock({ overwrite: true })`) → ลบ block ที่เกิน · ทุกขั้นทีละชุด
-- วัดบนเชน LMDB 30,000 block (block ละ 1 call · โปรแกรม 200 key):
-  | | ก่อน | หลัง |
+### Long chains (test `84-chain-scale`)
+- `historyfrom` = the first block from which history is continuous to the latest (the first block storing history · blocks not storing it → the next block) → `replayBlock` / `snapshotAt` check it once instead of reading `blockundo` of every newer block
+- `snapshotAt` / `pageSnapshotAt`: keys = those present now ∪ those with history (scans `history:<prefix>`, skipping over each key's history) → no `blockundo` reads
+  Limitation: child keys whose next segment is a number with leading zeros about as long as a 12-digit block number (e.g. `map("a", "0000000001")`) and that have been deleted may not show up
+- `rebuildFrom`: restores state from each key's first history entry → deletes history / indexes → re-executes blocks 1..target over the old ones (`createBlock({ overwrite: true })`) → deletes blocks beyond · every step in batches
+- Measured on an LMDB chain of 30,000 blocks (1 call per block · program with 200 keys):
+  | | Before | After |
   |---|---|---|
-  | `replayBlock(2)` | 33.5 ms (โตตามจำนวน block ที่ใหม่กว่า) | 2.7 ms (เท่ากับ block ล่าสุด) |
-  | `snapshotAt(2)` | 38.2 ms (โตตามความยาวเชน) | 7.1 ms (ตามจำนวน key ของโปรแกรม) |
-  | `snapshotAt(ล่าสุด − 1)` | 1.7 ms | 3.6 ms |
-  | `rebuildFrom(29,990)` เวลา / heap สูงสุด | 109 วิ / +179 MB | 113 วิ / +15 MB |
-  เทียบที่ 10 ล้าน block: replay block เก่า ~11 วิ (อยู่ใน RAM) → ~3 ms · rebuild ยังต้องรันทั้งเชน (ต้องมี snapshot ถึงจะเร็ว) แต่ไม่ล้มเพราะหน่วยความจำ
+  | `replayBlock(2)` | 33.5 ms (grows with the number of newer blocks) | 2.7 ms (same as the latest block) |
+  | `snapshotAt(2)` | 38.2 ms (grows with chain length) | 7.1 ms (by the program's key count) |
+  | `snapshotAt(latest − 1)` | 1.7 ms | 3.6 ms |
+  | `rebuildFrom(29,990)` time / peak heap | 109 s / +179 MB | 113 s / +15 MB |
+  Extrapolated to 10 million blocks: replaying an old block ~11 s (in RAM) → ~3 ms · rebuild still has to execute the whole chain (needs a snapshot to be fast) but no longer fails from memory
 
-### metadata.abi (เทสต์ `72-abi`)
+### metadata.abi (test `72-abi`)
 ```js
 { functions: [{ name, inputs: [{ name, type, description? }], outputs: [{ name?, type }], readonly?, payable?, description? }],
   events:    [{ name, fields: [{ name, type, indexed?, description? }], description? }] }
 // type ∈ address uint int bool string bytes object array any
 ```
-- ส่งตอน deploy (`metadata: { abi }` · ฟังก์ชันที่ประกาศต้อง export จริง) หรือ `setMetadata("abi", …)` ในโปรแกรม · ตรวจด้วย `checkAbi` (ชื่อ / ชนิด / ห้ามซ้ำ / indexed ≤ 3 / ≤ 64 ฟังก์ชัน · 32 event · 16 field · 16 KB)
-- explorer สร้างฟอร์ม Interact จาก inputs (แทนการเดาจากโค้ด) · แท็บ Events บอกชนิด / indexed · แท็บ ABI
-- `GET /program/:a/abi` → `{ address, abi, evmAbi }` · `/evm` `cardianal_getAbi(address)` → JSON ABI แบบ Ethereum (`toEvmAbi`: uint → uint256 · object / array / any → string)
+- Sent at deploy (`metadata: { abi }` · declared functions must actually be exported) or `setMetadata("abi", …)` in the program · validated by `checkAbi` (names / types / no duplicates / indexed ≤ 3 / ≤ 64 functions · 32 events · 16 fields · 16 KB)
+- The explorer builds the Interact form from inputs (instead of guessing from code) · the Events tab shows types / indexed · ABI tab
+- `GET /program/:a/abi` → `{ address, abi, evmAbi }` · `/evm` `cardianal_getAbi(address)` → Ethereum-style JSON ABI (`toEvmAbi`: uint → uint256 · object / array / any → string)
 
-### พฤติกรรมที่ล็อกไว้แล้ว (เทสต์คุมอยู่ — อย่าทำให้พัง)
+### Locked-in behavior (covered by tests — don't break it)
 
-- ไม่มีอะไรลง DB จนกว่าจะ `commit()`
-- timeout / DB พัง / แก๊สหมด / หน่วยความจำเกิน → ทั้ง tx ล้ม โปรแกรม `catch` ไม่ได้
-- **หน่วยความจำเกิน (`OUT_OF_MEMORY`) → เข้า block กิน nonce เสียค่าแก๊สเท่าที่ใช้** (เหมือนแก๊สหมด · รวมยอดที่ค้างในฝั่งโปรแกรม)
-- **คัดลอก / สร้างข้อมูลทั้งก้อนเสียแก๊สตามขนาด** (spread / rest / `+` ที่ได้ string / เมธอดในตัว) เรียกทางไหนก็เท่ากัน (เทสต์ `76`)
-- `runProgram` ปลายทางล้มแล้วผู้เรียก catch → writes + event ของกิ่งนั้นถูกย้อน
-- **nonce ผิด / เกินโควตา / timeout → ไม่เข้า block ไม่กิน nonce ไม่เสียแก๊ส** (`accepted: false`)
-- **โปรแกรม throw / เงินไม่พอ → เข้า block กิน nonce เสียแก๊ส** (`status: "throw"`, `accepted: true`)
-- `parentHash` ต่อกันเสมอ · เลข block ซ้ำไม่ได้ · timestamp ต้องมากกว่า block ก่อน
-- tx ซ้ำ (hash เดิม) เข้าไม่ได้ · rejected tx ไม่เขียนทับ `tx:<hash>` ของใบที่สำเร็จ
-- เวลาและ `Math.random()` ผูกกับ block + tx hash → replay ได้ผลเดิมเป๊ะ
-- error ของ V8 ถูก sanitize ก่อนเก็บ (ข้อความจริงไปอยู่ใน `debug` ซึ่ง**ไม่ถูกบันทึกลง DB**) เพื่อให้ replay ตรง
-- address เป็นตัวพิมพ์เล็กเสมอ · `origin = sender` สำหรับ tx ของ user
+- Nothing reaches the DB until `commit()`
+- timeout / DB failure / out of gas / memory exceeded → the whole tx fails, the program cannot `catch` it
+- **Memory exceeded (`OUT_OF_MEMORY`) → included in the block, consumes the nonce, pays for gas used** (like out of gas · including the total pending on the program side)
+- **Copying / creating whole data blobs costs gas by size** (spread / rest / `+` producing strings / built-in methods), the same whichever way it's called (test `76`)
+- `runProgram` target fails and the caller catches → writes + events of that branch are rolled back
+- **Wrong nonce / over quota / timeout → not included, nonce not consumed, no gas** (`accepted: false`)
+- **Program throws / insufficient funds → included, consumes the nonce, pays gas** (`status: "throw"`, `accepted: true`)
+- `parentHash` always chains · block numbers cannot repeat · timestamp must be greater than the previous block's
+- Duplicate txs (same hash) cannot get in · rejected txs never overwrite the `tx:<hash>` of a successful one
+- Time and `Math.random()` are tied to the block + tx hash → replays give exactly the same result
+- V8 errors are sanitized before storing (the real message goes into `debug`, which is **not written to the DB**) so replays match
+- Addresses are always lowercase · `origin = sender` for user txs
 
 ---
 
-## 5. key ใน DB ทั้งหมด
+## 5. All DB keys
 
-LMDB เก็บเป็น key/value แบน key เป็น string คั่นด้วย `:` ค่าเป็น JSON
+LMDB stores flat key/value; keys are strings separated by `:`, values are JSON
 
-### state ของ address / โปรแกรม
+### Address / program state
 ```
-pending:<id>                        โปรแกรมที่ deploy แล้วรอ init  { code, context, initInput, metadata, value }
-<id>:code                           โค้ด (string escape แล้ว)
-<id>:context                        { sender, origin } ตอน deploy
-<id>:this                           address ของตัวเอง — ใช้เช็คว่า address นี้เป็นโปรแกรม
-<id>:storage:<a>:<b>:…              ข้อมูลของโปรแกรม (ส่วนที่ map() สร้าง, URI-encode ต่อ part)
-<addr>:nonce                        ลำดับ tx ถัดไป
-<addr>:native:received|sended|consumed    ตัวนับสะสม เพิ่มได้อย่างเดียว
+pending:<id>                        deployed program awaiting init  { code, context, initInput, metadata, value }
+<id>:code                           code (escaped string)
+<id>:context                        { sender, origin } at deploy
+<id>:this                           its own address — used to check whether this address is a program
+<id>:storage:<a>:<b>:…              program data (the parts map() builds, URI-encoded per part)
+<addr>:nonce                        next tx sequence number
+<addr>:native:received|sended|consumed    cumulative counters, increase only
 <addr>:metadata:<field>             namespace / description / type / creator / createdAt / upgrader / version / template
-namespace:<name>                    ชื่อ → address (ห้ามซ้ำทั้งระบบ)
-pending-upgrade:<id>                โค้ดใหม่ที่ upgrader ส่งมา รอทีมงาน  { code, context, migrateInput }
-scheduled-upgrade:<id>              อนุมัติแล้ว รอ timelock  { code, context, migrateInput, approvedAt, activateAt }
-upgradeat:<n>                       ดัชนี: โปรแกรมที่ต้องเปิดใช้โค้ดใหม่ตอนสร้าง block n  [id…] (ลบทิ้งเมื่อเปิดใช้)
-<id>:codeversion:<n>                โค้ดเวอร์ชัน n  { version, code, blockNumber, timestamp } (เฉพาะโปรแกรมที่เคยอัปเกรด)
+namespace:<name>                    name → address (unique system-wide)
+pending-upgrade:<id>                new code submitted by the upgrader, awaiting the team  { code, context, migrateInput }
+scheduled-upgrade:<id>              approved, waiting for the timelock  { code, context, migrateInput, approvedAt, activateAt }
+upgradeat:<n>                       index: programs whose new code activates when block n is created  [id…] (deleted on activation)
+<id>:codeversion:<n>                code version n  { version, code, blockNumber, timestamp } (only programs that were upgraded)
 ```
-`pending-upgrade:` / `scheduled-upgrade:` ใช้ขีดกลาง จึงไม่ปนกับ `pending:` (รายการรออนุมัติ deploy นับด้วย prefix `pending:`)
+`pending-upgrade:` / `scheduled-upgrade:` use a hyphen so they don't mix with `pending:` (the deploy approval queue is counted by the `pending:` prefix)
 
-### ระยะ 4: Merkle trie · pruning · snapshot (เทสต์ `96-trie` `97-phase4` `98-phase4-server`)
-⚠️ **เปลี่ยนวิธีคำนวณ hash ของ block → ต้องล้างเชนเดิม** (ข้อมูล LMDB เก่าเปิดได้ แต่ block ใหม่ต่อจาก header เก่าไม่ได้ · sync กับ node รุ่นเก่าไม่ได้)
-- **stateRoot = root ของ Merkle Patricia Trie แบบ Ethereum ของ state ทั้งหมด** (`src/core/trie.js` · ตรงกับเวกเตอร์ของ geth ทุกไบต์)
-  key ใน trie = keccak256(dbKey) · ค่า = utf8(canonicalJson(ค่า)) · state = `isStateKey(dbKey)` (ไม่ใช่ block / history / ดัชนี / historyfrom / genesis / trie)
-  node เก็บที่ `trie:<nibble path>` **แค่ trie ล่าสุด** (เขียนทับที่เดิม · node ที่หายไปถูกลบ แบบ path-based ของ geth) → ไม่โตตามจำนวน block
-  `vm.commit(writes)` อัปเดต trie ใน commit เดียวกันเสมอ (genesis / block / rebuild) · Block คำนวณครั้งเดียวตอน `hashes()` แล้ว commit ใช้ชุดเดิม (DB ถูกแก้ระหว่างนั้น = `trieStale`)
-  DB ที่มี state แต่ไม่มี trie (ก่อนระยะ 4) → `rebuildTrie()` ให้เองครั้งแรก · `vm.stateRoot()` = root ตอนนี้
-- header มี **`writesRoot`** = hash ของ writes ของ state ใน block (เรียงตาม key · แบบ stateRoot เดิมแต่ไม่ต่อสาย) · `parentStateRoot` ยังอยู่ใน header แต่ไม่อยู่ใน hash แล้ว
-  `replayBlock` ของ block เก่าคำนวณ trie ของตอนนั้นไม่ได้ → ใช้ `stateRoot` จาก header เดิม (`createBlock({ stateRoot })`) แล้วตรวจผลการรันด้วย writesRoot / receiptsRoot
-  `vm.hashHeader(header)` คำนวณ hash กลับจาก field ของ header (`headerFields` ใน `encoding.js` · SDK ใช้ตัวเดียวกัน)
-- **หลักฐาน**: `vm.getProof([dbKey])` → `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (ไม่มี key = พิสูจน์ว่าไม่มีได้)
-  `GET /proof?key=…&key=…` · `/evm` `cardianal_getProof([dbKey | { program, key }])` · `eth_getProof` = error (state ไม่ใช่ account trie แบบ EVM)
-  ฝั่ง client: `verifyProof(root, dbKey, proof)` · `client.verifiedState(keys, { producers })` ตรวจ hash ของ header + ลายเซ็นผู้ผลิต + หลักฐาน ไม่ต้องเชื่อ node
-- **pruning** (`historyKeep` / `HISTORY_KEEP_BLOCKS=N`): หลัง commit ทุก block ลบ `history:` + `blockundo:` ของ block ที่เก่ากว่า N block (ทีละ ≤ 50,000 key) · `historyfrom` เลื่อนตาม
-  ย้อนดู state / `replayBlock` / `/block/:n?full=1` / eth_* ตาม block ได้แค่ N block ล่าสุด · `rebuildFrom` ใช้ไม่ได้ (ต้องมี history ตั้งแต่ block 1) · header / body เก็บครบ (ซิงก์ให้ node อื่นได้)
-  ไม่อยู่ใน hash → ตั้งต่างกันได้ทุกเครื่อง · ให้มีอย่างน้อย 1 เครื่องเป็น archive (ไม่ตั้ง) สำหรับ explorer / rebuild
-- **snapshot** (`src/node/snapshot.js`): ไฟล์ gzip JSON lines = manifest + header 256 block ล่าสุด (BlockHash · base fee) + `[dbKey, value]` ของ state ณ block N
-  `writeSnapshot(vm, file)` ไม่หยุดเชน (อ่านทีละชุด · block ที่ปิดระหว่างนั้นอ่านค่า ณ N จาก history) · `SNAPSHOT_EVERY=N` ถ่ายอัตโนมัติ → `GET /snapshot` (manifest) · `GET /snapshot/<N>` (ไฟล์)
-  `loadSnapshot(vm, lines, { producers })` (DB ที่ยังไม่มี block): hash ของทุก header คำนวณกลับได้ · ต่อกัน · ผู้ผลิตเซ็น → สร้าง trie จาก state แล้วต้องได้ stateRoot ของ header N (ไม่ตรง = ล้าง state ทิ้ง throw)
-  หลังโหลด: `historyfrom` = N + 1 · ไม่มี body ก่อน N · `startSync({ snapshot: true })` = DB ว่าง → โหลด `/snapshot` ของต้นทางก่อนแล้วซิงก์ต่อ · CLI `npm run snapshot -- export|import|verify`
-- **ความเร็ว** (เครื่องทดสอบ · LMDB · keccak เป็น JS ล้วนของ noble ~28µs ต่อ node 500 byte · Node ไม่มี keccak แบบ native)
-  load test 500 tx (close + roots p50 เทียบก่อนระยะ 4): native 355 vs 242 ms · token 909 vs 812 ms · mix 1186 vs 1260 ms · DB โตเพิ่ม ~700–900 byte ต่อ tx
-  state 1 ล้าน key: `rebuildTrie` 65 วินาที (เรียง key แล้วสร้างทีเดียว `buildTrie`) · block แตะ 4,000 key = trieUpdate ~0.8–1.5 วินาที + commit ~0.45 วินาที · หลักฐาน ~2.6 KB
-  node ใน DB เก็บเป็น byte (LMDB บีบอัดค่า > ~1000 byte ทำให้แบบ hex ช้า) · update ไม่ตรวจ hash ของ node ที่อ่าน (`proof()` ตรวจเสมอ · `new StateTrie({ verify: true })` ถ้าต้องการ)
+### Phase 4: Merkle trie · pruning · snapshot (tests `96-trie` `97-phase4` `98-phase4-server`)
+⚠️ **Changes how block hashes are computed → the old chain must be reset** (old LMDB data opens, but new blocks cannot follow old headers · cannot sync with old-version nodes)
+- **stateRoot = root of an Ethereum-style Merkle Patricia Trie of the whole state** (`src/core/trie.js` · matches geth's vectors byte-for-byte)
+  Trie key = keccak256(dbKey) · value = utf8(canonicalJson(value)) · state = `isStateKey(dbKey)` (not block / history / index / historyfrom / genesis / trie)
+  Nodes are stored at `trie:<nibble path>`, **only the latest trie** (overwritten in place · removed nodes are deleted, path-based like geth) → does not grow with block count
+  `vm.commit(writes)` always updates the trie in the same commit (genesis / block / rebuild) · Block computes it once at `hashes()` and commit reuses that set (DB modified in between = `trieStale`)
+  A DB with state but no trie (pre-phase 4) → `rebuildTrie()` runs automatically the first time · `vm.stateRoot()` = the current root
+- The header has **`writesRoot`** = hash of the block's state writes (sorted by key · like the old stateRoot but not chained) · `parentStateRoot` is still in the header but no longer part of the hash
+  `replayBlock` of an old block cannot compute the trie of that time → uses the `stateRoot` from the original header (`createBlock({ stateRoot })`) and verifies execution with writesRoot / receiptsRoot
+  `vm.hashHeader(header)` recomputes the hash from the header fields (`headerFields` in `encoding.js` · the SDK uses the same one)
+- **Proofs**: `vm.getProof([dbKey])` → `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (missing key = absence can be proven)
+  `GET /proof?key=…&key=…` · `/evm` `cardianal_getProof([dbKey | { program, key }])` · `eth_getProof` = error (the state is not an EVM account trie)
+  Client side: `verifyProof(root, dbKey, proof)` · `client.verifiedState(keys, { producers })` verifies the header hash + producer signature + proof, no need to trust the node
+- **pruning** (`historyKeep` / `HISTORY_KEEP_BLOCKS=N`): after every block commit, deletes `history:` + `blockundo:` of blocks older than N blocks (≤ 50,000 keys at a time) · `historyfrom` moves accordingly
+  Historical state / `replayBlock` / `/block/:n?full=1` / block-based eth_* only work for the latest N blocks · `rebuildFrom` is unavailable (needs history from block 1) · headers / bodies are kept in full (can sync other nodes)
+  Not part of the hash → can differ per machine · keep at least 1 machine as archive (unset) for the explorer / rebuild
+- **snapshot** (`src/node/snapshot.js`): gzip JSON lines file = manifest + the latest 256 block headers (BlockHash · base fee) + `[dbKey, value]` of the state as of block N
+  `writeSnapshot(vm, file)` doesn't stop the chain (reads in batches · blocks sealed meanwhile read values as of N from history) · `SNAPSHOT_EVERY=N` takes them automatically → `GET /snapshot` (manifest) · `GET /snapshot/<N>` (file)
+  `loadSnapshot(vm, lines, { producers })` (DB with no blocks yet): every header hash must recompute · chain together · be producer-signed → builds the trie from the state, which must match header N's stateRoot (mismatch = wipe the state and throw)
+  After loading: `historyfrom` = N + 1 · no bodies before N · `startSync({ snapshot: true })` = empty DB → loads the source's `/snapshot` first then keeps syncing · CLI `npm run snapshot -- export|import|verify`
+- **Speed** (test machine · LMDB · keccak is noble's pure JS, ~28µs per 500-byte node · Node has no native keccak)
+  Load test 500 tx (close + roots p50 vs. pre-phase 4): native 355 vs 242 ms · token 909 vs 812 ms · mix 1186 vs 1260 ms · DB grows an extra ~700–900 bytes per tx
+  1 million state keys: `rebuildTrie` 65 seconds (sort keys then build at once, `buildTrie`) · a block touching 4,000 keys = trieUpdate ~0.8–1.5 seconds + commit ~0.45 seconds · proof ~2.6 KB
+  Nodes are stored in the DB as bytes (LMDB compresses values > ~1000 bytes, which makes hex slow) · updates don't verify the hashes of nodes read (`proof()` always does · `new StateTrie({ verify: true })` if needed)
 
-**ยอดคงเหลือ = received − sended − consumed** (`consumed` = ค่าแก๊สที่จ่ายไป) ไม่มี key ที่เก็บยอดสุทธิ
-ออกแบบให้ทุกค่าเพิ่มทางเดียว เพื่อให้ tx ที่ไม่เกี่ยวกันไม่แย่ง key เดียวกัน
+**Balance = received − sended − consumed** (`consumed` = gas paid); there is no key storing the net balance
+Designed so every value only grows in one direction, so unrelated txs don't contend for the same key
 
-### chain / ดัชนี
+### Chain / indexes
 ```
-block:<n>              header (เลข n เติมศูนย์ 12 หลัก ทุก key ที่มีเลข block)
-blockbody:<n>          tx ดิบทุกใบ [{ action, method, request }] → replay สร้าง state ใหม่ได้ทั้งหมด
-blockundo:<n>          รายชื่อ key ของ state ที่ block นั้นแตะ (ไม่รวมดัชนี)
-blockhash:<hash>       hash → เลข block
-latestblock            เลข block ล่าสุด
+block:<n>              header (n zero-padded to 12 digits in every key containing a block number)
+blockbody:<n>          every raw tx [{ action, method, request }] → replay can rebuild the whole state
+blockundo:<n>          list of state keys that block touched (indexes excluded)
+blockhash:<hash>       hash → block number
+latestblock            latest block number
 tx:<vmhash>            { hash, digest, blockNumber, index, action, status, from, nonce }
-sigtx:<digest>         EIP-712 digest → vm hash (ทำให้ค้นด้วย hash ที่ user เซ็นได้)
-txto:<addr>:<n>:<idx>:<callIdx>    ดัชนี "ใครมา interact กับ address นี้" (ค่าไม่เก็บ blockNumber / index / timestamp · `readTransactionTo` เติมจาก key + header)
-event:<program>:<name>:<n>:<idx>:<i>   ดัชนี event
-eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   ดัชนีของ field ที่ emit แบบ indexed → dbKey ของ event
-eventsig:<topic0>:<program>:<name>     topic0 แบบ EVM → { program, name, indexed } (eth_getLogs)
-holding:<addr>:<program>   ดัชนี "address นี้เคยได้/ส่งเหรียญของโปรแกรมนี้" จาก event Transfer (from/to) ของ tx ที่สำเร็จ · ต้อง recordBlocks
-history:<dbKey>:<n>    ค่า**ก่อน**เปลี่ยน { existed: false } หรือ { existed: true, before } (pruning ลบของ block ที่เก่ากว่า HISTORY_KEEP_BLOCKS)
-trie:<nibbles>         node ของ Merkle trie ของ state ล่าสุด (RLP เป็น byte · ของเก่าแบบ hex ก็อ่านได้ · path จากราก · "trie:" = ราก) — stateRoot ของ block ล่าสุด
-0x000…000:native:received    ยอดเหรียญที่ถูกเผาทั้งหมด
+sigtx:<digest>         EIP-712 digest → vm hash (lets you search by the hash the user signed)
+txto:<addr>:<n>:<idx>:<callIdx>    index of "who interacted with this address" (the value doesn't store blockNumber / index / timestamp · `readTransactionTo` fills them from the key + header)
+event:<program>:<name>:<n>:<idx>:<i>   event index
+eventidx:<program>:<name>:<field>:<topic>:<n>:<idx>:<i>   index of fields emitted as indexed → the event's dbKey
+eventsig:<topic0>:<program>:<name>     EVM-style topic0 → { program, name, indexed } (eth_getLogs)
+holding:<addr>:<program>   index of "this address has received/sent this program's tokens", from Transfer events (from/to) of successful txs · requires recordBlocks
+history:<dbKey>:<n>    the value **before** the change { existed: false } or { existed: true, before } (pruning deletes those of blocks older than HISTORY_KEEP_BLOCKS)
+trie:<nibbles>         Merkle trie nodes of the latest state (RLP as bytes · old hex ones are still readable · path from the root · "trie:" = root) — stateRoot of the latest block
+0x000…000:native:received    total burned coins
 ```
 
-`txto` ที่ `callIdx > 0` คือการถูกเรียกแบบซ้อนชั้นผ่าน `runProgram` และมี `depth` + `via` เพิ่ม
-(นี่คือสิ่งที่ทำให้ explorer เห็นว่าโทเคนถูก `transferFrom` จากตลาด)
+`txto` with `callIdx > 0` is a nested call via `runProgram` and additionally has `depth` + `via`
+(this is what lets the explorer see that a token was `transferFrom`'d by a marketplace)
 
-`history:` ออกแบบให้ `stateAt(block, key)` ทำงานด้วยการ seek ครั้งเดียว:
-หา `history:<key>:<n'>` ตัวแรกที่ `n' > block` ถ้าไม่มี = ค่าปัจจุบัน ถ้ามี = ค่า `before` ของตัวนั้น
-→ ไม่ต้องไล่ย้อนทีละ block **ข้อมูลของ chain เอง (block/ดัชนี) ไม่เก็บ history** เพราะสร้างใหม่จาก body ได้
-(ดัชนี = `isIndexKey`: tx / txn / txto / sigtx / event / eventidx / eventsig / holding / rejtx / rejfrom / blockrejected · ตอนรัน tx ไม่มีใครอ่าน · `snapshotAt` ไม่คืนดัชนี)
+`history:` is designed so `stateAt(block, key)` works with a single seek:
+find the first `history:<key>:<n'>` with `n' > block`; none = the current value, found = that entry's `before` value
+→ no need to walk back block by block. **The chain's own data (blocks/indexes) keeps no history** because it can be rebuilt from bodies
+(indexes = `isIndexKey`: tx / txn / txto / sigtx / event / eventidx / eventsig / holding / rejtx / rejfrom / blockrejected · nobody reads them during tx execution · `snapshotAt` doesn't return indexes)
 
-`<addr>:txn:<nonce>:<hash>` ไม่เก็บ signature / digest: ลายเซ็นอยู่ใน `blockbody` (`vm.transactionSignature` · `getTransaction(hash, { signature: true })` · `/tx/:hash` · `/tx/:hash/receipt` · eth_getTransactionByHash v r s) · digest อยู่ใน `tx:` (`readTransactionRecord` เติมให้รายการ tx ของกระเป๋า)
+`<addr>:txn:<nonce>:<hash>` doesn't store signature / digest: signatures are in `blockbody` (`vm.transactionSignature` · `getTransaction(hash, { signature: true })` · `/tx/:hash` · `/tx/:hash/receipt` · eth_getTransactionByHash v r s) · the digest is in `tx:` (`readTransactionRecord` fills it into a wallet's tx list)
 
-`maxKeySize: 1000` ตั้งไว้เพราะ `history:` ต้องเอา key ไปซ้อนเป็น prefix
+`maxKeySize: 1000` is set because `history:` has to nest keys as a prefix
 
-ดูขนาดจริง: block ที่มี 100 tx เต็ม ≈ 190 KB / 664 key
+Real sizes: a full block of 100 txs ≈ 190 KB / 664 keys
 
 ---
 
-## 6. ลายเซ็น (EIP-712)
+## 6. Signatures (EIP-712)
 
 ```js
 import { signTransaction, verifyTransaction, buildTypedData, hashTypedData, addressOf } from "programvm/signature.js";
 
 const tx = { chainId: 41234, action: "call", from, to: program, method: "transfer",
-             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: "20000000000000" };   // 20,000 gwei (ขั้นต่ำของเชน 10,000 gwei)
-const signature = signTransaction(tx, privateKey);       // ฝั่ง wallet
-const { action, method, sender, hash, request } = verifyTransaction({ tx, signature });  // ฝั่ง server
+             input: { to: bob, amount: "100n" }, value: 0, nonce, gasLimit: 500000, gasPrice: "20000000000000" };   // 20,000 gwei (chain minimum is 10,000 gwei)
+const signature = signTransaction(tx, privateKey);       // wallet side
+const { action, method, sender, hash, request } = verifyTransaction({ tx, signature });  // server side
 vm[method](request);
 ```
 
-- domain `{ name: "Bluewolfchain", version: "2" }` (**ไม่มี chainId** → MetaMask เซ็นให้ได้ไม่ว่ากระเป๋าเปิดเชนไหนอยู่ ไม่ต้อง add เชนนี้ · MetaMask บังคับให้ chainId ของ domain ตรงกับเชนที่เปิดอยู่)
-- field ที่เซ็น **ลำดับห้ามสลับ**: `chainId, action, from, to, method, input, value, nonce, gasLimit, gasPrice, signedOnChainId`
-  · `chainId` = เชนนี้ (41234) → **mempool ปฏิเสธ chainId ที่ไม่ตรง** (`chainId ของ tx (X) ไม่ตรงกับเชน (Y)`) = กัน replay ข้ามเชน · ลายเซ็นข้อความ EIP-712 ไม่ใช่ tx ของ EVM จึงเอาไปส่งบนเชนอื่นไม่ได้
-  · `signedOnChainId` = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (explorer ใส่จาก `eth_chainId` · ไม่ส่ง = chainId) → receipt มี `signedOnChainId` · หน้า tx แสดง "Signed on" · เป็นค่าที่หน้าเว็บใส่เอง ไม่ใช่หลักฐาน · tx จาก `eth_sendRawTransaction` = chainId ของ tx
-  · tx แบบ EIP-1559 (มี `maxFeePerGas` หรือ `maxPriorityFeePerGas`) ใช้ `TRANSACTION_TYPE_1559` = ชุดเดิมที่ตัด `gasPrice` แล้วต่อ `maxFeePerGas, maxPriorityFeePerGas` (ก่อน `signedOnChainId`)
-  · explorer แสดงยอด + ค่าแก๊สโดยประมาณก่อนเปิดหน้าต่างกระเป๋า (`estimateCost` ใน `explorerscan/core/wallet.js`: call = แก๊สจาก `/query` + `gas.tx`) เพราะกระเป๋าที่เปิดเชนอื่นไม่รู้ยอด BWSC · ยอดไม่พอ = ไม่เรียกกระเป๋า
-  · permit ของ token (EIP-2612) ยังมี chainId ใน domain ตามมาตรฐาน → ต้องเปิดเชนนี้ในกระเป๋าตอนเซ็น permit · ส่ง gasPrice (≠ 0) คู่กับสอง field ใหม่ = ปฏิเสธ · `maxFeePerGas: 0` = ไม่ระบุ
-- `input` และ `code` ถูกยุบเป็น string เดียวด้วย `canonicalJson({ input, code })` → เซ็นข้อมูลชนิดไหนก็ได้
-- `action` ที่รับ: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade` `setGasConfig` (admin · หัวข้อ 4 "ค่าแก๊ส")
-  → `VM_METHOD` map ไปเป็นเมธอดของ VM (`metadata` → `setMetadata` · ที่เหลือชื่อเดียวกัน)
-  - `upgrade`: `to` = โปรแกรม · `code` = โค้ดใหม่ · `input` = migrateInput · `setUpgrader`: `input = { upgrader: "0x…" | null }`
-  - `deploy` มี field `upgrader` เพิ่มได้ → ถูกยุบเข้า string ที่เซ็นเป็น `canonicalJson({ input, code, upgrader })`
-    **ไม่ส่ง = ไม่มี key นี้** → tx / ลายเซ็นเดิมทุกใบได้ digest เหมือนเดิม (ใน hash ของ VM ก็เช่นกัน)
-- `sender` มาจากการ recover ลายเซ็น**เท่านั้น** `tx.from` ใช้เทียบอย่างเดียว
-- **ผู้จ่ายแก๊สแทน (paymaster / fee payer · เทสต์ `93-paymaster`)**: `tx.sponsor` = address → ต่อ field `sponsor` (address) ท้ายชนิด (แบบเดิมหรือ 1559 · ไม่มี sponsor = digest เดิมทุกไบต์)
-  `/sendtx { tx, signature, sponsorSignature }` · `sponsorSignature` = sponsor เซ็น **digest เดียวกัน** (เห็น tx ทั้งใบก่อนยอมจ่าย) · ผู้ส่งเปลี่ยน sponsor ไม่ได้เพราะอยู่ในข้อมูลที่ตัวเองเซ็น
-  VM: `request.sponsor` อยู่ใน hash (`feeFields`) · ผู้ส่งใช้ nonce ตัวเอง + จ่าย value เอง · แก๊สหักจาก sponsor (`tx.payer.sponsor`) · receipt / explorer แสดง `sponsor` ("Gas paid by")
-  VM เชื่อ `request.sponsor` (ตรวจลายเซ็นตอนรับเข้า mempool เหมือนลายเซ็นของผู้ส่ง · sync เชื่อผู้ผลิตที่เซ็น block) · ใช้ VM ตรง ๆ ต้องตรวจเอง
-- **SDK ฝั่ง client** (`client-sdk/index.js` = `programvm/client` · เทสต์ `92-sdk`): ไม่ import VM / sandbox / node:* (ใช้ใน browser ได้ · helper ที่ใช้ร่วมย้ายไป `src/core/encoding.js`)
-  `createClient({ url })` → `send(fields, signer, { sponsor? })` (เติม chainId / from / nonce / ค่าแก๊ส 1559 เอง) · `prepare` · `submit` · `wait(hash)` (ตามใบที่แทนให้) · `query` · `balance` · `abi` · `receipt`
-  signer: `keySigner(key)` · `walletSigner(window.ethereum)` (eth_signTypedData_v4 ด้วย `walletTypedData` = field uint256 เป็นเลขฐานสิบล้วน เพราะกระเป๋าอ่าน `"5n"` ไม่ออก)
+- domain `{ name: "Bluewolfchain", version: "2" }` (**no chainId** → MetaMask can sign whichever chain the wallet is on, no need to add this chain · MetaMask requires the domain chainId to match the active chain)
+- Signed fields, **order must not change**: `chainId, action, from, to, method, input, value, nonce, gasLimit, gasPrice, signedOnChainId`
+  · `chainId` = this chain (41234) → **the mempool rejects mismatched chainIds** (`tx chainId (X) does not match the chain (Y)`) = prevents cross-chain replay · an EIP-712 message signature is not an EVM tx, so it cannot be submitted on other chains
+  · `signedOnChainId` = the chain the wallet was on when signing (the explorer fills it from `eth_chainId` · omitted = chainId) → the receipt has `signedOnChainId` · the tx page shows "Signed on" · a value the web page sets itself, not proof · txs from `eth_sendRawTransaction` = the tx's chainId
+  · EIP-1559 txs (with `maxFeePerGas` or `maxPriorityFeePerGas`) use `TRANSACTION_TYPE_1559` = the same set without `gasPrice`, followed by `maxFeePerGas, maxPriorityFeePerGas` (before `signedOnChainId`)
+  · the explorer shows the amount + estimated gas before opening the wallet popup (`estimateCost` in `explorerscan/core/wallet.js`: call = gas from `/query` + `gas.tx`) because a wallet on another chain doesn't know the BWSC balance · insufficient balance = the wallet is not called
+  · token permits (EIP-2612) still have chainId in the domain per the standard → the wallet must be on this chain when signing a permit · sending gasPrice (≠ 0) together with the two new fields = rejected · `maxFeePerGas: 0` = unspecified
+- `input` and `code` are folded into a single string with `canonicalJson({ input, code })` → any data type can be signed
+- Accepted `action`s: `call` `deploy` `transfer` `metadata` `init` `reject` `upgrade` `setUpgrader` `initUpgrade` `rejectUpgrade` `setGasConfig` (admin · section 4 "Gas")
+  → `VM_METHOD` maps them to VM methods (`metadata` → `setMetadata` · the rest have the same name)
+  - `upgrade`: `to` = program · `code` = new code · `input` = migrateInput · `setUpgrader`: `input = { upgrader: "0x…" | null }`
+  - `deploy` may add an `upgrader` field → folded into the signed string as `canonicalJson({ input, code, upgrader })`
+    **Not sent = the key is absent** → every existing tx / signature keeps the same digest (likewise in the VM hash)
+- `sender` comes **only** from recovering the signature; `tx.from` is used only for comparison
+- **Gas sponsor (paymaster / fee payer · test `93-paymaster`)**: `tx.sponsor` = address → appends a `sponsor` (address) field to the end of the type (legacy or 1559 · no sponsor = byte-identical digest)
+  `/sendtx { tx, signature, sponsorSignature }` · `sponsorSignature` = the sponsor signs **the same digest** (sees the whole tx before agreeing to pay) · the sender cannot change the sponsor because it is in the data they signed
+  VM: `request.sponsor` is in the hash (`feeFields`) · the sender uses their own nonce + pays the value themselves · gas is deducted from the sponsor (`tx.payer.sponsor`) · receipt / explorer show `sponsor` ("Gas paid by")
+  The VM trusts `request.sponsor` (its signature is checked on mempool entry like the sender's · sync trusts the producer who signed the block) · if you use the VM directly you must check it yourself
+- **Client-side SDK** (`client-sdk/index.js` = `programvm/client` · test `92-sdk`): does not import VM / sandbox / node:* (works in the browser · shared helpers moved to `src/core/encoding.js`)
+  `createClient({ url })` → `send(fields, signer, { sponsor? })` (fills chainId / from / nonce / 1559 gas itself) · `prepare` · `submit` · `wait(hash)` (follows replacements) · `query` · `balance` · `abi` · `receipt`
+  signer: `keySigner(key)` · `walletSigner(window.ethereum)` (eth_signTypedData_v4 with `walletTypedData` = uint256 fields as plain decimal, because wallets can't read `"5n"`)
 
-### tx มี 2 hash ค้นได้ทั้งคู่
-| | มาจาก | ใช้ |
+### A tx has 2 hashes, both searchable
+| | Comes from | Used for |
 |---|---|---|
-| `hash` | VM คำนวณจาก request | key ใน DB, `txHashes` ของ block |
-| `digest` | EIP-712 ที่ user เซ็น | สิ่งที่ wallet แสดงให้ user เห็น — **ควรโชว์ตัวนี้เป็นเลขที่ tx** |
+| `hash` | computed by the VM from the request | DB key, the block's `txHashes` |
+| `digest` | the EIP-712 data the user signed | what the wallet shows the user — **show this one as the tx id** |
 
-`GET /tx/:x` และ `vm.getTransaction(x)` รับได้ทั้งสอง (ผ่าน `sigtx:`)
+`GET /tx/:x` and `vm.getTransaction(x)` accept both (via `sigtx:`)
 
 ---
 
 ## 7. HTTP API (server.js)
 
-ทุก response เป็น JSON · BigInt ถูก serialize เป็น `"123n"` · CORS เปิดกว้าง (`*`)
-`limit` สูงสุด 200 (ค่าตั้งต้น 20) · **รูปแบบ response ละเอียดอยู่ใน `EXPLORER-SPEC.md` หัวข้อ 4**
+Every response is JSON · BigInt is serialized as `"123n"` · CORS wide open (`*`)
+`limit` at most 200 (default 20) · **detailed response formats are in `EXPLORER-SPEC.md` section 4**
 
-### อ่าน
-| endpoint | คืน |
+### Read
+| endpoint | Returns |
 |---|---|
-| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, decimals, minBaseFee, genesisMinBaseFee, gasConfig, gas, admins, baseFee, gasTarget, maxBlockGas, burnPercent, burned, forks, producer, role, producers, baseProducers, producerSchedule }` — explorer poll ทุก 2 วิ · `baseFee` = ของ block ถัดไป |
-| `GET /blocks?before&limit` | header ย้อนหลัง |
-| `GET /block/latest` | header ล่าสุด |
-| `GET /block/:n` | header · `?full=1` → `replayBlock()` receipt เต็ม (409 ถ้า hash ไม่ตรง) |
-| `GET /tx/:hashOrDigest` | ดัชนี + `record` · ถ้าอยู่ในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (ใช้ hash เท่านั้น ไม่รับ digest) · ถูกปฏิเสธ → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` (`block: null` = รอ block ถัดไป) |
-| `GET /rejected?address&limit&cursor` · `GET /address/:a/rejected` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` · ไม่ระบุ address = ทั้งเชน (ไล่ ≤ 1,000 block ต่อ request) |
-| `GET /tx/:hash/receipt` | receipt จากการ replay block นั้น + `blockNumber` |
+| `GET /genesis` | `{ hash, chainId, latest, pending, gasPrice, decimals, minBaseFee, genesisMinBaseFee, gasConfig, gas, admins, baseFee, gasTarget, maxBlockGas, burnPercent, burned, forks, producer, role, producers, baseProducers, producerSchedule }` — the explorer polls it every 2 s · `baseFee` = the next block's |
+| `GET /blocks?before&limit` | past headers |
+| `GET /block/latest` | latest header |
+| `GET /block/:n` | header · `?full=1` → `replayBlock()` full receipt (409 if the hash doesn't match) |
+| `GET /tx/:hashOrDigest` | index + `record` · in the queue → `{ status: "pending" }` · replaced → `{ status: "replaced", hash, replacedBy }` (hash only, digest not accepted) · rejected → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` (`block: null` = waiting for the next block) |
+| `GET /rejected?address&limit&cursor` · `GET /address/:a/rejected` | rejected txs, newest first `{ items, next }` · no address = whole chain (scans ≤ 1,000 blocks per request) |
+| `GET /tx/:hash/receipt` | receipt from replaying that block + `blockNumber` |
 | `GET /address/:a` | native, nonce, metadata, isProgram, transactions, incoming |
-| `GET /program/:a` | code, context, metadata, native, storage (50 แรก), interactions, events, `token` (null ถ้าไม่ใช่ token ตามมาตรฐาน), `collection` (`{ address, standard: "ERC-721" \| "ERC-1155", name, symbol, totalSupply? }` · null ถ้าไม่ใช่ NFT / multi-token), `pendingUpgrade` / `scheduledUpgrade` (null ถ้าไม่มี) |
-| `GET /program/:a/versions` | โค้ดทุกเวอร์ชัน `[{ version, code, blockNumber, timestamp }]` (ว่าง = ไม่เคยอัปเกรด) |
-| `GET /address/:a/tokens` | เหรียญที่ถือ `[{ address, name, ticker, decimals, totalSupply, balance }]` · ยอด 0 ไม่แสดง |
-| `GET /address/:a/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` (สูงสุด 200) · โปรแกรมจากดัชนี `holding:` · ชิ้นจาก `owned:<a>:<id>` (ERC-721) / `balances:<a>:<id>` (ERC-1155) · ยอด 0 ไม่แสดง |
-| `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 ถ้าไม่ใช่ token |
+| `GET /program/:a` | code, context, metadata, native, storage (first 50), interactions, events, `token` (null if not a standard token), `collection` (`{ address, standard: "ERC-721" \| "ERC-1155", name, symbol, totalSupply? }` · null if not NFT / multi-token), `pendingUpgrade` / `scheduledUpgrade` (null if none) |
+| `GET /program/:a/versions` | every code version `[{ version, code, blockNumber, timestamp }]` (empty = never upgraded) |
+| `GET /address/:a/tokens` | tokens held `[{ address, name, ticker, decimals, totalSupply, balance }]` · zero balances hidden |
+| `GET /address/:a/nfts` | NFTs / multi-tokens held `[{ program, standard, name, symbol, tokenId, amount, uri }]` (max 200) · programs from the `holding:` index · items from `owned:<a>:<id>` (ERC-721) / `balances:<a>:<id>` (ERC-1155) · zero balances hidden |
+| `GET /token/:a` | `{ address, name, ticker, decimals, totalSupply }` · 404 if not a token |
 | `GET /program/:a/storage?prefix&start&limit` | `{ items, next, prefix }` — cursor pagination |
-| `GET /program/:a/groups?scan&cursor` | นับ key ตามชื่อ key แรก **ทีละช่วง**: `scan` key ต่อ request (ค่าเริ่ม 20,000 · สูงสุด 50,000) → `{ total, groups, scanned, next, complete }` · `next` ไม่ใช่ null → ส่ง `cursor=next` ต่อแล้วบวกผลเอง (นับครบทุก key) |
-| `GET /program/:a/interactions?limit&cursor` · `/program/:a/events?cursor=` · `/address/:a/incoming?cursor=` | แบบ cursor (เหมือนแถบ storage) `{ items, next }` อ่านแค่ limit + 1 key ไม่นับทั้งรายการ ไม่มีเพดาน 50,000 · ไม่ส่ง `cursor` = แบบเลขหน้าเดิม |
-| `GET /nonce/:a` | nonce ถัดไป **รวมใบที่รออยู่ในคิว** — ใช้ตัวนี้ตอนสร้าง tx |
+| `GET /program/:a/groups?scan&cursor` | counts keys by first key name **in ranges**: `scan` keys per request (default 20,000 · max 50,000) → `{ total, groups, scanned, next, complete }` · `next` not null → send `cursor=next` and add up the results yourself (counts every key) |
+| `GET /program/:a/interactions?limit&cursor` · `/program/:a/events?cursor=` · `/address/:a/incoming?cursor=` | cursor-based (like the storage tab) `{ items, next }`, reads only limit + 1 keys, no full count, no 50,000 cap · no `cursor` = the old page-number mode |
+| `GET /nonce/:a` | next nonce **including queued txs** — use this when building a tx |
 | `GET /name/:ns` | namespace → address |
-| `GET /state/:a?block` | state ของโปรแกรม ณ block นั้น (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block ย้อนไม่ได้ → 409 |
-| `GET /proof?key=<dbKey>&key=…` | หลักฐาน Merkle ของ key ใน state ล่าสุด `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (1–100 key) · ตรวจด้วย `verifyProof` / `client.verifiedState` |
-| `GET /snapshot` · `GET /snapshot/:n` | manifest ของ snapshot ล่าสุด `{ number, hash, stateRoot, size, file }` · ไฟล์ gzip (ต้องตั้ง `SNAPSHOT_EVERY` · ไม่มี = 404) |
-| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db: { usedBytes, mapSize, usedPercent } }` (db = null ถ้าไม่มี `DATA`) · มีปัญหา = 503 (ดูหัวข้อ 1 "เปิดเครือข่ายจริง") · `usedPercent` ใกล้ 100 = ต้องเพิ่ม `LMDB_MAP_SIZE` ก่อนเชนหยุด |
+| `GET /state/:a?block` | program state as of that block (`snapshotAt`) · `&limit=&cursor=` → `{ items, next }` (`pageSnapshotAt`) · block not reachable → 409 |
+| `GET /proof?key=<dbKey>&key=…` | Merkle proof of keys in the latest state `{ blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof }] }` (1–100 keys) · verify with `verifyProof` / `client.verifiedState` |
+| `GET /snapshot` · `GET /snapshot/:n` | manifest of the latest snapshot `{ number, hash, stateRoot, size, file }` · gzip file (requires `SNAPSHOT_EVERY` · none = 404) |
+| `GET /health` | `{ ok, problems, latest, latestAt, blockAgeMs, blockMs, historyFrom, pending, rejectedPending, role, producer, miner, follow, db: { usedBytes, mapSize, usedPercent } }` (db = null if no `DATA`) · any problem = 503 (see section 1 "Launching a real network") · `usedPercent` near 100 = raise `LMDB_MAP_SIZE` before the chain stops |
 | `GET /events?program&name&limit` | event |
-| `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block) |
-| `GET /programs` | `{ approved, pending }` จำนวนโปรแกรมที่อนุมัติแล้ว (มี `<address>:this`) / รออนุมัติ (`pending:<address>`) · ไม่มีดัชนีรวม จึงไล่ 1 key ต่อ address (`approvedProgramAddresses`) |
-| `GET /programs/pending` · `/programs/approved` | แบ่งหน้า `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token, collection? }], total, pages }` (`collection` = `"ERC-721"` / `"ERC-1155"` มีเฉพาะ NFT / multi-token → แสดงเป็น NFT / Multi-token) · หน้า explorer `#programs` (กดจากกล่องในหน้าแรก) |
-| `GET /sync?from` | `[{ header, body, rejected }]` สูงสุด 50 block — ให้ node ผู้อ่านดึง |
+| `GET /pending` | `{ size, transactions, rejectedPending }` (`rejectedPending` = rejected txs waiting to be recorded in a block) |
+| `GET /programs` | `{ approved, pending }` counts of approved programs (with `<address>:this`) / awaiting approval (`pending:<address>`) · no aggregate index, so it scans 1 key per address (`approvedProgramAddresses`) |
+| `GET /programs/pending` · `/programs/approved` | paginated `?page=&limit=` → `{ items: [{ address, name, deployer \| creator, createdAt, value, codeSize, token, collection? }], total, pages }` (`collection` = `"ERC-721"` / `"ERC-1155"`, only for NFT / multi-token → shown as NFT / Multi-token) · explorer page `#programs` (opened from the box on the home page) |
+| `GET /sync?from` | `[{ header, body, rejected }]` up to 50 blocks — for reader nodes to pull |
 
-**แบบแบ่งหน้า** (explorer ใช้ทุกรายการยาว) · `?page=<เริ่ม 1>&limit=<≤100, ค่าเริ่ม 20>` → `{ items, total, page, pages, limit, truncated }`
-page เกินหน้าสุดท้าย → ได้หน้าสุดท้าย · นับ key ไม่เกิน 50,000 ตัวต่อรายการ (`PAGE_SCAN`) เกินแล้ว `truncated: true`
-โค้ดอยู่ `src/node/explorer-api.js` (`pageOf` `slicePage` `page*`) · เทสต์ `49-explorer-paging`
+**Paginated** (the explorer uses this for every long list) · `?page=<from 1>&limit=<≤100, default 20>` → `{ items, total, page, pages, limit, truncated }`
+A page past the last → returns the last page · counts at most 50,000 keys per list (`PAGE_SCAN`), beyond that `truncated: true`
+Code lives in `src/node/explorer-api.js` (`pageOf` `slicePage` `page*`) · test `49-explorer-paging`
 
-| endpoint | รายการ |
+| endpoint | List |
 |---|---|
-| `GET /blocks/page` | header ใหม่ไปเก่า (คำนวณจากเลข block ไม่ไล่ key) |
-| `GET /address/:a/txs` | tx ที่ address ส่ง · **เรียงด้วยเลข nonce** (key `txn` ไม่ได้เติม 0 ข้างหน้า เรียงตามตัวอักษรจะผิดตั้งแต่ nonce 10) |
-| `GET /address/:a/incoming` | tx ที่เข้ามาหา (ดัชนี `txto:` รวมการเรียกซ้อนชั้น · แถวซ้อนชั้นมี `status` = ผลของ call ชั้นนั้น และ `txStatus` = ผลของทั้ง tx) |
-| `GET /program/:a/events?name` | event ใหม่ไปเก่า · `&<field>=<value>` (ต้องมี name) = ค้นด้วยดัชนี indexed แบบ cursor |
-| `GET /program/:a/abi` | `{ address, abi, evmAbi }` (ไม่ได้ประกาศ = null) |
-| `GET /program/:a/entries?name` | key 2 ชั้นของกลุ่ม `name` (ข้าม key 3 ชั้น) |
-| `GET /token/:a/holders` | ผู้ถือจาก `balances:<address>` ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย · 404 ถ้าไม่ใช่ token |
+| `GET /blocks/page` | headers, newest first (computed from block numbers, no key scan) |
+| `GET /address/:a/txs` | txs sent by the address · **ordered by nonce number** (`txn` keys are not zero-padded, so lexical order goes wrong from nonce 10) |
+| `GET /address/:a/incoming` | incoming txs (`txto:` index including nested calls · nested rows have `status` = result of that call level and `txStatus` = result of the whole tx) |
+| `GET /program/:a/events?name` | events, newest first · `&<field>=<value>` (requires name) = cursor-based search by the indexed index |
+| `GET /program/:a/abi` | `{ address, abi, evmAbi }` (not declared = null) |
+| `GET /program/:a/entries?name` | 2-level keys of group `name` (skips 3-level keys) |
+| `GET /token/:a/holders` | holders from the program's `balances:<address>` · skips zero balances · largest first · 404 if not a token |
 
-**trace ใน receipt** (`/tx/:h/receipt` → `trace[]`): `{ depth, program, method, from, origin, input, value, result, gasUsed, status, error }`
-`input` / `value` / `result` / `gasUsed` เพิ่มเมื่อ 9 ต.ค. (เก็บใน `tx.calls` ตอนรัน ไม่ได้เขียนลง DB และไม่เข้า hash ของ block)
-`gasUsed` ของชั้นนอกรวมของชั้นในแล้ว · ข้อความ error ของ server เป็นภาษาอังกฤษ (ข้อความ error จาก VM / โปรแกรมยังเป็นไทยตามเดิม)
-`type: "create"` มีเฉพาะรายการที่สร้างโปรแกรมด้วย `cloneProgram` (call ธรรมดาไม่มี field นี้) · หน้า tx แสดงเป็น "Create #n" + tag CREATE · callTracer ของ `/evm` เป็น frame `CREATE`
-| `GET /` หรือ `/explorer` | หน้า explorer |
+**trace in receipts** (`/tx/:h/receipt` → `trace[]`): `{ depth, program, method, from, origin, input, value, result, gasUsed, status, error }`
+`input` / `value` / `result` / `gasUsed` were added on Oct 9 (kept in `tx.calls` during execution, not written to the DB and not part of the block hash)
+The outer level's `gasUsed` includes the inner levels · server error messages are English (VM execution error messages in `src/core/` are English too and are part of consensus)
+`type: "create"` appears only on entries that created a program with `cloneProgram` (plain calls have no such field) · the tx page shows "Create #n" + a CREATE tag · `/evm`'s callTracer shows it as a `CREATE` frame
+| `GET /` or `/explorer` | the explorer page |
 
-### เขียน
+### Write
 ```
-POST /sendtx   { tx, signature, sponsorSignature? }   ลายเซ็นตรวจใน worker thread (src/node/verify-pool.js · เทสต์ 90 · ~2.4 ms/tx → 3 worker เร็วขึ้น ~2.8 เท่า)
+POST /sendtx   { tx, signature, sponsorSignature? }   signatures are verified in a worker thread (src/node/verify-pool.js · test 90 · ~2.4 ms/tx → 3 workers ~2.8× faster)
   200 → { queued: true, hash, sender, simulation }
-  400 → { queued: false, error | issues | simulation }      ลายเซ็นผิด / autoreview ไม่ผ่าน / simulate ล้ม / คิวไม่รับ
+  400 → { queued: false, error | issues | simulation }      bad signature / autoreview failed / simulate failed / queue refused
 
 POST /query    { programUuid, functionName, input, context?, value? }
   200 → { status: "success", result, gasUsed, events, calls, loadValues, afterValues, readOnly: true }
-  400 → ผลที่ status ไม่ใช่ success
+  400 → results whose status is not success
 ```
 
-`/sendtx` **คืน error ก่อนเข้าคิวเสมอ** ถ้า simulate ไม่ผ่าน (user จะไม่เสียเวลารอใบที่ล้มแน่ ๆ)
-`simulate` รันบน state ปัจจุบันของ DB ไม่นับผลของใบที่รออยู่ในคิว → เป็นการ "ประเมิน" ไม่ใช่รับประกัน
+`/sendtx` **always returns the error before queueing** if simulate fails (users don't waste time waiting for a tx that will certainly fail)
+`simulate` runs on the DB's current state without the effects of queued txs → an "estimate", not a guarantee
 
-### `/evm` — ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM / Blockscout (`src/node/evm-rpc.js` + `evm-ws.js` · เทสต์ `50-evm-rpc` `51-evm-ws` + e2e)
-อ่านข้อมูลเดิมแล้วตอบเป็น JSON-RPC 2.0 แบบ EVM (MetaMask / ethers / viem / Blockscout ต่อได้) · เขียนได้ทางเดียว: `eth_sendRawTransaction` ผ่าน intake เดียวกับ `/sendtx` (`submit` ของ server)
+### `/evm` — adapter for wallets / EVM tools / Blockscout (`src/node/evm-rpc.js` + `evm-ws.js` · tests `50-evm-rpc` `51-evm-ws` + e2e)
+Reads the existing data and answers as EVM-style JSON-RPC 2.0 (MetaMask / ethers / viem / Blockscout can connect) · the only write path: `eth_sendRawTransaction` through the same intake as `/sendtx` (the server's `submit`)
 ```
-POST /evm                      JSON-RPC 2.0 (รองรับ batch) · rate limit แยก EVM_RATE_LIMIT (ค่าเริ่มต้น 600/นาที/IP · 0 = ไม่จำกัด สำหรับ indexer)
-ws://host/evm                  เหมือน POST + eth_subscribe("newHeads" | "logs" | "newPendingTransactions") / eth_unsubscribe (ตรวจ block ใหม่ทุก 1 วินาทีเฉพาะตอนมีคน subscribe)
-GET  /evm                      ค่าสำหรับ wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
-GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (EIP-3091 · block รับทั้งเลขและ hash · ลิงก์ "ดูใน explorer" ของกระเป๋า)
-GET  /evm/explorer                                302 → / (URL explorer ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง)
+POST /evm                      JSON-RPC 2.0 (supports batches) · separate rate limit EVM_RATE_LIMIT (default 600/min/IP · 0 = unlimited, for indexers)
+ws://host/evm                  same as POST + eth_subscribe("newHeads" | "logs" | "newPendingTransactions") / eth_unsubscribe (checks for new blocks every 1 second, only while someone is subscribed)
+GET  /evm                      values for wallet_addEthereumChain { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls }
+GET  /evm/explorer/{tx|address|token|block}/:id   302 → /#tx/… (EIP-3091 · block accepts both number and hash · the wallet's "view in explorer" links)
+GET  /evm/explorer                                302 → / (explorer URL registered in chainlist · ethereum-lists CI actually opens it)
 ```
-- รองรับ (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
-  `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi` `cardianal_getProof` (`eth_getProof` = error ชี้ไปตัวนี้)
+- Supported (`rpc.methods`): `eth_chainId` `net_version` `eth_blockNumber` `eth_getBalance` `eth_getTransactionCount` `eth_getCode` `eth_gasPrice`
+  `eth_maxPriorityFeePerGas` `eth_feeHistory` `cardianal_getAbi` `cardianal_getProof` (`eth_getProof` = an error pointing to this one)
   `eth_getBlockByNumber/ByHash` `eth_getBlockReceipts` `eth_getTransactionByHash` `…ByBlockNumberAndIndex` `…ByBlockHashAndIndex` `eth_getTransactionReceipt`
-  `eth_getLogs` (ช่วงไม่เกิน 1000 block) `eth_call` (ERC-20 / ERC-721 / ERC-1155 + โปรแกรมที่มี `metadata.abi`) `eth_estimateGas` `eth_sendRawTransaction`
-  `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (เฉพาะ `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status`
-  `eth_newFilter` `eth_newBlockFilter` `eth_newPendingTransactionFilter` `eth_getFilterChanges` `eth_getFilterLogs` `eth_uninstallFilter` `eth_createAccessList` `eth_simulateV1` (ดูข้างล่าง) ฯลฯ · รายชื่อครบ = `METHODS` ใน `evm-rpc.js`
-- **block tag ย้อนหลัง** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) อ่านจาก history ของเชนด้วย `vm.stateAt(n, key)`
-  (ต้องเปิด `recordHistory` ซึ่ง server เปิดอยู่) · `eth_call` ย้อนหลังรัน `vm.query` บน state ณ block นั้น (`options.read`) · block ที่ยังไม่มี → error `header not found`
-- ผล `vm.replayBlock` เก็บ cache 64 block (key = เลข + hash) → receipt ทุกใบ / `logIndex` (นับต่อเนื่องทั้ง block) / `cumulativeGasUsed` ได้จาก replay ครั้งเดียว
-- เชนเก็บ native เป็น wei อยู่แล้ว → `EVM_DECIMALS` ค่าเริ่มต้น 0 (ไม่คูณ) · `nativeCurrency.decimals` = 18 เสมอ · `eth_gasPrice` = base fee ของ block ถัดไป + tip ที่แนะนำ (`eth_maxPriorityFeePerGas` = มัธยฐานของ tip ใน 20 block ล่าสุด)
-  · `eth_feeHistory` แบบ geth (≤ 1024 block · baseFeePerGas มีช่องของ block ถัดไป · reward ตาม percentile ถ่วงด้วยแก๊ส) · block มี `baseFeePerGas`
-  · tx / receipt แบบ 1559 = `type 0x2` + `maxFeePerGas` `maxPriorityFeePerGas` `accessList: []` · `gasPrice` / `effectiveGasPrice` = ราคาจริง
-- timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, เวลา = เวลาของ block 1) · `gasLimit` = `vm.maxBlockGas` (ไม่ได้ตั้ง → 30M)
-- status `0x1/0x0` · `contractAddress` = programUuid ของ deploy · `logsBloom` / `receiptsRoot` ของ block มาจาก header · ของ receipt คำนวณจาก log
-- log มาจาก `eventLog(event)` ของ VM (ไม่อ่าน state): event ที่ emit แบบ indexed → topic0 = keccak ของลายเซ็น + topic ของ field ที่ indexed + data แบบ ABI
-  (token มาตรฐาน → log ERC-20 ตรงตัว) · event อื่น → topic0 = keccak(ชื่อ), data = JSON เป็น hex
-- NFT มาตรฐาน (`checkNftStandard`) → `Transfer` 4 topic (from, to, **tokenId indexed**, data `0x`) + `Approval(address,address,uint256)` + `ApprovalForAll(address,address,bool)` แบบ ERC-721
-  multi-token มาตรฐาน (`checkMultiTokenStandard`) → `TransferSingle` (data = id, value) / `TransferBatch` (data = ABI `uint256[]` × 2) / `ApprovalForAll` / `URI` แบบ ERC-1155
-  Blockscout แยก ERC-20 / ERC-721 จากจำนวน topic ของ Transfer และรู้จัก ERC-1155 จาก TransferSingle / Batch · ตรวจด้วย ethers `Interface.parseLog` ในเทสต์ `66-evm-nft-logs`
-- `eth_call` ของ NFT: `name symbol totalSupply balanceOf ownerOf tokenURI getApproved isApprovedForAll supportsInterface` · ของ multi-token: `name symbol balanceOf(address,uint256) uri totalSupply(uint256) isApprovedForAll supportsInterface`
-- tx `input` = JSON `{action, method, input}` เป็น hex (ไม่ใช่ ABI) · `eth_getCode` = ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (กระเป๋า → `0x`)
-- callTracer: root = tx (`CREATE` สำหรับ deploy), `calls[]` = trace ซ้อนตาม depth · native ที่โปรแกรมโอนด้วย `transferNative` (ไม่อยู่ใน trace)
-  หาได้จาก `nativeChanges` หลังตัด value ของทุกชั้นและค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) → เป็น `CALL` จากโปรแกรมนั้นไปผู้รับ · ค่าแก๊สไม่เป็น internal tx
-- txpool: จาก `mempool.list()` (ไม่มี to / value เพราะ mempool ไม่ได้เปิดให้อ่าน)
-- **ABI ของโปรแกรมแถม** (`src/standards/system-abi.js` + `src/standards/abi/*.js` · เทสต์ `118-system-abi`): node ตอบ ABI ให้เองเมื่อโค้ดในเชนตรงกับโปรแกรมแถมทุกตัวอักษร (ไม่เก็บบนเชน · แก้ ABI ได้ใน node รุ่นถัดไป · clone เช่นคู่เทรด / multisig ได้ด้วยไม่เสียแก๊ส) · ใช้ทุกที่ที่อ่าน ABI: `eth_call` / `eth_sendRawTransaction` / `cardianal_getAbi` / `GET /program/:a/abi` / `metadata` ของ `/program` `/address` (explorer)
-  ข้อจำกัด: list / object ส่งเป็น string JSON (BigInt เป็น `"123n"`) · input ที่ไม่บังคับต้องส่งค่าเสมอ (ดู description ใน ABI) · event ที่ emit ไม่มี indexed (`Sync` ของคู่เทรด · `ThresholdChanged` / `HashApproved` ของ multisig) ethers ถอดไม่ได้ · nft-market ที่จ่ายด้วย token: log `Listed` / `Sold` / `OfferMade` มีชนิด payToken เป็น address จึงไม่ตรง ABI (ABI ใช้แบบจ่ายเหรียญหลัก)
-- **`eth_call` ตาม `metadata.abi`** (`src/node/evm-abi.js` · เทสต์ `91-evm-abi-call`): หลัง ERC-20 / 721 / 1155 ของโปรแกรมมาตรฐาน → selector = keccak("ชื่อ(ชนิด,…)") ตาม `toEvmAbi` · ถอด argument แบบ Solidity (uint / int → `"123n"` · address ตัวเล็ก · bytes → `"0x…"` · object / array / any = string JSON ที่ parse ให้)
-  → `vm.query` (from = `context.sender`) → เข้ารหัสผลตาม outputs (หลายตัว = array ตามลำดับหรือ object ตามชื่อ · ไม่มี outputs = `0x`) · ถอดไม่ได้ / โปรแกรม throw = `execution reverted: …`
-- **`eth_sendRawTransaction`** (`src/node/evm-raw.js` · เทสต์ `94-evm-send-raw` ใช้ ethers JsonRpcProvider + Wallet แบบ Hardhat / dApp)
-  รับ legacy ที่มี chainId (EIP-155) และ type 2 (accessList ว่าง) · ไม่รับ: ไม่มี chainId · chainId ไม่ตรง · type 1 / 3 / 4 · deploy bytecode (`to` ว่าง) · data ไปที่ address ที่ไม่ใช่โปรแกรม · s สูง (EIP-2)
-  แปลง: ไม่ใช่โปรแกรม + data ว่าง → `transfer` · token มาตรฐาน + `transfer` / `approve` / `transferFrom` แบบ ERC-20 → ฟังก์ชันของ token · อื่น ๆ → ฟังก์ชันตาม `metadata.abi` (เขียนได้)
-  request เก็บ `digest = keccak(raw)` + `evmRaw` (raw ทั้งใบอยู่ใน block body ตรวจซ้ำได้) · `/tx/:hash` · receipt · getTransactionByHash ตอบด้วย hash ของ Ethereum (`evmHash` ใน receipt) · nonce ตัวนับเดียวกับ tx แบบ EIP-712
-- `eth_estimateGas`: โอน native = 21000 (ที่กระเป๋าคาด · จ่ายตามที่ใช้จริง · fork `bluewolf` ใช้จริง 17,300) · เรียกโปรแกรม = จำลองด้วย `vm.query` × 1.25 + 1000 + `gas.tx` · ล้ม = `execution reverted`
-- **filter ผ่าน HTTP** (เทสต์ `115-evm-filters-simulate` · `116-ethers-filters` ใช้ ethers `contract.on` / `provider.on("pending")` จริง):
-  `eth_newFilter` / `eth_newBlockFilter` / `eth_newPendingTransactionFilter` → `eth_getFilterChanges` (ของใหม่ตั้งแต่ครั้งก่อน) · `eth_getFilterLogs` · `eth_uninstallFilter`
-  เก็บในหน่วยความจำ (restart = หาย → `filter not found`) · ไม่ถูกเรียก 5 นาที = ลบ · สูงสุด 10,000 ตัวต่อ node / 100 ตัวต่อ IP · log filter ไล่ทีละไม่เกิน 1,000 block ต่อครั้ง
-  pending ได้ hash จาก `mempool.onAdded` (ค้างได้ 10,000 ใบ) · ws: `eth_subscribe("newPendingTransactions"[, true])` ส่งทันทีที่เข้าคิว
-- `eth_createAccessList` → `accessList: []` + `gasUsed` = `eth_estimateGas` (เชนไม่มี access list)
-- `eth_simulateV1`: blockStateCalls 1 ชุด (≤ 100 call) · call ต่อกันบน block จำลองถัดไป (ไม่ commit) → status / returnData / gasUsed / logs ต่อ call
-  ไม่รับ stateOverrides / blockOverrides / block เก่า · หักค่าแก๊สเหมือน tx จริง · hash ของ block / tx จำลอง = 0x00…
-- ไม่รองรับ: `eth_getStorageAt`, `eth_getProof`, `trace_*`, `eth_call` กับโปรแกรมที่ไม่มี ABI และไม่ใช่มาตรฐาน, `balanceOfBatch` ผ่าน eth_call · รายการ tx ใน block แบบไม่ full ของใบจากกระเป๋ายังเป็น hash ภายใน
-- chainId มาจาก genesis / `CHAIN_ID` ของเชน (ค่าเริ่ม + `genesis.json` ในrepo = 41234) · ลองกับ MetaMask จริง: `docs/metamask-checklist.md`
+  `eth_getLogs` (range at most 1000 blocks) `eth_call` (ERC-20 / ERC-721 / ERC-1155 + programs with `metadata.abi`) `eth_estimateGas` `eth_sendRawTransaction`
+  `debug_traceTransaction` `debug_traceBlockByNumber` `debug_traceBlockByHash` (only `{ tracer: "callTracer" }`) `txpool_content` `txpool_inspect` `txpool_status`
+  `eth_newFilter` `eth_newBlockFilter` `eth_newPendingTransactionFilter` `eth_getFilterChanges` `eth_getFilterLogs` `eth_uninstallFilter` `eth_createAccessList` `eth_simulateV1` (see below) etc. · the full list = `METHODS` in `evm-rpc.js`
+- **Historical block tags** (`eth_getBalance` / `eth_getTransactionCount` / `eth_getCode` / `eth_call`) read from the chain history with `vm.stateAt(n, key)`
+  (requires `recordHistory`, which the server enables) · historical `eth_call` runs `vm.query` on the state as of that block (`options.read`) · a block that doesn't exist yet → error `header not found`
+- `vm.replayBlock` results are cached for 64 blocks (key = number + hash) → every receipt / `logIndex` (continuous across the block) / `cumulativeGasUsed` come from a single replay
+- The chain already stores native in wei → `EVM_DECIMALS` default 0 (no multiplication) · `nativeCurrency.decimals` = always 18 · `eth_gasPrice` = next block's base fee + suggested tip (`eth_maxPriorityFeePerGas` = median tip of the latest 20 blocks)
+  · geth-style `eth_feeHistory` (≤ 1024 blocks · baseFeePerGas includes a slot for the next block · reward by gas-weighted percentile) · blocks have `baseFeePerGas`
+  · 1559 txs / receipts = `type 0x2` + `maxFeePerGas` `maxPriorityFeePerGas` `accessList: []` · `gasPrice` / `effectiveGasPrice` = the effective price
+- timestamp ÷ 1000 · block 0 = genesis (`vm.genesisHash()`, time = block 1's time) · `gasLimit` = `vm.maxBlockGas` (unset → 30M)
+- status `0x1/0x0` · `contractAddress` = the deploy's programUuid · the block's `logsBloom` / `receiptsRoot` come from the header · a receipt's are computed from its logs
+- Logs come from the VM's `eventLog(event)` (no state reads): events emitted with indexed → topic0 = keccak of the signature + topics of the indexed fields + ABI data
+  (standard tokens → exact ERC-20 logs) · other events → topic0 = keccak(name), data = JSON as hex
+- Standard NFTs (`checkNftStandard`) → ERC-721-style `Transfer` with 4 topics (from, to, **tokenId indexed**, data `0x`) + `Approval(address,address,uint256)` + `ApprovalForAll(address,address,bool)`
+  Standard multi-tokens (`checkMultiTokenStandard`) → ERC-1155-style `TransferSingle` (data = id, value) / `TransferBatch` (data = ABI `uint256[]` × 2) / `ApprovalForAll` / `URI`
+  Blockscout distinguishes ERC-20 / ERC-721 by the number of Transfer topics and recognizes ERC-1155 by TransferSingle / Batch · verified with ethers `Interface.parseLog` in test `66-evm-nft-logs`
+- NFT `eth_call`: `name symbol totalSupply balanceOf ownerOf tokenURI getApproved isApprovedForAll supportsInterface` · multi-token: `name symbol balanceOf(address,uint256) uri totalSupply(uint256) isApprovedForAll supportsInterface`
+- tx `input` = JSON `{action, method, input}` as hex (not ABI) · `eth_getCode` = the program's JS source as UTF-8 hex (wallets → `0x`)
+- callTracer: root = tx (`CREATE` for deploys), `calls[]` = nested trace by depth · native transferred by programs with `transferNative` (not in the trace)
+  is derived from `nativeChanges` after subtracting every level's value and the fees (consumed → zero address / feeRecipient) → a `CALL` from that program to the recipient · gas fees are not internal txs
+- txpool: from `mempool.list()` (no to / value because the mempool doesn't expose them)
+- **ABIs of the bundled programs** (`src/standards/system-abi.js` + `src/standards/abi/*.js` · test `118-system-abi`): the node supplies the ABI itself when the on-chain code matches a bundled program character for character (not stored on-chain · the ABI can be fixed in the next node version · clones such as trading pairs / multisigs get it too, at no gas) · used everywhere ABIs are read: `eth_call` / `eth_sendRawTransaction` / `cardianal_getAbi` / `GET /program/:a/abi` / `metadata` of `/program` `/address` (explorer)
+  Limitations: lists / objects are passed as JSON strings (BigInt as `"123n"`) · optional inputs must always be sent (see the description in the ABI) · events emitted without indexed (the pair's `Sync` · multisig's `ThresholdChanged` / `HashApproved`) cannot be decoded by ethers · nft-market paid with a token: the `Listed` / `Sold` / `OfferMade` logs have payToken typed as address, so they don't match the ABI (the ABI uses the native-coin variant)
+- **`eth_call` via `metadata.abi`** (`src/node/evm-abi.js` · test `91-evm-abi-call`): after ERC-20 / 721 / 1155 of standard programs → selector = keccak("name(type,…)") per `toEvmAbi` · decodes arguments Solidity-style (uint / int → `"123n"` · lowercase address · bytes → `"0x…"` · object / array / any = JSON string, parsed for you)
+  → `vm.query` (from = `context.sender`) → encodes the result per outputs (multiple = an array in order or an object by name · no outputs = `0x`) · undecodable / program throws = `execution reverted: …`
+- **`eth_sendRawTransaction`** (`src/node/evm-raw.js` · test `94-evm-send-raw` uses ethers JsonRpcProvider + Wallet like Hardhat / dApps)
+  Accepts legacy with chainId (EIP-155) and type 2 (empty accessList) · rejects: no chainId · mismatched chainId · type 1 / 3 / 4 · bytecode deploys (empty `to`) · data to a non-program address · high s (EIP-2)
+  Mapping: not a program + empty data → `transfer` · standard token + ERC-20 `transfer` / `approve` / `transferFrom` → the token's functions · otherwise → functions per `metadata.abi` (writes allowed)
+  The request stores `digest = keccak(raw)` + `evmRaw` (the whole raw tx is in the block body and can be re-verified) · `/tx/:hash` · receipt · getTransactionByHash answer with the Ethereum hash (`evmHash` in the receipt) · nonce shares the counter with EIP-712 txs
+- `eth_estimateGas`: native transfer = 21000 (what wallets expect · you pay what is actually used · the `bluewolf` fork actually uses 17,300) · program calls = simulated with `vm.query` × 1.25 + 1000 + `gas.tx` · failure = `execution reverted`
+- **Filters over HTTP** (tests `115-evm-filters-simulate` · `116-ethers-filters` use real ethers `contract.on` / `provider.on("pending")`):
+  `eth_newFilter` / `eth_newBlockFilter` / `eth_newPendingTransactionFilter` → `eth_getFilterChanges` (new items since the last call) · `eth_getFilterLogs` · `eth_uninstallFilter`
+  Kept in memory (restart = lost → `filter not found`) · not polled for 5 minutes = deleted · at most 10,000 per node / 100 per IP · log filters scan at most 1,000 blocks per call
+  pending gets hashes from `mempool.onAdded` (up to 10,000 buffered) · ws: `eth_subscribe("newPendingTransactions"[, true])` pushes as soon as a tx is queued
+- `eth_createAccessList` → `accessList: []` + `gasUsed` = `eth_estimateGas` (the chain has no access lists)
+- `eth_simulateV1`: 1 blockStateCalls set (≤ 100 calls) · calls run in sequence on a simulated next block (no commit) → status / returnData / gasUsed / logs per call
+  Does not accept stateOverrides / blockOverrides / old blocks · charges gas like a real tx · simulated block / tx hashes = 0x00…
+- Not supported: `eth_getStorageAt`, `eth_getProof`, `trace_*`, `eth_call` on non-standard programs without an ABI, `balanceOfBatch` via eth_call · non-full block tx lists still use the internal hash for txs from wallets
+- chainId comes from the chain's genesis / `CHAIN_ID` (default + in-repo `genesis.json` = 41234) · testing with real MetaMask: `docs/metamask-checklist.md`
 - Blockscout: `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL` / `ETHEREUM_JSONRPC_TRACE_URL` = `http://host/evm` · `ETHEREUM_JSONRPC_WS_URL=ws://host/evm`
-  · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · ฝั่งเชน `EVM_RATE_LIMIT=0`
-  · Blockscout 9.x ต้องเพิ่ม `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm ไม่อ่าน gzip) · ขั้นตอนเต็ม + เปิด-ปิด + แก้ปัญหา: `docs/blockscout.md`
-  · ตัวดักดูคำขอที่เข้า /evm: `node dev/evm-proxy.mjs` (:3001 → :3000/evm)
+  · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · `INDEXER_DISABLE_BLOCK_REWARD_FETCHER=true` · chain side `EVM_RATE_LIMIT=0`
+  · Blockscout 9.x additionally needs `ETHEREUM_JSONRPC_HTTP_REQUEST_COMPRESSION_HEAVY_METHODS_ENABLED=false` (/evm doesn't read gzip) · full steps + start/stop + troubleshooting: `docs/blockscout.md`
+  · request sniffer for /evm: `node dev/evm-proxy.mjs` (:3001 → :3000/evm)
 
 ---
 
 ## 8. Explorer (`explorerscan/`)
 
-โฟลเดอร์ `explorerscan/` แยกไฟล์ตามหน้าที่ (โครงสร้าง + ส่วนไหนแก้ได้ / ส่วนไหนเป็นระบบ: `explorerscan/README.md`) **ภาษาอังกฤษทั้งหน้า** (เทสต์ e2e ตรวจว่าไม่มีอักษรไทยนอกจากข้อมูลของผู้ใช้) ไม่มี build step ไม่มี framework ไม่มี dependency ภายนอก
-HTML + CSS + JS ธรรมดา (script ไม่ใช่ module · ลำดับโหลดใน `index.html` สำคัญ) · `server.js` เสิร์ฟที่ `/explorerscan/*` และ `GET /` (index.html + `<base href="/explorerscan/">`) · `EXPLORER_DIR` = ใช้โฟลเดอร์ที่ fork ไปแต่ง · โฮสต์แยกได้ (`config.js` → `api`)
-- ปุ่ม **Add network** (`addNetwork()` ใน `core/wallet.js`) ส่ง `GET /evm` ให้ `wallet_addEthereumChain`
+The `explorerscan/` folder splits files by role (structure + which parts are editable / which are core logic: `explorerscan/README.md`). **The whole page is in English** (e2e tests check there are no Thai characters except user data). No build step, no framework, no external dependencies
+Plain HTML + CSS + JS (scripts, not modules · load order in `index.html` matters) · `server.js` serves `/explorerscan/*` and `GET /` (index.html + `<base href="/explorerscan/">`) · `EXPLORER_DIR` = use a forked folder you customized · can be hosted separately (`config.js` → `api`)
+- The **Add network** button (`addNetwork()` in `core/wallet.js`) sends `GET /evm` to `wallet_addEthereumChain`
 
-### โครง
-- routing ด้วย `location.hash` → `render(soft)` แยกไปที่ `home()` / `block(n)` / `tx(h)` / `address(a)`
-  `soft` = วาดใหม่ในที่เดิม (เปลี่ยนหน้า / แท็บ) ไม่ขึ้น Loading และคงตำแหน่ง scroll
-  ทุก render มีเลขลำดับ (`renderSeq`) — มีแค่ render ล่าสุดที่วาดได้ (กันหน้าเก่าที่โหลดช้ามาทับหน้าใหม่)
-- `cut()` ย่อ address / hash เป็น `0x1234…abcd` (4 ตัวหน้า 4 ตัวหลัง) ในตาราง · หน้ารายละเอียดแสดงเต็มด้วย `full()` (ตัดบรรทัดบนจอเล็ก)
-- แบ่งหน้า: `pager(res, "setPage('id',$)")` ใต้ทุกรายการยาว → ปุ่มเลขหน้า (หน้าแรก / สุดท้าย / ±2 รอบหน้าปัจจุบัน) + ‹ › + ช่อง Go to
-  `pageState[hash|id]` จำเลขหน้าต่อหน้า explorer และต่อรายการ · รายการที่มาทั้งก้อน (tx ใน block, เหรียญที่ถือ) ตัดหน้าในเบราว์เซอร์ (`slicePage`)
-- helper เล็ก ๆ: `esc` `cut` `num` `when` `ago` `utc` `age` `copy` `addr` `txLink` `panel` `table` `kv`
-- เวลาแบบ "… ago" ทุกจุดใช้ `age(t)` (หรือ `utc(t)` ต่อท้าย): มีบรรทัดเล็ก `YYYY-MM-DD HH:MM:SS UTC` ใต้ · จอ ≤720px ซ่อนวินาที (`.utc .sec`)
-  **`num()` คือตัวแปลง `"123n"` → ตัวเลขอ่านง่าย — ทุกค่าที่มาจากโปรแกรมต้องผ่านตัวนี้**
-- ธีม: น้ำเงินคราม / indigo มืดธีมเดียว (`color-scheme:dark`) · ค่าสีทั้งหมดอยู่ใน `explorerscan/theme/colors.css` (`--bg:#060914` `--panel:#0f1530` `--accent:#a5b4fc` `--accent-2:#818cf8` `--violet:#4f52d6`) · พื้นหลัง gradient #17204a → #070a17 + เส้นตารางจาง · แถบข้างซ้าย (มือถือ = drawer ปุ่ม ☰ `#menu-btn`)
-  แท็บที่เลือก / ปุ่มหลัก = `--violet` · การ์ดมีป้ายชื่อเล็กด้านบน · กล่อง JSON / โค้ด / ผลลัพธ์ = `#04050d` · รายละเอียดดู EXPLORER-SPEC.md ข้อ 9
-- responsive รองรับจอกว้าง 180px ขึ้นไป (เทสต์ e2e "responsive" วัด 180/240/360/768/1280 ว่าไม่มีอะไรล้นหรือถูกตัด)
-  - `table()` ห่อด้วย `.twrap` (ตารางกว้างกว่าจอ → เลื่อนในกรอบ ไม่ดันทั้งหน้า) และใส่ class `grid`
-  - ≤640px: ตาราง `.grid` เป็นการ์ดแถวละใบ · `labelCells()` ใส่ `data-label` จากหัวตาราง + ห่อค่าใน `.cv` (เรียกใน `el()` และ `drawStorage()`)
-    หัวตารางที่มี `<select>` (dropdown storage) ยังแสดง · ตาราง `kv` ซ้อนชื่อไว้บนค่า · แท็บขึ้นบรรทัดใหม่แทนเลื่อนข้าง · หัวเว็บไม่ sticky
-  - ≤360px: ชื่อคอลัมน์อยู่บนค่า, ระยะขอบ 8px, ช่องค้นหา/ปุ่ม wallet เต็มบรรทัด
-  - ตัวช่วยวัดเอง: เปิดทุกหน้าแล้วหา element ที่เลยขอบ `.panel` โดยไม่มีกรอบเลื่อน (ดูโค้ดในเทสต์ e2e)
-- ทุก address / hash คลิกได้ + มีปุ่มคัดลอก (`⧉`)
-- poll `/genesis` ทุก 2 วินาที อัปเดตเลข block กับขนาดคิวที่หัวเว็บ
+### Structure
+- Routing via `location.hash` → `render(soft)` dispatches to `home()` / `block(n)` / `tx(h)` / `address(a)`
+  `soft` = redraw in place (page / tab change), no Loading shown, scroll position kept
+  Every render has a sequence number (`renderSeq`) — only the latest render may draw (prevents a slow-loading old page from overwriting the new one)
+- `cut()` shortens addresses / hashes to `0x1234…abcd` (first 4 and last 4) in tables · detail pages show them in full with `full()` (wrapping on small screens)
+- Pagination: `pager(res, "setPage('id',$)")` under every long list → page-number buttons (first / last / ±2 around the current page) + ‹ › + a Go to box
+  `pageState[hash|id]` remembers the page number per explorer page and per list · lists that arrive in full (txs in a block, tokens held) are paginated in the browser (`slicePage`)
+- Small helpers: `esc` `cut` `num` `when` `ago` `utc` `age` `copy` `addr` `txLink` `panel` `table` `kv`
+- Every "… ago" time uses `age(t)` (or `utc(t)` appended): a small `YYYY-MM-DD HH:MM:SS UTC` line below · at ≤720px seconds are hidden (`.utc .sec`)
+  **`num()` converts `"123n"` → a readable number — every value coming from a program must go through it**
+- Theme: a single dark navy / indigo theme (`color-scheme:dark`) · all colors are in `explorerscan/theme/colors.css` (`--bg:#060914` `--panel:#0f1530` `--accent:#a5b4fc` `--accent-2:#818cf8` `--violet:#4f52d6`) · background gradient #17204a → #070a17 + faint grid lines · left sidebar (mobile = drawer, ☰ button `#menu-btn`)
+  Selected tab / primary button = `--violet` · cards have a small label on top · JSON / code / result boxes = `#04050d` · details in EXPLORER-SPEC.md item 9
+- Responsive down to 180px wide (the e2e "responsive" test measures 180/240/360/768/1280 for nothing overflowing or clipped)
+  - `table()` is wrapped in `.twrap` (tables wider than the screen → scroll inside the frame, not the whole page) and gets class `grid`
+  - ≤640px: `.grid` tables become one card per row · `labelCells()` sets `data-label` from the table headers + wraps values in `.cv` (called in `el()` and `drawStorage()`)
+    Headers containing a `<select>` (storage dropdown) still show · `kv` tables stack the name above the value · tabs wrap instead of scrolling sideways · the header is not sticky
+  - ≤360px: column names above values, 8px margins, search box / wallet button full width
+  - Self-check: open every page and look for elements extending beyond `.panel` without a scroll frame (see the code in the e2e test)
+- Every address / hash is clickable + has a copy button (`⧉`)
+- Polls `/genesis` every 2 seconds, updating the block number and queue size in the header
 
-### หน้า address / โปรแกรม — แท็บ
-`tabs(groups)` + `tabState[location.hash]` จำแท็บที่เลือกต่อ URL
+### Address / program pages — tabs
+`tabs(groups)` + `tabState[location.hash]` remember the selected tab per URL
 
-| แท็บ (`data-tab`) | เนื้อหา |
+| Tab (`data-tab`) | Content |
 |---|---|
-| Events (`event`) / ABI (`abi`) | event ถอดตาม `metadata.abi` (ชื่อ + ชนิด + tag indexed · `eventData()`) · แท็บ ABI มีเฉพาะโปรแกรมที่ประกาศ (`abiView()`) |
-| Tokens (`tokens`) | (เฉพาะกระเป๋าที่ถือเหรียญ · แท็บแรก) ticker, ยอดหารด้วย 10^decimals |
-| NFTs (`nfts`) | (เฉพาะ address ที่ถือ NFT / multi-token) collection, ERC-721 / ERC-1155, token ID, จำนวน, URI (http(s) เป็นลิงก์ · ipfs:// ฯลฯ เป็นข้อความ) · `/address/:a/nfts` |
-| Holders (`holders`) | (เฉพาะโปรแกรม token) อันดับ, address, ยอด, % ของ supply · `/token/:a/holders` ทีละ 25 |
-| Calls / Incoming (`in`) | `/address/:a/incoming` (รวมซ้อนชั้น มี badge "Nested · depth N") · คอลัมน์ Status = สถานะของทั้ง tx (ตรงกับหน้า tx) · call ซ้อนที่ล้มแต่ชั้นบน catch ไว้มีข้อความเตือนสีส้ม "⚠ caught" ต่อท้าย · ข้อมูลเก่าที่ไม่มี `txStatus` ใช้ `status` แทน (ต้องล้าง chain ถึงจะถูก) |
+| Events (`event`) / ABI (`abi`) | events decoded per `metadata.abi` (name + type + indexed tag · `eventData()`) · the ABI tab exists only for programs that declare one (`abiView()`) |
+| Tokens (`tokens`) | (only wallets holding tokens · first tab) ticker, balance divided by 10^decimals |
+| NFTs (`nfts`) | (only addresses holding NFTs / multi-tokens) collection, ERC-721 / ERC-1155, token ID, amount, URI (http(s) as links · ipfs:// etc. as text) · `/address/:a/nfts` |
+| Holders (`holders`) | (token programs only) rank, address, balance, % of supply · `/token/:a/holders`, 25 at a time |
+| Calls / Incoming (`in`) | `/address/:a/incoming` (including nested, with a "Nested · depth N" badge) · the Status column = status of the whole tx (matches the tx page) · nested calls that failed but were caught by an upper level get an orange "⚠ caught" warning appended · old data without `txStatus` uses `status` instead (the chain must be reset to be correct) |
 | Outgoing (`out`) | `/address/:a/txs` |
-| Interact (`interact`) | (โปรแกรม) ฟอร์ม — เลือกฟังก์ชัน, input JSON, value |
-| Permit (`permit`) | (token ที่โค้ดมี `permit` + `nonces` + `eip712Digest(`) ฟอร์ม spender / value (หน่วย token ตาม decimals) / deadline (unix วินาที ค่าเริ่ม +1 ชม.) → `eth_signTypedData_v4` (domain `{ name, "1", chainId จาก /genesis, verifyingContract }`) · ปุ่ม Sign permit (โชว์ลายเซ็น `#permit-signature` + input ของ permit + typed data) · Sign & submit (เซ็นใหม่ด้วย nonce ปัจจุบัน แล้วส่ง `permit` เป็น tx → `#permit-out` + `#permit-allowance`) |
-| Edit metadata (`meta`) | (กระเป๋า) ฟอร์มแก้ metadata อยู่แถบเดียวกับ Interact (เดิมเป็นปุ่มในแถว information) |
+| Interact (`interact`) | (programs) form — choose a function, input JSON, value |
+| Permit (`permit`) | (tokens whose code has `permit` + `nonces` + `eip712Digest(`) form for spender / value (token units per decimals) / deadline (unix seconds, default +1 h) → `eth_signTypedData_v4` (domain `{ name, "1", chainId from /genesis, verifyingContract }`) · Sign permit button (shows the signature `#permit-signature` + the permit input + typed data) · Sign & submit (re-signs with the current nonce, then sends `permit` as a tx → `#permit-out` + `#permit-allowance`) |
+| Edit metadata (`meta`) | (wallets) metadata edit form, in the same bar as Interact (previously a button in the information row) |
 | Events (`event`) | `/program/:a/events` |
-| Storage (`storage`) | แยกตามจำนวนชั้นของ key: Variables / Maps / Lookup (ดูด้านล่าง) |
+| Storage (`storage`) | split by key depth: Variables / Maps / Lookup (see below) |
 | Code (`code`) | source |
 
-กดแท็บที่เปิดอยู่แล้วไม่วาดใหม่ (ค่าที่พิมพ์ในฟอร์มไม่หาย)
+Clicking the already-open tab does not redraw (values typed in forms are kept)
 
-กล่องข้อมูลของโปรแกรมมีแถว **Version** (`metadata.version` ไม่มี = 1 · มี tag "Upgrade pending review" / "Upgrade active from block N" จาก `pendingUpgrade` / `scheduledUpgrade`)
-**Upgrader** (ไม่มี = "None (immutable)") และ **Template** (เฉพาะโปรแกรมที่สร้างด้วย `cloneProgram`)
-ชื่อ action ในทุกตาราง / หน้า tx ผ่าน `ACTION_LABELS`: `upgrade` → "Upgrade", `setUpgrader` → "Set upgrader", `initUpgrade` → "Approve upgrade", `rejectUpgrade` → "Reject upgrade", `create` → "Create" (ที่เหลือแสดงชื่อเดิม)
+The program info box has a **Version** row (`metadata.version`, missing = 1 · with an "Upgrade pending review" / "Upgrade active from block N" tag from `pendingUpgrade` / `scheduledUpgrade`)
+**Upgrader** (none = "None (immutable)") and **Template** (only programs created with `cloneProgram`)
+Action names in every table / tx page go through `ACTION_LABELS`: `upgrade` → "Upgrade", `setUpgrader` → "Set upgrader", `initUpgrade` → "Approve upgrade", `rejectUpgrade` → "Reject upgrade", `create` → "Create" (the rest show their original name)
 
-### หน้า block / tx — ค่าแก๊สแบบ EIP-1559
-- block: `Base fee` (+ block ถัดไปขึ้น / ลง เทียบ gasUsed กับ target · `baseFeeTrend()`) · `Fee split` เผา / ผู้ปิด block
+### Block / tx pages — EIP-1559 gas
+- block: `Base fee` (+ whether the next block goes up / down, comparing gasUsed with target · `baseFeeTrend()`) · `Fee split` burned / block sealer
 - tx: `Gas price` = base fee + tip · `Fee limits` (tag EIP-1559 · max fee / max tip) · `Fee split` (`feeRows()`)
 
-### หน้า tx — Return value / Balance changes
-แถว "Return value" = ค่าที่โปรแกรม return เต็ม ๆ แสดงแบบเดียวกับผล Read ใน Interact (`returnValue()` ใช้ร่วมกัน) · tx ที่ล้มโชว "— (failed)"
-Balance changes = บรรทัดละช่อง: address · received / sent / gas paid · +/−จำนวนที่เปลี่ยน · total ใหม่
-จำนวนที่เปลี่ยนมาจาก `before` ใน `nativeChanges` ที่ `block.receipt()` ใส่ให้ (ค่าก่อน tx นั้น ไล่ต่อกันใน block · ไม่อยู่ใน block hash)
+### Tx page — Return value / Balance changes
+The "Return value" row = the program's full return value, displayed the same way as Read results in Interact (`returnValue()` is shared) · failed txs show "— (failed)"
+Balance changes = one line per field: address · received / sent / gas paid · +/− change · new total
+The change comes from `before` in `nativeChanges`, which `block.receipt()` fills in (the value before that tx, chained through the block · not part of the block hash)
 
-### หน้า tx — Program calls
-`traceView()` เป็นแผนผังย่อ: กล่องเล็กละ call ในกล่องมีแค่เลขลำดับ (กรอบแดง = call นั้นล้ม · tooltip = program.method())
-วางเป็นต้นไม้จากบนลงล่าง: ชั้นละ depth · call ที่ถูกเรียกอยู่ใต้ผู้เรียก พี่น้องเรียงซ้าย→ขวาตามลำดับที่เกิด · ใบไม้ละ 1 คอลัมน์ (`slot`) ผู้เรียกอยู่กึ่งกลางเหนือลูกคนแรกกับคนสุดท้าย
-แผนผังอยู่กึ่งกลางกรอบทั้งแนวนอนและแนวตั้ง · กล่องบนสุด "tx" (เส้นประ) = ผู้ส่ง tx · ลูกศร SVG จากผู้เรียก → ผู้ถูกเรียก (เส้นแดงเมื่อ call นั้นล้ม)
-ผู้เรียกของแต่ละ call = call ก่อนหน้าที่ตื้นกว่า 1 ชั้น (`traceParents()` เพราะ trace มาเรียงแบบ depth-first)
-กดกล่อง → `pickCall(i)` แสดงรายละเอียดของ call นั้นใต้แผนผัง (`callDetail`: caller → program.method(), gas, value, origin, Input, Result/Error) · เปิดหน้ามาแสดง #1
-ขนาดกล่องตามความกว้างจอ (`flowSize()`: กล่อง 28px คอลัมน์ 40px แถว 46px / ≤260px = 24 / 32 / 40)
-จอกว้าง: แผนผังอยู่ซ้าย (สูงสุด 40% ของความกว้าง · สูงเกิน 70vh เลื่อนในกรอบ) รายละเอียดอยู่ขวาและสูงเท่าแผนผังพอดี (`.calls-body` stretch + `contain:size` บน `#call-detail` เนื้อหายาวกว่าเลื่อนในกล่อง · แถวสูงอย่างน้อย 200px) · จอ ≤720px วางซ้อนกันบน-ล่าง แผนผังที่กว้างกว่าจอเลื่อนข้างในกรอบ `.flowwrap`
-ชื่อ namespace (โชวในรายละเอียดและ tooltip) ดึงจาก `/address/:a?limit=1` ของทุก address ใน trace (ไม่เกิน 30) ตอนเปิดหน้า tx
+### Tx page — Program calls
+`traceView()` is a compact diagram: one small box per call containing only its sequence number (red border = that call failed · tooltip = program.method())
+Laid out as a top-down tree: one row per depth · callees sit under their caller, siblings left→right in order of occurrence · one column per leaf (`slot`), callers centered above their first and last child
+The diagram is centered in its frame horizontally and vertically · the top "tx" box (dashed) = the tx sender · SVG arrows from caller → callee (red when that call failed)
+Each call's caller = the previous call that is 1 level shallower (`traceParents()`, because the trace comes depth-first)
+Clicking a box → `pickCall(i)` shows that call's details below the diagram (`callDetail`: caller → program.method(), gas, value, origin, Input, Result/Error) · the page opens showing #1
+Box size follows screen width (`flowSize()`: 28px boxes, 40px columns, 46px rows / ≤260px = 24 / 32 / 40)
+Wide screens: the diagram on the left (at most 40% of the width · taller than 70vh scrolls in its frame), details on the right exactly as tall as the diagram (`.calls-body` stretch + `contain:size` on `#call-detail`; longer content scrolls inside the box · rows at least 200px tall) · at ≤720px they stack top-bottom, and diagrams wider than the screen scroll sideways inside the `.flowwrap` frame
+Namespace names (shown in details and tooltips) are fetched from `/address/:a?limit=1` for every address in the trace (at most 30) when the tx page opens
 
-### แถบ "ข้อมูล" ของโปรแกรม
-แยก key ตามจำนวนชั้น (`src/node/explorer-api.js` · เทสต์ `47-explorer-storage`)
+### The program "data" tab
+Keys are split by depth (`src/node/explorer-api.js` · test `47-explorer-storage`)
 
-| แถบย่อย | key | แสดง | API |
+| Sub-tab | key | Shows | API |
 |---|---|---|---|
-| Variables (`info`) | 1 ชั้น (`owner`, `price`) | ทุกตัวพร้อมค่า | `/program/:a/layout` → `variables` |
-| Maps (`storage`) | 2 ชั้น (`balances:<address>`) | dropdown key แรกอยู่ที่หัวคอลัมน์แรกของตาราง → list key ที่ 2 + ค่า ทีละ 25 พร้อมเลขหน้า | `/program/:a/entries?name=&page=` |
-| Lookup (`get`) | 3 ชั้นขึ้นไป (`allow:<a>:<b>`) | ไม่ list · ฟอร์มแนวตั้ง: key 1 dropdown, key 2, 3… ช่องละบรรทัด · `+ key` / `− key` → อ่านทีละตัว | `/program/:a/get?key=…&key=…` |
+| Variables (`info`) | 1 level (`owner`, `price`) | every one with its value | `/program/:a/layout` → `variables` |
+| Maps (`storage`) | 2 levels (`balances:<address>`) | a first-key dropdown in the table's first column header → lists second keys + values, 25 at a time with page numbers | `/program/:a/entries?name=&page=` |
+| Lookup (`get`) | 3+ levels (`allow:<a>:<b>`) | no list · vertical form: key 1 dropdown, key 2, 3… one per line · `+ key` / `− key` → reads one at a time | `/program/:a/get?key=…&key=…` |
 
-- `layout` ไล่ key ไม่เกิน 20,000 ตัว (`SCAN_LIMIT`) เกินแล้วตอบ `truncated: true` และหน้าเว็บบอกว่านับไม่ครบ
-- กลุ่มเดียวกันมีทั้ง 2 และ 3 ชั้นได้ (`mixed:a` กับ `mixed:a:b`) → ขึ้นทั้งใน storage และ get storage
-- `storageView` จำแถบ / key ที่เลือก / ผลที่อ่านไว้ ตราบที่ยังอยู่โปรแกรมเดิม · `readKeys()` เก็บค่าที่พิมพ์ก่อนวาดใหม่ (กด `+` แล้วค่าไม่หาย)
-- `/program/:a/groups`, `/program/:a/storage`, `/program/:a/map` (cursor) และ `/blocks?before` เดิมยังอยู่ (หน้าเว็บไม่ได้ใช้แล้ว)
+- `layout` scans at most 20,000 keys (`SCAN_LIMIT`), beyond that it answers `truncated: true` and the page says the count is incomplete
+- A group can have both 2- and 3-level keys (`mixed:a` and `mixed:a:b`) → appears in both storage and get storage
+- `storageView` remembers the tab / selected key / read results while you stay on the same program · `readKeys()` keeps typed values before redrawing (pressing `+` doesn't lose them)
+- `/program/:a/groups`, `/program/:a/storage`, `/program/:a/map` (cursor) and the old `/blocks?before` are still there (no longer used by the page)
 
-### การแสดงค่า
-- ค่าที่เป็น object/array ทุกที่ (input, ผลลัพธ์, event, ค่าใน storage) → `json(v)` กล่องดำ `pre.json` ลงสีแบบ JSON · `"123n"` แสดงเป็นตัวเลข
-- key หลายชั้น → `keyChips(parts)` badge สี่เหลี่ยมต่อกัน (แทน `a / b / c`)
-- ค่าแก๊ส `gas(v)` มีไอคอนสายฟ้า · เลข block `blockNo(n)` มีไอคอนกล่อง (ลิงก์ไปหน้า block)
-- ยอดเหรียญ `units(raw, decimals)` · ค่าที่มาจาก storage ต้องผ่าน `attr()`/`esc()` เสมอ (key มาจากโปรแกรม)
+### Displaying values
+- Object/array values everywhere (input, results, events, storage values) → `json(v)`, a black `pre.json` box with JSON coloring · `"123n"` shown as a number
+- Multi-level keys → `keyChips(parts)`, chained square badges (instead of `a / b / c`)
+- Gas `gas(v)` has a lightning icon · block numbers `blockNo(n)` have a box icon (linking to the block page)
+- Token amounts `units(raw, decimals)` · values from storage must always go through `attr()`/`esc()` (keys come from programs)
 
-### มาตรฐาน token (`src/standards/token.js` · เทสต์ `48-token-standard`)
-ฟังก์ชัน `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom`
-ฟังก์ชันเสริมใน `TOKEN_PROGRAM` (ไม่บังคับในมาตรฐาน): `multiTransfer({ transfers: [{ to, amount }] })` โอนหลายกระเป๋าใน tx เดียว (≈1,400 gas ต่อรายการ) · ข้อความ error เป็นภาษาอังกฤษ + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
-mint ตอน init emit Transfer จาก zero address · `checkTokenStandard(code)` ตรวจจาก `return { … }` + `emit(` ในโค้ด
-`TOKEN_PROGRAM` คือโปรแกรมตัวอย่าง (seed ใช้ 6 decimals) · input ตอน deploy: `{ name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }`
-เหรียญที่ถือ = ดัชนี `holding:` (บอกว่าโปรแกรมไหน) + `balanceOf` ตอนเปิดหน้า (ยอดจริง) → ยอด 0 ไม่แสดง
-ไม่เก็บยอดสะสมจาก event เพราะ rebuild block แล้วจะนับซ้ำ · โปรแกรมที่ emit Transfer แต่ไม่ผ่านมาตรฐานไม่ถูกแสดง
+### Token standard (`src/standards/token.js` · test `48-token-standard`)
+Functions `name ticker decimals totalSupply balanceOf allowance transfer approve transferFrom`
+Extra functions in `TOKEN_PROGRAM` (not required by the standard): `multiTransfer({ transfers: [{ to, amount }] })` transfers to many wallets in one tx (≈1,400 gas per entry) · error messages are English + `emit("Transfer", {from,to,amount})` / `emit("Approval", {owner,spender,amount})`
+Minting at init emits Transfer from the zero address · `checkTokenStandard(code)` checks `return { … }` + `emit(` in the code
+`TOKEN_PROGRAM` is the sample program (seed uses 6 decimals) · deploy input: `{ name, ticker, decimals, supply, namespace?, icon?, url?, contact?, description? }`
+Tokens held = the `holding:` index (which programs) + `balanceOf` when the page opens (the real balance) → zero balances hidden
+Cumulative balances are not derived from events because rebuilding blocks would double count · programs that emit Transfer but don't meet the standard are not shown
 
-### มาตรฐาน NFT / multi-token / permit / ERC-1271 / multicall (`src/standards/*` · เทสต์ `62`–`67`)
-ทุกมาตรฐานตรวจด้วย `checkStandard(code, functions, events)` (ใน `token.js`) — ดูจาก `return { … }` ตัวสุดท้าย + `emit("ชื่อ"` ในโค้ด · ข้อความ error ในโปรแกรมเป็นภาษาอังกฤษ
-โปรแกรม import กันไม่ได้ จึงแจกเป็น string ของซอร์ส (แทรกค่าคงที่ด้วย template string ตอน import โมดูล) · ทุกตัวผ่าน `reviewProgram`
+### NFT / multi-token / permit / ERC-1271 / multicall standards (`src/standards/*` · tests `62`–`67`)
+Every standard is checked with `checkStandard(code, functions, events)` (in `token.js`) — based on the final `return { … }` + `emit("name"` in the code · error messages inside the programs are English
+Programs cannot import each other, so they are distributed as source strings (constants interpolated with template strings at module import) · all pass `reviewProgram`
 
-| ไฟล์ | โปรแกรม | สรุป |
+| File | Program | Summary |
 |---|---|---|
-| `nft.js` | `NFT_PROGRAM` · `checkNftStandard` | ERC-721: `mint({ to, tokenId?, uri? })` (owner / minter · ไม่ส่ง id = ถัดไปเริ่ม 1n) `transferFrom` `safeTransferFrom` (ปลายทางเป็นโปรแกรมต้องตอบ `onERC721Received` = `0x150b7a02`) `approve({ to, tokenId })` `setApprovalForAll` `ownerOf` `balanceOf({ owner })` `getApproved` `isApprovedForAll` `tokenURI` (uri ของชิ้น หรือ baseURI + id) `burn` `setMinter` `supportsInterface` · event `Transfer {from,to,tokenId}` `Approval {owner,approved,tokenId}` `ApprovalForAll {owner,operator,approved}` · storage `owners:<id>` `owned:<owner>:<id>` `balances:<owner>` |
-| `multitoken.js` | `MULTITOKEN_PROGRAM` · `checkMultiTokenStandard` | ERC-1155: `balanceOf({ account, id })` `balanceOfBatch({ accounts, ids })` `safeTransferFrom({ from, to, id, amount, data? })` `safeBatchTransferFrom({ …, ids, amounts })` (hook `onERC1155Received` / `onERC1155BatchReceived`) `mint` `mintBatch` `burn` `setApprovalForAll` `uri` (template `{id}` หรือ `setURI`) `totalSupply({ id })` · event `TransferSingle {operator,from,to,id,amount}` `TransferBatch {…,ids,amounts}` `ApprovalForAll {account,operator,approved}` `URI {value,id}` · storage `balances:<account>:<id>` |
-| `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · `PERMIT_TYPES` (types ของ ethers / MetaMask) · ดูหัวข้อ "permit (ERC-2612)" ด้านล่าง |
-| `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` เมื่อเจ้าของ (key เดียว) เซ็น **digest 32 byte** นั้นตรง ๆ (`ecrecoverDigest`) · `execute({ target, fn, input, value? })` (เจ้าของสั่งเรียกโปรแกรมอื่น) · `transferOwnership` · รับ NFT / 1155 แบบ safe ได้ |
-| `multicall.js` | `MULTICALL_PROGRAM` | (init รับ `namespace` / `icon` / `url` / `contact` / `description` ไม่บังคับ) `aggregate({ calls: [{ target, fn, input }], readonly? })` ตามลำดับ ล้มตัวเดียวล้มหมด · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = ทุก call เป็น staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **ปลายทางเห็น sender = multicall** (เหมือน Multicall3) จึงเหมาะกับการรวม "อ่าน" |
+| `nft.js` | `NFT_PROGRAM` · `checkNftStandard` | ERC-721: `mint({ to, tokenId?, uri? })` (owner / minter · no id = next, starting at 1n) `transferFrom` `safeTransferFrom` (a program recipient must answer `onERC721Received` = `0x150b7a02`) `approve({ to, tokenId })` `setApprovalForAll` `ownerOf` `balanceOf({ owner })` `getApproved` `isApprovedForAll` `tokenURI` (the item's uri or baseURI + id) `burn` `setMinter` `supportsInterface` · events `Transfer {from,to,tokenId}` `Approval {owner,approved,tokenId}` `ApprovalForAll {owner,operator,approved}` · storage `owners:<id>` `owned:<owner>:<id>` `balances:<owner>` |
+| `multitoken.js` | `MULTITOKEN_PROGRAM` · `checkMultiTokenStandard` | ERC-1155: `balanceOf({ account, id })` `balanceOfBatch({ accounts, ids })` `safeTransferFrom({ from, to, id, amount, data? })` `safeBatchTransferFrom({ …, ids, amounts })` (hooks `onERC1155Received` / `onERC1155BatchReceived`) `mint` `mintBatch` `burn` `setApprovalForAll` `uri` (template `{id}` or `setURI`) `totalSupply({ id })` · events `TransferSingle {operator,from,to,id,amount}` `TransferBatch {…,ids,amounts}` `ApprovalForAll {account,operator,approved}` `URI {value,id}` · storage `balances:<account>:<id>` |
+| `token.js` | `TOKEN_PROGRAM` + permit | `permit({ owner, spender, value, deadline, signature })` `nonces({ owner })` `permitDomain()` `DOMAIN_SEPARATOR()` · `PERMIT_TYPES` (ethers / MetaMask types) · see the "permit (ERC-2612)" section below |
+| `wallet.js` | `WALLET_PROGRAM` · `SIGNATURE_CHECKER` · `ERC1271_MAGIC_VALUE` | ERC-1271: `isValidSignature({ hash, signature })` → `"0x1626ba7e"` when the owner (single key) signed that **32-byte digest** directly (`ecrecoverDigest`) · `execute({ target, fn, input, value? })` (the owner calls another program) · `transferOwnership` · can receive NFTs / 1155 via safe transfers |
+| `multicall.js` | `MULTICALL_PROGRAM` | (init takes optional `namespace` / `icon` / `url` / `contact` / `description`) `aggregate({ calls: [{ target, fn, input }], readonly? })` in order, one failure fails all · `tryAggregate({ calls, readonly?, requireSuccess? })` → `[{ success, result } \| { success: false, error, code }]` · `readonly: true` = every call is a staticcall · `getBlockNumber` `getChainId` `getNativeBalance` · **targets see sender = multicall** (like Multicall3), so it suits batching "reads" |
 
-### โปรแกรมกลางของเชน (`src/standards/system.js` · `scripts/deploy-system.js` · เทสต์ `105-system-programs` + e2e)
-ชุดที่ทุก dApp / กระเป๋าใช้ร่วมกัน (แบบ Multicall3 / WBNB / Gnosis Safe) · deploy ครั้งเดียวด้วยกระเป๋า **deployer เฉพาะ** (nonce 0 → 13 · ครบ 14 ตัวใช้ ~6M แก๊ส · deploy tx ตั้ง gasLimit 1.5M) → address รู้ล่วงหน้า (`programAddressFor(deployer, nonce)`) · ตั้งชื่อ (namespace) ตอน initialization → ค้น `/name/wbwsc` ได้ · ทั้งชุดไม่มี upgrader
+### Chain system programs (`src/standards/system.js` · `scripts/deploy-system.js` · test `105-system-programs` + e2e)
+The set every dApp / wallet shares (like Multicall3 / WBNB / Gnosis Safe) · deployed once with a **dedicated deployer** wallet (nonce 0 → 13 · all 14 use ~6M gas · deploy txs set gasLimit 1.5M) → addresses known in advance (`programAddressFor(deployer, nonce)`) · names (namespaces) set at initialization → searchable via `/name/wbwsc` · none of the set has an upgrader
 
-| nonce | ชื่อ | โปรแกรม | สรุป |
+| nonce | Name | Program | Summary |
 |---|---|---|---|
-| 0 | `multicall` | `MULTICALL_PROGRAM` | ดูตารางข้างบน |
-| 1 | `wbwsc` (`w<symbol>`) | `WCARD_PROGRAM` | token มาตรฐานครบ (`TOKEN_CORE` + permit) · `deposit()` แนบ value ได้ WBWSC 1:1 · `depositTo({ to })` · `withdraw({ amount })` / `withdrawTo({ to, amount })` เผาแล้วโอนเหรียญหลักคืน (ลดยอดก่อนโอน) · event `Deposit` `Withdrawal` + `Transfer` จาก / ไป zero · decimals 18 · ชื่อตาม `SYMBOL` (`W<symbol>`) |
-| 2 | `multisig-template` | `MULTISIG_PROGRAM` | m-of-n (1–20 เจ้าของ) ยืนยันด้วย tx ของแต่ละคน: `submit({ target, fn?, input?, value? })` → id (ผู้เสนอยืนยันให้) · `confirm` / `revoke` / `execute({ id })` (นับเฉพาะเจ้าของปัจจุบัน · ทำเครื่องหมาย executed ก่อนเรียกออก) · fn ว่าง = โอนเหรียญหลัก · `addOwner` / `removeOwner` / `changeThreshold` / `approveHash` เรียกได้เฉพาะผ่านรายการของตัวเอง (`sender === ThisAddress()`) · `isValidSignature` = magic เมื่อ hash ถูก `approveHash` (ERC-1271) · ไม่ส่ง owners = ต้นแบบ (ทำอะไรไม่ได้) |
-| 3–5 | `token-template` `nft-template` `multitoken-template` | `TOKEN_PROGRAM` `NFT_PROGRAM` `MULTITOKEN_PROGRAM` | ต้นแบบให้ factory clone · ทั้ง 3 รับ `owner` ใน init ได้แล้ว (ไม่ส่ง = ผู้ deploy เหมือนเดิม · ส่งต้องเป็น address 42 ตัว) · token ที่ supply 0 ไม่ emit Transfer |
-| 6 | `factory` | `FACTORY_PROGRAM` | ใครก็สร้างได้ทันทีไม่ต้องรอ admin (`cloneProgram`): `createToken({ name, ticker, decimals 0–36, supply })` (supply เป็นของผู้เรียก) · `createNft({ name, symbol, baseURI? })` · `createMultiToken({ name?, symbol?, uri? })` (ผู้เรียก = owner) · `createMultisig({ owners, threshold })` · ทุกตัวรับ `salt?` + `namespace` `icon` `url` `contact` `description` · salt จริง = `<ผู้เรียก>:<salt>` (ไม่ส่ง = `#<ลำดับของผู้เรียก>` · salt เองห้ามขึ้นต้น `#`) → `vm.cloneAddressFor(factory, factorySalt(creator, salt), โค้ดต้นแบบ)` · อ่าน `templates` `count` `created({ index })` `createdCount({ creator })` `createdBy({ creator, index })` `kindOf({ address })` · event `Created { kind, address, creator }` |
-| 7 | `multisender` | `MULTISENDER_PROGRAM` (`multisender.js` · เทสต์ 108) | `sendNative` / `sendToken` / `sendTokens` / `sendNft` / `sendMultiToken` ให้หลายคนใน tx เดียว (≤ 100 รายการ · event `Sent` 1 ครั้งต่อ call) |
-| 8 | `token-lock` | `TOKEN_LOCK_PROGRAM` (`tokenlock.js` · เทสต์ 109) | ล็อก token / LP แบบ PinkLock: `lock({ token, amount, unlockAt, owner? })` · `vestingLock` (TGE + cycle) · `unlock` · `extendLock` · `increaseLock` · `transferLockOwnership` · `renounceLockOwnership` |
-| 9 | `dex-pair-template` | `DEX_PAIR_PROGRAM` (`dex.js` · เทสต์ 110) | ต้นแบบคู่เทรด (LP token "BWSC-LP") · deploy ไม่มี token = ใช้ไม่ได้ · router clone ให้ด้วย salt `dexPairSalt(a, b)` |
-| 10 | `dex` | `DEX_PROGRAM` | factory + router แบบ Uniswap V2 (init `{ pairTemplate, wrapped }`) · ค่าธรรมเนียม 0.3% ให้ผู้ใส่สภาพคล่อง ไม่มีเจ้าของ · path 2–4 token · native ผ่าน WBWSC · router ไม่ค้างเงิน · ไม่มี flash swap |
-| 11 | `staking` | `STAKING_PROGRAM` (`staking.js` · เทสต์ 111) | ใครก็สร้าง pool: `createPool` · `stake` / `unstake` / `claim` / `exit` ได้ทุกเมื่อ · รางวัลไหลต่อวินาที · `emergencyWithdraw` · `addRewards` · `recoverUnallocated` |
-| 12 | `limit-order` | `LIMIT_ORDER_PROGRAM` (`limitorder.js` · เทสต์ 112) | `placeOrder` (ฝาก token ขายไว้) · `fillOrder` / `fillOrders` (≤ 20) · `cancelOrder` · `cancelExpired` · token ↔ token (เหรียญหลักใช้ WBWSC) |
-| 13 | `nft-market` | `NFT_MARKET_PROGRAM` (`nftmarket.js` · เทสต์ 113) | `list` / `listMulti` / `buy` / `updatePrice` / `cancel` · `makeOffer` / `cancelOffer` / `acceptOffer` · init `{ feeBps 0–1000 (เริ่ม 0), feeRecipient? }` · ค่าธรรมเนียมปัดลง |
+| 0 | `multicall` | `MULTICALL_PROGRAM` | see the table above |
+| 1 | `wbwsc` (`w<symbol>`) | `WCARD_PROGRAM` | full standard token (`TOKEN_CORE` + permit) · `deposit()` with attached value gives WBWSC 1:1 · `depositTo({ to })` · `withdraw({ amount })` / `withdrawTo({ to, amount })` burn and send the native coin back (balance reduced before transfer) · events `Deposit` `Withdrawal` + `Transfer` from / to zero · decimals 18 · named after `SYMBOL` (`W<symbol>`) |
+| 2 | `multisig-template` | `MULTISIG_PROGRAM` | m-of-n (1–20 owners) confirmed by each owner's tx: `submit({ target, fn?, input?, value? })` → id (the proposer confirms automatically) · `confirm` / `revoke` / `execute({ id })` (counts only current owners · marks executed before calling out) · empty fn = native transfer · `addOwner` / `removeOwner` / `changeThreshold` / `approveHash` callable only via its own proposals (`sender === ThisAddress()`) · `isValidSignature` = magic when the hash was `approveHash`ed (ERC-1271) · no owners = template (can't do anything) |
+| 3–5 | `token-template` `nft-template` `multitoken-template` | `TOKEN_PROGRAM` `NFT_PROGRAM` `MULTITOKEN_PROGRAM` | templates for the factory to clone · all 3 now accept `owner` in init (not sent = the deployer, as before · if sent must be a 42-char address) · tokens with supply 0 don't emit Transfer |
+| 6 | `factory` | `FACTORY_PROGRAM` | anyone can create immediately without waiting for an admin (`cloneProgram`): `createToken({ name, ticker, decimals 0–36, supply })` (supply goes to the caller) · `createNft({ name, symbol, baseURI? })` · `createMultiToken({ name?, symbol?, uri? })` (caller = owner) · `createMultisig({ owners, threshold })` · all take `salt?` + `namespace` `icon` `url` `contact` `description` · the real salt = `<caller>:<salt>` (not sent = `#<caller's sequence>` · custom salts must not start with `#`) → `vm.cloneAddressFor(factory, factorySalt(creator, salt), template code)` · reads `templates` `count` `created({ index })` `createdCount({ creator })` `createdBy({ creator, index })` `kindOf({ address })` · event `Created { kind, address, creator }` |
+| 7 | `multisender` | `MULTISENDER_PROGRAM` (`multisender.js` · test 108) | `sendNative` / `sendToken` / `sendTokens` / `sendNft` / `sendMultiToken` to many recipients in one tx (≤ 100 entries · one `Sent` event per call) |
+| 8 | `token-lock` | `TOKEN_LOCK_PROGRAM` (`tokenlock.js` · test 109) | PinkLock-style token / LP locks: `lock({ token, amount, unlockAt, owner? })` · `vestingLock` (TGE + cycle) · `unlock` · `extendLock` · `increaseLock` · `transferLockOwnership` · `renounceLockOwnership` |
+| 9 | `dex-pair-template` | `DEX_PAIR_PROGRAM` (`dex.js` · test 110) | trading pair template (LP token "BWSC-LP") · deployed without tokens = unusable · the router clones it with salt `dexPairSalt(a, b)` |
+| 10 | `dex` | `DEX_PROGRAM` | Uniswap V2-style factory + router (init `{ pairTemplate, wrapped }`) · 0.3% fee to liquidity providers, no owner · paths of 2–4 tokens · native via WBWSC · the router holds no funds · no flash swaps |
+| 11 | `staking` | `STAKING_PROGRAM` (`staking.js` · test 111) | anyone can create a pool: `createPool` · `stake` / `unstake` / `claim` / `exit` at any time · rewards stream per second · `emergencyWithdraw` · `addRewards` · `recoverUnallocated` |
+| 12 | `limit-order` | `LIMIT_ORDER_PROGRAM` (`limitorder.js` · test 112) | `placeOrder` (deposits the token to sell) · `fillOrder` / `fillOrders` (≤ 20) · `cancelOrder` · `cancelExpired` · token ↔ token (the native coin uses WBWSC) |
+| 13 | `nft-market` | `NFT_MARKET_PROGRAM` (`nftmarket.js` · test 113) | `list` / `listMulti` / `buy` / `updatePrice` / `cancel` · `makeOffer` / `cancelOffer` / `acceptOffer` · init `{ feeBps 0–1000 (default 0), feeRecipient? }` · fees round down |
 
 ```
-DEPLOYER_KEY=0x… node scripts/deploy-system.js https://chain.example.com --plan     # ดู address ก่อน (ไม่ส่ง tx)
-node scripts/deploy-system.js --plan --deployer 0x… --chain-id 41234                   # ไม่ต้องมี key / node
-DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js https://chain.example.com # deploy + อนุมัติ → deploy/system-programs.json
+DEPLOYER_KEY=0x… node scripts/deploy-system.js https://chain.example.com --plan     # preview addresses first (no txs sent)
+node scripts/deploy-system.js --plan --deployer 0x… --chain-id 41234                   # no key / node needed
+DEPLOYER_KEY=0x… ADMIN_KEY=0x… node scripts/deploy-system.js https://chain.example.com # deploy + approve → deploy/system-programs.json
 ```
-- `systemPrograms({ addressAt, symbol })` = แผน (ลำดับ / ชื่อ / input ของแต่ละตัว · input ของ factory ใส่ address ต้นแบบให้เอง)
-- สคริปต์: ตรวจชื่อว่าง · nonce ที่ใช้ไปแล้วต้องเป็นโปรแกรมตามแผน (ไม่งั้นหยุด) · deployer ต้องมีเงิน · ส่งใบเดิมซ้ำเมื่อ mempool ตอบ "ส่งถี่เกินกำหนด" · รันซ้ำได้ (ข้ามตัวที่มีแล้ว) · ไม่มี `ADMIN_KEY` = ค้างรอ admin กด Approve
-- explorer: หน้า `#system` (เมนูข้าง "System programs") อ่านรายชื่อจาก `EXPLORER.systemPrograms` ใน `explorerscan/config.js` แล้วหา address ด้วย `/name/<ชื่อ>`
-- โค้ดทุกตัวผ่าน `reviewProgram` — autoreview ไม่ให้ใช้ `obj[key]` จึงตั้ง metadata ทีละ field
+- `systemPrograms({ addressAt, symbol })` = the plan (order / name / input of each · the factory's input gets the template addresses filled in)
+- The script: checks names are free · nonces already used must be the planned programs (otherwise it stops) · the deployer must be funded · resends the same tx when the mempool answers "sending too frequently" · can be rerun (skips existing ones) · no `ADMIN_KEY` = waits for an admin to press Approve
+- Explorer: the `#system` page (sidebar "System programs") reads the list from `EXPLORER.systemPrograms` in `explorerscan/config.js` and finds addresses with `/name/<name>`
+- All code passes `reviewProgram` — autoreview disallows `obj[key]`, so metadata is set one field at a time
 
-**permit (ERC-2612 + EIP-712 จริง)** — MetaMask `eth_signTypedData_v4` / ethers `Wallet.signTypedData` เซ็นได้ตรง ๆ (เทสต์ `62-permit-1271` `78-eip712` + e2e)
+**permit (ERC-2612 + real EIP-712)** — MetaMask `eth_signTypedData_v4` / ethers `Wallet.signTypedData` can sign it directly (tests `62-permit-1271` `78-eip712` + e2e)
 ```js
-domain  = { name: <name() ของ token>, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }
+domain  = { name: <the token's name()>, version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }
 types   = { Permit: [owner address, spender address, value uint256, nonce uint256, deadline uint256] }   // PERMIT_TYPES
 digest  = eip712Digest(domain, types, "Permit", { owner, spender, value, nonce, deadline })          // = TypedDataEncoder.hash
 DOMAIN_SEPARATOR() = eip712DomainSeparator(domain)                                                   // = TypedDataEncoder.hashDomain
 ```
-- `deadline` เป็น **วินาที (unix seconds) แบบ EIP-2612** · token เทียบกับ `params.block.timestamp / 1000n` (เวลาของ block เป็นมิลลิวินาที ปัดลง) · วินาทีของ block > deadline → `permit expired` (เท่ากันยังใช้ได้)
-  (token รุ่นก่อน EIP-712 ใช้ deadline มิลลิวินาที)
-- `nonce` = `nonces({ owner })` ตอนเซ็น · สำเร็จแล้วเพิ่ม 1 (ลายเซ็นเดิมใช้ซ้ำไม่ได้) · chain อื่น / token อื่น (verifyingContract) / ชื่ออื่น → `invalid permit signature`
-- owner / spender ต้องเป็น address 42 ตัว (`owner and spender must be addresses`) · verifyingContract = address ของ token จึงต้องเป็น address จริง (`0x` + 40 hex — server สร้างให้แบบนี้อยู่แล้ว · programUuid แบบชื่อใน testkit ใช้ permit ไม่ได้)
-- owner เป็นกระเป๋าคน → `ecrecoverDigest(digest, signature) === owner` · owner เป็นโปรแกรม → `isValidSignature({ hash: digest, signature })` แบบ `{ readonly: true }` ผ่าน `isValidSignatureNow(signer, hash, signature)` (`SIGNATURE_CHECKER` — ตอนนี้รับ **digest 32 byte** แบบ OpenZeppelin ไม่ hash ข้อความให้แล้ว)
-  — เจ้าของ `WALLET_PROGRAM` เซ็น typed data ของ permit ที่ `owner` = address ของกระเป๋าด้วย MetaMask ได้เลย (= `signWalletHash(permitDigest(…))` เซ็น digest ตรง ๆ)
-  ⚠️ แบบ ERC-1271 ทั่วไป: เจ้าของคนเดียวกันหลายกระเป๋า ลายเซ็นของ digest เดียวกันใช้กับทุกกระเป๋า — permit ปลอดภัยเพราะ owner อยู่ใน message
-- ตัวช่วยฝั่ง wallet / เทสต์: `src/crypto/program-signature.js` (`programvm/program-signature.js`)
-  `permitTypedData(fields)` (payload ทั้งก้อนสำหรับ `eth_signTypedData_v4` มี `EIP712Domain` · ตัวเลขเป็น string ทศนิยม) `permitDigest(fields)` `permitDomainSeparator(fields)` `signPermit(fields, key)` (ได้ลายเซ็นเดียวกับ ethers ทุกไบต์)
-  `signWalletHash(hash, key)` / `signTypedDataDigest(digest, key)` (เซ็น digest ตรง ๆ) `recoverTypedDataDigest(digest, sig)` `typedDataDigest(domain, types, primaryType, message)` · ของเดิมแบบข้อความ: `signProgramMessage` `recoverProgramMessage` `programMessageHash`
-- ส่งให้ ethers: ตัด `EIP712Domain` ออกจาก types ก่อน (ethers สร้างเอง และ throw ถ้ามี) · `eip712Digest` ของเรารับได้ทั้งสองแบบ
-- **ไม่ต้องล้างเชน**: API ใหม่เป็นของเพิ่ม · token / กระเป๋าที่ deploy ไปแล้วยังรันโค้ดเดิม (permit แบบ JSON digest + deadline ms · isValidSignature hash ข้อความ) จนกว่าจะ deploy ใหม่ (หรืออัปเกรดถ้ามี upgrader) · explorer แสดงแถบ Permit เฉพาะ token ที่โค้ดมี `eip712Digest(` · ถ้าอยากให้ token ตัวอย่าง (seed) เป็นแบบใหม่ ต้อง deploy ใหม่ / ล้างเชนแล้ว seed ใหม่
-- ดัชนี `holding:` นับ event `Transfer` / `TransferSingle` / `TransferBatch` (`HOLDING_EVENTS` ใน VM) → explorer หา NFT / 1155 ที่ address ถือได้
+- `deadline` is in **seconds (unix seconds), per EIP-2612** · the token compares it with `params.block.timestamp / 1000n` (block time is in milliseconds, rounded down) · block seconds > deadline → `permit expired` (equal is still valid)
+  (tokens predating EIP-712 use a millisecond deadline)
+- `nonce` = `nonces({ owner })` at signing · incremented by 1 on success (the old signature cannot be reused) · another chain / another token (verifyingContract) / another name → `invalid permit signature`
+- owner / spender must be 42-char addresses (`owner and spender must be addresses`) · verifyingContract = the token's address, so it must be a real address (`0x` + 40 hex — the server already generates them this way · name-style programUuids in the testkit can't use permit)
+- Owner is a personal wallet → `ecrecoverDigest(digest, signature) === owner` · owner is a program → `isValidSignature({ hash: digest, signature })` with `{ readonly: true }` via `isValidSignatureNow(signer, hash, signature)` (`SIGNATURE_CHECKER` — now takes a **32-byte digest** like OpenZeppelin and no longer hashes text for you)
+  — the owner of a `WALLET_PROGRAM` can sign permit typed data with `owner` = the wallet's address directly in MetaMask (= `signWalletHash(permitDigest(…))` signs the digest directly)
+  ⚠️ As with ERC-1271 in general: if one owner controls several wallets, a signature over the same digest works for all of them — permit is safe because owner is in the message
+- Wallet-side / test helpers: `src/crypto/program-signature.js` (`programvm/program-signature.js`)
+  `permitTypedData(fields)` (the whole payload for `eth_signTypedData_v4`, with `EIP712Domain` · numbers as decimal strings) `permitDigest(fields)` `permitDomainSeparator(fields)` `signPermit(fields, key)` (produces a signature byte-identical to ethers)
+  `signWalletHash(hash, key)` / `signTypedDataDigest(digest, key)` (sign a digest directly) `recoverTypedDataDigest(digest, sig)` `typedDataDigest(domain, types, primaryType, message)` · the older text-based ones: `signProgramMessage` `recoverProgramMessage` `programMessageHash`
+- Passing to ethers: remove `EIP712Domain` from types first (ethers builds it itself and throws if present) · our `eip712Digest` accepts both forms
+- **No chain reset needed**: the new APIs are additions · tokens / wallets already deployed keep running their old code (JSON-digest permit + ms deadline · isValidSignature hashing text) until redeployed (or upgraded if they have an upgrader) · the explorer shows the Permit tab only for tokens whose code has `eip712Digest(` · to make the sample (seed) token the new kind, redeploy / reset the chain and seed again
+- The `holding:` index counts `Transfer` / `TransferSingle` / `TransferBatch` events (`HOLDING_EVENTS` in the VM) → the explorer can find the NFTs / 1155s an address holds
 
-### metadata ในหน้า address / โปรแกรม
-| แถว | มาจาก | แสดง |
+### Metadata on address / program pages
+| Row | Comes from | Shows |
 |---|---|---|
-| information | `icon` + `namespace` | ไอคอนสี่เหลี่ยมจัตุรัส (`avatar()`: รูป https:// หรือ data:image · emoji · ไม่มี = ตัวแรกของชื่อ) + ชื่อ |
-| คำอธิบาย | `description` | ข้อความ |
-| links | `url` + `contact` | ลิงก์ออกไปข้างนอก (`target=_blank rel=noopener noreferrer nofollow`) |
+| information | `icon` + `namespace` | a square icon (`avatar()`: an https:// or data:image picture · emoji · none = first letter of the name) + name |
+| description | `description` | text |
+| links | `url` + `contact` | outbound links (`target=_blank rel=noopener noreferrer nofollow`) |
 
-- `safeHref()` ยอมเฉพาะ `https?://` · `mailto:` · `tel:` และอีเมลล้วน (→ `mailto:`) อย่างอื่นแสดงเป็นข้อความ ไม่ทำลิงก์ (กัน `javascript:`)
-- แท็บ "Edit metadata" มีเฉพาะหน้ากระเป๋า (อยู่แถบเดียวกับ Interact): ฟอร์ม icon / namespace / คำอธิบาย / url / contact → `sendTx({ action: "metadata", input })`
-  ส่งเฉพาะช่องที่เปลี่ยน · ช่องที่ล้างว่าง = `null` (ลบ) · wallet ต้องเป็น address ของหน้านั้น (VM ใช้ผู้เซ็นเป็น address เสมอ)
-- โปรแกรมไม่มีแท็บแก้ไข (ผู้ใช้เลือกไว้ 9 ต.ค.: ตั้งได้เฉพาะของตัวเอง) → metadata ของโปรแกรมตั้งจากโค้ดด้วย `setMetadata`
-  `TOKEN_PROGRAM` รับ `icon` / `url` / `contact` / `description` ใน input ตอน deploy (seed ใช้ไอคอน data:image)
+- `safeHref()` allows only `https?://` · `mailto:` · `tel:` and bare emails (→ `mailto:`); anything else is shown as text, not a link (blocks `javascript:`)
+- The "Edit metadata" tab exists only on wallet pages (in the same bar as Interact): form for icon / namespace / description / url / contact → `sendTx({ action: "metadata", input })`
+  Sends only changed fields · fields cleared to empty = `null` (delete) · the wallet must be that page's address (the VM always uses the signer as the address)
+- Programs have no edit tab (the user decided on Oct 9: you can only set your own) → program metadata is set from code with `setMetadata`
+  `TOKEN_PROGRAM` accepts `icon` / `url` / `contact` / `description` in its deploy input (seed uses a data:image icon)
 
-### ไอคอน address
-ทุก address ที่ผ่าน `addr()` มีไอคอน: คน = กระเป๋าผู้ใช้ · คอมพิวเตอร์ (สีม่วง) = โปรแกรม
-วัดจาก "มีโค้ดที่ address นั้น" (`<address>:code`) หรือ deploy แล้วรอ init (`pending:<address>`)
-`decorate()` ถูกเรียกทุกครั้งที่วาดหน้า รวบ address ที่ยังไม่รู้ไปถาม `/is-program?addresses=a,b,c` ทีเดียว (ครั้งละ ≤ 200) · จำไว้เฉพาะตัวที่เป็นโปรแกรม
+### Address icons
+Every address rendered through `addr()` has an icon: person = user wallet · computer (purple) = program
+Determined by "there is code at that address" (`<address>:code`) or deployed and awaiting init (`pending:<address>`)
+`decorate()` runs on every page draw, batching unknown addresses into one `/is-program?addresses=a,b,c` request (≤ 200 per call) · only programs are remembered
 
 ### wallet connect
 `eth_requestAccounts` → `eth_signTypedData_v4` → `POST /sendtx`
-เซ็นแบบ EIP-1559 (`TX_TYPE_1559` · `maxFeePerGas` = 2 × `baseFee` จาก `/genesis` · `maxPriorityFeePerGas` 0) · `sendTx({ gasPrice })` = แบบเดิม
-`callableOf(code)` อ่านชื่อฟังก์ชันจาก `return { … }` ท้ายโค้ดด้วย regex
-`runQuery()` ไม่ต้องต่อ wallet · `runWrite()` ต้องเซ็น แล้วเด้งไปหน้า tx หลัง 2.5 วิ
+Signs EIP-1559 style (`TX_TYPE_1559` · `maxFeePerGas` = 2 × `baseFee` from `/genesis` · `maxPriorityFeePerGas` 0) · `sendTx({ gasPrice })` = legacy
+`callableOf(code)` reads function names from the trailing `return { … }` with a regex
+`runQuery()` needs no wallet · `runWrite()` must sign, then jumps to the tx page after 2.5 s
 
-**Input ของ Interact มี 2 แบบ** (ปุ่ม Fields / JSON · จำแบบที่เลือกไว้ใน localStorage `ix-mode`)
-- โปรแกรมที่มี `metadata.abi` และประกาศฟังก์ชันที่เลือก → ช่องมาจาก `inputs` ของ ABI (ชนิด + description · tag ABI) แทนการเดาจากโค้ดด้านล่าง
-- Fields: `inferInputs(code, fn)` อ่านโค้ดของฟังก์ชันที่เลือก (`functionSource()` ตัด body ด้วยการนับวงเล็บ) หา `params.input.<ชื่อ>`
-  รวม alias (`const i = params.input`), destructuring (`const { to, amount } = params.input` / `({ input })`) และตามเข้า helper ในโปรแกรม 1 ชั้น (`move(from, to, amount)`)
-- เดาชนิดจากการใช้งาน (`guessShape`): list (for…of / .length / .map) → object (.ย่อย) → address (ชื่อ to/from/who/owner/token… หรือเป็นเป้าของ transferNative / runProgram)
-  → whole number (คำนวณ / เทียบกับ `1n`, ชื่อ amount…) → yes/no (`=== true`, `|| false`, หรือใช้แค่ใน if/!/?) → text
-- ช่อง list/object เป็น JSON มีตัวอย่างใน placeholder จาก `item.<key>` ใน for…of · ตัวเลขในช่องเหล่านี้แปลงเป็น `"Nn"` ให้ (`bigints()`)
-- ตัวเลขที่กรอก `7` ส่งเป็น `"7n"` (VM ไม่รับ number ของ JS) · ช่องว่าง = ไม่ส่ง key นั้น · ค่าไม่ถูกชนิดขึ้น error พร้อมชื่อช่องตอนกด Read / Send
-- สลับ Fields → JSON เขียนค่าที่กรอกเป็น JSON (ค่าที่ไม่ถูกชนิดคัดลอกไปตามที่พิมพ์) · JSON → Fields เติมช่องกลับ key ที่ไม่มีช่องจะเก็บไว้แล้วส่งไปด้วย ("Also sent from the JSON")
-- state อยู่ใน `ix` (program, fn, mode, values, json, extra) เปลี่ยนฟังก์ชัน / ต่อ wallet แล้ววาดใหม่ค่าที่พิมพ์ไม่หาย
+**Interact has 2 input modes** (Fields / JSON buttons · the chosen mode is remembered in localStorage `ix-mode`)
+- Programs with `metadata.abi` that declare the selected function → fields come from the ABI `inputs` (type + description · ABI tag) instead of the code-based guessing below
+- Fields: `inferInputs(code, fn)` reads the selected function's code (`functionSource()` extracts the body by counting brackets) looking for `params.input.<name>`
+  including aliases (`const i = params.input`), destructuring (`const { to, amount } = params.input` / `({ input })`), and following into in-program helpers one level deep (`move(from, to, amount)`)
+- Guesses types from usage (`guessShape`): list (for…of / .length / .map) → object (.sub-field) → address (names to/from/who/owner/token… or used as the target of transferNative / runProgram)
+  → whole number (arithmetic / compared with `1n`, names like amount…) → yes/no (`=== true`, `|| false`, or only used in if/!/?) → text
+- list/object fields are JSON with a placeholder example from `item.<key>` in for…of · numbers in these fields are converted to `"Nn"` for you (`bigints()`)
+- An entered number `7` is sent as `"7n"` (the VM doesn't accept JS numbers) · empty field = that key is not sent · wrong-type values raise an error with the field name on Read / Send
+- Switching Fields → JSON writes the entered values as JSON (wrong-type values are copied as typed) · JSON → Fields refills the fields; keys without a field are kept and sent too ("Also sent from the JSON")
+- State lives in `ix` (program, fn, mode, values, json, extra); changing function / connecting a wallet then redrawing keeps typed values
 
-**ผลของ Read / Send** (`#out` = `.ixout`): แก้ในกล่องเดิม ไม่วาดหน้าใหม่ ระหว่างรอผลเก่าจางลง (`busy()`) แล้ว `showResult()` แทนที่
-- บรรทัดสถานะ (✓/✗ · Read หรือ Transaction · ฟังก์ชัน · block · gas) → **Return value** (หรือ Error) → "Full response" พับไว้ (จำว่าเปิด/ปิด)
-- Send ไม่เด้งไปหน้า tx แล้ว: รอ `/tx/:hash` จนมี blockNumber (สูงสุด 120 วิ) แล้วอ่าน receipt โชวค่าที่ return + ลิงก์ "View transaction"
-- `outSeq` กันผลของรอบเก่าทับรอบใหม่ · ถ้ากล่องหายจากหน้า (เปลี่ยนหน้า / วาดใหม่) หยุดรอทันที
+**Read / Send results** (`#out` = `.ixout`): updated in the same box without redrawing the page; while waiting, the old result fades (`busy()`), then `showResult()` replaces it
+- Status line (✓/✗ · Read or Transaction · function · block · gas) → **Return value** (or Error) → "Full response" collapsed (open/closed state remembered)
+- Send no longer jumps to the tx page: it waits on `/tx/:hash` until there is a blockNumber (up to 120 s), then reads the receipt and shows the return value + a "View transaction" link
+- `outSeq` prevents old results from overwriting newer ones · if the box disappears from the page (page change / redraw) waiting stops immediately
 
-⚠️ `canonical()` ในหน้าเว็บ**ต้องตรงกับ `canonicalJson()` ใน VM เป๊ะ ๆ** (เรียง key, bigint → `"123n"`)
-และ `signingInput()` ต้องทำ hex ใน input เป็นตัวพิมพ์เล็กแบบเดียวกับ `normalizeTransaction()` ใน `signature.js`
-ไม่ตรง = digest ไม่ตรง = ลายเซ็นใช้ไม่ได้ทุกใบ (`test/46-explorer-canonical.test.js` คุมอยู่)
+⚠️ The page's `canonical()` **must match the VM's `canonicalJson()` exactly** (sorted keys, bigint → `"123n"`)
+and `signingInput()` must lowercase hex in the input the same way as `normalizeTransaction()` in `signature.js`
+Mismatch = digest mismatch = every signature is invalid (`test/46-explorer-canonical.test.js` guards this)
 
 ---
 
-## 9. autoreview — ตรวจโค้ดแทนคน
+## 9. autoreview — automated code review
 
-`src/core/autoreview.js` อยู่ได้ด้วยตัวเอง (ต้องการแค่ `acorn`) ยกไปใช้ที่ไหนก็ได้
+`src/core/autoreview.js` is self-contained (needs only `acorn`) and can be reused anywhere
 
 ```js
 import { reviewProgram } from "./src/core/autoreview.js";
 const r = reviewProgram(code);     // { ok, issues: [{ line, column, message }], message }
 ```
 
-**ทำงานที่ `/sendtx` ก่อนเข้า VM** ไม่ใช่ข้างใน VM (VM มี option `autoReview` แยกไว้ด้วยแต่ `server.js` ไม่เปิด)
-· เปิดปิดด้วย env `AUTO_REVIEW` (ค่าเริ่ม เปิด · `0` / `false` / `off` / `no` = ปิด → deploy / upgrade ไม่ถูกตรวจโค้ด เหลือ sandbox + แก๊สคุม) · กฎอยู่ใน `src/core/autoreview.js`
+**Runs at `/sendtx` before the VM**, not inside the VM (the VM has a separate `autoReview` option too, but `server.js` doesn't enable it)
+· toggled with env `AUTO_REVIEW` (default on · `0` / `false` / `off` / `no` = off → deploys / upgrades are not code-reviewed, leaving the sandbox + gas in control) · the rules are in `src/core/autoreview.js`
 
-หลักการคือ **บัญชีขาว** — อนุญาตเฉพาะที่ระบุ ที่เหลือปฏิเสธหมด จึงไม่ต้องไล่ห้าม `process` / `fetch` / `eval` ทีละตัว
+The principle is a **whitelist** — only what is listed is allowed, everything else is rejected, so there is no need to ban `process` / `fetch` / `eval` one by one
 
-| ห้าม | เหตุผล |
+| Banned | Reason |
 |---|---|
-| identifier ที่ไม่รู้จัก (`process`, `require`, `globalThis`, `fetch`, `eval`, `Function`) | ไม่อยู่ในบัญชีขาว |
-| `.constructor` `.prototype` `.__proto__` `.caller` `.arguments` `.stack` | ประตูหนีออกจาก sandbox / ไม่ deterministic |
-| `obj[key]` (computed member) | หลบการตรวจชื่อ property ได้ |
-| `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | ไม่ deterministic หรือหนีขอบเขต (regex ถูก sandbox ปิดด้วยแม้ปิด autoreview — `.match("…")` ที่ผ่าน autoreview ก็ throw) |
-| `new` ที่ไม่ใช่ `Error` / `Date` | — |
-| getter / setter / method ใน object literal | — |
-| `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | ผลต่างกันตาม locale/engine หรือเปลี่ยน `this` (`.repeat` `.padStart` `.padEnd` ใช้ได้แล้ว: sandbox คิดแก๊สตามขนาดผลลัพธ์ก่อนทำ) |
-| ชื่อที่ขึ้นต้น `__` | — |
-| เมธอดของ global ที่ไม่อยู่ใน `ALLOWED_MEMBERS` | เช่น `Object.defineProperty`, `Math.sin` |
+| unknown identifiers (`process`, `require`, `globalThis`, `fetch`, `eval`, `Function`) | not on the whitelist |
+| `.constructor` `.prototype` `.__proto__` `.caller` `.arguments` `.stack` | sandbox escape hatches / non-deterministic |
+| `obj[key]` (computed member) | can bypass property name checks |
+| `class` `async/await` `generator` `this` `for…in` `with` · regex · tagged template | non-deterministic or escapes scope (regex is disabled by the sandbox even with autoreview off — `.match("…")` that passes autoreview still throws) |
+| `new` other than `Error` / `Date` | — |
+| getters / setters / methods in object literals | — |
+| `.sort` `.bind` `.call` `.apply` `.toLocale*` `.normalize` | results vary by locale/engine or rebind `this` (`.repeat` `.padStart` `.padEnd` are allowed now: the sandbox charges gas by result size before running) |
+| names starting with `__` | — |
+| global methods not in `ALLOWED_MEMBERS` | e.g. `Object.defineProperty`, `Math.sin` |
 
-ตรวจจริงผ่าน HTTP:
+Real check over HTTP:
 ```
 code: function program() { function evil(p) { return process.env } return { evil } }
-→ 400 { "error": "โค้ดไม่ผ่านการตรวจ",
-        "issues": [{ "line": 2, "message": "'process' ไม่รู้จัก (ใช้ได้เฉพาะ API ของ VM และตัวแปรที่ประกาศเอง)" }] }
+→ 400 { "error": "code failed review",
+        "issues": [{ "line": 2, "message": "'process' is unknown (only VM APIs and your own declarations are allowed)" }] }
 ```
+(The issue message comes from `src/core/autoreview.js`; it is consensus text)
 
-**ข้อจำกัดที่ต้องเข้าใจ**: autoreview กันโค้ด *ที่เขียนตรง ๆ* ว่าอันตราย แต่ไม่ใช่ sandbox
-ตอนนี้โปรแกรมรันใน sandbox (QuickJS) แล้ว ถึงหลุดการตรวจไปก็เอื้อมไม่ถึง Node · `while(true)` จบด้วยแก๊สหมด (ด่านสุดท้ายคือ interrupt ของ QuickJS ตาม `timeoutMs`)
-autoreview จึงเป็นชั้นที่สอง (กันโค้ดที่ไม่ deterministic / อ่านยาก) ไม่ใช่ขอบเขตความปลอดภัยชั้นเดียวอีกต่อไป
+**A limitation to understand**: autoreview blocks code that is *plainly written* to be dangerous, but it is not a sandbox
+Programs now run in the sandbox (QuickJS), so even if something slips past review it can't reach Node · `while(true)` ends by running out of gas (the last line of defense is QuickJS's interrupt per `timeoutMs`)
+So autoreview is a second layer (guards against non-deterministic / hard-to-read code), no longer the sole security boundary
 
 ---
 
-## 10. เทสต์
+## 10. Tests
 
-`test/` 118 ไฟล์ · 1045 เคส · `node --test` ล้วน ไม่มี framework
-`test/helpers.js` (ตัวช่วย + assert ชุด key ของผลลัพธ์) · `test/programs.js` (โปรแกรมตัวอย่างที่ใช้ร่วมกัน)
+`test/` 118 files · 1045 cases · plain `node --test`, no framework
+`test/helpers.js` (helpers + asserts on result key sets) · `test/programs.js` (shared sample programs)
 
-ไฟล์เรียงตามหัวข้อ `01`–`44` เริ่มจากพื้นฐานไปซับซ้อน ตัวที่ควรรู้:
+Files are ordered by topic `01`–`44`, from basics to complex. The ones worth knowing:
 
-| ไฟล์ | คุม |
+| File | Covers |
 |---|---|
-| `09-determinism` | รันซ้ำได้ผลเดิม (เคยพังเพราะ `init` เขียน `createdAt` จากนาฬิกาจริง — ต้องส่ง `timestamp` คงที่) |
-| `26-signature` `27-metamask-compat` | EIP-712 ตรงกับ `ethers` |
+| `09-determinism` | replays give the same result (it once broke because `init` wrote `createdAt` from the real clock — a fixed `timestamp` must be passed) |
+| `26-signature` `27-metamask-compat` | EIP-712 matches `ethers` |
 | `30-block-body-replay` `34-history-replay` | replay / stateAt / rebuildFrom |
-| `31-chain-safety` | parentHash, block ซ้ำ, timestamp ถอยหลัง, tx ซ้ำ |
-| `33-limits-admin` | โควตา tx ต่อ block / ต่อ user, สิทธิ์ init/reject |
-| `38-reentrancy` | reentrancy + pattern ปลอดภัย |
-| `40-bigint` | ตัวเลขเป็น BigInt ทั้งระบบ (ไม่มีโหมด number) |
-| `43-autoreview` | กฎทุกข้อของตัวตรวจ |
-| `44-complex-scenario` | token + market ครบวงจร: approve/transferFrom, native deposit/withdraw, rollback ซ้อน, invariant ว่าเงินไม่หาย |
-| `56-upgrade` | อัปเกรด: upgrader / โอน-สละสิทธิ์ / อนุมัติ-ปฏิเสธ / migrate ล้ม / timelock 0 และ N / codeversion / replay / tx ที่เซ็น |
-| `105-system-programs` | โปรแกรมกลาง: address ตามแผน · ชื่อ · WBWSC (`WCARD_PROGRAM`) ฝาก-ถอน 1:1 · factory สร้าง token / NFT / multi-token / multisig (salt, address ล่วงหน้า, ตรวจค่า) · multisig m-of-n, revoke, เปลี่ยนเจ้าของผ่านตัวเอง, approveHash (ERC-1271) |
-| `107-bluewolfchain` | ค่าตั้งต้นของเชน (chainId 41234 · 10,000 gwei · block 2 วิ · 5M แก๊ส) + `genesis.json` / genesis ตัวอย่างเปิด fork `bluewolf` · ราคาต่อหน่วยของ fork · โอนเหรียญหลัก 17,300 แก๊ส · ชื่อ Bluewolfchain / BWSC / WBWSC |
-| `114-sign-any-chain` | domain ไม่มี chainId: เซ็นตอนกระเป๋าเปิดเชนอื่นได้ · receipt มี `signedOnChainId` · ไม่ส่ง = เชนนี้ · chainId ใน message ไม่ตรง → mempool ปฏิเสธ (กัน replay ข้ามเชน) · ตรงกับ ethers |
-| `57-clone` | cloneProgram: address แบบ CREATE2, salt ซ้ำ, ต้นแบบไม่อนุมัติ, rollback, value, แก๊ส, trace create (callTracer) |
-| `58-sandbox` | sandbox: OUT_OF_MEMORY (catch ไม่ได้, รวมทั้งสายการเรียก, จุดเกินแน่นอน, เข้า block เสียแก๊ส) / stack ล้น / เอื้อมไม่ถึง host / แก๊สหมด-หมดเวลา catch ไม่ได้ / แยกโปรแกรม / ค่าข้ามเขตแดน / คืน handle ครบหลังหลายพัน call |
-| `62-permit-1271` | permit (EIP-712): DOMAIN_SEPARATOR / digest = ethers · relayer ส่งแทน · replay · หมดเวลา (วินาที) · chain / token / ค่าอื่น · กระเป๋าโปรแกรม (ERC-1271 แบบ staticcall) · execute / transferOwnership |
-| `78-eip712` | eip712Digest / DomainSeparator / encodeType / hashStruct = ethers ทุกชุด type (atomic ทุกชนิด, struct ซ้อน, array ซ้อน, salt) ทั้งฝั่ง host และในโปรแกรม · keccak256Bytes / ecrecoverDigest · แก๊ส · permit ที่เซ็นด้วย ethers signTypedData (คน + ERC-1271) · หมดเวลา / replay / chain / verifyingContract อื่น |
-| `63-nft-standard` `64-multitoken-standard` | NFT / multi-token: mint, สิทธิ์ (approve / operator / minter), safe transfer + hook, ย้อนทั้งชุด, uri, burn, ดัชนีของที่ถือ |
-| `65-multicall` | aggregate (ลำดับ + all-or-nothing) · tryAggregate (ย้อนเฉพาะตัวที่ล้ม · requireSuccess) · readonly (staticcall ทุก call) |
-| `66-evm-nft-logs` `67-explorer-nft` | /evm: log ERC-721 / ERC-1155 + eth_call (ถอดด้วย ethers) · explorer: collectionInfo / nftHoldings / ชนิดโปรแกรม |
-| `68-base-fee` | base fee ขึ้น / ลง / ขั้นต่ำ / ตั้งค่า · ราคาจริง = min(maxFee, baseFee + priority) · เผา / tip / ยอดรวมไม่หาย · แบบเดิม · BaseFee() · replay |
-| `69-fee-mempool` | ลายเซ็นแบบ 1559 · mempool เรียงตาม tip จริง · maxFee < baseFee รอในคิว · แทนที่ต้องเพิ่มทั้งสองค่า 10% |
-| `70-header-roots` | receiptsRoot / logsBloom ใน header + hash · replay / rebuild / sync ตรวจ · /evm ใช้ค่าจาก header |
-| `71-indexed-events` | emit indexed (ตรวจ options · แก๊ส topic) · ดัชนี + cursor + หลาย field · eth_getLogs ตาม topic · token มาตรฐาน |
-| `72-abi` | checkAbi (schema ทุกข้อ) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
+| `31-chain-safety` | parentHash, duplicate blocks, timestamps going backwards, duplicate txs |
+| `33-limits-admin` | tx quotas per block / per user, init/reject permissions |
+| `38-reentrancy` | reentrancy + safe patterns |
+| `40-bigint` | numbers are BigInt throughout (no number mode) |
+| `43-autoreview` | every rule of the checker |
+| `44-complex-scenario` | token + market end to end: approve/transferFrom, native deposit/withdraw, nested rollback, invariant that no funds are lost |
+| `56-upgrade` | upgrades: upgrader / transfer-renounce / approve-reject / failing migrate / timelock 0 and N / codeversion / replay / signed txs |
+| `105-system-programs` | system programs: planned addresses · names · WBWSC (`WCARD_PROGRAM`) 1:1 deposit-withdraw · factory creates token / NFT / multi-token / multisig (salt, precomputed address, validation) · multisig m-of-n, revoke, owner changes via itself, approveHash (ERC-1271) |
+| `107-bluewolfchain` | chain defaults (chainId 41234 · 10,000 gwei · 2 s blocks · 5M gas) + `genesis.json` / the example genesis enable the `bluewolf` fork · the fork's unit prices · native transfer 17,300 gas · names Bluewolfchain / BWSC / WBWSC |
+| `114-sign-any-chain` | domain without chainId: signing works while the wallet is on another chain · receipt has `signedOnChainId` · omitted = this chain · mismatched chainId in the message → rejected by the mempool (prevents cross-chain replay) · matches ethers |
+| `57-clone` | cloneProgram: CREATE2-style addresses, duplicate salt, unapproved template, rollback, value, gas, create trace (callTracer) |
+| `58-sandbox` | sandbox: OUT_OF_MEMORY (uncatchable, across the call chain, deterministic point, included in the block and charged) / stack overflow / host unreachable / out of gas & timeout uncatchable / program isolation / cross-boundary values / all handles released after thousands of calls |
+| `62-permit-1271` | permit (EIP-712): DOMAIN_SEPARATOR / digest = ethers · relayer submission · replay · expiry (seconds) · other chain / token / values · program wallets (staticcall-style ERC-1271) · execute / transferOwnership |
+| `78-eip712` | eip712Digest / DomainSeparator / encodeType / hashStruct = ethers for every type set (all atomic types, nested structs, nested arrays, salt) on both the host and in programs · keccak256Bytes / ecrecoverDigest · gas · permits signed with ethers signTypedData (person + ERC-1271) · expiry / replay / other chain / verifyingContract |
+| `63-nft-standard` `64-multitoken-standard` | NFT / multi-token: mint, permissions (approve / operator / minter), safe transfer + hooks, whole-batch rollback, uri, burn, holdings index |
+| `65-multicall` | aggregate (order + all-or-nothing) · tryAggregate (rolls back only the failed ones · requireSuccess) · readonly (staticcall for every call) |
+| `66-evm-nft-logs` `67-explorer-nft` | /evm: ERC-721 / ERC-1155 logs + eth_call (decoded with ethers) · explorer: collectionInfo / nftHoldings / program kinds |
+| `68-base-fee` | base fee up / down / minimum / configuration · effective price = min(maxFee, baseFee + priority) · burn / tip / totals conserved · legacy · BaseFee() · replay |
+| `69-fee-mempool` | 1559 signatures · mempool ordered by effective tip · maxFee < baseFee waits in the queue · replacement must raise both values by 10% |
+| `70-header-roots` | receiptsRoot / logsBloom in the header + hash · checked by replay / rebuild / sync · /evm uses the header values |
+| `71-indexed-events` | emit indexed (options validation · topic gas) · index + cursor + multiple fields · eth_getLogs by topic · standard tokens |
+| `72-abi` | checkAbi (every schema rule) · deploy / setMetadata("abi") · toEvmAbi / programAbi / cardianal_getAbi |
 | `73-evm-fees` | /evm: baseFeePerGas · type 0x2 / effectiveGasPrice · eth_gasPrice / eth_maxPriorityFeePerGas / eth_feeHistory |
-| `76-gas-bulk-copy` | แก๊สตามขนาดข้อมูล: ลูป spread ทวีคูณหมดแก๊สก่อน 32 MB · ทุกทางที่คิด (spread / rest / apply / Set / Map / `+` / เมธอดในตัว / ArrayBuffer / typed array / RegExp ปิดแล้ว / runProgram) · ทางเลี่ยง (iterator / Proxy โกหก / เมธอดเดิม) · OOM จ่ายแก๊สจริง |
-| `77-rejected-once` | ใบที่ถูกปฏิเสธซ้ำ (hash เดิม) บันทึกใน block เดียว · ไม่ค้างให้ปิด block ใหม่ · `/evm` block เดิมไม่เปลี่ยนภายหลัง · ใบต่างกันยังบันทึกตามปกติ |
-| `79-rejected-hold` | มีแต่ใบที่ถูกปฏิเสธ → ไม่ปิด block จนครบ `REJECTED_HOLD_MS` (60 วิ) · มี tx จริง → ปิดทันทีและใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ลง block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
-| `80-load-test` | `dev/load-test.js --quick` (20 tx × 1+2 block · native / token / mix × LMDB / memory, ~5 วิ): exit 0 · ทุกใบเข้า block สำเร็จ · รายงาน JSON มีเวลาทุกช่วง (add / sim / take / roots / commit / write / close / slot) · LMDB โต · แก๊สของ LMDB = memory · ลบโฟลเดอร์ชั่วคราว |
-| `81-cpu-gas` | regex: literal deploy ไม่ผ่าน · RegExp / match / search / matchAll / species split → TypeError แม้ปิด autoreview · BigInt ใหญ่ (`2n ** 1e9n`, ลูป × ÷ toString parse key join …) หมดแก๊สเร็วกว่า timeout · เพดาน 8192 bit · ราคาตามสูตร · แก๊สเท่ากันทุกครั้ง / ทุก VM · token / number แก๊สเท่าเดิม · โค้ดที่แปลง operator ให้ผลเหมือน JS เดิม |
-| `82-perf-intake` | `mempool.add(item, { verified })` ไม่ตรวจลายเซ็นซ้ำ (ผลเหมือนตรวจเอง) · กันซ้ำภายใน ttl × 2 ตามเวลาแม้ยังไม่ล้าง · ใบในคิวหมดอายุถูกล้าง + บันทึก expired ตอนรับใบใหม่ · `block.hashes()` จำผล / เปลี่ยนเมื่อรัน tx หรือบันทึกใบที่ถูกปฏิเสธ / ตรงกับ replay |
-| `83-storage-slim` | ดัชนีไม่มี history / ไม่อยู่ใน blockundo · `isIndexKey` · `rebuildFrom` ได้ดัชนีเท่าเชนที่สร้างถึง block นั้นตรง ๆ (รวม target 0) · txn ไม่เก็บ signature / digest แต่ tx page / wallet list / eth_getTransactionByHash ยังได้ครบ · txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ · replay / stateAt / snapshotAt ได้ผลเดิม |
-| `85-genesis-producer` | `resolveSettings`: genesis ก่อน env · env ต่าง = error · ไม่มี config = ใช้ env · `startupProblems` (ADMINS / PRODUCER_KEY / producer นอกรายชื่อ · DEV ข้าม) · `server.js` จริงไม่ยอมเริ่ม · producer อยู่ใน hash + ลายเซ็นกู้ได้ · sync ปฏิเสธผู้ผลิตนอกรายชื่อ / ลายเซ็นปลอม / ไม่มีลายเซ็น / ไม่มีผู้ผลิต · replay / rebuild ได้ hash + ลายเซ็นเดิมแม้ไม่มี key · `replayTimeoutMs`: ผู้อ่านที่ timeout สั้นยังได้ hash ตรง |
-| `86-ops` | `/health` ปกติ 200 · stalled · ปิด block ล้มเหลว = 503 · `scripts/monitor.js` check (รวมติดต่อไม่ได้) · `scripts/backup.js` สำรองขณะ DB เปิด / manifest / ตรวจสาย block / keep · verify เจอ manifest ไม่ตรง + header หาย · restore ลงโฟลเดอร์ว่าง / ต้อง `--force` |
-| `87-sandbox-fuzz` | `fuzzOnce` / `fuzzDecoder` / `runFuzz` (seed คงที่ 150 รอบ): ไม่มี INTERNAL · ผลเหมือนกันสอง VM · host ไม่ปนเปื้อน · ผลเป็นข้อมูลล้วน · sandbox ใช้ต่อได้ · ตัวสุ่มซ้ำได้ตาม seed |
-| `88-gas-cpu` | `dev/bench-gas.js` (`npm run bench:gas`): ns ต่อแก๊สของ ~85 งาน เทียบลูปเลข · งานที่เคยถูกเกิน 8 เท่า (string ยาว `<` / `===` / switch, Map / Set key ยาว, JSON.stringify ซ้อนลึก, sort, flat, normalize) ราคาใหม่ · แก๊สเท่ากันทุก VM · ผล JS เหมือนเดิม |
-| `89-warm-sandbox` | ภาพอุ่นมี / ไม่มีใน cache / ปิด cache: ผลทุก tx เหมือนกันทุกไบต์ (รวมจุด OUT_OF_MEMORY) · global ไม่ค้าง · โปรแกรมที่สองของ tx ปกติ · LRU มีเพดาน |
-| `90-verify-pool` | worker ให้ผลเหมือน `verifyTransaction` ทุกไบต์ · error เดิม · ข้อมูลส่งข้าม thread ไม่ได้ = reject ไม่ค้าง · size 0 = thread หลัก · ปิดแล้วเรียกต่อได้ · 200 ใบพร้อมกัน thread หลักไม่ถูกบล็อก |
-| `91-evm-abi-call` | `eth_call` ตาม `metadata.abi`: ethers เข้ารหัส / ถอดได้ทุกชนิด · ตาม block · from = context.sender · selector ไม่ตรง / throw / calldata สั้น / JSON เสีย = reverted · codec ตรงกับ ethers |
-| `92-sdk` | `client-sdk` ไม่ import VM / sandbox / node:* · send ด้วย key / กระเป๋า EIP-1193 (ethers เซ็น typed data แบบ MetaMask) → wait ถึง block · nonce ผิด = `ChainError` พร้อม body |
-| `93-paymaster` | ไม่มี sponsor = ชนิดเดิม · มี sponsor = digest ตรงกับ ethers · ลายเซ็น sponsor หาย / ผิดคน / sponsor = ผู้ส่ง / เปลี่ยน sponsor = ปฏิเสธ · บนเชน: ผู้ใช้ยอด 0 ส่งได้ แก๊สหักจาก sponsor nonce ของผู้ส่ง · value ต้องเป็นเงินของผู้ส่ง |
-| `94-evm-send-raw` | ethers ส่งผ่าน `/evm`: native (type 2 + legacy) · ERC-20 transfer ของ token มาตรฐาน · ฟังก์ชันตาม ABI + estimateGas · receipt ด้วย hash ของ ethers · ปฏิเสธ ไม่มี chainId / chainId ผิด / deploy / type 1 / data ไป EOA / RLP เสีย · ถอดตรงกับ ethers |
-| `96-trie` | Merkle Patricia Trie ตรงกับ Ethereum (trie ว่าง · doe/dog/dogglesworth · geth TestDelete) · สุ่มใส่ / ลบ 200–300 รอบ = สร้างใหม่ทุกไบต์ ไม่มี node ค้าง (รวม key ที่เป็น prefix กัน / node ฝังในพ่อ / ค่าใน branch) · หลักฐานมี / ไม่มีค่า · แก้ node / root ผิด / node ขาด = ไม่ผ่าน |
-| `97-phase4` | `getProof` กับ stateRoot ของ header · ผู้อ่านได้ trie เหมือนผู้ผลิตทุก node · DB เก่าไม่มี trie สร้างให้ได้ root เดิม · pruning (เหลือ N block · ย้อนดู / replay ได้แค่ช่วงนั้น · ซิงก์จาก node ที่ตัดแล้วได้ผลเท่า archive · ทยอยลบ) · snapshot (โหลดแล้วซิงก์ต่อ = ผู้ผลิตทุก key · export ระหว่างมี block ใหม่ + ลบ key · แก้ค่า / ขาด key / ไม่ครบ / ผู้ผลิตผิด / chainId ผิด / key ที่ไม่ใช่ state = ไม่รับและไม่เหลือค้าง · header 256 block) |
-| `98-phase4-server` | server จริง: `/proof` + `client.verifiedState` (node ที่โกหกหลักฐาน = ไม่ผ่าน) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (เก็บ 2 ไฟล์) · node ใหม่ `startSync({ snapshot: true })` โหลดแล้วซิงก์ต่อได้ stateRoot เดียวกัน |
-| `101-block-gas-defer` | แก๊สที่เหลือใน block ไม่พอ → ใบนั้นรอ block ถัดไป (ไม่ถูกปฏิเสธ · ใบ nonce ถัดไปเข้าตาม) · server `mineOnce`: ไม่มีใบที่เข้าได้ + base fee ขั้นต่ำ = ไม่ปิด block ว่าง · `/health` ไม่ขึ้น stalled ระหว่างนั้น |
-| `102-evm-explorer-links` | ลิงก์ explorer ตาม EIP-3091 ใต้ `/evm/explorer` (tx / address / token / block ด้วยเลขหรือ hash) · `/evm/explorer` เปิดแล้วได้หน้า explorer (สำหรับลงทะเบียน chainlist) |
-| `103-deploy-preflight` | `scripts/preflight.js` กับไฟล์ใน `deploy/`: ค่าตัวอย่างที่ลืมแก้ / genesis ของช่วงพัฒนา / DEV = ไม่ผ่าน · กรอกครบ = ผ่าน · `HOST=127.0.0.1` ฟังเฉพาะในเครื่อง · ลืม `forks` = ไม่ผ่าน |
-| `117-launch-limits` | body เกิน `MAX_BODY_BYTES` = 413 (มี / ไม่มี content-length) · batch ของ `/evm` เกิน `EVM_MAX_BATCH` = ปฏิเสธ · ทุกคำขอใน batch นับ `EVM_RATE_LIMIT` · ws: batch / subscription ต่อการเชื่อมต่อ / การเชื่อมต่อต่อ IP มีเพดาน · `eth_sendRawTransaction` ผ่าน ws นับโควตา `/sendtx` |
-| `118-system-abi` | ABI ของโปรแกรมแถม 11 ตัว: ผ่าน `checkAbi` · ฟังก์ชันตรงกับที่ export · event ตรงกับทุก `emit` (field + ลำดับ + indexed) · deploy ชุดเต็มแล้ว `cardianal_getAbi` / `eth_call` / ถอด log ด้วย ethers ได้ · multisig ที่ clone ได้ ABI ด้วย |
-| `100-producer-failover` | `producerSchedule` ตรวจรูปแบบ / เรียง / `producersAt` · ไม่อยู่ใน genesis hash · key หลุด: key เดิมผลิตหลัง block N = ปฏิเสธ (block ก่อน N ซิงก์ได้) · `client.verifiedState` รับฟังก์ชันรายชื่อ · key สำรองผลิตต่อได้ + เตือนเมื่อมี key เดียว · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (ยังผลิต = ไม่เริ่ม · ซิงก์ที่ขาด · ติดต่อไม่ได้ = เตือน · ซิงก์ไม่ครบ = ไม่เริ่ม) · server จริงหลายโปรเซส: FOLLOW ซิงก์ + 503 · FAILOVER_FROM ตอนเดิมยังผลิต = exit 1 · เดิมดับ → สำรองผลิตต่อด้วย DATA เดิม · schedule ถอด key → `retired` → key ใหม่ซิงก์แล้วผลิตต่อ |
-| `99-trie-gas-forks` | `stateKey` คิดต่อ key ครั้งแรกของ tx · block เต็มแก๊สมี key ≤ แก๊ส / (write + stateKey) · fork: กติกาใหม่ตั้งแต่ block ที่กำหนด · replay ก่อน / หลัง fork ได้ hash เดิม · node ที่ไม่ตั้ง fork แยกที่ block นั้น · ชื่อไม่รู้จัก / block ผิด = ไม่ยอมเริ่ม · genesis hash ไม่รวม forks |
-| `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · นับจากขวาของ X-Forwarded-For (ปลอมทางซ้ายไม่ได้ผล) · server จริงหลัง proxy นับโควตาแยกตามผู้ใช้ · ไม่ตั้ง = เมิน header |
-| `84-chain-scale` | `historyfrom` (เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่ · เชนเก่าคำนวณครั้งเดียว) · replayBlock ไม่อ่าน blockundo · `pageSnapshotAt` = ผลของการไล่ blockundo (key ที่ถูกลบ / ซ้อนชั้น) + แบ่งหน้าต่อกันครบ · `rebuildFrom` ทีละชุด (batch 1 / 3 / 10,000) ได้ DB เท่าเชนที่สร้างถึง target ตรง ๆ ทุก key · history ไม่ครบ → ปฏิเสธก่อนแตะ DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
-| `59-evm-gaps` | API ที่เทียบ EVM: BlockHash (256 block, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (ค่า + แก๊ส) / runProgram readonly (ห้ามแก้ state ทุกชั้น, catch ได้, trace staticcall) / API ปลอมของ SDK |
+| `76-gas-bulk-copy` | gas by data size: exponential spread loops run out of gas before 32 MB · every charged path (spread / rest / apply / Set / Map / `+` / built-in methods / ArrayBuffer / typed arrays / RegExp now disabled / runProgram) · bypasses (iterators / lying Proxies / original methods) · OOM pays real gas |
+| `77-rejected-once` | a repeatedly rejected tx (same hash) is recorded in one block only · doesn't hold up sealing a new block · `/evm` old blocks don't change later · different txs are still recorded normally |
+| `79-rejected-hold` | only rejected txs → no block until `REJECTED_HOLD_MS` (60 s) elapses · real txs present → seals immediately with the rejected ones riding along · the time is not stored in the block · env `REJECTED_HOLD_MS` / `AUTO_REVIEW` |
+| `80-load-test` | `dev/load-test.js --quick` (20 tx × 1+2 blocks · native / token / mix × LMDB / memory, ~5 s): exit 0 · every tx included successfully · the JSON report has timings for every phase (add / sim / take / roots / commit / write / close / slot) · LMDB grows · LMDB gas = memory gas · temporary folders removed |
+| `81-cpu-gas` | regex: literals fail deploy · RegExp / match / search / matchAll / species split → TypeError even with autoreview off · large BigInts (`2n ** 1e9n`, loops of × ÷ toString parse key join …) run out of gas well before timeout · 8192-bit cap · prices per formula · identical gas every time / on every VM · token / number gas unchanged · operator-rewritten code behaves like plain JS |
+| `82-perf-intake` | `mempool.add(item, { verified })` skips re-verifying signatures (same result as verifying itself) · dedup within ttl × 2 by time even before cleanup · expired queued txs are cleaned + recorded as expired when a new tx arrives · `block.hashes()` memoizes / changes when a tx runs or a rejected tx is recorded / matches replay |
+| `83-storage-slim` | indexes have no history / are not in blockundo · `isIndexKey` · `rebuildFrom` produces the same indexes as a chain built directly to that block (including target 0) · txn stores no signature / digest but the tx page / wallet list / eth_getTransactionByHash still get everything · txto stores no blockNumber / index / timestamp but the API still has every field · replay / stateAt / snapshotAt give the same results |
+| `85-genesis-producer` | `resolveSettings`: genesis before env · differing env = error · no config = use env · `startupProblems` (ADMINS / PRODUCER_KEY / producer not listed · DEV skips) · the real `server.js` refuses to start · producer in the hash + recoverable signature · sync rejects unlisted producers / forged signatures / missing signatures / missing producers · replay / rebuild get the same hash + signature without the key · `replayTimeoutMs`: readers with a short timeout still get matching hashes |
+| `86-ops` | `/health` normally 200 · stalled · block sealing failure = 503 · `scripts/monitor.js` check (including unreachable) · `scripts/backup.js` backs up with the DB open / manifest / block chain check / keep · verify catches a mismatched manifest + missing header · restore into an empty folder / requires `--force` |
+| `87-sandbox-fuzz` | `fuzzOnce` / `fuzzDecoder` / `runFuzz` (fixed seed, 150 iterations): no INTERNAL · identical results on two VMs · host not contaminated · results are pure data · sandbox remains usable · the generator is reproducible by seed |
+| `88-gas-cpu` | `dev/bench-gas.js` (`npm run bench:gas`): ns per gas of ~85 workloads vs. a number loop · workloads that used to be over 8× underpriced (long-string `<` / `===` / switch, long Map / Set keys, deeply nested JSON.stringify, sort, flat, normalize) repriced · identical gas on every VM · JS results unchanged |
+| `89-warm-sandbox` | warm image cached / not cached / cache off: every tx result byte-identical (including the OUT_OF_MEMORY point) · no globals left over · second program in a tx works normally · LRU is capped |
+| `90-verify-pool` | workers give byte-identical results to `verifyTransaction` · same errors · data that can't cross threads = rejected, no hang · size 0 = main thread · callable again after close · 200 concurrent txs don't block the main thread |
+| `91-evm-abi-call` | `eth_call` via `metadata.abi`: ethers can encode / decode every type · by block · from = context.sender · mismatched selector / throw / short calldata / broken JSON = reverted · codec matches ethers |
+| `92-sdk` | `client-sdk` doesn't import VM / sandbox / node:* · send with a key / EIP-1193 wallet (ethers signs typed data like MetaMask) → wait until in a block · wrong nonce = `ChainError` with body |
+| `93-paymaster` | no sponsor = the original type · with sponsor = digest matches ethers · missing / wrong-signer sponsor signature / sponsor = sender / changed sponsor = rejected · on-chain: a user with 0 balance can send, gas is deducted from the sponsor, sender's nonce · value must be the sender's money |
+| `94-evm-send-raw` | ethers sends through `/evm`: native (type 2 + legacy) · ERC-20 transfer of a standard token · ABI functions + estimateGas · receipt by ethers' hash · rejects no chainId / wrong chainId / deploy / type 1 / data to an EOA / broken RLP · decoding matches ethers |
+| `96-trie` | Merkle Patricia Trie matches Ethereum (empty trie · doe/dog/dogglesworth · geth TestDelete) · random insert / delete for 200–300 rounds = byte-identical to a fresh build, no leftover nodes (including keys that are prefixes of each other / nodes embedded in parents / values in branches) · proofs of presence / absence · tampered node / wrong root / missing node = fails |
+| `97-phase4` | `getProof` against the header's stateRoot · readers get the same trie as the producer, node for node · an old DB without a trie gets one built with the same root · pruning (keeps N blocks · historical lookup / replay only within that range · syncing from a pruned node gives the same result as archive · gradual deletion) · snapshot (load then keep syncing = producer, key for key · export while new blocks arrive + keys deleted · tampered values / missing keys / incomplete / wrong producer / wrong chainId / non-state keys = rejected with nothing left behind · 256 block headers) |
+| `98-phase4-server` | real server: `/proof` + `client.verifiedState` (a node lying about proofs = fails) · `cardianal_getProof` / `eth_getProof` · `SNAPSHOT_EVERY` → `/snapshot` (keeps 2 files) · a new node with `startSync({ snapshot: true })` loads then keeps syncing with the same stateRoot |
+| `101-block-gas-defer` | not enough gas left in the block → that tx waits for the next block (not rejected · the next-nonce tx follows) · server `mineOnce`: no includable tx + minimum base fee = no empty block · `/health` doesn't report stalled meanwhile |
+| `102-evm-explorer-links` | EIP-3091 explorer links under `/evm/explorer` (tx / address / token / block by number or hash) · opening `/evm/explorer` gives the explorer page (for chainlist registration) |
+| `103-deploy-preflight` | `scripts/preflight.js` with the files in `deploy/`: unedited example values / development genesis / DEV = fails · fully filled in = passes · `HOST=127.0.0.1` listens locally only · missing `forks` = fails |
+| `117-launch-limits` | body over `MAX_BODY_BYTES` = 413 (with / without content-length) · `/evm` batch over `EVM_MAX_BATCH` = rejected · every request in a batch counts toward `EVM_RATE_LIMIT` · ws: batches / subscriptions per connection / connections per IP are capped · `eth_sendRawTransaction` over ws counts toward the `/sendtx` quota |
+| `118-system-abi` | ABIs of the 11 bundled programs: pass `checkAbi` · functions match the exports · events match every `emit` (fields + order + indexed) · after deploying the full set, `cardianal_getAbi` / `eth_call` / decoding logs with ethers work · cloned multisigs get the ABI too |
+| `100-producer-failover` | `producerSchedule` format / ordering / `producersAt` · not in the genesis hash · key leaked: the old key producing after block N = rejected (blocks before N still sync) · `client.verifiedState` accepts a list function · a backup key can keep producing + a warning when there is only one key · `startupProblems` FOLLOW / nextBlock · `prepareFailover` (still producing = don't start · syncs what's missing · unreachable = warn · incomplete sync = don't start) · real multi-process server: FOLLOW syncs + 503 · FAILOVER_FROM while the old one still produces = exit 1 · old one down → the standby keeps producing with the same DATA · schedule removes a key → `retired` → the new key syncs and keeps producing |
+| `99-trie-gas-forks` | `stateKey` charged per first key of a tx · a gas-full block has keys ≤ gas / (write + stateKey) · fork: new rules from the given block · replay before / after the fork gives the same hash · a node without the fork splits at that block · unknown name / bad block = refuses to start · the genesis hash excludes forks |
+| `95-client-ip` | `clientIp`: `TRUST_PROXY` 0 / 1 / 2 · counted from the right of X-Forwarded-For (forging the left part has no effect) · the real server behind a proxy keeps per-user quotas · unset = header ignored |
+| `84-chain-scale` | `historyfrom` (new chain = 1 · blocks not storing history → recount · old chains computed once) · replayBlock doesn't read blockundo · `pageSnapshotAt` = the result of scanning blockundo (deleted / nested keys) + contiguous complete pages · `rebuildFrom` in batches (batch 1 / 3 / 10,000) yields a DB identical, key for key, to a chain built directly to target · incomplete history → rejected before touching the DB · `parseSize` / `DB.stats()` · server `/health` + `/state?limit&cursor` |
+| `59-evm-gaps` | EVM-equivalent APIs: BlockHash (256 blocks, replay) / ChainId / Coinbase / BlockGasLimit / GasPrice / GasLeft / CodeHashOf / CodeSizeOf / sha256 / ripemd160 / blake2b / modexp (values + gas) / runProgram readonly (no state changes at any level, catchable, staticcall trace) / the SDK's fake APIs |
 
-`test/e2e/explorer.e2e.js` (`npm run test:e2e`) เปิด explorer ใน Chromium จริงกับ `server.js` จริง: ไล่ทุกหน้า, อ่านค่า, เซ็น tx ด้วย wallet จำลอง (รวมแถบ Permit: เซ็น EIP-712 แล้วเชนรับ)
-ใช้ `playwright` (devDependency) — ในเครื่องที่ยังไม่มีเบราว์เซอร์ให้รัน `npx playwright install chromium` ก่อน · CI รันเป็น job `e2e` แยก
-`46-explorer-canonical` ดึง `canonical()` / `signingInput()` ออกจาก `explorerscan/core/wallet.js` มาเทียบกับ VM ตรง ๆ — แก้สองฟังก์ชันนี้ต้องผ่านเทสต์นี้
+`test/e2e/explorer.e2e.js` (`npm run test:e2e`) opens the explorer in real Chromium against the real `server.js`: walks every page, reads values, signs txs with a mock wallet (including the Permit tab: signs EIP-712 and the chain accepts it)
+Uses `playwright` (devDependency) — on machines without the browser yet, run `npx playwright install chromium` first · CI runs it as a separate `e2e` job
+`46-explorer-canonical` extracts `canonical()` / `signingInput()` from `explorerscan/core/wallet.js` and compares them with the VM directly — changes to these two functions must pass this test
 
-**ถ้าแก้ชุด key ของผลลัพธ์ (เพิ่ม field ใน receipt / result) ต้องแก้ `test/helpers.js` ด้วย** ไม่งั้นเทสต์หลายไฟล์จะพังพร้อมกัน
-`dev/demo-market.js` อ่าน source ของ TOKEN/MARKET ออกมาจาก `test/44-complex-scenario.test.js` ตรง ๆ — แก้เทสต์นั้นแล้ว demo เปลี่ยนตาม
+**If you change result key sets (adding fields to receipts / results), you must also update `test/helpers.js`**, otherwise many test files break at once
+`dev/demo-market.js` reads the TOKEN/MARKET source directly from `test/44-complex-scenario.test.js` — change that test and the demo changes with it
 
-### จำลองผู้ใช้ 200 กระเป๋า (`npm run simulate`)
+### Simulating 200 wallets (`npm run simulate`)
 
-⚠️ `simulate` / `scenario` / `scenario:full` ตั้งราคาแก๊ส 1–20 gwei และงบแก๊สตาม `DEFAULT_GAS` → server ที่เปิดเองต้องใช้ `GAS_PRICE=1000000000` + genesis ที่ไม่มี `"forks"` (`genesis-nofork.json` = `genesis.json` ที่ลบ `forks`: `node -e 'const g=require("./genesis.json");delete g.forks;require("fs").writeFileSync("genesis-nofork.json",JSON.stringify(g))'`) · ค่าเริ่มของเชน (10,000 gwei + fork `bluewolf`) = tx ถูกปฏิเสธ / งบไม่พอ · `scenario:full --spawn` ตั้งให้เอง · `--spawn` ของ `simulate` / `scenario` ส่ง env ต่อให้ server
+⚠️ `simulate` / `scenario` / `scenario:full` set gas prices of 1–20 gwei and gas budgets per `DEFAULT_GAS` → a server you start yourself must use `GAS_PRICE=1000000000` + a genesis without `"forks"` (`genesis-nofork.json` = `genesis.json` with `forks` removed: `node -e 'const g=require("./genesis.json");delete g.forks;require("fs").writeFileSync("genesis-nofork.json",JSON.stringify(g))'`) · chain defaults (10,000 gwei + fork `bluewolf`) = txs rejected / budgets insufficient · `scenario:full --spawn` sets this up itself · `--spawn` of `simulate` / `scenario` passes env through to the server
 
-`dev/simulate-users.js` ส่ง tx จริงเข้า server ที่รันอยู่ ทีละ block ตามจังหวะปิด block (`BLOCK_MS` ของ server) แล้วตรวจว่าทุกใบเข้า block
+`dev/simulate-users.js` sends real txs to a running server, one block at a time following the block cadence (the server's `BLOCK_MS`), then checks that every tx was included
 
 ```
-RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · RATE_LIMIT=0 จำเป็น (ยิงจาก IP เดียว) · BLOCK_MS ค่าเริ่ม 2000
-npm run simulate                               # terminal 2 · เปิด explorer ดูไปพร้อมกันได้
-GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run simulate -- --spawn   # หรือให้สคริปต์เปิด server เอง (ปิดตอนจบ · BLOCK_MS 1000)
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · RATE_LIMIT=0 is required (everything comes from one IP) · BLOCK_MS default 2000
+npm run simulate                               # terminal 2 · you can watch the explorer at the same time
+GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run simulate -- --spawn   # or let the script start the server itself (closed at the end · BLOCK_MS 1000)
 npm run simulate -- --blocks 200 --min 15 --max 25
 ```
 
-- เฟส 1 (~10 block แรก): genesis → 10 กระเป๋าแจก → อีก 190 กระเป๋า · ~20 tx/block
-- เฟส 2 (`--blocks`, ค่าเริ่ม 100): deploy token / market / poll 10 ตัว (admin init ให้อัตโนมัติ) แล้วใช้งานจริง 15–25 tx/block: โอน, ตั้งชื่อ, แจกโทเคน, approve, ประกาศขาย, ซื้อ, ฝาก-ถอน, โหวต + tx ผิดพลาดตั้งใจเล็กน้อย (ต้องโดนปฏิเสธที่ `/sendtx`)
-- จบแล้วสรุป: ส่ง / เข้าคิว / ถูกปฏิเสธ (แยกสาเหตุ) / เข้าคิวแต่ไม่เข้า block / tx ต่อ block / ระยะห่าง block · รายงานเต็มที่ `simulate-report.json` · key ของกระเป๋าที่ `simulate-report-wallets.json`
-- ต้องเริ่มจาก chain ใหม่ (block 0) เพราะใช้เงินจาก genesis ~7.7 ล้าน และชื่อ namespace ซ้ำกับรอบก่อนไม่ได้ · ถ้า server ตั้ง `ADMINS` ต้องส่ง `--admin-key`
+- Phase 1 (~first 10 blocks): genesis → 10 funded wallets → 190 more wallets · ~20 tx/block
+- Phase 2 (`--blocks`, default 100): deploys 10 token / market / poll programs (admin inits them automatically) then real usage at 15–25 tx/block: transfers, naming, token airdrops, approve, listing, buying, deposit-withdraw, voting + a few deliberately bad txs (must be rejected at `/sendtx`)
+- At the end it summarizes: sent / queued / rejected (by reason) / queued but not included / tx per block / block spacing · full report in `simulate-report.json` · wallet keys in `simulate-report-wallets.json`
+- Must start from a fresh chain (block 0) because it uses ~7.7 million from genesis and namespace names can't repeat from a previous run · if the server sets `ADMINS`, pass `--admin-key`
 
-### scenario 1000 กระเป๋า · 10 tx ต่อ block (`npm run scenario`)
+### Scenario: 1000 wallets · 10 tx per block (`npm run scenario`)
 
-`dev/scenario.js` + โปรแกรมใน `dev/scenario-programs.js` (เทสต์ `50-scenario-programs`)
-
-```
-RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · chain ใหม่ (ใช้เงิน genesis ~9.1 ล้าน)
-npm run scenario                               # terminal 2 · ค่าเริ่ม 60 block ของการใช้งาน
-GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn --blocks 15   # หรือเปิด server เอง (MemoryDB)
-```
-
-- ทุก block หยิบงานที่ "พร้อม" (ของที่ต้องใช้เข้า block แล้ว) ให้ครบ `--per-block` (10) ใบ: งานตั้งต้นก่อน แล้วเติมด้วยงานของกระเป๋าที่ได้เหรียญแล้ว
-- โปรแกรม: token `TEST` (6 decimals, ไอคอน, namespace `scenario-test`) · `multisend` (แจก native) · `chain-a`…`chain-f` (step เรียกต่อกัน 6 ทอด, C / E แวะอ่าน balanceOf, D catch ความผิดพลาดของชั้นล่าง)
-  · `router-1`…`router-4` (forward: ดึง token ด้วย transferFrom แล้วส่ง token + native ต่อกัน 4 ทอด หักทอดละ 1%)
-- แจก: multiSend native 3,500 ให้ 1000 กระเป๋า (100 ต่อ tx) + 40,000 ให้ 50 กระเป๋า power · multiTransfer TEST 1,000 ให้ทุกกระเป๋า (power 50,000)
-  `--target` (ค่าเริ่ม 0xF10F…80Cf) ได้ native 500,000 + TEST 1,000,000 และได้เพิ่มระหว่างทางจาก router / การโอน
-- ใช้งาน: power 3 ใบต่อ block (chain 3–6 ทอด, 20% ของสาย 6 ทอดให้ F ล้มแต่ D catch ไว้ · router 4 ทอด · multiTransfer 10–30 คน) + กระเป๋าทั่วไป (โอน TEST / native, ตั้งชื่อ)
-  ประเมินค่าใช้จ่ายต่อกระเป๋า (`COST`, `budget`) ไม่ส่งงานที่จ่ายไม่ไหว · tx ที่ล้มทั้งใบไม่มีในชุดนี้เพราะ simulate ที่ `/sendtx` ปฏิเสธก่อนเข้า block
-- รันจริง 9 ต.ค. (BLOCK_MS 3000): 64 block × 10 tx ทุก block, 640/640 สำเร็จ, ผู้ถือ TEST 1,006 · รายงานที่ `scenario-report.json`
-- ⚠️ แท็บ Incoming ของกระเป๋านับเฉพาะ tx ที่ส่ง**ถึง**กระเป๋านั้นตรง ๆ — token ที่ได้จาก transfer / router และ native จาก transferNative ไม่อยู่ในรายการนี้ (ดูได้จากแท็บ Tokens / ยอด)
-
-### scenario ครบทุกฟังก์ชัน (`npm run scenario:full`) — เทสต์ `74-scenario-full`
-
-`dev/scenario-full.js` + โปรแกรมตัวอย่างใน `dev/scenario-full-programs.js` (ทุกตัวมี `metadata.abi` + namespace → แสดงสวยทั้ง explorer และ Blockscout)
-ส่ง tx จริงทีละชุดแล้ว**ตรวจผลบนเชนทุกข้อ** (~300 ข้อ พิมพ์ ✅ / ❌ ทีละหัวข้อ · ล้มข้อเดียว = exit 1 · รายงาน `scenario-full-report.json`)
+`dev/scenario.js` + programs in `dev/scenario-programs.js` (test `50-scenario-programs`)
 
 ```
-RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 (เปิด fork bluewolf = ข้อแก๊สล้ม · ใช้ chain เดิมที่มีข้อมูลอยู่แล้วก็ได้ · รันซ้ำได้ เพราะ --tag สุ่มให้ทุกรอบ)
-npm run scenario:full                          # terminal 2 · http://localhost:3000 (รันจริงล่าสุดที่ BLOCK_MS 3000 ใช้ ~2 นาที)
-npm run scenario:full -- --spawn               # เปิด server เอง: MemoryDB · BLOCK_MS 1000 · GAS_PRICE 1 gwei · genesis ไม่มี forks · MAX_BLOCK_GAS 3M · UPGRADE_DELAY_BLOCKS 2 (ทดสอบ timelock) · ตรวจ sync ด้วย
-npm run scenario:full -- --spawn --quick       # BLOCK_MS 300 (~15 วินาที) — ตัวที่เทสต์ 74 ใช้
-npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout http://localhost   # server ที่ตั้ง ADMINS / พิมพ์ลิงก์ Blockscout
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 · fresh chain (uses ~9.1 million from genesis)
+npm run scenario                               # terminal 2 · default 60 blocks of usage
+GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn --blocks 15   # or start the server itself (MemoryDB)
 ```
 
-- หัวข้อ: เตรียมกระเป๋า · deploy → init / reject (คืนเงิน) · namespace · ABI · โอน 0 / legacy / 1559 / burnedFee / producerFee / base fee ขึ้น-ลง
-  · replace-by-fee (+10%) / replaced / ราคาไม่พอ / tx ที่ถูกปฏิเสธลง block · token (transfer / approve / transferFrom / multiTransfer / permit EIP-712 คน + ERC-1271 · DOMAIN_SEPARATOR · หมดเวลา)
-  · NFT (mint / safeTransferFrom ไปคนและ WALLET_PROGRAM / approve / operator / tokenURI) · ERC-1155 (mint / batch / operator / uri) · กระเป๋า ERC-1271 (execute)
-  · multicall · runProgram ซ้อน / STATICCALL FORBIDDEN / catch · API ทุกตัวเทียบค่าจริง (รวม keccak256Bytes / ecrecoverDigest / eip712Digest · replay ได้ Math.random เดิม) · upgrade (reject / approve / timelock / migrate / versions / setUpgrader / สละสิทธิ์)
-  · cloneProgram (address ทำนายด้วย `vm.cloneAddressFor`) · OUT_OF_GAS / OUT_OF_MEMORY ทั้งตอน query, /sendtx และ**ใน block** · event indexed (REST + eth_getLogs)
-  · /evm ที่ Blockscout ใช้ (block / tx type 0x0-0x2 / receipt + log ERC-20 · ERC-721 4 topic · ERC-1155 / eth_call / feeHistory / tx ที่ล้ม 0x0 / callTracer) · REST ของ explorer · sync
-- tx ที่ล้ม "ใน block" ทำด้วยกับดักของ `GAS_LAB_PROGRAM`: `arm()` + `loopIfArmed()` + `memoryIfArmed()` ส่งใน block เดียวกัน (simulate ที่ /sendtx รันบน state ก่อน arm จึงผ่าน)
-- sync: import `server.js` ตัวที่สองในโปรเซสของสคริปต์ (env เดียวกับ server ที่ spawn · MemoryDB · ปิด miner) แล้ว `syncOnce` จาก `/sync` จนครบ → เทียบ head hash / stateRoot
-  ใช้กับ server ที่เปิดเองได้ด้วย `--sync` (env ที่มีผลกับผลของ tx ต้องตรงกัน เช่น `UPGRADE_DELAY_BLOCKS` `GAS_*` `MEMORY_LIMIT_MB`)
-- ท้ายรายงานพิมพ์ address ของโปรแกรมตัวอย่าง + tx ที่น่าดู เป็นลิงก์ `/#address/…` `/#tx/…` ของเรา และ `<blockscout>/token|address|tx/…`
-  (hash ที่พิมพ์คือ VM hash = hash ที่ Blockscout เห็น · `/sendtx` คืน digest ที่ผู้ใช้เซ็น — explorer ของเราค้นได้ทั้งสอง)
-- **ดูใน Blockscout**: ชี้ Blockscout ไปที่ `/evm` ของ server ตัวเดียวกัน — `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL=ETHEREUM_JSONRPC_TRACE_URL=http://<host>:3000/evm`
-  · `ETHEREUM_JSONRPC_WS_URL=ws://<host>:3000/evm` · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · ฝั่งเชน `EVM_RATE_LIMIT=0` (ขั้นตอนเต็มใน `docs/blockscout.md`)
-  `--spawn` ใช้ port สุ่มและ MemoryDB → ถ้าจะดูใน Blockscout ให้เปิด server เอง (`RATE_LIMIT=0 EVM_RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev`) แล้วรันแบบไม่มี `--spawn`
-- ข้าม: `TIMEOUT_MS` (แก๊ส 3M หมดก่อนเสมอ ~60 ms · เทสต์ 08 / 58 คุม timeout อยู่แล้ว)
-- พบระหว่างทำ (แก้แล้ว · เทสต์ `75-simulate-block-number`): `simulate` ใช้ `number: null` → `BlockNumber()` เป็น null ตอน /sendtx
-  โปรแกรมที่คำนวณกับเลข block ถูกปฏิเสธทั้งที่ใน block รันได้ → ตอนนี้จำลองเป็น block ถัดไปเสมอ (ไม่ commit / ไม่จองเลข)
-- พบระหว่างทำ (แก้แล้ว · เทสต์ `76-gas-bulk-copy`): spread `[...a, ...a]` ไม่ถูกคิดแก๊สตามจำนวนสมาชิก (รวมการแปลง array เป็น string โดยนัย)
-  → เดิมจองหน่วยความจำ 32 MB ได้ด้วย ~230 แก๊ส · ตอนนี้คิด 1 ต่อสมาชิก / 32 byte (หัวข้อ "ค่าแก๊ส") ลูปเดิมหมดแก๊สที่ 3M ก่อน
-  `memoryIfArmed` จึงเปลี่ยนเป็นสร้าง string 1 MB (`s + s`) แล้ว `keep.push([s].join(""))` วนไป (เขียนไว้ตอน `repeat` ยังถูก autoreview ห้าม · ตอนนี้ใช้ได้แล้ว) + `gasLimit` 1,500,000 → ยัง OUT_OF_MEMORY ใน block (จ่าย ~1.05M gas · สคริปต์ตรวจว่า gasUsed อยู่ระหว่าง 500K–1.5M)
-- ท้ายรายงานพิมพ์ gasUsed ของ tx ที่น่าดูแต่ละตัว + แก๊สรวมทุก block ของรอบนั้น (`gasByTx` / `gasUsed` ในไฟล์รายงาน) · `npm run scenario` ก็พิมพ์ gas/tx ต่อชนิดและแก๊สรวม
+- Each block picks "ready" work (whose prerequisites are already in a block) up to `--per-block` (10) txs: setup work first, then filled with work from wallets that already have funds
+- Programs: token `TEST` (6 decimals, icon, namespace `scenario-test`) · `multisend` (native airdrop) · `chain-a`…`chain-f` (steps calling each other 6 hops deep, C / E stop to read balanceOf, D catches errors from lower levels)
+  · `router-1`…`router-4` (forward: pull tokens with transferFrom then pass token + native along 4 hops, taking 1% per hop)
+- Airdrops: multiSend native 3,500 to 1000 wallets (100 per tx) + 40,000 to 50 power wallets · multiTransfer TEST 1,000 to every wallet (power 50,000)
+  `--target` (default 0xF10F…80Cf) gets native 500,000 + TEST 1,000,000 and more along the way from routers / transfers
+- Usage: power wallets 3 txs per block (chains of 3–6 hops, 20% of the 6-hop chains make F fail but D catches it · 4-hop routers · multiTransfer to 10–30 people) + regular wallets (transfer TEST / native, set names)
+  Estimates each wallet's costs (`COST`, `budget`) and doesn't send work it can't afford · txs failing entirely are absent from this set because simulate at `/sendtx` rejects them before inclusion
+- Real run on Oct 9 (BLOCK_MS 3000): 64 blocks × 10 txs every block, 640/640 succeeded, 1,006 TEST holders · report in `scenario-report.json`
+- ⚠️ A wallet's Incoming tab counts only txs sent **directly to** that wallet — tokens received via transfer / router and native via transferNative are not in that list (see the Tokens tab / balances)
 
-### load test — ปิด block ใช้เวลาเท่าไหร่ (`npm run load:test`) — เทสต์ `80-load-test`
+### Full-coverage scenario (`npm run scenario:full`) — test `74-scenario-full`
 
-`dev/load-test.js` วัดเวลาปิด block ภายใต้โหลด **ในโปรเซสเดียว ไม่ผ่าน HTTP** ด้วยของจริงทั้งชุด: `VirtualMachine` (option เดียวกับ `server.js`: 500 tx / 16 ต่อ sender / maxBlockGas และ maxTxGas 3M / EIP-1559 / history)
-+ `DB` (LMDB ในโฟลเดอร์ชั่วคราวบนดิสก์จริง) เทียบ `MemoryDB` + `Mempool` + `simulate` (+ `reviewProgram` ตอน deploy) = `/sendtx` ลบ HTTP
-ผู้ส่งเป็นกระเป๋าจาก genesis คนละใบ (1 ใบต่อกระเป๋าต่อ block → ไม่ติดเพดาน 16) · เซ็น tx ก่อน block (ฝั่ง client ไม่จับเวลา) แล้วแต่ละ block ทำแบบ miner ของ server: `mempool.add` ทีละใบ → `createBlock` → `mempool.take` → `commit`
+`dev/scenario-full.js` + sample programs in `dev/scenario-full-programs.js` (all have `metadata.abi` + namespace → display nicely in both the explorer and Blockscout)
+Sends real txs batch by batch then **verifies every result on-chain** (~300 checks, printing ✅ / ❌ per section · a single failure = exit 1 · report `scenario-full-report.json`)
 
 ```
-npm run load:test                                       # ชุดเต็ม: native / token / mix × 100 / 250 / 500 tx × LMDB + memory (~10 นาที)
-npm run load:test -- --quick                            # ชุดเล็ก ~5 วินาที (ตัวที่เทสต์ 80 ใช้)
-npm run load:test -- --db lmdb --workload token --txs 500 --blocks 30 --out load.json   # เลือกเอง + รายงาน JSON ทุก block
-npm run load:test -- --data-dir /var/data/tmp --keep    # วาง LMDB บนดิสก์ที่จะใช้จริง · เก็บโฟลเดอร์ไว้ดู
+RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # terminal 1 (with the bluewolf fork enabled = gas checks fail · an existing chain with data works too · rerunnable because --tag is randomized each run)
+npm run scenario:full                          # terminal 2 · http://localhost:3000 (the latest real run at BLOCK_MS 3000 took ~2 minutes)
+npm run scenario:full -- --spawn               # starts the server itself: MemoryDB · BLOCK_MS 1000 · GAS_PRICE 1 gwei · genesis without forks · MAX_BLOCK_GAS 3M · UPGRADE_DELAY_BLOCKS 2 (tests the timelock) · also checks sync
+npm run scenario:full -- --spawn --quick       # BLOCK_MS 300 (~15 seconds) — the one test 74 uses
+npm run scenario:full -- --url http://host:3000 --admin-key 0x… --blockscout http://localhost   # a server with ADMINS set / print Blockscout links
+```
+
+- Sections: wallet setup · deploy → init / reject (refund) · namespace · ABI · 0 transfer / legacy / 1559 / burnedFee / producerFee / base fee up-down
+  · replace-by-fee (+10%) / replaced / price too low / rejected txs recorded in blocks · token (transfer / approve / transferFrom / multiTransfer / EIP-712 permit by person + ERC-1271 · DOMAIN_SEPARATOR · expiry)
+  · NFT (mint / safeTransferFrom to a person and to WALLET_PROGRAM / approve / operator / tokenURI) · ERC-1155 (mint / batch / operator / uri) · ERC-1271 wallet (execute)
+  · multicall · nested runProgram / STATICCALL FORBIDDEN / catch · every API compared against real values (including keccak256Bytes / ecrecoverDigest / eip712Digest · replay gives the same Math.random) · upgrade (reject / approve / timelock / migrate / versions / setUpgrader / renounce)
+  · cloneProgram (address predicted with `vm.cloneAddressFor`) · OUT_OF_GAS / OUT_OF_MEMORY at query, at /sendtx and **in a block** · indexed events (REST + eth_getLogs)
+  · the /evm parts Blockscout uses (block / tx type 0x0-0x2 / receipt + ERC-20 logs · 4-topic ERC-721 · ERC-1155 / eth_call / feeHistory / failed 0x0 txs / callTracer) · explorer REST · sync
+- Txs that fail "in a block" are produced with `GAS_LAB_PROGRAM`'s trap: `arm()` + `loopIfArmed()` + `memoryIfArmed()` sent in the same block (simulate at /sendtx runs on the state before arm, so they pass)
+- sync: imports a second `server.js` in the script's process (same env as the spawned server · MemoryDB · miner off) then `syncOnce` from `/sync` until complete → compares head hash / stateRoot
+  Works with a server you started yourself via `--sync` (env affecting tx results must match, e.g. `UPGRADE_DELAY_BLOCKS` `GAS_*` `MEMORY_LIMIT_MB`)
+- The end of the report prints the sample program addresses + notable txs as links to our `/#address/…` `/#tx/…` and to `<blockscout>/token|address|tx/…`
+  (the printed hash is the VM hash = the hash Blockscout sees · `/sendtx` returns the digest the user signed — our explorer can search both)
+- **Viewing in Blockscout**: point Blockscout at the same server's `/evm` — `ETHEREUM_JSONRPC_VARIANT=geth` · `ETHEREUM_JSONRPC_HTTP_URL=ETHEREUM_JSONRPC_TRACE_URL=http://<host>:3000/evm`
+  · `ETHEREUM_JSONRPC_WS_URL=ws://<host>:3000/evm` · `INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE=call_tracer` · chain side `EVM_RATE_LIMIT=0` (full steps in `docs/blockscout.md`)
+  `--spawn` uses a random port and MemoryDB → to view in Blockscout, start the server yourself (`RATE_LIMIT=0 EVM_RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev`) and run without `--spawn`
+- Skipped: `TIMEOUT_MS` (3M gas always runs out first, ~60 ms · tests 08 / 58 already cover timeouts)
+- Found along the way (fixed · test `75-simulate-block-number`): `simulate` used `number: null` → `BlockNumber()` was null at /sendtx
+  Programs computing with the block number were rejected even though they ran fine in a block → now it always simulates as the next block (no commit / no number reserved)
+- Found along the way (fixed · test `76-gas-bulk-copy`): spread `[...a, ...a]` wasn't charged gas per element (including implicit array-to-string conversion)
+  → previously 32 MB of memory could be allocated for ~230 gas · now 1 per element / 32 bytes (section "Gas"), and the old loop runs out of gas at 3M first
+  So `memoryIfArmed` was changed to build a 1 MB string (`s + s`) then loop `keep.push([s].join(""))` (written when `repeat` was still banned by autoreview · it is allowed now) + `gasLimit` 1,500,000 → still OUT_OF_MEMORY in a block (pays ~1.05M gas · the script checks gasUsed is between 500K–1.5M)
+- The end of the report prints gasUsed of each notable tx + total gas of every block in the run (`gasByTx` / `gasUsed` in the report file) · `npm run scenario` also prints gas/tx per kind and total gas
+
+### load test — how long does block sealing take (`npm run load:test`) — test `80-load-test`
+
+`dev/load-test.js` measures block sealing time under load **in a single process, without HTTP**, using the real components: `VirtualMachine` (same options as `server.js`: 500 tx / 16 per sender / maxBlockGas and maxTxGas 3M / EIP-1559 / history)
++ `DB` (LMDB in a temporary folder on a real disk) vs `MemoryDB` + `Mempool` + `simulate` (+ `reviewProgram` at deploy) = `/sendtx` minus HTTP
+Senders are distinct genesis wallets (1 tx per wallet per block → never hits the 16 cap) · txs are signed before the block (client side is not timed), then each block does what the server's miner does: `mempool.add` one by one → `createBlock` → `mempool.take` → `commit`
+
+```
+npm run load:test                                       # full set: native / token / mix × 100 / 250 / 500 tx × LMDB + memory (~10 minutes)
+npm run load:test -- --quick                            # small set, ~5 seconds (the one test 80 uses)
+npm run load:test -- --db lmdb --workload token --txs 500 --blocks 30 --out load.json   # custom selection + a JSON report of every block
+npm run load:test -- --data-dir /var/data/tmp --keep    # put LMDB on the disk you will actually use · keep the folder for inspection
 RATE_LIMIT=0 DATA=./data npm run dev                    # end-to-end: terminal 1
-npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --blocks 4   # terminal 2 · ยิง /sendtx จริง (ตรวจลายเซ็น + simulate + HTTP)
+npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --blocks 4   # terminal 2 · hits the real /sendtx (signature check + simulate + HTTP)
 ```
 
-- ตัวเลือก: `--db lmdb|memory|both` · `--workload native,token,mix|all` · `--txs 100,250,500` · `--blocks` (10 · ที่วัด) · `--warmup` (2 · ไม่นับ) · `--rounds` (200 · ลูปของ MIX.work) · `--seed` · `--out`
-  `--url` เติมเงินด้วย tx จริง (funder → กระเป๋ากลาง ≤ 50 ใบต่อกระเป๋ากลาง เพราะ rate limit 60 ใบ/นาที/address) แล้วยิงพร้อมกัน `--concurrency` (16) · ไม่เกิน 800 tx ต่อรอบ · `--funder-key` / `--admin-key` (server ตั้ง `ADMINS`) · ต้อง `RATE_LIMIT=0`
-- workload: **native** โอน native · **token** `TOKEN_PROGRAM.transfer` (ทั้งสองแบบ ครึ่งหนึ่งไป address ใหม่ทุกใบ) · **mix** token 30% / native 20% / `MIX.work` (ลูป 200 รอบ + keccak256 + เขียน 3 key + emit indexed) 35% / `MIX.probe` (runProgram ไป token) 15%
-- คอลัมน์ (ms ต่อ block): **add** = `mempool.add` ทั้ง block (ตรวจลายเซ็น + simulate) · **take** = createBlock + take (รันทุกใบ) · **roots** = `block.hashes()` วัดแยก (ไม่รวมใน close) · **commit** = `block.commit()` ทั้งหมด · **write** = เฉพาะ `db.writeKeys`
-  · **close** = take + commit (สิ่งที่ miner ทำใน `setInterval`) · **slot** = add + close (server เป็น thread เดียว ทั้งสองต้องเสร็จใน `BLOCK_MS`) · **DB +/tx** = หน้า LMDB ที่ใช้เพิ่ม (`lastPageNumber × pageSize`) ต่อ tx
+- Options: `--db lmdb|memory|both` · `--workload native,token,mix|all` · `--txs 100,250,500` · `--blocks` (10 · measured) · `--warmup` (2 · not counted) · `--rounds` (200 · MIX.work's loop) · `--seed` · `--out`
+  `--url` funds wallets with real txs (funder → intermediate wallets, ≤ 50 txs per intermediate wallet because of the 60 tx/min/address rate limit) then fires concurrently with `--concurrency` (16) · at most 800 txs per round · `--funder-key` / `--admin-key` (server sets `ADMINS`) · requires `RATE_LIMIT=0`
+- Workloads: **native** native transfers · **token** `TOKEN_PROGRAM.transfer` (in both, half go to a new address each time) · **mix** token 30% / native 20% / `MIX.work` (200-iteration loop + keccak256 + 3 key writes + emit indexed) 35% / `MIX.probe` (runProgram into the token) 15%
+- Columns (ms per block): **add** = `mempool.add` for the whole block (signature check + simulate) · **take** = createBlock + take (runs every tx) · **roots** = `block.hashes()` measured separately (not included in close) · **commit** = all of `block.commit()` · **write** = `db.writeKeys` only
+  · **close** = take + commit (what the miner does in `setInterval`) · **slot** = add + close (the server is single-threaded, both must finish within `BLOCK_MS`) · **DB +/tx** = extra LMDB pages used (`lastPageNumber × pageSize`) per tx
 
-**ผลวัดจริง 22 ต.ค.** (Xeon 2.8 GHz 4 vCPU · Node 22.22 · LMDB 3.5.7 บน `/tmp` = ดิสก์ virtio จริง ไม่ใช่ tmpfs · 10 block + อุ่น 2 · ทุกใบสำเร็จ ไม่มีใบถูกปฏิเสธ)
+**Real measurements, Oct 22** (Xeon 2.8 GHz 4 vCPU · Node 22.22 · LMDB 3.5.7 on `/tmp` = a real virtio disk, not tmpfs · 10 blocks + 2 warmup · every tx succeeded, none rejected)
 
 | workload | tx/block | gas/block | add | take | roots | commit LMDB / mem | write LMDB / mem | **close p50 / p95 LMDB** | close p50 / p95 mem | slot p95 LMDB | LMDB +/tx |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1292,55 +1293,55 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 | mix | 250 | 923,705 | 1,691 | 554 | 77 | 174 / 123 | 72 / 18 | **721 / 844** | 636 / 786 | 2,689 | 12.5 KB |
 | mix | 500 | 1,815,757 | 3,379 | 955 | 129 | 345 / 252 | 132 / 42 | **1,296 / 1,470** | 1,249 / 1,375 | 4,976 | 12.5 KB |
 
-(add / take / roots เป็นค่า p50 ของ LMDB — memory ใกล้เคียงกัน ±5%)
-- throughput ของการปิด block อย่างเดียว (LMDB): native ~1,450–1,500 tx/s (1.9 Mgas/s) · token ~275–285 tx/s (0.75 Mgas/s) · mix ~335–390 tx/s (1.3 Mgas/s) · memory เร็วกว่า 10–30%
-  รวมการรับ tx (slot): native ~200 tx/s · token ~90 tx/s · mix ~105 tx/s
-- **LMDB ไม่ใช่คอขวด**: `writeKeys` 90–200 ms ต่อ block 500 tx (~12–20 key ต่อ tx) · ต่างจาก memory ~10% ของ close
-  (lmdb-js เปิด `overlappingSync` เป็นค่าเริ่ม → fsync เกิดเบื้องหลัง ไม่อยู่ในเวลา write)
-  commit ส่วนที่เหลือ (~2/3) คือประกอบ header / body / ดัชนี / history + คำนวณ root (`hashes()` ~150 ms ต่อ block 500 token tx และถูกเรียกซ้ำใน `header()`)
-- **ปิด block กินเวลาตามจำนวนครั้งที่เรียก sandbox ไม่ใช่ตามแก๊ส**: token transfer ~2.7 ms/tx ใน block (simulate ~3.3 ms/tx) · native ~0.2 ms/tx
-- end-to-end `--url` (server LMDB `BLOCK_MS=3000` · client อยู่เครื่องเดียวกัน · concurrency 16):
-  token 250 ใบ/รอบ → **62–70 req/s** · `/sendtx` p50 ~160 ms p95 0.8–1.1 วิ · 250 ใบกระจายลง 2 block (~200 + ~50)
-  native 500 ใบ/รอบ → **~113 req/s** · p50 ~118 ms p95 ~260 ms · 500 ใบลง 2 block
-- profile (`node --cpu-prof dev/load-test.js --db lmdb --workload token --txs 500 …`, CPU 33 วิ):
-  `verifyTransaction` 27% (secp256k1 `recoverPublicKey` ของ noble ~3.5 ms/ใบ) · sandbox 38% (`evalCode` คอมไพล์ factory ทุก call 17% · `restoreSnapshot` 9% ≈ 0.6 ms ต่อการรัน) · keccak 9% · `Mempool.prune` 2%
+(add / take / roots are LMDB p50 values — memory is similar, ±5%)
+- Block sealing throughput alone (LMDB): native ~1,450–1,500 tx/s (1.9 Mgas/s) · token ~275–285 tx/s (0.75 Mgas/s) · mix ~335–390 tx/s (1.3 Mgas/s) · memory 10–30% faster
+  Including tx intake (slot): native ~200 tx/s · token ~90 tx/s · mix ~105 tx/s
+- **LMDB is not the bottleneck**: `writeKeys` 90–200 ms per 500-tx block (~12–20 keys per tx) · differs from memory by ~10% of close
+  (lmdb-js enables `overlappingSync` by default → fsync happens in the background, outside the write time)
+  The rest of commit (~2/3) is assembling header / body / indexes / history + computing roots (`hashes()` ~150 ms per block of 500 token txs, and called again in `header()`)
+- **Block sealing time scales with the number of sandbox calls, not with gas**: token transfer ~2.7 ms/tx in a block (simulate ~3.3 ms/tx) · native ~0.2 ms/tx
+- end-to-end `--url` (LMDB server `BLOCK_MS=3000` · client on the same machine · concurrency 16):
+  token 250 txs/round → **62–70 req/s** · `/sendtx` p50 ~160 ms p95 0.8–1.1 s · 250 txs spread over 2 blocks (~200 + ~50)
+  native 500 txs/round → **~113 req/s** · p50 ~118 ms p95 ~260 ms · 500 txs over 2 blocks
+- profile (`node --cpu-prof dev/load-test.js --db lmdb --workload token --txs 500 …`, 33 s of CPU):
+  `verifyTransaction` 27% (noble's secp256k1 `recoverPublicKey` ~3.5 ms/tx) · sandbox 38% (`evalCode` compiling the factory on every call 17% · `restoreSnapshot` 9% ≈ 0.6 ms per run) · keccak 9% · `Mempool.prune` 2%
 
-**สรุป / ข้อแนะนำ**
-1. (ผลเดิม ก่อนเปลี่ยนเป็น block 1 วิ · ดูค่าเริ่มตอนนี้ด้านล่าง) **`BLOCK_MS=3000` ปลอดภัยสำหรับการปิด block 500 tx** — แย่สุดที่วัดได้ token 500 ใบ p95 1.9 วิ (ทุก tx เรียก sandbox) · ไม่ควรลด `BLOCK_MS` ต่ำกว่า ~2,000 ถ้ายังให้ 500 tx ต่อ block
-   ⚠️ เวลาปิดขึ้นกับจำนวนครั้งที่เรียกโปรแกรม: tx ที่ `runProgram` หลายทอดต่อใบ (multicall / router) ทำให้ 500 ใบเกิน 3 วิได้ → ถ้าจะเพิ่ม `maxTransactions` หรือเปิดให้คนนอกใช้ ควรวัดด้วย workload แบบนั้นก่อน
-2. **ที่เต็มก่อนคือการรับ tx ไม่ใช่การปิด block**: รับ 500 token tx ใช้ ~3.8 วิในโปรเซส (~7.5 วิผ่าน HTTP) > 3 วิ ทั้งหมดอยู่ใน thread เดียวกับ miner
-   → รับได้จริง ~65 token / ~110 native tx/s ต่อ node (~200–330 tx ต่อ block 3 วิ) · ระหว่างปิด block `/sendtx` ค้าง (p95 ~1 วิ) — ไม่พัง แค่ tx ไหลไป block ถัดไป
-3. hotspot (✅ = แก้แล้วใน PR "perf-intake" · เทสต์ `82-perf-intake`):
-   - ✅ `server.js` `handlePost` เรียก `verifyTransaction` เองแล้ว `mempool.add` เรียกซ้ำ → ตอนนี้ส่ง `mempool.add(item, { verified })` ตรวจลายเซ็นครั้งเดียว
-   - `recoverPublicKey` ของ noble เป็น JS ล้วน (~3.5 ms) → ย้ายไป worker thread (ตรวจลายเซ็นขนานได้ ไม่แตะ state) หรือใช้ตัว native
-   - ✅ `Mempool.prune()` ถูกเรียกทุก `add` และวนทั้ง `#seen` (เก็บ ttl × 2 = 10 นาที) + `#recent` → ต้นทุนต่อใบโตตามจำนวน tx ที่เคยเห็น:
-     วัด native 500 × 40 block (memory): ส่วนที่ไม่ใช่ simulate 3.8 → 5.9 ms/ใบ เมื่อ `#seen` ~20,000 · ที่ 500 tx / 3 วิ ต่อเนื่อง 10 นาที `#seen` ~100,000 → คาดว่า +10 ms/ใบ
-     → ตอนนี้ `add` ล้างแบบเบา (`#pruneRecent`: ไล่จากเก่าสุด หยุดเมื่อเจอรายการที่ยังไม่หมดอายุ · `#recent` ย้ายผู้ส่งไปท้ายทุกครั้งที่ส่ง) · `#seen` ตรวจเวลาตอนอ่าน · ล้างครบทุกรายการใน `prune()` ตอน `take` (ครั้งเดียวต่อ block)
-   - ✅ `Block.hashes()` ถูกเรียกซ้ำใน `header()` / `receipt()` / `commit()` → จำผลไว้ (`#hashesCache`) ล้างเมื่อรัน tx / `recordRejected` / เปิดใช้อัปเกรด
-   ผลวัดก่อน / หลังแก้ (เครื่องเดียวกัน 4 vCPU · LMDB · BLOCK_MS 3000):
-   | วัด | ก่อน | หลัง |
+**Summary / recommendations**
+1. (old result, before switching to 1 s blocks · see the current defaults below) **`BLOCK_MS=3000` is safe for sealing 500-tx blocks** — the worst measured was 500 token txs at p95 1.9 s (every tx calls the sandbox) · don't lower `BLOCK_MS` below ~2,000 if you keep 500 txs per block
+   ⚠️ Sealing time depends on how many program calls happen: txs with several `runProgram` hops each (multicall / router) can push 500 txs past 3 s → before raising `maxTransactions` or opening to outsiders, measure with that kind of workload first
+2. **What saturates first is tx intake, not block sealing**: accepting 500 token txs takes ~3.8 s in-process (~7.5 s over HTTP) > 3 s, all on the same thread as the miner
+   → realistic intake ~65 token / ~110 native tx/s per node (~200–330 txs per 3 s block) · `/sendtx` stalls during block sealing (p95 ~1 s) — nothing breaks, txs just flow to the next block
+3. Hotspots (✅ = fixed in PR "perf-intake" · test `82-perf-intake`):
+   - ✅ `server.js` `handlePost` called `verifyTransaction` itself and then `mempool.add` called it again → now it passes `mempool.add(item, { verified })`, verifying the signature once
+   - noble's `recoverPublicKey` is pure JS (~3.5 ms) → move it to a worker thread (signature checks can run in parallel without touching state) or use a native implementation
+   - ✅ `Mempool.prune()` was called on every `add` and iterated all of `#seen` (kept for ttl × 2 = 10 minutes) + `#recent` → per-tx cost grew with the number of txs ever seen:
+     measured native 500 × 40 blocks (memory): the non-simulate part went 3.8 → 5.9 ms/tx with `#seen` ~20,000 · at a sustained 500 tx / 3 s for 10 minutes `#seen` ~100,000 → expected +10 ms/tx
+     → now `add` does a light cleanup (`#pruneRecent`: walks from the oldest, stops at the first unexpired entry · `#recent` moves the sender to the end on every send) · `#seen` checks time on read · a full cleanup in `prune()` at `take` (once per block)
+   - ✅ `Block.hashes()` was called repeatedly in `header()` / `receipt()` / `commit()` → memoized (`#hashesCache`), cleared when a tx runs / `recordRejected` / an upgrade activates
+   Before / after measurements (same 4 vCPU machine · LMDB · BLOCK_MS 3000):
+   | Measure | Before | After |
    |---|---|---|
-   | `/sendtx` ผ่าน HTTP: token 250 ใบ/รอบ | ~138 req/s · p50 99 ms | ~202 req/s · p50 68 ms (+46%) |
-   | `/sendtx` ผ่าน HTTP: native 500 ใบ/รอบ | ~199 req/s · 500 ใบล้นไป 2 block | ~347 req/s · 500 ใบเข้า block เดียว (+75%) |
-   | รับ native 500 × 40 block ต่อเนื่อง (ส่วนที่ไม่ใช่ simulate) | 2.22 → 3.05 ms/ใบ (โตขึ้นเรื่อย ๆ) | 2.10 → 2.07 ms/ใบ (คงที่) |
-   | commit p50 (ในโปรเซส) token / native / mix 500 tx | 219 / 132 / 202 ms | 140 / 77 / 112 ms (−36% ถึง −45%) |
+   | `/sendtx` over HTTP: token 250 txs/round | ~138 req/s · p50 99 ms | ~202 req/s · p50 68 ms (+46%) |
+   | `/sendtx` over HTTP: native 500 txs/round | ~199 req/s · 500 txs spilled into 2 blocks | ~347 req/s · 500 txs in a single block (+75%) |
+   | intake of native 500 × 40 consecutive blocks (non-simulate part) | 2.22 → 3.05 ms/tx (keeps growing) | 2.10 → 2.07 ms/tx (flat) |
+   | commit p50 (in-process) token / native / mix 500 tx | 219 / 132 / 202 ms | 140 / 77 / 112 ms (−36% to −45%) |
    | close p50 token / native / mix 500 tx | 1,242 / 204 / 1,049 ms | 1,168 / 138 / 944 ms |
-   (ตัวเลขชุดนี้วัดบนเครื่องที่เร็วกว่าตารางข้างบน ให้ดูเป็นการเทียบก่อน / หลังบนเครื่องเดียวกัน)
-   - sandbox: คอมไพล์ factory ทุก call + คืน snapshot ~0.6 ms ต่อการรัน (แผนเดิมในหัวข้อ 4 "Sandbox")
-4. **ดิสก์**: LMDB โต ~9.6 KB (native) – 15 KB (token) ต่อ tx (history + ดัชนี + receipt · ~12–20 key ต่อ tx) → block 500 token tx ทุก 3 วิต่อเนื่อง ≈ 2.5 MB/วิ ≈ 200 GB/วัน
-   ชน `mapSize` 100 GB ของ `DB` ในราว 12 ชั่วโมงที่โหลดเต็ม → ต้องมีแผนตัด history / เฝ้าดิสก์ก่อนเปิดจริง (หัวข้อ 11 "เมื่อถึงเวลา")
-   ✅ `mapSize` ค่าเริ่ม 1 TB แล้ว (env `LMDB_MAP_SIZE` เช่น `2T` · `/health` บอกที่ใช้ไป) — PR "chain-scale"
-   ✅ ตัดข้อมูลซ้ำแล้ว (PR "storage-slim" · เทสต์ `83`): ดัชนีไม่มี history / ไม่อยู่ใน blockundo · txn ไม่เก็บ signature / digest · txto ไม่เก็บ blockNumber / index / timestamp
-   | วัด (500 tx × 10 block + อุ่น 2 · LMDB) | ก่อน | หลัง |
+   (this set was measured on a faster machine than the table above; read it as a before / after comparison on the same machine)
+   - sandbox: compiling the factory on every call + restoring the snapshot ~0.6 ms per run (the existing plan in section 4 "Sandbox")
+4. **Disk**: LMDB grows ~9.6 KB (native) – 15 KB (token) per tx (history + indexes + receipts · ~12–20 keys per tx) → 500-token-tx blocks every 3 s sustained ≈ 2.5 MB/s ≈ 200 GB/day
+   hits the `DB`'s 100 GB `mapSize` in about 12 hours at full load → a plan for pruning history / monitoring disk is needed before going live (section 11 "When the time comes")
+   ✅ `mapSize` now defaults to 1 TB (env `LMDB_MAP_SIZE`, e.g. `2T` · `/health` reports usage) — PR "chain-scale"
+   ✅ Duplicate data removed (PR "storage-slim" · test `83`): indexes have no history / are not in blockundo · txn stores no signature / digest · txto stores no blockNumber / index / timestamp
+   | Measure (500 tx × 10 blocks + 2 warmup · LMDB) | Before | After |
    |---|---|---|
-   | ข้อมูลจริง (key + JSON ก่อนบีบอัด) token / native | 37.7 / 20.9 MB | 22.6 / 14.3 MB (−40% / −32%) |
-   | ไฟล์ LMDB token / native | 88 / 55 MB | 53 / 37 MB |
+   | actual data (keys + JSON before compression) token / native | 37.7 / 20.9 MB | 22.6 / 14.3 MB (−40% / −32%) |
+   | LMDB file token / native | 88 / 55 MB | 53 / 37 MB |
    | LMDB +/tx token / native | 15.0 / 9.6 KB | 8.9 / 6.3 KB |
    | commit p50 token / native | 142 / 82 ms | 117 / 64 ms |
    | write p50 token / native | 81 / 55 ms | 65 / 39 ms |
 
-**ผลวัดซ้ำ 24 ต.ค. หลัง PR #43** (เครื่องสเปกเดียวกับตาราง 22 ต.ค. · ชุดเต็ม 10 block + อุ่น 2 · ทุกใบสำเร็จ · แก๊สต่อ block เท่าเดิมทุกชุด · ตารางเต็ม `/mnt/project-files/cardianal_server/load-test-2026-10-24.md`)
-ส่วนที่ดีขึ้นรวมผลของ PR "perf-intake" และ "storage-slim" ที่ merge หลังวัด 22 ต.ค. ด้วย · โหมดในโปรเซสตรวจลายเซ็นบน thread หลัก (worker เห็นผลในโหมด `--url`)
+**Re-measured Oct 24 after PR #43** (same machine spec as the Oct 22 table · full set, 10 blocks + 2 warmup · every tx succeeded · gas per block unchanged in every set · full table in `/mnt/project-files/cardianal_server/load-test-2026-10-24.md`)
+The improvements also include the effects of PRs "perf-intake" and "storage-slim", merged after the Oct 22 measurement · in-process mode verifies signatures on the main thread (workers only show their effect in `--url` mode)
 
 | 500 tx / block · LMDB | add p50 | take p50 | close p50 / p95 | LMDB +/tx |
 |---|---|---|---|---|
@@ -1348,83 +1349,83 @@ npm run load:test -- --url http://localhost:3000 --workload token --txs 250 --bl
 | token | 3,802 → 2,338 ms | 1,349 → 493 | 1,732 / 1,906 → **660 / 804** | 15 → 8.9 KB |
 | mix | 3,379 → 2,698 ms | 955 → 842 | 1,296 / 1,470 → **988 / 1,146** | 12.5 → 8.0 KB |
 
-end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 รอบ):
+end-to-end `--url` (`BLOCK_MS=3000` · LMDB · concurrency 16 · 4 rounds):
 
-| ชุด | `VERIFY_WORKERS=0` | worker 3 ตัว (ค่าเริ่มบนเครื่อง 4 vCPU) |
+| Set | `VERIFY_WORKERS=0` | 3 workers (the default on a 4 vCPU machine) |
 |---|---|---|
-| token 250 ใบ/รอบ | 175–216 req/s · p95 130–184 ms | **338–521 req/s · p95 44–69 ms** |
-| native 500 ใบ/รอบ | 200–310 req/s · ล้นไป 2 block 2 ใน 4 รอบ | **632–859 req/s · p95 41–51 ms · เข้า block เดียวทุกรอบ** |
+| token 250 txs/round | 175–216 req/s · p95 130–184 ms | **338–521 req/s · p95 44–69 ms** |
+| native 500 txs/round | 200–310 req/s · spilled into 2 blocks in 2 of 4 rounds | **632–859 req/s · p95 41–51 ms · a single block every round** |
 
-**คอขวดย้ายแล้ว**: รับ tx ได้ 400–800 req/s เร็วกว่าที่เชนบรรจุได้ = `maxTransactions` 500 ต่อ `BLOCK_MS` 3 วิ ≈ **167 tx/s ต่อเครือข่าย**
-จะรับมากกว่านี้ต้องเพิ่มเพดานต่อ block หรือลด `BLOCK_MS`
-**ค่าเริ่มตอนนั้น (หลังจำลอง 0.25–3 วิ): block 1 วิ · 1M แก๊ส (gasTarget 500k) · 500 tx** (ตอนนี้ Bluewolfchain: block 2 วิ · 5M แก๊ส · gasTarget 2.5M · 500 tx · fork `bluewolf` · ความจุดู `deploy/README.md` ข้อ 1) — แก๊สต่อวินาทีเท่าเดิม (3M / 3 วิ) · block เต็มแบบ mix ปิด 334 ms (p95 489) · ต่ำกว่า 0.75 วิไม่ได้ความจุเพิ่ม (CPU ต่อ tx คงที่ · block เล็กมากมีต้นทุนคงที่ต่อ block) · ผลวัดเต็มใน block-time-sim.md ของโปรเจกต์
-**ยิงผ่าน HTTP จริงที่ค่าเริ่มนั้น** (24 ต.ค. · LMDB · DEV · `load-test --url --txs 500 --blocks 3` · client เครื่องเดียวกัน): token 253–274 req/s (500 ใบเข้า block ใน 2.9–3.3 วิ · ~216 ใบ/block = เต็มแก๊ส 1M) · mix 168–210 req/s (140–189 ใบ/block · 3.2–4.0 วิ) · native 414–553 req/s (1.8–2.0 วิ) · ทุกใบสำเร็จ ไม่มี block ว่าง
-**แก้พร้อมกัน** (เจอตอนยิงจริงที่ 1M แก๊ส · เทสต์ `101-block-gas-defer`):
-  - ใบที่แก๊สที่เหลือใน block ไม่พอ แต่ block ว่างรับได้ → `mempool.take` ปล่อยไว้รอ block ถัดไป (เดิมถูกปฏิเสธ → ใบ nonce ถัดไปของคนเดิมค้างจนหมดอายุ 5 นาที และ miner ปิด block ว่างทุกรอบระหว่างนั้น) · ใบที่ใหญ่เกิน block ว่างยังถูกปฏิเสธ
-  - miner (`mineOnce`) ไม่ปิด block ว่างเมื่อไม่มีใบไหนเข้าได้และ base fee อยู่ที่ขั้นต่ำแล้ว (block ว่างช่วยแค่ลด base fee) · `minerState.idleAt` → `/health` ไม่นับเป็น stalled
-`load-test.js` ยังใช้ maxBlockGas 3M เพื่อวัด block 500 tx ได้ · `scenario:full --spawn` ตั้ง `MAX_BLOCK_GAS=3000000` (กับดัก OUT_OF_MEMORY ใช้ ~1.05M แก๊สใน tx เดียว · server ที่ maxBlockGas < 2M = ข้ามหัวข้อนั้น) · เวลาปิด block ยังเหลือที่ (token 500 ใบ p95 0.8 วิ · mix 1.1 วิ) แต่ต้องวัดด้วย workload ที่ `runProgram` หลายทอดก่อน (โปรแกรมที่ถูกเรียกต่อยังคอมไพล์ทุก tx)
-ยังไม่ได้วัด: โหลดต่อเนื่องนาน ๆ (ยิงเป็นรอบ ≤ 800 ใบ) · client กับ server อยู่เครื่องเดียวกัน
-
----
-
-## 11. ⚠️ ที่ยังไม่ได้ทำ — เรียงตามความสำคัญ
-
-### บล็อกการเปิดให้คนนอก deploy
-1. ~~ไม่มี sandbox จริง~~ เสร็จแล้ว: โปรแกรมรันใน QuickJS (WebAssembly) — `src/core/sandbox.js` (หัวข้อ 4 "Sandbox")
-   แยกจาก Node จริง · หน่วยความจำ 32 MB / stack 256 KB ต่อ tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · เกิน = `OUT_OF_MEMORY` · ไม่มี `node:vm` แล้ว
-   ~~ความเร็ว / fuzz~~ เสร็จแล้ว: ภาพอุ่นต่อโปรแกรม (token transfer 2.2 → 0.94 ms/tx) · fuzz 20,000 รอบไม่พบปัญหา · ราคาแก๊สเทียบเวลา CPU แล้ว (`npm run bench:gas`)
-2. ~~gas ยังไม่นับขั้น~~ เสร็จแล้ว: `src/core/gasmeter.js` ฉีดตัวนับตอนคอมไพล์ (1 gas/node) · การคัดลอก / สร้างข้อมูลคิดตามขนาด (spread / rest / string `+` / เมธอดในตัว · 1 ต่อสมาชิกหรือ 32 byte)
-   `while(true) {}` จบด้วย OUT_OF_GAS ที่ `maxTxGas` (server = `MAX_BLOCK_GAS` 5M) · timeout 5 วิเหลือเป็นด่านสุดท้าย
-3. ~~ค่ากลางในหน่วยความจำยังไม่จำกัด~~ เสร็จแล้ว: `memoryLimitBytes` ต่อ tx (sandbox) · `maxValueSize` ยังกันตอนเขียน / return / emit เหมือนเดิม
-
-### บล็อกการมี node ที่สอง
-4. `sync.js` พร้อมแล้ว (ดึง body มารันเอง เทียบ hash ไม่ใช่เชื่อ state) · ข้อ 2 เสร็จแล้ว ผลแก๊สไม่ขึ้นกับความเร็วเครื่อง
-   ~~กรณี timeout~~ เสร็จแล้ว: replay / sync ใช้ `replayTimeoutMs` · ~~block ไม่มีลายเซ็นผู้ผลิต~~ เสร็จแล้ว: `producer` + `producerSignature` ตรวจกับ `config.producers` (หัวข้อ 1 "เปิดเครือข่ายจริง")
-   ที่เหลือคืองานใหญ่: P2P (ตอนนี้ดึงจาก URL เดียว) · ผู้ผลิตหลายราย · finality
-
-### ค้างคาที่รู้อยู่
-5. ~~tx ที่ถูกปฏิเสธไม่เข้า block เลย~~ เสร็จแล้ว: บันทึกใน block (`rejectedRoot` อยู่ใน hash) ไม่รัน ไม่แตะ state — หัวข้อ mempool
-   `GET /tx/:hash` → `rejected` · `/rejected` · explorer หน้า tx / block / แถบ Rejected ของ address · `/evm` เห็นเป็น tx ที่ล้ม (ต้องล้างเชนเดิม)
-6. ~~native / gas ยังเป็น `number`~~ เสร็จแล้ว: native เป็น BigInt wei 18 ทศนิยม · แก๊สนับทีละขั้น (1 gas/node)
-7. ~~`/program/:a/groups` นับได้สูงสุด 5,000 key~~ เสร็จแล้ว: นับครบทีละช่วง (`scan` ≤ 50,000 key ต่อ request + `cursor`)
-8. ~~แท็บ interactions / event ยังไม่มี pagination~~ เสร็จแล้ว: แบบ cursor (Newer / Older) ฝั่ง server `/program/:a/interactions` · `/program/:a/events?cursor=`
-9. **explorer ยังไม่เคยถูกเทสต์กับ MetaMask จริง** — มี e2e ด้วย Playwright แล้ว (`npm run test:e2e`, wallet จำลองที่เซ็นด้วย ethers) + ethers ส่งผ่าน `/evm` ได้ (เทสต์ 94)
-   แต่ตัว extension MetaMask จริงยังต้องลองด้วยมือ: `docs/metamask-checklist.md`
-   ลองในเครื่องด้วย key ทดสอบ: `deploy/README.md` ข้อ 0 (RPC เป็น http · `EVM_RATE_LIMIT=0` กัน 429 เมื่อทุกอย่างมาจาก 127.0.0.1)
-10. ~~ยังไม่มี load test~~ มีแล้ว: `npm run load:test` (หัวข้อ 10 "load test") · ปิด block 500 tx บน LMDB ใช้ 0.3 วิ (native) – 1.9 วิ (token, p95) ทันใน 3 วิ
-    ~~คอขวดคือการรับ tx (~65 token / ~110 native tx/s ต่อ node)~~ แก้แล้ว: ตรวจลายเซ็นครั้งเดียว + ใน worker thread · `Mempool.prune` เบาลง · ไม่คำนวณ root ซ้ำ · ภาพอุ่นของ sandbox (เทสต์ 82 / 89 / 90)
-    วัดซ้ำ 24 ต.ค.: รับผ่าน HTTP token 338–521 · native 632–859 req/s · ปิด block 500 token tx p95 0.8 วิ (ตอนนั้น block 3 วิ) · ค่าเริ่มตอนนั้น block 1 วิ · 1M แก๊ส → ~216 token tx ต่อ block ≈ 216 tx/s (หัวข้อ 10 "load test") · **ตอนนี้ block 2 วิ · 5M แก๊ส + fork `bluewolf`** (ความจุดู `deploy/README.md` ข้อ 1)
-    ~~แผนตัด history~~ มีแล้ว: `HISTORY_KEEP_BLOCKS` (ระยะ 4 · หัวข้อ 4 "ระยะ 4") · ที่เหลือ: `runProgram` ยังคอมไพล์โปรแกรมที่ถูกเรียกต่อทุก tx
-11. ~~สถานะ `replaced` อยู่ในหน่วยความจำ (หายเมื่อ restart)~~ เสร็จแล้ว: `replacedLog` off-chain มีเพดาน (`<DATA>/replaced-tx.jsonl`) อยู่รอด restart
-    (ตรวจแล้ว 2026-10-24: mempool ใช้ digest เป็น hash อยู่แล้ว ใบที่ถูกแทนที่ไม่เคยรันจึงไม่มี VM hash · `/tx/<digest>` ตอบ replaced ได้ — บรรทัดเดิมที่ว่า "ค้นด้วย VM hash เท่านั้น" ผิด)
-12. ~~เชนไม่รับโอน native 0~~ เสร็จแล้ว: โอน 0 ได้แบบ EVM (ยกเลิกใบที่ค้าง = โอน 0 ให้ตัวเอง)
-13. ~~explorer ไม่มีฟอร์ม deploy / upgrade~~ เสร็จแล้ว: หน้า `#deploy` (upgrader ไม่บังคับ) · แถบ Upgrade (โค้ดใหม่ + migrate input, โอน / สละสิทธิ์, admin อนุมัติ / ปฏิเสธ) · ปุ่ม Approve / Reject ในรายการรออนุมัติ
-
-### ⛔ ความปลอดภัยที่ต้องแก้ก่อนเปิดจริง
-ไม่มี endpoint ไหนรับ private key · `scripts/*` เซ็นในเครื่องตัวเองแล้วส่งแค่ `{ tx, signature }` (ตรวจแล้ว 2026-10-24) แต่รับ key ทาง `--admin-key` / `--funder-key` และมี key ทดสอบในโค้ด → ใช้กับ key จริงไม่ได้
-ของจริงเซ็นฝั่ง client เท่านั้น (explorer ใช้ `eth_signTypedData_v4`) · key ของ `ADMINS` ควรอยู่ใน hardware wallet / multisig · `PRODUCER_KEY` อยู่ในเครื่องผู้ผลิตเท่านั้น
-ตั้ง `UPGRADE_DELAY_BLOCKS` > 0 ใน genesis เพื่อให้ผู้ใช้มีเวลาถอนออกก่อนโค้ดใหม่ใช้งาน
-อยู่หลัง nginx / Caddy → ตั้ง `TRUST_PROXY=1` และเปิด port ของ server ให้เฉพาะ proxy (หัวข้อ 1 "เปิดเครือข่ายจริง") · CORS ยังเปิด `*`
-
-### เมื่อถึงเวลา
-rollback เร็ว · P2P · ผู้ผลิตหลายราย / finality · bridge · ตัด body / receipt ของ block เก่า (แบบ EIP-4444)
-(ทำแล้ว ระยะ 4: Merkle trie + `cardianal_getProof` · ตัด history (`HISTORY_KEEP_BLOCKS`) · snapshot + sync จาก snapshot)
-(ทำแล้ว ลบออกจากรายการ 2026-10-24: factory = `cloneProgram` · การอัปเกรดโปรแกรม · มาตรฐานโทเคน / NFT / 1155 · หน้า holders)
-แผนเต็ม: `/mnt/project-files/cardianal_server/dev-plan.md` (ระยะ 1–5) · เทียบ EVM: `gap-vs-evm.md`
+**The bottleneck has moved**: tx intake handles 400–800 req/s, faster than the chain can pack = `maxTransactions` 500 per 3 s `BLOCK_MS` ≈ **167 tx/s per network**
+Accepting more requires raising the per-block cap or lowering `BLOCK_MS`
+**The defaults at that time (after simulating 0.25–3 s): 1 s blocks · 1M gas (gasTarget 500k) · 500 tx** (now Bluewolfchain: 2 s blocks · 5M gas · gasTarget 2.5M · 500 tx · fork `bluewolf` · for capacity see `deploy/README.md` item 1) — gas per second unchanged (3M / 3 s) · a full mix block seals in 334 ms (p95 489) · below 0.75 s there is no capacity gain (CPU per tx is constant · very small blocks have a fixed per-block cost) · full measurements in the project's block-time-sim.md
+**Real HTTP load at those defaults** (Oct 24 · LMDB · DEV · `load-test --url --txs 500 --blocks 3` · client on the same machine): token 253–274 req/s (500 txs included within 2.9–3.3 s · ~216 txs/block = 1M gas full) · mix 168–210 req/s (140–189 txs/block · 3.2–4.0 s) · native 414–553 req/s (1.8–2.0 s) · every tx succeeded, no empty blocks
+**Fixed at the same time** (found during real load at 1M gas · test `101-block-gas-defer`):
+  - A tx that doesn't fit in the block's remaining gas but would fit in an empty block → `mempool.take` leaves it for the next block (previously rejected → the same sender's next-nonce tx stalled until its 5-minute expiry, and the miner sealed empty blocks every round meanwhile) · txs larger than an empty block are still rejected
+  - The miner (`mineOnce`) doesn't seal empty blocks when no tx fits and the base fee is already at the minimum (empty blocks only help lower the base fee) · `minerState.idleAt` → `/health` doesn't count it as stalled
+`load-test.js` still uses maxBlockGas 3M so it can measure 500-tx blocks · `scenario:full --spawn` sets `MAX_BLOCK_GAS=3000000` (the OUT_OF_MEMORY trap uses ~1.05M gas in one tx · servers with maxBlockGas < 2M = that section is skipped) · block sealing time still has headroom (500 token txs p95 0.8 s · mix 1.1 s) but must first be measured with multi-hop `runProgram` workloads (called programs still compile every tx)
+Not yet measured: sustained load over long periods (fired in rounds of ≤ 800 txs) · client and server on the same machine
 
 ---
 
-## 12. เอกสารอื่นในโปรเจค
+## 11. ⚠️ Not done yet — ordered by priority
 
-| ไฟล์ | เนื้อหา |
+### Blocking outside deploys
+1. ~~no real sandbox~~ done: programs run in QuickJS (WebAssembly) — `src/core/sandbox.js` (section 4 "Sandbox")
+   Truly isolated from Node · 32 MB memory / 256 KB stack per tx (`MEMORY_LIMIT_MB` / `STACK_LIMIT_KB`) · exceeded = `OUT_OF_MEMORY` · `node:vm` is gone
+   ~~speed / fuzz~~ done: per-program warm images (token transfer 2.2 → 0.94 ms/tx) · 20,000 fuzz iterations found no issues · gas prices calibrated against CPU time (`npm run bench:gas`)
+2. ~~gas not step-counted~~ done: `src/core/gasmeter.js` injects counters at compile time (1 gas/node) · copying / creating data is charged by size (spread / rest / string `+` / built-in methods · 1 per element or 32 bytes)
+   `while(true) {}` ends with OUT_OF_GAS at `maxTxGas` (server = `MAX_BLOCK_GAS` 5M) · the 5 s timeout remains the last line of defense
+3. ~~intermediate values in memory not limited~~ done: `memoryLimitBytes` per tx (sandbox) · `maxValueSize` still guards writes / return / emit as before
+
+### Blocking a second node
+4. `sync.js` is ready (fetches bodies and executes them itself, compares hashes rather than trusting state) · item 2 is done, so gas results don't depend on machine speed
+   ~~the timeout case~~ done: replay / sync use `replayTimeoutMs` · ~~blocks lack producer signatures~~ done: `producer` + `producerSignature` checked against `config.producers` (section 1 "Launching a real network")
+   What remains is big work: P2P (currently pulls from a single URL) · multiple producers · finality
+
+### Known loose ends
+5. ~~rejected txs never enter a block~~ done: recorded in the block (`rejectedRoot` is in the hash), not executed, state untouched — mempool section
+   `GET /tx/:hash` → `rejected` · `/rejected` · explorer tx / block pages / the address Rejected tab · `/evm` sees them as failed txs (requires resetting the old chain)
+6. ~~native / gas still `number`~~ done: native is BigInt wei with 18 decimals · gas is step-counted (1 gas/node)
+7. ~~`/program/:a/groups` counts at most 5,000 keys~~ done: complete counts in ranges (`scan` ≤ 50,000 keys per request + `cursor`)
+8. ~~interactions / event tabs have no pagination~~ done: cursor-based (Newer / Older) on the server side `/program/:a/interactions` · `/program/:a/events?cursor=`
+9. **The explorer has never been tested with real MetaMask** — there are Playwright e2e tests now (`npm run test:e2e`, a mock wallet signing with ethers) + ethers can send through `/evm` (test 94)
+   but the real MetaMask extension still needs manual testing: `docs/metamask-checklist.md`
+   Local testing with test keys: `deploy/README.md` item 0 (RPC over http · `EVM_RATE_LIMIT=0` avoids 429 when everything comes from 127.0.0.1)
+10. ~~no load test yet~~ done: `npm run load:test` (section 10 "load test") · sealing 500-tx blocks on LMDB takes 0.3 s (native) – 1.9 s (token, p95), within 3 s
+    ~~the bottleneck is tx intake (~65 token / ~110 native tx/s per node)~~ fixed: signatures verified once + in worker threads · lighter `Mempool.prune` · no repeated root computation · sandbox warm images (tests 82 / 89 / 90)
+    Re-measured Oct 24: HTTP intake token 338–521 · native 632–859 req/s · sealing 500 token txs p95 0.8 s (3 s blocks at that time) · the defaults then were 1 s blocks · 1M gas → ~216 token txs per block ≈ 216 tx/s (section 10 "load test") · **now 2 s blocks · 5M gas + fork `bluewolf`** (for capacity see `deploy/README.md` item 1)
+    ~~history pruning plan~~ done: `HISTORY_KEEP_BLOCKS` (phase 4 · section 4 "Phase 4") · remaining: `runProgram` still compiles called programs every tx
+11. ~~the `replaced` status is in memory (lost on restart)~~ done: capped off-chain `replacedLog` (`<DATA>/replaced-tx.jsonl`) survives restarts
+    (checked 2026-10-24: the mempool already uses the digest as the hash; replaced txs never ran so they have no VM hash · `/tx/<digest>` can answer replaced — the old line saying "searchable by VM hash only" was wrong)
+12. ~~the chain doesn't accept native transfers of 0~~ done: EVM-style 0 transfers work (cancel a stuck tx = send 0 to yourself)
+13. ~~the explorer has no deploy / upgrade form~~ done: the `#deploy` page (upgrader optional) · the Upgrade tab (new code + migrate input, transfer / renounce, admin approve / reject) · Approve / Reject buttons in the pending-approval list
+
+### ⛔ Security to fix before going live
+No endpoint accepts private keys · `scripts/*` sign locally and send only `{ tx, signature }` (checked 2026-10-24), but they take keys via `--admin-key` / `--funder-key` and contain test keys in code → not for use with real keys
+Production signing is client-side only (the explorer uses `eth_signTypedData_v4`) · `ADMINS` keys should live in a hardware wallet / multisig · `PRODUCER_KEY` only on the producer machine
+Set `UPGRADE_DELAY_BLOCKS` > 0 in genesis so users have time to withdraw before new code goes live
+Behind nginx / Caddy → set `TRUST_PROXY=1` and open the server port only to the proxy (section 1 "Launching a real network") · CORS is still `*`
+
+### When the time comes
+fast rollback · P2P · multiple producers / finality · bridge · pruning old block bodies / receipts (EIP-4444-style)
+(done in phase 4: Merkle trie + `cardianal_getProof` · history pruning (`HISTORY_KEEP_BLOCKS`) · snapshots + sync from snapshot)
+(done, removed from the list 2026-10-24: factory = `cloneProgram` · program upgrades · token / NFT / 1155 standards · holders page)
+Full plan: `/mnt/project-files/cardianal_server/dev-plan.md` (phases 1–5) · EVM comparison: `gap-vs-evm.md`
+
+---
+
+## 12. Other docs in the project
+
+| File | Content |
 |---|---|
-| `README.md` | ภาพรวมสั้น + โครงสร้าง + วิธีเริ่ม |
-| `CHECKPOINT.md` | ภาพ ณ Checkpoint 5: สถานะ, ค่าตั้งต้น, ตัวเลข performance ของตอนนั้น (chainId 1 · block 1 วิ — ค่าปัจจุบันดูไฟล์นี้ / `deploy/README.md`) |
-| `EXPLORER-SPEC.md` | สเปคฝั่ง API consumer — **รูปแบบ response ของทุก endpoint อยู่ที่นี่** อ่านก่อนทำ frontend |
-| `program-sdk/README.md` | สำหรับคนนอกที่จะเขียนโปรแกรม + testkit |
-| `client-sdk/index.js` | SDK ฝั่ง client (เซ็น + ส่ง tx + รอผล · ใช้ใน browser ได้) — หัวข้อ 6 |
-| `docs/metamask-checklist.md` | ลอง MetaMask จริงทีละขั้น (กรอกผลแล้วส่งกลับ) |
-| `deploy/README.md` | เปิดเชนสาธารณะเครื่องเดียว: ค่าใน genesis / env, nginx, systemd, backup + monitor, ตรวจก่อนประกาศ (`scripts/preflight.js`, `deploy/check.sh`) |
-| `program-sdk/patterns/SAFE-PATTERNS.md` | pattern กัน reentrancy และข้อผิดพลาดที่เจอบ่อย |
+| `README.md` | short overview + layout + getting started |
+| `CHECKPOINT.md` | snapshot as of Checkpoint 5: status, defaults, performance numbers of that time (chainId 1 · 1 s blocks — for current values see this file / `deploy/README.md`) |
+| `EXPLORER-SPEC.md` | spec for API consumers — **every endpoint's response format is here**, read before building a frontend |
+| `program-sdk/README.md` | for outside developers writing programs + testkit |
+| `client-sdk/index.js` | client-side SDK (sign + send tx + wait for result · works in the browser) — section 6 |
+| `docs/metamask-checklist.md` | step-by-step real MetaMask test (fill in results and send back) |
+| `deploy/README.md` | launching a single-machine public chain: genesis / env values, nginx, systemd, backup + monitor, pre-announcement checks (`scripts/preflight.js`, `deploy/check.sh`) |
+| `program-sdk/patterns/SAFE-PATTERNS.md` | reentrancy-safe patterns and common mistakes |
 
-ลำดับการอ่านที่แนะนำ: **ไฟล์นี้** → `EXPLORER-SPEC.md` (ถ้าทำ frontend) หรือ comment หัว `virtualmachine.js` (ถ้าทำ VM) → `CHECKPOINT.md`
+Recommended reading order: **this file** → `EXPLORER-SPEC.md` (for frontend work) or the header comment of `virtualmachine.js` (for VM work) → `CHECKPOINT.md`

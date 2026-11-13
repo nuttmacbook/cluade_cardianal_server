@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/home.js [แก้ได้ · หน้าตา]
-   หน้าแรก (#): ตัวเลขภาพรวม + รายการ block ล่าสุด */
+/* explorerscan/ui/pages/home.js [editable · look]
+   Home page (#): overview stats + latest blocks */
 
 // ---------- home ----------
 async function home(draw = el) {

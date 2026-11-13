@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { sandboxStats, sandboxMemoryBytes } from "../src/core/sandbox.js";
 
-/* sandbox ของโปรแกรม (QuickJS ใน WebAssembly — src/core/sandbox.js): หน่วยความจำ / stack / การแยกจาก host / การเก็บกวาด */
+/* the program sandbox (QuickJS in WebAssembly, src/core/sandbox.js): memory / stack / host isolation / cleanup */
 
 const T = 1_700_000_000_000;
 const as = (who) => ({ sender: who, origin: who });
@@ -37,7 +37,7 @@ const HOG = `function program() {
   return { hog, hogCaught, hogFinally, nested, some, half }
 }`;
 
-test("หน่วยความจำเกินกำหนด → OUT_OF_MEMORY ทั้ง tx ล้ม catch / finally ไม่ได้ ไม่มี writes", () => {
+test("memory over the limit → OUT_OF_MEMORY, whole tx fails, catch / finally cannot stop it, no writes", () => {
   const { activate, call } = setup({ gas: API_GAS_ONLY, memoryLimitBytes: 4 * MB });
   activate("hog", HOG);
   activate("other", HOG);
@@ -45,34 +45,34 @@ test("หน่วยความจำเกินกำหนด → OUT_OF_ME
     const res = call("hog", name);
     assert.equal(res.status, "throw", name);
     assert.equal(res.error.code, "OUT_OF_MEMORY", name);
-    assert.match(res.error.message, /หน่วยความจำเกินกำหนด \(4194304 ไบต์ต่อ tx\)/);
+    assert.match(res.error.message, /exceeded the memory limit \(4194304 bytes per tx\)/);
     assert.deepEqual(res.writes, [], name);
   }
-  // โปรแกรมซ้อนใช้เกิน → ผู้เรียก catch ไม่ได้เช่นกัน
+  // a nested program exceeding it → the caller cannot catch it either
   const nested = call("hog", "nested", { target: "other" });
   assert.equal(nested.error.code, "OUT_OF_MEMORY");
   assert.deepEqual(nested.calls.map((c) => c.error?.code), ["OUT_OF_MEMORY", "OUT_OF_MEMORY"]);
-  // tx ถัดไปเริ่มใหม่ได้เต็มกำหนด
+  // the next tx starts again with the full limit
   assert.equal(call("hog", "some", { n: 1000 }).result, "1000n");
 });
 
-test("หน่วยความจำนับรวมทั้งสายการเรียก และจุดที่เกินแน่นอนทุกครั้ง (แก๊สเท่ากัน)", () => {
+test("memory is counted across the whole call chain, and the overflow point is the same every time (same gas)", () => {
   const { activate, call } = setup({ memoryLimitBytes: 4 * MB, maxTxGas: 50_000_000 });
   activate("hog", HOG);
   activate("other", HOG);
-  // แต่ละฝั่งใช้ไม่ถึงกำหนด แต่รวมกันเกิน
+  // each side stays under the limit, but together they exceed it
   assert.equal(call("hog", "some", { n: 12000 }).status, "success");
   const both = call("hog", "half", { n: 12000, target: "other" });
   assert.equal(both.error.code, "OUT_OF_MEMORY");
-  // เกินที่จุดเดียวกันทุกครั้ง ไม่ว่าก่อนหน้านั้น memory ของ WebAssembly จะเคยโตไปแค่ไหน
+  // overflows at the same point every time, however much WebAssembly memory grew before
   const first = call("hog", "hog");
-  call("hog", "some", { n: 40000 });   // tx อื่นคั่น (ใช้หน่วยความจำมาก แต่ไม่เกิน)
+  call("hog", "some", { n: 40000 });   // another tx in between (uses a lot of memory, but within the limit)
   const second = call("hog", "hog");
   assert.equal(first.error.code, "OUT_OF_MEMORY");
   assert.equal(second.gasUsed, first.gasUsed);
 });
 
-test("หน่วยความจำเกินใน block: เข้า block และเสียค่าแก๊สเหมือนแก๊สหมด", () => {
+test("memory overflow in a block: enters the block and pays gas, like running out of gas", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true, recordBlocks: true, timeoutMs: 5000, memoryLimitBytes: 4 * MB });
   vm.db.load({ "alice:native:received": "100000000n" });
   const plain = new VM.VirtualMachine(vm.db);
@@ -89,7 +89,7 @@ test("หน่วยความจำเกินใน block: เข้า bl
   assert.equal(vm.db.readKeys(["hog:storage:caught"])[0], undefined);
 });
 
-test("stack ล้น → PROGRAM_ERROR (RangeError) ที่โปรแกรม catch ได้แล้วทำงานต่อได้", () => {
+test("stack overflow → PROGRAM_ERROR (RangeError) that the program can catch and continue", () => {
   const { activate, call } = setup({ gas: API_GAS_ONLY });
   activate("deep", `function program() {
     function down(n) { return down(n + 1) + 1 }
@@ -100,13 +100,13 @@ test("stack ล้น → PROGRAM_ERROR (RangeError) ที่โปรแกร
   }`);
   const res = call("deep", "overflow");
   assert.equal(res.error.code, "PROGRAM_ERROR");
-  assert.equal(res.error.message, "โปรแกรมทำงานผิดพลาด (RangeError)");
+  assert.equal(res.error.message, "program error (RangeError)");
   assert.deepEqual(call("deep", "recover").result, [false, "InternalError", "3n"]);
   const depth = Number(call("deep", "depth").result.slice(0, -1));
-  assert.ok(depth > 500, `ซ้อนได้ ${depth} ชั้น`);
+  assert.ok(depth > 500, `nested ${depth} levels`);
 });
 
-test("โปรแกรมเข้าถึง host ไม่ได้: ไม่มี process / require / globalThis ของ Node / Function constructor / eval", () => {
+test("programs cannot reach the host: no process / require / Node globalThis / Function constructor / eval", () => {
   const { activate, call } = setup({ gas: API_GAS_ONLY });
   activate("probe", `function program() {
     function attempt(fn) { try { const value = fn(); return typeof value === "function" ? "function" : typeof value === "object" && value !== null ? "object" : String(value) } catch (e) { return "blocked:" + e.name } }
@@ -149,7 +149,7 @@ test("โปรแกรมเข้าถึง host ไม่ได้: ไม
   });
 });
 
-test("แก๊สหมด / หมดเวลา: โปรแกรม catch ไม่ได้ทั้งชั้นเดียวกันและชั้นที่เรียกซ้อน", () => {
+test("out of gas / timeout: programs cannot catch it, at the same level or in nested calls", () => {
   const code = `function program() {
     function spin() { while (true) {} }
     function swallow() { while (true) { try { spin() } catch (e) {} } }
@@ -175,7 +175,7 @@ test("แก๊สหมด / หมดเวลา: โปรแกรม catch
   }
 });
 
-test("โปรแกรมแยกจากกัน: global / prototype ที่แก้ไม่รั่วไปโปรแกรมอื่น และไม่ค้างข้าม tx · ตัวแปรระดับบนสุดไม่ค้างข้าม call", () => {
+test("programs are isolated: modified globals / prototypes do not leak to other programs or persist across txs · top-level variables do not persist across calls", () => {
   const { activate, call } = setup({ gas: API_GAS_ONLY });
   const code = `function program() {
     let counter = 0;
@@ -196,13 +196,13 @@ test("โปรแกรมแยกจากกัน: global / prototype ท�
     self: { shared: "number", polluted: "number", push: "number" },
     other: { shared: "undefined", polluted: "undefined", push: "undefined" },
   });
-  // tx ถัดไป: โปรแกรมเดิมไม่เห็นสิ่งที่ตัวเองแก้ไว้
+  // next tx: the same program does not see its own earlier changes
   assert.deepEqual(call("a", "look").result, { shared: "undefined", polluted: "undefined", push: "undefined" });
   assert.deepEqual(call("a", "countTwice", { target: "b" }).result, ["1n", "1n"]);
   assert.equal(call("b", "count").result, "1n");
 });
 
-test("ค่าข้ามเขตแดน: BigInt / object ซ้อน / null ไปกลับครบ · function / symbol ถูกปฏิเสธ", () => {
+test("values across the boundary: BigInt / nested objects / null round-trip intact · function / symbol are rejected", () => {
   const { activate, call } = setup({ gas: API_GAS_ONLY });
   activate("echo", `function program() {
     function echo(params) { return params.input }
@@ -217,12 +217,12 @@ test("ค่าข้ามเขตแดน: BigInt / object ซ้อน / nu
   assert.deepEqual(call("echo", "echo", value).result, value);
   assert.deepEqual(call("echo", "relay", { target: "echo", value }).result, value);
   assert.deepEqual(call("echo", "store", { value }).result, value);
-  assert.equal(call("echo", "badFunction").error.message, "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  assert.equal(call("echo", "badSymbol").error.message, "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  assert.equal(call("echo", "badReturn").error.message, "ค่าที่ return ต้องเป็นข้อมูล JSON");
+  assert.equal(call("echo", "badFunction").error.message, "writeDB value must be JSON data");
+  assert.equal(call("echo", "badSymbol").error.message, "writeDB value must be JSON data");
+  assert.equal(call("echo", "badReturn").error.message, "return value must be JSON data");
 });
 
-test("คืน handle / context ครบ: เรียกหลายพันครั้งแล้วหน่วยความจำไม่โต (รวม tx ที่ใช้โปรแกรมเกินจำนวน context ที่เตรียมไว้)", () => {
+test("all handles / contexts are released: memory does not grow after thousands of calls (including txs that use more programs than the pre-made contexts)", () => {
   const { activate, call } = setup({ maxCallDepth: 16 });
   activate("token", `function program() {
     function transfer(params) {
@@ -239,7 +239,7 @@ test("คืน handle / context ครบ: เรียกหลายพัน
     function chain(params) { const rest = params.input.rest; return rest.length === 0 ? 0n : 1n + runProgram(rest[0], "chain", { rest: rest.slice(1) }) }
     return { chain }
   }`);
-  // 12 โปรแกรมใน tx เดียว (มากกว่า context ที่เตรียมไว้ 8 ตัว)
+  // 12 programs in one tx (more than the 8 pre-made contexts)
   assert.equal(call("token", "chain", { rest: names }).result, "12n");
   for (let i = 0; i < 100; i++) call("token", "transfer");
   const memory = sandboxMemoryBytes();
@@ -256,8 +256,8 @@ test("คืน handle / context ครบ: เรียกหลายพัน
   assert.equal(call("token", "transfer").result, `${1000000 - 3101}n`);
 });
 
-test("ตั้งขนาดหน่วยความจำ / stack นอกช่วงที่รองรับไม่ได้", () => {
-  assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { maxStackBytes: 1024 * 1024 }), /maxStackBytes ต้องเป็นจำนวนเต็มระหว่าง 16384 ถึง 262144/);
+test("memory / stack sizes outside the supported range are rejected", () => {
+  assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { maxStackBytes: 1024 * 1024 }), /maxStackBytes must be an integer between 16384 and 262144/);
   assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { memoryLimitBytes: 1000 }), /memoryLimitBytes/);
   assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { memoryLimitBytes: 4 * MB + 0.5 }), /memoryLimitBytes/);
 });

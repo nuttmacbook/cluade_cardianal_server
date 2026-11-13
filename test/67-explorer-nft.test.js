@@ -6,7 +6,7 @@ import { MULTITOKEN_PROGRAM } from "../src/standards/multitoken.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { collectionInfo, collectionStandard, nftHoldings, tokenHoldings, pageApprovedPrograms, pagePendingPrograms } from "../src/node/explorer-api.js";
 
-/* explorer: รู้จัก NFT (ERC-721) / multi-token (ERC-1155) มาตรฐาน · ของที่ address ถือ (tokenId / ยอด / uri) */
+/* explorer: recognizes standard NFT (ERC-721) / multi-token (ERC-1155) · what an address holds (tokenId / balance / uri) */
 
 const N = "0x00000000000000000000000000000000000000f2";
 const G = "0x00000000000000000000000000000000000000f3";
@@ -45,7 +45,7 @@ function chain() {
   return vm;
 }
 
-test("collectionInfo: NFT → ERC-721 (+ totalSupply) · multi-token → ERC-1155 · token / กระเป๋า → null", () => {
+test("collectionInfo: NFT → ERC-721 (+ totalSupply) · multi-token → ERC-1155 · token / wallet → null", () => {
   const vm = chain();
   assert.deepEqual(collectionInfo(vm, N), { address: N, standard: "ERC-721", name: "Siam Art", symbol: "SART", totalSupply: "3n" });
   assert.deepEqual(collectionInfo(vm, G.toUpperCase().replace("0X", "0x")), { address: G, standard: "ERC-1155", name: "Items", symbol: "ITM" });
@@ -55,7 +55,7 @@ test("collectionInfo: NFT → ERC-721 (+ totalSupply) · multi-token → ERC-115
   assert.equal(collectionStandard(undefined), null);
 });
 
-test("nftHoldings: ชิ้น ERC-721 ตามเจ้าของปัจจุบัน + tokenURI · ยอด ERC-1155 ต่อ id + uri · ยอด 0 ไม่แสดง · เหรียญ ERC-20 แยกอยู่ที่ tokenHoldings", () => {
+test("nftHoldings: ERC-721 tokens by current owner + tokenURI · ERC-1155 balance per id + uri · zero balances hidden · ERC-20 tokens are separate, in tokenHoldings", () => {
   const vm = chain();
   const pick = (items) => items.map((i) => [i.program, i.standard, i.tokenId, i.amount, i.uri]);
   assert.deepEqual(pick(nftHoldings(vm, BOB)), [
@@ -73,7 +73,7 @@ test("nftHoldings: ชิ้น ERC-721 ตามเจ้าของปัจ�
   assert.equal(nftHoldings(vm, CAROL, { limit: 2 }).length, 2);
 });
 
-test("รายการโปรแกรม: NFT / multi-token มีฟิลด์ collection (ทั้งที่อนุมัติแล้วและรออนุมัติ) · token และโปรแกรมอื่นไม่มี", () => {
+test("program lists: NFT / multi-token have a collection field (both approved and pending) · tokens and other programs do not", () => {
   const vm = chain();
   const approved = Object.fromEntries(pageApprovedPrograms(vm, { page: 1, limit: 20 }).items.map((p) => [p.address, p.collection]));
   assert.deepEqual(approved, { [N]: "ERC-721", [G]: "ERC-1155", [T]: undefined });

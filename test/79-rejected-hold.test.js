@@ -2,9 +2,9 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import * as sign from "../src/crypto/signature.js";
 
-/* มีแต่ใบที่ถูกปฏิเสธ → server ไม่ปิด block ทันที: ติดไปกับ block ที่มี tx จริง หรือปิดเมื่อใบที่รอนานสุดครบ REJECTED_HOLD_MS (ค่าเริ่ม 60 วิ) */
+/* only rejected txs → the server does not close a block right away: they ride along with a block that has real txs, or a block closes once the oldest has waited REJECTED_HOLD_MS (default 60 s) */
 
-const KEY = sign.randomPrivateKey();   // กระเป๋าไม่มีเหรียญ
+const KEY = sign.randomPrivateKey();   // wallet with no coins
 const me = sign.addressOf(KEY);
 const CODE = "function program() {\n  function ping(params) { return 1n }\n  return { ping };\n}";
 
@@ -12,7 +12,7 @@ let server, vm, mempool, shouldMine, REJECTED_HOLD_MS, url, chainId;
 
 before(async () => {
   let miner;
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   ({ server, vm, mempool, miner, shouldMine, REJECTED_HOLD_MS } = await import("../server.js"));
   clearInterval(miner);
   chainId = vm.chainId;
@@ -24,13 +24,13 @@ after(() => server.close());
 
 const post = (p, body) => fetch(url + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
-test("ค่าเริ่ม 60 วิ · /pending บอกค่าที่ตั้ง", async () => {
+test("default 60 s · /pending shows the setting", async () => {
   assert.equal(REJECTED_HOLD_MS, 60_000);
   assert.equal((await fetch(`${url}/pending`).then((r) => r.json())).rejectedHoldMs, 60_000);
 });
 
-test("ใบที่ถูกปฏิเสธอย่างเดียว: ยังไม่ปิด block จนกว่าใบที่รอนานสุดครบ 60 วิ", async () => {
-  assert.equal(shouldMine(), false, "คิวว่าง");
+test("rejected txs only: no block until the oldest has waited 60 s", async () => {
+  assert.equal(shouldMine(), false, "queue empty");
   const tx = { chainId, from: me, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, maxFeePerGas: "2000000000",
     maxPriorityFeePerGas: "0", nonce: 0, action: "deploy", code: CODE };
   const sent = await post("/sendtx", { tx, signature: sign.signTransaction(tx, KEY) });
@@ -40,17 +40,17 @@ test("ใบที่ถูกปฏิเสธอย่างเดียว: 
   assert.ok(Number.isFinite(at));
   assert.equal(shouldMine(at), false);
   assert.equal(shouldMine(at + 59_999), false);
-  assert.equal(shouldMine(at + 60_000), true, "ครบ 60 วิ → ปิด block บันทึกใบที่ถูกปฏิเสธ");
+  assert.equal(shouldMine(at + 60_000), true, "60 s reached → close a block recording the rejected txs");
 });
 
-test("มี tx จริงในคิว → ปิด block ทันที และใบที่ถูกปฏิเสธติดไปด้วย · เวลาไม่ถูกบันทึกลง block", async () => {
+test("real txs in the queue → close a block right away, with the rejected txs included · the wait time is not recorded in the block", async () => {
   const key = sign.randomPrivateKey();
   assert.equal(mempool.rejectedPending, 1);
-  // tx จริง (simulate ผ่าน) เข้าคิว
+  // a real tx (simulate passes) enters the queue
   const tx = { chainId, from: sign.addressOf(key), to: me, method: "", input: {}, value: 0, gasLimit: 0, gasPrice: "1000000000", nonce: 0, action: "transfer" };
   const queued = mempool.add({ tx, signature: sign.signTransaction(tx, key) }, { simulate: () => ({ ok: true }) });
   assert.equal(queued.ok, true, JSON.stringify(queued));
-  assert.equal(shouldMine(mempool.oldestRejectionAt), true, "มี tx จริง → ไม่ต้องรอ");
+  assert.equal(shouldMine(mempool.oldestRejectionAt), true, "real tx present → no waiting");
   const block = vm.createBlock({ timestamp: Date.now(), feeRecipient: "0x1111111111111111111111111111111111111111" });
   mempool.take(block);
   const rejected = block.rejectedTransactions();
@@ -61,7 +61,7 @@ test("มี tx จริงในคิว → ปิด block ทันที 
   assert.equal(mempool.oldestRejectionAt, null);
 });
 
-test("env: REJECTED_HOLD_MS ตั้งได้ · AUTO_REVIEW=0 ปิดการตรวจโค้ดที่ /sendtx (ค่าเริ่ม = เปิด)", async () => {
+test("env: REJECTED_HOLD_MS is configurable · AUTO_REVIEW=0 turns off code review at /sendtx (default = on)", async () => {
   const { execFileSync } = await import("node:child_process");
   const read = (env) => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e",
     "const m = await import('./server.js'); clearInterval(m.miner); console.log(JSON.stringify([m.AUTO_REVIEW, m.REJECTED_HOLD_MS])); process.exit(0)"],

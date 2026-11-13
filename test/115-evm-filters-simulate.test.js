@@ -9,8 +9,8 @@ import { Mempool } from "../src/node/mempool.js";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * RPC แบบ EVM ที่เพิ่ม:
- *   filter ผ่าน HTTP: eth_newFilter / eth_newBlockFilter / eth_newPendingTransactionFilter / eth_getFilterChanges / eth_getFilterLogs / eth_uninstallFilter
+ * added EVM-style RPCs:
+ *   filters over HTTP: eth_newFilter / eth_newBlockFilter / eth_newPendingTransactionFilter / eth_getFilterChanges / eth_getFilterLogs / eth_uninstallFilter
  *   ws eth_subscribe("newPendingTransactions") · eth_createAccessList · eth_simulateV1
  */
 
@@ -58,21 +58,21 @@ const ask = (rpc, method, params = [], client) => {
   return reply.result;
 };
 
-test("eth_newFilter: getFilterChanges ได้ log ใหม่ตั้งแต่ครั้งก่อน · getFilterLogs ได้ทั้งช่วง · uninstall แล้วหาไม่เจอ", () => {
+test("eth_newFilter: getFilterChanges returns logs new since the last poll · getFilterLogs returns the whole range · not found after uninstall", () => {
   const { rpc, bump } = chain();
-  bump(1);   // block 2: ก่อนสร้าง filter
+  bump(1);   // block 2: before the filter is created
   const filter = ask(rpc, "eth_newFilter", [{ address: P, topics: [BUMPED], fromBlock: "0x1" }]);
   assert.match(filter, /^0x[0-9a-f]{32}$/);
-  assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), []);   // ของเก่าไม่นับเป็นของใหม่
+  assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), []);   // old entries don't count as new
   bump(2);
   bump(3);
   const changes = ask(rpc, "eth_getFilterChanges", [filter]);
   assert.deepEqual(changes.map((log) => log.blockNumber), ["0x3", "0x4"]);
   assert.equal(changes[0].topics[0], BUMPED);
-  assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), []);   // อ่านแล้ว = ไม่ส่งซ้ำ
+  assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), []);   // already read = not sent again
   assert.deepEqual(ask(rpc, "eth_getFilterLogs", [filter]).map((log) => log.blockNumber), ["0x2", "0x3", "0x4"]);
 
-  // topic ไม่ตรง → ไม่ได้อะไร · address ผิดรูปแบบ → error ตอนสร้าง
+  // topic mismatch → nothing · malformed address → error on creation
   const other = ask(rpc, "eth_newFilter", [{ topics: [topicId("Other()")] }]);
   bump(4);
   assert.deepEqual(ask(rpc, "eth_getFilterChanges", [other]), []);
@@ -84,7 +84,7 @@ test("eth_newFilter: getFilterChanges ได้ log ใหม่ตั้งแ�
   assert.deepEqual(send(rpc, "eth_getFilterChanges", [filter]).error, { code: EVM_ERROR.SERVER, message: "filter not found" });
 });
 
-test("eth_newFilter: toBlock หยุดที่ block นั้น · ตามไม่ทันเกิน logRange → ส่งทีละช่วง", () => {
+test("eth_newFilter: toBlock stops at that block · lagging more than logRange → sent one range at a time", () => {
   const { rpc, bump } = chain({ logRange: 2 });
   const capped = ask(rpc, "eth_newFilter", [{ address: P, toBlock: "0x3" }]);
   const all = ask(rpc, "eth_newFilter", [{ address: P }]);
@@ -96,7 +96,7 @@ test("eth_newFilter: toBlock หยุดที่ block นั้น · ตา�
   assert.deepEqual(ask(rpc, "eth_getFilterChanges", [all]).map((log) => log.blockNumber), ["0x6"]);
 });
 
-test("eth_newBlockFilter ได้ hash ของ block ใหม่ · filter หมดอายุเมื่อไม่ถูกเรียก · จำกัดจำนวนต่อ client และทั้ง node", () => {
+test("eth_newBlockFilter returns new block hashes · filters expire when not polled · limited per client and per node", () => {
   let clock = 0;
   const { rpc, bump, vm } = chain({ now: () => clock, filterTtlMs: 1000, maxFiltersPerClient: 2, maxFilters: 3 });
   const blocks = ask(rpc, "eth_newBlockFilter", [], "1.1.1.1");
@@ -108,9 +108,9 @@ test("eth_newBlockFilter ได้ hash ของ block ใหม่ · filter �
   ask(rpc, "eth_newBlockFilter", [], "1.1.1.1");
   assert.equal(send(rpc, "eth_newBlockFilter", [], "1.1.1.1").error.code, EVM_ERROR.LIMIT);
   ask(rpc, "eth_newBlockFilter", [], "2.2.2.2");
-  assert.equal(send(rpc, "eth_newBlockFilter", [], "3.3.3.3").error.code, EVM_ERROR.LIMIT);   // เต็มทั้ง node
+  assert.equal(send(rpc, "eth_newBlockFilter", [], "3.3.3.3").error.code, EVM_ERROR.LIMIT);   // node-wide limit reached
   clock = 900;
-  ask(rpc, "eth_getFilterChanges", [blocks]);   // ถูกเรียก = ต่ออายุ
+  ask(rpc, "eth_getFilterChanges", [blocks]);   // polled = renewed
   clock = 1500;
   assert.equal(rpc.filterCount(), 1);
   assert.deepEqual(ask(rpc, "eth_getFilterChanges", [blocks]), []);
@@ -134,7 +134,7 @@ function pooled() {
   return { vm, mempool, rpc, add };
 }
 
-test("eth_newPendingTransactionFilter ได้ hash ของ tx ที่เข้า mempool หลังสร้าง filter", () => {
+test("eth_newPendingTransactionFilter returns hashes of txs entering the mempool after the filter is created", () => {
   const { rpc, add } = pooled();
   const before = add(0);
   const filter = ask(rpc, "eth_newPendingTransactionFilter");
@@ -143,10 +143,10 @@ test("eth_newPendingTransactionFilter ได้ hash ของ tx ที่เ�
   assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), [first, second]);
   assert.deepEqual(ask(rpc, "eth_getFilterChanges", [filter]), []);
   assert.ok(!ask(rpc, "eth_getFilterChanges", [filter]).includes(before));
-  assert.equal(send(rpc, "eth_getFilterLogs", [filter]).error.message, "filter not found");   // getFilterLogs ใช้ได้กับ log filter เท่านั้น
+  assert.equal(send(rpc, "eth_getFilterLogs", [filter]).error.message, "filter not found");   // getFilterLogs works with log filters only
 });
 
-test("ws: eth_subscribe newPendingTransactions ส่ง hash ทันที · true = ทั้งใบ", async () => {
+test("ws: eth_subscribe newPendingTransactions sends the hash immediately · true = the full tx", async () => {
   const { vm, rpc, add } = pooled();
   const server = http.createServer((request, response) => response.end());
   const ws = attachEvmWebSocket(server, { rpc, vm, pollMs: 20 });
@@ -173,7 +173,7 @@ test("ws: eth_subscribe newPendingTransactions ส่ง hash ทันที ·
     assert.equal(got.params.result, hash);
     const tx = await next((m) => m.params?.subscription === full);
     assert.deepEqual([tx.params.result.hash, tx.params.result.from, tx.params.result.blockNumber], [hash, ALICE, null]);
-    // filter ผ่าน ws ก็ได้ (ส่งต่อให้ rpc พร้อม IP)
+    // filters also work over ws (forwarded to rpc with the IP)
     socket.send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "eth_newBlockFilter" }));
     assert.match((await next((m) => m.id === 3)).result, /^0x[0-9a-f]{32}$/);
     socket.close();
@@ -184,7 +184,7 @@ test("ws: eth_subscribe newPendingTransactions ส่ง hash ทันที ·
   }
 });
 
-test("eth_createAccessList: accessList ว่าง + gasUsed เท่ากับ eth_estimateGas · revert → error", () => {
+test("eth_createAccessList: empty accessList + gasUsed equals eth_estimateGas · revert → error", () => {
   const { rpc } = chain();
   const request = { from: OWNER, to: P, data: iface.encodeFunctionData("bump", [3]) };
   const result = ask(rpc, "eth_createAccessList", [request, "latest"]);
@@ -193,7 +193,7 @@ test("eth_createAccessList: accessList ว่าง + gasUsed เท่ากั
   assert.match(send(rpc, "eth_createAccessList", [{ from: OWNER, to: P, data: iface.encodeFunctionData("boom") }]).error.message, /execution reverted: nope/);
 });
 
-test("eth_simulateV1: call ต่อกันเห็นผลของกันและกัน · returnData / logs / revert · ไม่ commit", () => {
+test("eth_simulateV1: chained calls see each other's effects · returnData / logs / revert · no commit", () => {
   const { rpc, vm } = chain();
   const before = vm.latestBlockNumber();
   const bump = (by) => ({ from: OWNER, to: P, data: iface.encodeFunctionData("bump", [by]) });
@@ -203,14 +203,14 @@ test("eth_simulateV1: call ต่อกันเห็นผลของกั�
   assert.equal(block.parentHash, vm.getBlock(before).hash);
   const [a, b, boom, transfer, bad] = block.calls;
   assert.deepEqual([a.status, iface.decodeFunctionResult("bump", a.returnData)[0]], ["0x1", 5n]);
-  assert.deepEqual([b.status, iface.decodeFunctionResult("bump", b.returnData)[0]], ["0x1", 12n]);   // เห็นผลของ call ก่อนหน้า
+  assert.deepEqual([b.status, iface.decodeFunctionResult("bump", b.returnData)[0]], ["0x1", 12n]);   // sees the previous call's effect
   assert.deepEqual([b.logs[0].address, b.logs[0].topics[0], b.logs[0].logIndex], [P, BUMPED, "0x1"]);
   assert.equal(boom.status, "0x0");
   assert.match(boom.error.message, /execution reverted: nope/);
   assert.equal(transfer.status, "0x1");
   assert.deepEqual([bad.status, bad.error.message], ["0x0", "data sent to an address that is not a program"]);
   assert.ok(Number(block.gasUsed) > 0);
-  // ไม่เปลี่ยน state / ไม่สร้าง block
+  // no state change / no block created
   assert.equal(vm.latestBlockNumber(), before);
   assert.equal(vm.query({ programUuid: P, functionName: "count" }).result, "0n");
 

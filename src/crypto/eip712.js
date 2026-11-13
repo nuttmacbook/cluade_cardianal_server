@@ -1,25 +1,25 @@
 /**
- * EIP-712 (typed structured data) แบบเดียวกับที่ MetaMask eth_signTypedData_v4 / ethers TypedDataEncoder เซ็น
- * ไม่พึ่ง VM — ใช้ทั้งใน VM (API eip712Digest / eip712DomainSeparator ของโปรแกรม) และฝั่ง wallet / เทสต์
+ * EIP-712 (typed structured data), the same as what MetaMask eth_signTypedData_v4 / ethers TypedDataEncoder sign
+ * VM-independent — used both inside the VM (the program API eip712Digest / eip712DomainSeparator) and on the wallet / test side
  *
  *   eip712Digest(domain, types, primaryType, message)  → "0x…" 32 byte = keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(message))
  *   eip712DomainSeparator(domain, types?)              → "0x…" 32 byte = hashStruct("EIP712Domain", domain)
  *   eip712HashStruct(primaryType, types, value)        → "0x…" 32 byte
  *   eip712EncodeType(primaryType, types)               → "Mail(Person from,Person to,string contents)Person(string name,address wallet)"
  *
- * types = { ชื่อ struct: [{ name, type }, …] } · มี EIP712Domain หรือไม่มีก็ได้ (ไม่มี = ใช้ field ของ domain ที่มีค่า
- *   ตามลำดับ name, version, chainId, verifyingContract, salt แบบ ethers)
- * ค่า: uintN / intN = bigint / number (จำนวนเต็มปลอดภัย) / string ทศนิยมหรือ "0x…" · address = "0x" + 40 hex
- *      bool = true / false · bytesN = "0x…" ยาว N byte พอดี · bytes = "0x…" · string = ข้อความ (UTF-8)
- *      struct = object (field เกินถูกข้าม · ขาด = error) · T[] / T[k] = array
- * ทุกอย่าง deterministic · error = Error ธรรมดาพร้อมข้อความ (VM แปลงเป็น INVALID_REQUEST)
- * meter (ไม่บังคับ) = { hashes, bytes } นับจำนวนครั้งที่ keccak และจำนวน byte ที่ถูก hash → VM ใช้คิดแก๊ส
+ * types = { struct name: [{ name, type }, …] } · EIP712Domain may or may not be present (absent = use the domain fields that have values
+ *   in the order name, version, chainId, verifyingContract, salt, like ethers)
+ * values: uintN / intN = bigint / number (safe integer) / decimal string or "0x…" · address = "0x" + 40 hex
+ *      bool = true / false · bytesN = "0x…" of exactly N bytes · bytes = "0x…" · string = text (UTF-8)
+ *      struct = object (extra fields are skipped · missing = error) · T[] / T[k] = array
+ * Everything is deterministic · errors = a plain Error with a message (the VM maps it to INVALID_REQUEST; the Thai messages stay as is because they end up in on-chain tx errors)
+ * meter (optional) = { hashes, bytes } counts keccak calls and bytes hashed → the VM uses it to charge gas
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from "@noble/hashes/utils.js";
 
-/** ลำดับ field ของ EIP712Domain (ตาม EIP-712 / ethers) */
+/** EIP712Domain field order (per EIP-712 / ethers) */
 export const DOMAIN_FIELDS = [
   { name: "name", type: "string" },
   { name: "version", type: "string" },
@@ -27,7 +27,7 @@ export const DOMAIN_FIELDS = [
   { name: "verifyingContract", type: "address" },
   { name: "salt", type: "bytes32" },
 ];
-/** ซ้อน array / struct ลึกได้ไม่เกินนี้ · จำนวน struct / field สูงสุด — กัน stack ของ host (ทุกเครื่องต้องล้มที่จุดเดียวกัน = deterministic) */
+/** max nesting depth of arrays / structs · max number of structs / fields — protects the host stack (every node must fail at the same point = deterministic) */
 export const EIP712_MAX_DEPTH = 32;
 export const EIP712_MAX_TYPES = 64;
 export const EIP712_MAX_FIELDS = 128;
@@ -46,9 +46,9 @@ const describe = (value) => (typeof value === "bigint" ? `${value}n` : typeof va
 const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
-/** "0x…" → bytes (จำนวนไบต์เต็มเท่านั้น) */
-export function hexBytes(value, label = "ค่า") {
-  if (typeof value !== "string" || !HEX_BYTES_PATTERN.test(value)) fail(`${label} ต้องเป็น hex string "0x…" จำนวนไบต์เต็ม`);
+/** "0x…" → bytes (whole bytes only) */
+export function hexBytes(value, label = "value") {
+  if (typeof value !== "string" || !HEX_BYTES_PATTERN.test(value)) fail(`${label} must be a hex string "0x…" of whole bytes`);
   return hexToBytes(value.slice(2));
 }
 
@@ -60,18 +60,18 @@ const keccakOf = (bytes, meter) => {
   return keccak_256(bytes);
 };
 
-/** จำนวนเต็มตามแบบที่ ethers รับ (BigNumberish) */
+/** integers as ethers accepts them (BigNumberish) */
 function toBigInt(value, label) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) fail(`${label}: number ต้องเป็นจำนวนเต็มปลอดภัย (ใช้ BigInt แทน)`);
+    if (!Number.isSafeInteger(value)) fail(`${label}: number must be a safe integer (use BigInt instead)`);
     return BigInt(value);
   }
   if (typeof value === "string") {
     if (/^-?(0|[1-9]\d*)$/.test(value)) return BigInt(value);
     if (/^-?0x[0-9a-fA-F]+$/.test(value)) return value.startsWith("-") ? -BigInt(value.slice(1)) : BigInt(value);
   }
-  return fail(`${label}: ต้องเป็นจำนวนเต็ม (ได้ ${describe(value)})`);
+  return fail(`${label}: must be an integer (got ${describe(value)})`);
 }
 
 const word = (big) => {
@@ -84,29 +84,29 @@ const word = (big) => {
   return out;
 };
 
-/** อ่าน types → Map(ชื่อ struct → [{ name, type }]) พร้อมตรวจรูปแบบ (ไม่รวม EIP712Domain) */
+/** parse types → Map(struct name → [{ name, type }]) and validate the shape (EIP712Domain excluded) */
 function readTypes(types) {
-  if (!isPlainObject(types)) fail("types ต้องเป็น object ของ { ชื่อ struct: [{ name, type }] }");
+  if (!isPlainObject(types)) fail("types must be an object of { structName: [{ name, type }] }");
   const map = new Map();
-  if (Object.keys(types).length > EIP712_MAX_TYPES) fail(`types มี struct ได้ไม่เกิน ${EIP712_MAX_TYPES} ชนิด`);
+  if (Object.keys(types).length > EIP712_MAX_TYPES) fail(`types can have at most ${EIP712_MAX_TYPES} structs`);
   for (const typeName of Object.keys(types)) {
-    if (!NAME_PATTERN.test(typeName)) fail(`ชื่อ struct ไม่ถูกต้อง: ${JSON.stringify(typeName)}`);
+    if (!NAME_PATTERN.test(typeName)) fail(`invalid struct name: ${JSON.stringify(typeName)}`);
     const fields = types[typeName];
-    if (!Array.isArray(fields)) fail(`types.${typeName} ต้องเป็น array ของ { name, type }`);
-    if (fields.length > EIP712_MAX_FIELDS) fail(`types.${typeName} มี field ได้ไม่เกิน ${EIP712_MAX_FIELDS}`);
+    if (!Array.isArray(fields)) fail(`types.${typeName} must be an array of { name, type }`);
+    if (fields.length > EIP712_MAX_FIELDS) fail(`types.${typeName} can have at most ${EIP712_MAX_FIELDS} fields`);
     const seen = new Set();
     const list = fields.map((field) => {
       if (!isPlainObject(field) || typeof field.name !== "string" || typeof field.type !== "string") {
-        fail(`types.${typeName}: field ต้องเป็น { name, type }`);
+        fail(`types.${typeName}: field must be { name, type }`);
       }
-      if (!NAME_PATTERN.test(field.name)) fail(`types.${typeName}: ชื่อ field ไม่ถูกต้อง ${JSON.stringify(field.name)}`);
-      if (seen.has(field.name)) fail(`types.${typeName}: field '${field.name}' ซ้ำ`);
+      if (!NAME_PATTERN.test(field.name)) fail(`types.${typeName}: invalid field name ${JSON.stringify(field.name)}`);
+      if (seen.has(field.name)) fail(`types.${typeName}: duplicate field '${field.name}'`);
       seen.add(field.name);
       return { name: field.name, type: field.type };
     });
     map.set(typeName, list);
   }
-  // ตรวจชนิดของทุก field ว่ารู้จัก และไม่มี struct อ้างตัวเองเป็นวง (ethers ปฏิเสธเช่นกัน)
+  // check every field's type is known and no struct references itself in a cycle (ethers rejects these too)
   for (const [typeName, fields] of map) {
     for (const field of fields) checkType(field.type, map, `${typeName}.${field.name}`);
   }
@@ -114,7 +114,7 @@ function readTypes(types) {
   return map;
 }
 
-/** ชนิดฐานของ array ("Person[][2]" → "Person") */
+/** base type of an array ("Person[][2]" → "Person") */
 const baseType = (type) => {
   let base = type;
   for (let match = ARRAY_PATTERN.exec(base); match; match = ARRAY_PATTERN.exec(base)) base = match[1];
@@ -139,22 +139,22 @@ function isAtomic(type) {
 function checkType(type, map, where) {
   let depth = 0;
   for (let match = ARRAY_PATTERN.exec(type), rest = type; match; match = ARRAY_PATTERN.exec(rest)) {
-    if (match[2] !== "" && match[2] !== String(Number(match[2]))) fail(`${where}: ขนาด array ไม่ถูกต้อง '${type}'`);
+    if (match[2] !== "" && match[2] !== String(Number(match[2]))) fail(`${where}: invalid array size '${type}'`);
     rest = match[1];
-    if (++depth > EIP712_MAX_DEPTH) fail(`${where}: array ซ้อนลึกเกิน ${EIP712_MAX_DEPTH} ชั้น`);
+    if (++depth > EIP712_MAX_DEPTH) fail(`${where}: arrays nested deeper than ${EIP712_MAX_DEPTH} levels`);
   }
   const base = baseType(type);
-  if (!isAtomic(base) && !map.has(base)) fail(`${where}: ไม่รู้จักชนิด '${type}'`);
+  if (!isAtomic(base) && !map.has(base)) fail(`${where}: unknown type '${type}'`);
 }
 
-/** struct ที่ typeName อ้างถึง (ไม่รวมตัวเอง) · strict = ห้ามวน */
+/** structs referenced by typeName (excluding itself) · strict = no cycles */
 function dependencies(typeName, map, strict = false) {
   const found = new Set();
   const visit = (name, path) => {
     for (const field of map.get(name)) {
       const base = baseType(field.type);
       if (!map.has(base)) continue;
-      if (strict && path.includes(base)) fail(`struct '${base}' อ้างถึงตัวเองเป็นวง`);
+      if (strict && path.includes(base)) fail(`struct '${base}' references itself cyclically`);
       if (found.has(base)) continue;
       found.add(base);
       visit(base, [...path, base]);
@@ -168,13 +168,13 @@ function dependencies(typeName, map, strict = false) {
 const encodeStruct = (name, fields) => `${name}(${fields.map((field) => `${field.type} ${field.name}`).join(",")})`;
 
 function encodeTypeOf(typeName, map) {
-  if (!map.has(typeName)) fail(`ไม่รู้จัก struct '${typeName}'`);
-  // เรียงชื่อแบบเดียวกับ ethers / MetaMask (เทียบ code unit · ชื่อเป็น ASCII อยู่แล้ว)
+  if (!map.has(typeName)) fail(`unknown struct '${typeName}'`);
+  // sort names the same way as ethers / MetaMask (by code unit · names are ASCII already)
   const deps = [...dependencies(typeName, map)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return [typeName, ...deps].map((name) => encodeStruct(name, map.get(name))).join("");
 }
 
-/** ตัวเข้ารหัสค่าของแต่ละ field เป็น 32 byte (ใช้ซ้ำใน call เดียว: typeHash ถูก cache) */
+/** encodes each field's value to 32 bytes (reused within one call: typeHash is cached) */
 function makeEncoder(map, meter) {
   const typeHashes = new Map();
   const typeHash = (name) => {
@@ -183,35 +183,35 @@ function makeEncoder(map, meter) {
   };
 
   const encodeValue = (type, value, label, depth) => {
-    if (depth > EIP712_MAX_DEPTH) fail(`${label}: ซ้อนลึกเกิน ${EIP712_MAX_DEPTH} ชั้น`);
-    if (value === undefined || value === null) fail(`${label}: ไม่มีค่า (${type})`);
+    if (depth > EIP712_MAX_DEPTH) fail(`${label}: nested deeper than ${EIP712_MAX_DEPTH} levels`);
+    if (value === undefined || value === null) fail(`${label}: missing value (${type})`);
     const array = ARRAY_PATTERN.exec(type);
     if (array) {
-      if (!Array.isArray(value)) fail(`${label}: ต้องเป็น array (${type})`);
-      if (array[2] !== "" && value.length !== Number(array[2])) fail(`${label}: ต้องมี ${array[2]} ช่อง (ได้ ${value.length})`);
+      if (!Array.isArray(value)) fail(`${label}: must be an array (${type})`);
+      if (array[2] !== "" && value.length !== Number(array[2])) fail(`${label}: must have ${array[2]} items (got ${value.length})`);
       const parts = value.map((item, i) => encodeValue(array[1], item, `${label}[${i}]`, depth + 1));
       return keccakOf(concatBytes(...parts), meter);
     }
     if (map.has(type)) return hashStructOf(type, value, label, depth + 1);
     if (type === "address") {
-      if (typeof value !== "string" || !ADDRESS_PATTERN.test(value)) fail(`${label}: ต้องเป็น address "0x" + 40 hex (ได้ ${describe(value)})`);
+      if (typeof value !== "string" || !ADDRESS_PATTERN.test(value)) fail(`${label}: must be an address "0x" + 40 hex (got ${describe(value)})`);
       const out = new Uint8Array(32);
       out.set(hexToBytes(value.slice(2)), 12);
       return out;
     }
     if (type === "bool") {
-      if (typeof value !== "boolean") fail(`${label}: ต้องเป็น true / false (ได้ ${describe(value)})`);
+      if (typeof value !== "boolean") fail(`${label}: must be true / false (got ${describe(value)})`);
       return word(value ? 1n : 0n);
     }
     if (type === "string") {
-      if (typeof value !== "string") fail(`${label}: ต้องเป็น string (ได้ ${describe(value)})`);
+      if (typeof value !== "string") fail(`${label}: must be a string (got ${describe(value)})`);
       return keccakOf(utf8ToBytes(value), meter);
     }
     if (type === "bytes") return keccakOf(hexBytes(value, label), meter);
     const bytesN = BYTES_N_PATTERN.exec(type);
     if (bytesN) {
       const bytes = hexBytes(value, label);
-      if (bytes.length !== Number(bytesN[1])) fail(`${label}: ต้องยาว ${bytesN[1]} byte พอดี (ได้ ${bytes.length})`);
+      if (bytes.length !== Number(bytesN[1])) fail(`${label}: must be exactly ${bytesN[1]} bytes (got ${bytes.length})`);
       const out = new Uint8Array(32);
       out.set(bytes, 0);
       return out;
@@ -223,17 +223,17 @@ function makeEncoder(map, meter) {
       const signed = int[1] === "";
       const min = signed ? -(1n << (width - 1n)) : 0n;
       const max = signed ? (1n << (width - 1n)) - 1n : (1n << width) - 1n;
-      if (number < min || number > max) fail(`${label}: เกินช่วงของ ${type} (${number})`);
+      if (number < min || number > max) fail(`${label}: out of range for ${type} (${number})`);
       return word(number < 0n ? (1n << 256n) + number : number);
     }
-    return fail(`${label}: ไม่รู้จักชนิด '${type}'`);
+    return fail(`${label}: unknown type '${type}'`);
   };
 
   const hashStructOf = (typeName, value, label, depth = 0) => {
-    if (!isPlainObject(value)) fail(`${label}: ต้องเป็น object ของ struct ${typeName}`);
+    if (!isPlainObject(value)) fail(`${label}: must be an object of struct ${typeName}`);
     const parts = [typeHash(typeName)];
     for (const field of map.get(typeName)) {
-      if (!Object.hasOwn(value, field.name)) fail(`${label}.${field.name}: ไม่มีค่า (${field.type})`);
+      if (!Object.hasOwn(value, field.name)) fail(`${label}.${field.name}: missing value (${field.type})`);
       parts.push(encodeValue(field.type, value[field.name], `${label}.${field.name}`, depth));
     }
     return keccakOf(concatBytes(...parts), meter);
@@ -242,19 +242,19 @@ function makeEncoder(map, meter) {
   return { hashStructOf };
 }
 
-/** ชนิดของ domain: types.EIP712Domain ถ้ามี · ไม่มี = field ที่ domain มีค่า (ลำดับมาตรฐาน) */
+/** domain types: types.EIP712Domain if present · otherwise = the domain fields that have values (standard order) */
 function domainFields(domain, types) {
-  if (!isPlainObject(domain)) fail("domain ต้องเป็น object { name?, version?, chainId?, verifyingContract?, salt? }");
-  if (isPlainObject(types) && Object.hasOwn(types, "EIP712Domain")) return null;   // ใช้ของ types
+  if (!isPlainObject(domain)) fail("domain must be an object { name?, version?, chainId?, verifyingContract?, salt? }");
+  if (isPlainObject(types) && Object.hasOwn(types, "EIP712Domain")) return null;   // use the one in types
   for (const key of Object.keys(domain)) {
-    if (!DOMAIN_FIELDS.some((field) => field.name === key)) fail(`domain: ไม่รู้จัก field '${key}'`);
+    if (!DOMAIN_FIELDS.some((field) => field.name === key)) fail(`domain: unknown field '${key}'`);
   }
   return DOMAIN_FIELDS.filter((field) => domain[field.name] !== undefined && domain[field.name] !== null);
 }
 
-/** types ของ message โดยไม่มี EIP712Domain (ethers ห้ามมีใน types · MetaMask ต้องมี — รับทั้งสองแบบ) */
+/** message types without EIP712Domain (ethers forbids it in types · MetaMask requires it — both are accepted) */
 function messageTypes(types) {
-  if (!isPlainObject(types)) fail("types ต้องเป็น object ของ { ชื่อ struct: [{ name, type }] }");
+  if (!isPlainObject(types)) fail("types must be an object of { structName: [{ name, type }] }");
   const { EIP712Domain: _domain, ...rest } = types;
   return rest;
 }
@@ -265,12 +265,12 @@ function domainSeparatorBytes(domain, types, meter) {
   const map = readTypes({ ...(fields ? {} : messageTypes(types)), EIP712Domain: domainType });
   for (const field of map.get("EIP712Domain")) {
     const known = DOMAIN_FIELDS.find((item) => item.name === field.name);
-    if (!known || known.type !== field.type) fail(`EIP712Domain: field '${field.name} ${field.type}' ไม่ใช่ของมาตรฐาน`);
+    if (!known || known.type !== field.type) fail(`EIP712Domain: field '${field.name} ${field.type}' is not standard`);
   }
   return makeEncoder(map, meter).hashStructOf("EIP712Domain", domain, "domain");
 }
 
-/** domainSeparator ของ domain (เท่ากับ ethers TypedDataEncoder.hashDomain) */
+/** domainSeparator of a domain (equals ethers TypedDataEncoder.hashDomain) */
 export function eip712DomainSeparator(domain, types, meter) {
   return `0x${bytesToHex(domainSeparatorBytes(domain, types, meter))}`;
 }
@@ -278,37 +278,37 @@ export function eip712DomainSeparator(domain, types, meter) {
 /** hashStruct(primaryType, value) */
 export function eip712HashStruct(primaryType, types, value, meter) {
   const map = readTypes(messageTypes(types));
-  if (typeof primaryType !== "string" || !map.has(primaryType)) fail(`primaryType '${primaryType}' ไม่อยู่ใน types`);
+  if (typeof primaryType !== "string" || !map.has(primaryType)) fail(`primaryType '${primaryType}' is not in types`);
   return `0x${bytesToHex(makeEncoder(map, meter).hashStructOf(primaryType, value, primaryType))}`;
 }
 
-/** encodeType ของ struct (ตัวมันเอง + struct ที่อ้างถึงเรียงตามชื่อ) */
+/** encodeType of a struct (itself + referenced structs sorted by name) */
 export function eip712EncodeType(primaryType, types) {
   return encodeTypeOf(primaryType, readTypes(messageTypes(types)));
 }
 
 /**
- * digest ที่ eth_signTypedData_v4 เซ็น = keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(message))
- * primaryType = "EIP712Domain" → digest ของ domain อย่างเดียว (keccak256(0x1901 ‖ domainSeparator) แบบ MetaMask)
+ * digest signed by eth_signTypedData_v4 = keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(message))
+ * primaryType = "EIP712Domain" → digest of the domain only (keccak256(0x1901 ‖ domainSeparator), like MetaMask)
  */
 export function eip712Digest(domain, types, primaryType, message, meter) {
-  if (typeof primaryType !== "string" || primaryType === "") fail("primaryType ต้องเป็นชื่อ struct");
+  if (typeof primaryType !== "string" || primaryType === "") fail("primaryType must be a struct name");
   const separator = domainSeparatorBytes(domain, types, meter);
   const parts = [new Uint8Array([0x19, 0x01]), separator];
   if (primaryType !== "EIP712Domain") {
     const map = readTypes(messageTypes(types));
-    if (!map.has(primaryType)) fail(`primaryType '${primaryType}' ไม่อยู่ใน types`);
+    if (!map.has(primaryType)) fail(`primaryType '${primaryType}' is not in types`);
     parts.push(makeEncoder(map, meter).hashStructOf(primaryType, message, primaryType));
   }
   return `0x${bytesToHex(keccakOf(concatBytes(...parts), meter))}`;
 }
 
-/** keccak256 ของ byte ดิบ "0x…" → "0x…" 32 byte */
+/** keccak256 of raw "0x…" bytes → 32-byte "0x…" */
 export const keccak256Bytes = (hex, meter) => `0x${bytesToHex(keccakOf(hexBytes(hex), meter))}`;
 
 /**
- * ecrecover แบบ EVM: digest 32 byte ("0x…" หรือ Uint8Array) + ลายเซ็น "0x" + r + s + v (65 byte, v = 27 / 28) → address ตัวพิมพ์เล็ก
- * ลายเซ็นใช้ไม่ได้ → null (ไม่ throw) · ใช้ร่วมกันทั้ง ecrecover / ecrecoverDigest ใน VM และตัวช่วยฝั่ง wallet
+ * EVM-style ecrecover: 32-byte digest ("0x…" or Uint8Array) + signature "0x" + r + s + v (65 bytes, v = 27 / 28) → lowercase address
+ * invalid signature → null (doesn't throw) · shared by ecrecover / ecrecoverDigest in the VM and the wallet-side helpers
  */
 export function recoverAddress(digest, signature) {
   try {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { EVENTFUL, PROBE } from "./programs.js";
 
-/* emit ของโปรแกรม และเพดานความยาว key ของ storage */
+/* program emit, and the storage key length cap */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -26,7 +26,7 @@ const call = (vm, programUuid, functionName, input = {}, sender = "alice") =>
 //  emit
 // ---------------------------------------------------------------------------
 
-test("emit: event อยู่ในผลลัพธ์ของ tx", () => {
+test("emit: events are in the tx result", () => {
   const vm = setup();
   const res = call(vm, "token", "transfer", { to: "bob", amount: 30 });
 
@@ -36,14 +36,14 @@ test("emit: event อยู่ในผลลัพธ์ของ tx", () => {
   ]);
 });
 
-test("emit: initialization ก็ emit ได้ และเห็นตอน init", () => {
+test("emit: initialization can emit too, visible at init", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   vm.commit(vm.deploy({ programUuid: "token", code: EVENTFUL, context: user("alice"), initInput: { supply: 10 } }, { timestamp: T }).writes);
   const res = vm.init({ programUuid: "token" }, { timestamp: T });
   assert.deepEqual(res.events, [{ index: 0, depth: 0, program: "token", name: "Created", data: { owner: "alice", supply: "10n" } }]);
 });
 
-test("emit: เรียกซ้อน → เห็น event ของทุกชั้นพร้อม depth และชื่อโปรแกรม", () => {
+test("emit: nested calls → events from every level, with depth and program name", () => {
   const vm = setup();
   vm.commit(call(vm, "token", "transfer", { to: "relayer", amount: 100 }).writes);
   const res = call(vm, "relayer", "relay", { target: "token", to: "carol", amount: 10 }, "relayer");
@@ -56,33 +56,33 @@ test("emit: เรียกซ้อน → เห็น event ของทุ�
   assert.deepEqual(res.events[1].data, { from: "relayer", to: "carol", amount: "10n" });
 });
 
-test("emit: กิ่งที่ถูกย้อน → event ของกิ่งนั้นหายไปด้วย", () => {
+test("emit: reverted branch → that branch's events are dropped too", () => {
   const vm = setup();
   const res = call(vm, "relayer", "relaySafe", { target: "token", to: "carol", amount: 999_999 }, "nobody");
 
   assert.equal(res.status, "success");
-  assert.deepEqual(res.events.map((event) => event.name), ["RelayFailed"]); // ไม่มี Transfer ของกิ่งที่ล้ม
-  assert.match(res.events[0].data.reason, /ยอดไม่พอ/);
+  assert.deepEqual(res.events.map((event) => event.name), ["RelayFailed"]); // no Transfer from the failed branch
+  assert.match(res.events[0].data.reason, /insufficient balance/);
 });
 
-test("emit: tx ที่ล้มทั้งใบ → ไม่มี event เลย", () => {
+test("emit: fully failed tx → no events at all", () => {
   const vm = setup();
   const res = call(vm, "token", "transfer", { to: "bob", amount: 999_999 });
   assert.equal(res.status, "throw");
   assert.deepEqual(res.events, []);
 });
 
-test("emit: ชื่อ event ต้องเป็นตัวอักษรอังกฤษ", () => {
+test("emit: event names must use English letters", () => {
   const vm = setup();
   assert.equal(call(vm, "token", "badName").error.code, "INVALID_REQUEST");
 });
 
-test("emit: อยู่ใน receipt ทั้งระดับ tx และระดับ block", () => {
+test("emit: in receipts at both tx and block level", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 2000, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 10 }, context: user("alice") });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "carol", amount: 20 }, context: user("alice") });
-  block.call({ programUuid: "token", functionName: "transfer", input: { to: "dave", amount: 999_999 }, context: user("alice") }); // ล้ม
+  block.call({ programUuid: "token", functionName: "transfer", input: { to: "dave", amount: 999_999 }, context: user("alice") }); // fails
 
   const receipt = block.receipt();
   assert.deepEqual(receipt.transactions.map((tx) => tx.events.length), [1, 1, 0]);
@@ -93,13 +93,13 @@ test("emit: อยู่ใน receipt ทั้งระดับ tx และ�
   assert.equal(receipt.events[0].txHash, receipt.transactions[0].hash);
 });
 
-test("emit: ย้อนดู event ของ block เก่าได้ด้วย replayBlock", () => {
+test("emit: events of old blocks can be recovered with replayBlock", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 2000, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 10 }, context: user("alice") });
   block.commit();
 
-  for (let i = 0; i < 3; i += 1) {   // ปิด block เพิ่มอีก 3 อัน
+  for (let i = 0; i < 3; i += 1) {   // close 3 more blocks
     const next = vm.createBlock({ timestamp: T + 3000 + i * 1000, feeRecipient: "miner" });
     next.call({ programUuid: "token", functionName: "transfer", input: { to: "carol", amount: 1 }, context: user("alice") });
     next.commit();
@@ -109,12 +109,12 @@ test("emit: ย้อนดู event ของ block เก่าได้ด้
   assert.deepEqual(receipt.events.map((event) => event.data), [{ from: "alice", to: "bob", amount: "10n" }]);
 });
 
-test("emit: คิดค่าแก๊สตามจำนวน event และขนาดข้อมูล", () => {
+test("emit: gas is charged by event count and data size", () => {
   const gas = { call: 0, read: 0, write: 0, stateKey: 0, byte: 0, event: 200, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
   vm.db.load({ "alice:native:received": "1000000n" });
 
-  // transfer emit 1 event / relaySafe emit 1 event แต่ relay (สำเร็จ) emit 2
+  // transfer emits 1 event / relaySafe emits 1 event, but relay (on success) emits 2
   const one = call(vm, "token", "transfer", { to: "bob", amount: 30 });
   assert.equal(one.gasUsed, gas.event);
 
@@ -125,22 +125,22 @@ test("emit: คิดค่าแก๊สตามจำนวน event แล�
   assert.equal(three.gasUsed, 3 * gas.event);
 });
 
-test("emit: ข้อมูลใน event ยิ่งใหญ่ยิ่งแพง", () => {
+test("emit: larger event data costs more", () => {
   const gas = { call: 0, read: 0, write: 0, byte: 1, event: 0, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
   vm.db.load({ "alice:native:received": "1000000n" });
 
   const small = call(vm, "token", "transfer", { to: "b", amount: 1 });
   const large = call(vm, "token", "transfer", { to: "b".repeat(100), amount: 1 });
-  assert.equal(large.gasUsed - small.gasUsed, 99); // ชื่อผู้รับที่ยาวขึ้นอยู่ในข้อมูลของ event
+  assert.equal(large.gasUsed - small.gasUsed, 99); // the longer recipient name is in the event data
 });
 
 
 // ---------------------------------------------------------------------------
-//  เพดานความยาว key
+//  Key length cap
 // ---------------------------------------------------------------------------
 
-test("key: ยาวเกิน 1000 ไบต์ → tx ล้มใบเดียว ไม่ลาก block", () => {
+test("key: longer than 1000 bytes → only that tx fails, not the block", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   vm.commit(vm.deploy({ programUuid: "probe", code: PROBE, context: user("alice") }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "probe" }, { timestamp: T }).writes);
@@ -151,21 +151,21 @@ test("key: ยาวเกิน 1000 ไบต์ → tx ล้มใบเด�
 
   assert.equal(ok.status, "success");
   assert.equal(tooLong.error.code, "INVALID_REQUEST");
-  assert.match(tooLong.error.message, /key ของ storage ยาวเกินกำหนด/);
+  assert.match(tooLong.error.message, /storage key too long/);
   block.commit();
   assert.equal(vm.getBlock(1).successCount, 1);
 });
 
-test("key: ภาษาไทยนับตามจำนวน byte จริง", () => {
+test("key: non-ASCII text is counted by real byte length", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { maxKeySize: 200 });
   vm.commit(vm.deploy({ programUuid: "probe", code: PROBE, context: user("alice") }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "probe" }, { timestamp: T }).writes);
 
   const write = (key) => vm.call({ programUuid: "probe", functionName: "writeKey", input: { key, value: 1 }, context: user("alice") }, { timestamp: T });
-  assert.equal(write("ก".repeat(10)).status, "success");     // 10 ตัว = 90 ไบต์หลัง encode
-  assert.equal(write("ก".repeat(30)).error.code, "INVALID_REQUEST"); // 270 ไบต์
+  assert.equal(write("中".repeat(10)).status, "success");     // 10 chars = 90 bytes after encoding (3 UTF-8 bytes each, non-ASCII on purpose: tests UTF-8 byte counting)
+  assert.equal(write("中".repeat(30)).error.code, "INVALID_REQUEST"); // 270 bytes
 });
 
-test("key: ค่าเริ่มต้นคือ 1000 ไบต์", () => {
+test("key: the default is 1000 bytes", () => {
   assert.equal(VM.DEFAULT_OPTIONS.maxKeySize, 1000);
 });

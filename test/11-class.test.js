@@ -7,9 +7,9 @@ beforeEach(resetVM);
 
 let endpointCounter = 0;
 
-/** VM ที่มี DB ของตัวเอง (endpoint ไม่ซ้ำ) */
+/** VM with its own DB (unique endpoint) */
 function createVm(options) {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { maxTxGas: Infinity, ...options });   // เทสต์ timeout ด้วยลูปรอเวลา
+  const vm = new VM.VirtualMachine(new MemoryDB(), { maxTxGas: Infinity, ...options });   // tests timeout with a busy-wait loop
   const save = (res) => {
     if (res.status === "success") vm.commit(res.writes);
     return res;
@@ -21,7 +21,7 @@ function createVm(options) {
   return { vm, save, activate };
 }
 
-test("class: ค่าเริ่มต้นของ VirtualMachine", () => {
+test("class: VirtualMachine defaults", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   assert.equal(vm.timeoutMs, VM.DEFAULT_OPTIONS.timeoutMs);
   assert.equal(vm.maxCallDepth, VM.DEFAULT_OPTIONS.maxCallDepth);
@@ -31,12 +31,12 @@ test("class: ค่าเริ่มต้นของ VirtualMachine", () => {
   assert.ok(vm.createTransaction() instanceof VM.Transaction);
 });
 
-test("class: ไม่ส่ง db หรือส่ง object ที่ไม่ครบ → error", () => {
+test("class: missing db or an incomplete object → error", () => {
   assert.throws(() => new VM.VirtualMachine(), { code: "INTERNAL", message: /readKeys/ });
   assert.throws(() => new VM.VirtualMachine({ readKeys: () => [] }), { code: "INTERNAL" });
 });
 
-test("class: หลาย instance คนละ endpoint ใช้ DB และ config แยกกัน", () => {
+test("class: multiple instances with different endpoints use separate DBs and configs", () => {
   const a = createVm();
   const b = createVm({ timeoutMs: 50 });
 
@@ -50,7 +50,7 @@ test("class: หลาย instance คนละ endpoint ใช้ DB และ 
   assert.equal(b.vm.call({ programUuid: "faulty", functionName: "busy", input: { ms: 100 }, context: user("x") }).error.code, "TIMEOUT");
 });
 
-test("class: แก้ timeoutMs ของ instance ระหว่างใช้งานได้", () => {
+test("class: an instance's timeoutMs can be changed while in use", () => {
   const { vm, activate } = createVm();
   activate("faulty", FAULTY);
   vm.timeoutMs = 30;
@@ -59,7 +59,7 @@ test("class: แก้ timeoutMs ของ instance ระหว่างใช�
   assert.equal(vm.call({ programUuid: "faulty", functionName: "busy", input: { ms: 60 }, context: user("x") }).status, "success");
 });
 
-test("class: Block ใช้ DB ของ VM ที่สร้างมัน", () => {
+test("class: Block uses the DB of the VM that created it", () => {
   const { vm, activate } = createVm();
   activate("counter", COUNTER, { start: 10 });
 
@@ -72,7 +72,7 @@ test("class: Block ใช้ DB ของ VM ที่สร้างมัน",
   assert.equal(vm.db.readKeys(["counter:storage:count"])[0], "12n");
 });
 
-test("class: สถานะภายใน Block เข้าถึงจากข้างนอกไม่ได้", () => {
+test("class: Block internal state is not accessible from outside", () => {
   const block = new VM.VirtualMachine(new MemoryDB()).createBlock();
   assert.deepEqual(Object.keys(block), []);
   assert.equal(block.state, undefined);

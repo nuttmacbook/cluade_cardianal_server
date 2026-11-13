@@ -1,41 +1,41 @@
 /**
- * load test: เวลาที่เชนใช้ปิด block ภายใต้โหลด — LMDB บนดิสก์จริง เทียบ MemoryDB
+ * load test: time the chain takes to close a block under load — LMDB on a real disk vs MemoryDB
  *
- *   npm run load:test                                   # ชุดเต็ม: native / token / mix × 100 / 250 / 500 tx × LMDB + memory
- *   npm run load:test -- --quick                        # ชุดเล็ก (~10 วินาที · ตัวที่เทสต์ 80 ใช้)
+ *   npm run load:test                                   # full set: native / token / mix × 100 / 250 / 500 tx × LMDB + memory
+ *   npm run load:test -- --quick                        # small set (~10 seconds · the one test 80 uses)
  *   npm run load:test -- --db lmdb --workload token --txs 500 --blocks 30 --out load.json
- *   npm run load:test -- --url http://localhost:3000 --txs 200 --blocks 5    # ยิง /sendtx ของ server ที่รันอยู่ (end-to-end)
+ *   npm run load:test -- --url http://localhost:3000 --txs 200 --blocks 5    # sends to /sendtx of a running server (end-to-end)
  *
- * โหมดในโปรเซส (ค่าเริ่ม) ใช้ของจริงทั้งหมดแบบเดียวกับ server.js — ไม่ผ่าน HTTP
- *   VirtualMachine (option แบบ server: maxTransactions 500 · ต่อ sender 16 · EIP-1559 · history ฯลฯ · แต่ maxBlockGas / maxTxGas 3M (server ค่าเริ่ม 5M) · ไม่เปิด fork bluewolf · min base fee 1 gwei)
- *   + DB (LMDB ในโฟลเดอร์ชั่วคราวบนดิสก์) หรือ MemoryDB · Mempool + simulate + reviewProgram ตอนรับ tx (= /sendtx ลบ HTTP)
- *   ทุก block: เซ็น tx (ฝั่ง client · ไม่จับเวลา) → mempool.add ทีละใบ (ตรวจลายเซ็น + simulate) → createBlock → mempool.take → commit
- *   ผู้ส่งหลายกระเป๋าจาก genesis (1 ใบต่อกระเป๋าต่อ block) → ไม่ติดเพดาน 16 ใบต่อ sender
+ * In-process mode (default) uses all the real components the same way server.js does — without HTTP
+ *   VirtualMachine (server-style options: maxTransactions 500 · 16 per sender · EIP-1559 · history etc. · but maxBlockGas / maxTxGas 3M (server default 5M) · bluewolf fork off · min base fee 1 gwei)
+ *   + DB (LMDB in a temporary folder on disk) or MemoryDB · Mempool + simulate + reviewProgram when accepting txs (= /sendtx minus HTTP)
+ *   every block: sign txs (client side · not timed) → mempool.add one by one (signature check + simulate) → createBlock → mempool.take → commit
+ *   many sender wallets from genesis (1 tx per wallet per block) → never hits the 16-per-sender cap
  *
- * ที่วัดต่อ block
- *   add      mempool.add ทั้ง block (ตรวจลายเซ็น + simulate)  · sim = ส่วนของ simulate
- *   take     createBlock + mempool.take (รัน tx ทุกใบใน block)
- *   roots    block.hashes() (stateRoot / txRoot / receiptsRoot / logsBloom) — วัดแยกอีกครั้ง ไม่นับรวมใน close
- *   commit   block.commit() ทั้งหมด = ประกอบ header / body / ดัชนี / history (+ คำนวณ root ข้างใน) + db.writeKeys
- *   write    เฉพาะ db.writeKeys (LMDB transaction)
- *   close    take + commit (= เวลาที่ miner ของ server ใช้ใน setInterval)
- *   slot     add + close (server เป็น thread เดียว: ทั้งสองต้องเสร็จใน BLOCK_MS)
+ * Measured per block
+ *   add      mempool.add for the whole block (signature check + simulate)  · sim = the simulate part
+ *   take     createBlock + mempool.take (runs every tx in the block)
+ *   roots    block.hashes() (stateRoot / txRoot / receiptsRoot / logsBloom) — measured separately, not counted in close
+ *   commit   all of block.commit() = assemble header / body / indexes / history (+ computes roots internally) + db.writeKeys
+ *   write    db.writeKeys only (LMDB transaction)
+ *   close    take + commit (= the time the server's miner spends in setInterval)
+ *   slot     add + close (the server is single-threaded: both must finish within BLOCK_MS)
  *
  * workload
- *   native   โอน native (ครึ่งหนึ่งไป address ใหม่ทุกใบ)
- *   token    TOKEN_PROGRAM.transfer (ครึ่งหนึ่งไป address ใหม่)
- *   mix      token 30% · native 20% · MIX.work (ลูป --rounds รอบ + keccak256 + เขียน 3 key + emit) 35% · MIX.probe (runProgram ไป token) 15%
+ *   native   native transfers (half to a new address each time)
+ *   token    TOKEN_PROGRAM.transfer (half to a new address)
+ *   mix      token 30% · native 20% · MIX.work (loop --rounds times + keccak256 + write 3 keys + emit) 35% · MIX.probe (runProgram into token) 15%
  *
- * ตัวเลือก
+ * Options
  *   --db lmdb|memory|both   (both)          --workload native,token,mix|all (all)     --txs 100,250,500
- *   --blocks <n>  block ที่วัดต่อชุด (10)    --warmup <n> block อุ่นเครื่องที่ไม่นับ (2)  --rounds <n> รอบลูปของ MIX.work (200)
- *   --data-dir <dir>  ที่สร้างโฟลเดอร์ LMDB ชั่วคราว (os.tmpdir())   --keep  ไม่ลบโฟลเดอร์ LMDB หลังจบ
- *   --out <file>  รายงาน JSON     --quick  ชุดเล็ก (txs 20 · blocks 2 · warmup 1)    --seed <text>
- *   --url <url>   โหมด end-to-end: เติมเงินกระเป๋าผ่าน tx จริงแล้วยิง /sendtx (ต้องเปิด server ด้วย RATE_LIMIT=0)
- *                 --funder-key <key> (Hardhat #1 ที่ genesis.json ให้เงิน) · --admin-key <key> ถ้า server ตั้ง ADMINS
- *                 --concurrency <n> request พร้อมกัน (16) · กระเป๋าไม่เกิน 800 (ส่งต่อผ่านกระเป๋ากลางเพราะ rate limit 60 ใบ/นาที/address)
+ *   --blocks <n>  measured blocks per set (10)    --warmup <n> uncounted warm-up blocks (2)  --rounds <n> loop count of MIX.work (200)
+ *   --data-dir <dir>  where to create the temporary LMDB folder (os.tmpdir())   --keep  don't delete the LMDB folder afterwards
+ *   --out <file>  JSON report     --quick  small set (txs 20 · blocks 2 · warmup 1)    --seed <text>
+ *   --url <url>   end-to-end mode: fund wallets via real txs, then send to /sendtx (start the server with RATE_LIMIT=0)
+ *                 --funder-key <key> (Hardhat #1, funded by genesis.json) · --admin-key <key> if the server sets ADMINS
+ *                 --concurrency <n> concurrent requests (16) · at most 800 wallets (funded via hub wallets because of the 60 tx/min/address rate limit)
  *
- * ⚠️ key ของกระเป๋าสร้างจาก --seed เพื่อทดสอบเท่านั้น
+ * ⚠️ wallet keys are derived from --seed for testing only
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -73,11 +73,11 @@ const OPTIONS = {
   adminKey: option("admin-key", null),
   concurrency: Number(option("concurrency", 16)),
 };
-for (const w of OPTIONS.workloads) if (!WORKLOADS.includes(w)) throw new Error(`workload ไม่รู้จัก: ${w} (${WORKLOADS.join(" / ")})`);
-if (!["lmdb", "memory", "both"].includes(OPTIONS.db)) throw new Error("--db ต้องเป็น lmdb / memory / both");
-if (OPTIONS.txs.some((n) => !Number.isInteger(n) || n < 1)) throw new Error("--txs ต้องเป็นจำนวนเต็มบวก เช่น 100,250,500");
+for (const w of OPTIONS.workloads) if (!WORKLOADS.includes(w)) throw new Error(`unknown workload: ${w} (${WORKLOADS.join(" / ")})`);
+if (!["lmdb", "memory", "both"].includes(OPTIONS.db)) throw new Error("--db must be lmdb / memory / both");
+if (OPTIONS.txs.some((n) => !Number.isInteger(n) || n < 1)) throw new Error("--txs must be positive integers, e.g. 100,250,500");
 
-// option ของ VM เหมือน server.js (ค่าเริ่มของ env) — ตัวเลขที่วัดได้จึงใช้กับ server จริงได้ตรง ๆ
+// VM options same as server.js (env defaults) — so the measured numbers apply directly to the real server
 const MINER = "0x1111111111111111111111111111111111111111";
 const GWEI = 10n ** 9n;
 const COIN = 10n ** 18n;
@@ -89,10 +89,10 @@ const VM_OPTIONS = {
   maxTransactions: 500, maxTransactionsPerSender: 16, maxBlockGas: 3_000_000, maxTxGas: 3_000_000,
   admins: null, upgradeDelayBlocks: 0,
 };
-// base fee ขึ้นได้ 12.5% ต่อ block ที่ใช้แก๊สเกินเป้า (1.5M) → ตั้ง maxFee สูงไว้ ไม่ให้ tip
+// the base fee can rise 12.5% per block that uses more gas than the target (1.5M) → set a high maxFee, no tip
 const FEES = { gasLimit: 500_000, maxFeePerGas: `${10_000n * GWEI}`, maxPriorityFeePerGas: "0" };
 
-// ---------- โปรแกรมของ workload "mix" ----------
+// ---------- programs for the "mix" workload ----------
 const MIX_PROGRAM = `function program() {
   function initialization(params) {
     writeDB("token", params.input.token)
@@ -119,7 +119,7 @@ const MIX_PROGRAM = `function program() {
   return { work, probe }
 }`;
 
-// ---------- ตัวช่วย ----------
+// ---------- helpers ----------
 const keyOf = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 const walletOf = (text) => { const key = keyOf(text); return { key, address: sign.addressOf(key) }; };
 const freshAddress = (text) => `0x${keyOf(`addr:${text}`).slice(-40)}`;
@@ -137,7 +137,7 @@ const fmt = (value, digits = 0) => (value === null || value === undefined ? "-" 
 const bytes = (value) => (value === null || value === undefined ? "-" : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${(value / 1024).toFixed(0)} KB`);
 const wait = (time) => new Promise((resolve) => setTimeout(resolve, time));
 
-/** สุ่มแบบกำหนด seed ได้ (mulberry32) — workload เดิมได้ลำดับ tx เดิม */
+/** Seedable random (mulberry32) — the same workload gives the same tx order */
 function rng(seedText) {
   let state = parseInt(keyOf(seedText).slice(2, 10), 16);
   return () => {
@@ -148,7 +148,7 @@ function rng(seedText) {
   };
 }
 
-/** ฟิลด์ของ tx ใบถัดไปตาม workload (ยังไม่ใส่ nonce / from) */
+/** Fields of the next tx for the workload (nonce / from not set yet) */
 function makeTx(workload, { random, programs, senders, index, rounds }) {
   const to = random() < 0.5 ? freshAddress(index) : senders[Math.floor(random() * senders.length)].address;
   const native = () => ({ action: "transfer", to, value: `${1000n + BigInt(index % 1000)}` });
@@ -162,14 +162,14 @@ function makeTx(workload, { random, programs, senders, index, rounds }) {
   return { action: "call", to: programs.mix, method: "probe", input: {} };
 }
 
-/** แปลงฟิลด์เป็น tx ที่เซ็นแล้ว */
+/** Turns fields into a signed tx */
 function signed(wallet, fields, nonce, chainId) {
   const tx = { chainId, from: wallet.address, to: "", method: "", input: {}, value: 0, nonce, ...FEES, ...fields };
   return { tx, signature: sign.signTransaction(tx, wallet.key) };
 }
 
 // ============================================================================
-//  โหมดในโปรเซส
+//  In-process mode
 // ============================================================================
 
 function dbStats(db, dir) {
@@ -179,7 +179,7 @@ function dbStats(db, dir) {
   return { entries: lmdb.entryCount, fileBytes: stat.size, diskBytes: stat.blocks * 512, usedBytes: (lmdb.lastPageNumber + 1) * lmdb.pageSize };
 }
 
-/** chain ใหม่ 1 ชุด (VM + DB + mempool) แบบเดียวกับ server.js · จับเวลา db.writeKeys */
+/** A fresh chain (VM + DB + mempool) set up like server.js · times db.writeKeys */
 function createChain(kind, { senderCount, seed }) {
   let dir = null;
   let db;
@@ -204,12 +204,12 @@ function createChain(kind, { senderCount, seed }) {
   return { kind, dir, db, vm, mempool, timing, funder, senders, nonces: new Map(), lastTimestamp: 0 };
 }
 
-/** = handlePost("/sendtx") ของ server ลบ HTTP: mempool.add + reviewProgram (deploy) + simulate */
+/** = the server's handlePost("/sendtx") minus HTTP: mempool.add + reviewProgram (deploy) + simulate */
 function addTx(chain, item, simTiming) {
   const check = (verified) => {
     if (item.tx.action === "deploy" || item.tx.action === "upgrade") {
       const reviewed = reviewProgram(item.tx.code);
-      if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
+      if (!reviewed.ok) return { ok: false, error: "code failed review", issues: reviewed.issues };
     }
     const start = performance.now();
     try { return simulate(chain.vm, verified); } finally { simTiming.ms += ms(start); }
@@ -224,7 +224,7 @@ function sendFrom(chain, wallet, fields, simTiming = { ms: 0 }) {
   return result;
 }
 
-/** ปิด block แบบ miner ของ server.js → เวลาแต่ละช่วง */
+/** Closes a block like server.js's miner → time per phase */
 function mine(chain, { measureRoots = false } = {}) {
   const timestamp = Math.max(Date.now(), chain.lastTimestamp + 1);
   chain.lastTimestamp = timestamp;
@@ -250,11 +250,11 @@ function mine(chain, { measureRoots = false } = {}) {
 }
 
 function mustOk(result, label) {
-  if (!result.ok) throw new Error(`${label} ถูกปฏิเสธ: ${result.reason ?? result.simulation?.error ?? JSON.stringify(result)}`);
+  if (!result.ok) throw new Error(`${label} rejected: ${result.reason ?? result.simulation?.error ?? JSON.stringify(result)}`);
   return result;
 }
 
-/** deploy token + MIX → init → แจก token ให้ทุกกระเป๋า (ผ่าน mempool + block จริง) */
+/** deploy token + MIX → init → distribute tokens to every wallet (through the real mempool + blocks) */
 function setupPrograms(chain, workload) {
   if (workload === "native") return {};
   const { vm, funder } = chain;
@@ -276,7 +276,7 @@ function setupPrograms(chain, workload) {
         input: { transfers: batch.map((s) => ({ to: s.address, amount: `${10n ** 18n}n` })) } }), "multiTransfer");
     }
     const closed = mine(chain);
-    if (closed.failed) throw new Error(`แจก token ล้ม: ${closed.firstError}`);
+    if (closed.failed) throw new Error(`token distribution failed: ${closed.firstError}`);
   }
   return programs;
 }
@@ -286,7 +286,7 @@ function runInProcess(kind, workload, txs) {
   const chain = createChain(kind, { senderCount: Math.max(txs, 16), seed });
   try {
     const programs = setupPrograms(chain, workload);
-    const random = rng(seed);   // LMDB กับ memory ได้ลำดับ tx เดียวกัน
+    const random = rng(seed);   // LMDB and memory get the same tx order
     const sizeBefore = dbStats(chain.db, chain.dir);
     const blocks = [];
     let cursor = 0;
@@ -294,7 +294,7 @@ function runInProcess(kind, workload, txs) {
     let rejectedAdds = 0;
     const rejectReasons = {};
     for (let b = 0; b < OPTIONS.warmup + OPTIONS.blocks; b += 1) {
-      // เติมคิวให้ครบ txs ใบ (block ที่แก๊สเต็มทิ้งใบที่เหลือไว้ในคิว → เติมแค่ส่วนที่ขาด)
+      // refill the queue up to txs (a gas-full block leaves the rest in the queue → only top up what's missing)
       const need = Math.max(0, txs - chain.mempool.size);
       const items = [];
       for (let i = 0; i < need; i += 1) {
@@ -315,7 +315,7 @@ function runInProcess(kind, workload, txs) {
           rejectedAdds += 1;
           const reason = String(result.reason ?? "").replace(/\d+/g, "N").slice(0, 80);
           rejectReasons[reason] = (rejectReasons[reason] ?? 0) + 1;
-          // nonce ที่จองไว้ใช้ไม่ได้ → ถอยให้ใบถัดไปของกระเป๋านี้ใช้ nonce เดิม
+          // the reserved nonce can't be used → step back so this wallet's next tx reuses it
           if (chain.nonces.get(wallet.address) === nonce + 1) chain.nonces.set(wallet.address, nonce);
         }
       }
@@ -333,7 +333,7 @@ function runInProcess(kind, workload, txs) {
     if (chain.dir) {
       chain.db.close();
       if (!OPTIONS.keep) fs.rmSync(chain.dir, { recursive: true, force: true });
-      else console.log(`  เก็บ LMDB ไว้ที่ ${chain.dir}`);
+      else console.log(`  LMDB kept at ${chain.dir}`);
     }
   }
 }
@@ -362,8 +362,8 @@ function summarize({ blocks, sizeBefore, sizeAfter, ...rest }) {
     gasPerBlock: measured.length ? Math.round(gasTotal / measured.length) : 0,
     gasPerTx: txTotal ? Math.round(gasTotal / txTotal) : 0,
     failedTxs: sum(pick("failed")),
-    closeTxPerSec: closeTotal ? round((txTotal / closeTotal) * 1000, 0) : null,          // รัน + commit อย่างเดียว
-    slotTxPerSec: slotTotal ? round((txTotal / slotTotal) * 1000, 0) : null,             // รวมรับ tx (ตรวจลายเซ็น + simulate)
+    closeTxPerSec: closeTotal ? round((txTotal / closeTotal) * 1000, 0) : null,          // run + commit only
+    slotTxPerSec: slotTotal ? round((txTotal / slotTotal) * 1000, 0) : null,             // including tx intake (signature check + simulate)
     closeGasPerSec: closeTotal ? Math.round((gasTotal / closeTotal) * 1000) : null,
     timing, sizeBefore, sizeAfter, growth,
     bytesPerTx: growth?.usedBytes && txTotal ? Math.round(growth.usedBytes / sum(blocks.map((b) => b.txs))) : null,
@@ -382,11 +382,11 @@ function printTable(runs) {
   console.log(line(head));
   console.log(widths.map((w) => "-".repeat(w)).join("  "));
   for (const row of rows) console.log(line(row));
-  console.log("(ms ต่อ block · add = mempool.add ทั้ง block (ลายเซ็น + simulate) · close = take + commit · slot = add + close · DB +/tx = LMDB ที่ใช้เพิ่มต่อ tx)");
+  console.log("(ms per block · add = mempool.add for the whole block (signatures + simulate) · close = take + commit · slot = add + close · DB +/tx = extra LMDB used per tx)");
 }
 
 // ============================================================================
-//  โหมด --url: end-to-end ผ่าน /sendtx ของ server ที่รันอยู่
+//  --url mode: end-to-end via /sendtx of a running server
 // ============================================================================
 
 async function runUrl() {
@@ -394,7 +394,7 @@ async function runUrl() {
   const get = async (route) => (await fetch(API + route)).json();
   const post = async (route, body) => {
     const response = await fetch(API + route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (response.status === 429) throw new Error("server ตอบ 429 — เปิด server ด้วย RATE_LIMIT=0");
+    if (response.status === 429) throw new Error("server returned 429 — start the server with RATE_LIMIT=0");
     return response.json();
   };
   const genesis = await get("/genesis");
@@ -402,7 +402,7 @@ async function runUrl() {
   const seed = OPTIONS.seed ?? `load-url:${Date.now()}`;
   const txs = Math.max(...OPTIONS.txs);
   const senderCount = Math.max(txs, 16);
-  if (senderCount > 800) throw new Error("โหมด --url รองรับไม่เกิน 800 tx ต่อ block (กระเป๋าละ 1 ใบ)");
+  if (senderCount > 800) throw new Error("--url mode supports at most 800 txs per block (1 per wallet)");
   const funder = { key: OPTIONS.funderKey, address: sign.addressOf(OPTIONS.funderKey) };
   const admin = OPTIONS.adminKey ? { key: OPTIONS.adminKey, address: sign.addressOf(OPTIONS.adminKey) } : funder;
   const senders = Array.from({ length: senderCount }, (_, i) => walletOf(`${seed}:sender:${i}`));
@@ -412,7 +412,7 @@ async function runUrl() {
   const send = async (wallet, fields, label) => {
     const nonce = await nonceOf(wallet);
     const result = await post("/sendtx", signed(wallet, fields, nonce, chainId));
-    if (!result.queued) throw new Error(`${label} ถูกปฏิเสธ: ${JSON.stringify(result.simulation?.error ?? result.error ?? result.reason ?? result)}`);
+    if (!result.queued) throw new Error(`${label} rejected: ${JSON.stringify(result.simulation?.error ?? result.error ?? result.reason ?? result)}`);
     nonces.set(wallet.address, nonce + 1);
     return result.hash;
   };
@@ -424,21 +424,21 @@ async function runUrl() {
       if ((latest ?? 0) > lastSeen) return (lastSeen = latest);
       await wait(50);
     }
-    throw new Error("ไม่มี block ใหม่ใน 120 วินาที");
+    throw new Error("no new block in 120 seconds");
   };
   const settle = async (hashes) => {
     for (const hash of hashes) {
       for (;;) {
         const found = await get(`/tx/${hash}`);
-        if (found.blockNumber) { if (found.status !== "success") throw new Error(`tx ${hash} ล้ม: ${JSON.stringify(found.error)}`); break; }
+        if (found.blockNumber) { if (found.status !== "success") throw new Error(`tx ${hash} failed: ${JSON.stringify(found.error)}`); break; }
         if (found.status !== "pending") throw new Error(`tx ${hash}: ${JSON.stringify(found)}`);
         await nextBlock();
       }
     }
   };
 
-  console.log(`โหมด end-to-end: ${API} · chainId ${chainId} · ${senderCount} กระเป๋า · ${hubs.length} กระเป๋ากลาง`);
-  // เติม native: funder → กระเป๋ากลาง → ผู้ส่ง (≤ 50 ใบต่อกระเป๋ากลาง ไม่เกิน rate limit 60 ใบ/นาที)
+  console.log(`end-to-end mode: ${API} · chainId ${chainId} · ${senderCount} wallets · ${hubs.length} hub wallets`);
+  // fund native: funder → hub wallets → senders (≤ 50 per hub, within the 60 tx/min rate limit)
   const perSender = 10n * COIN;
   const hubFunding = [];
   for (const [i, hub] of hubs.entries()) hubFunding.push(await send(funder, { action: "transfer", to: hub.address, value: `${perSender * 51n}` }, `fund hub ${i}`));
@@ -471,7 +471,7 @@ async function runUrl() {
     }
     await settle(transfers);
   }
-  console.log(`เตรียมเสร็จ (block ${lastSeen}) · ยิง ${txs} tx × ${OPTIONS.blocks} รอบ · workload ${workload}`);
+  console.log(`setup done (block ${lastSeen}) · sending ${txs} tx × ${OPTIONS.blocks} rounds · workload ${workload}`);
 
   const random = rng(`${seed}:url`);
   const rounds = [];
@@ -508,8 +508,8 @@ async function runUrl() {
     rounds.push({ submitted: signedItems.length, accepted: accepted.length, rejected, sendMs: round(sendMs, 1), includeMs: round(includeMs, 1),
       sendtxPerSec: round((signedItems.length / sendMs) * 1000, 0), latency: { p50: round(s.p50, 1), p95: round(s.p95, 1), max: round(s.max, 1) },
       blocks: headers.map((h) => ({ number: h.number, txCount: h.txCount, gasUsed: h.gasUsed, timestamp: h.timestamp })) });
-    console.log(`รอบ ${r + 1}: /sendtx ${signedItems.length} ใบใน ${fmt(sendMs)} ms (${fmt((signedItems.length / sendMs) * 1000)} req/s · p50 ${fmt(s.p50, 1)} p95 ${fmt(s.p95, 1)} max ${fmt(s.max, 1)} ms)`
-      + ` · รับ ${accepted.length} · เข้า block ${headers.map((h) => `#${h.number}:${h.txCount}`).join(" ")} ใน ${fmt(includeMs)} ms`);
+    console.log(`round ${r + 1}: /sendtx ${signedItems.length} txs in ${fmt(sendMs)} ms (${fmt((signedItems.length / sendMs) * 1000)} req/s · p50 ${fmt(s.p50, 1)} p95 ${fmt(s.p95, 1)} max ${fmt(s.max, 1)} ms)`
+      + ` · accepted ${accepted.length} · in blocks ${headers.map((h) => `#${h.number}:${h.txCount}`).join(" ")} in ${fmt(includeMs)} ms`);
   }
   const all = rounds.flatMap((r) => r.latency ? [r] : []);
   return { mode: "url", url: API, workload, txs, rounds, summary: {
@@ -526,8 +526,8 @@ async function main() {
     report.url = await runUrl();
   } else {
     const kinds = OPTIONS.db === "both" ? ["lmdb", "memory"] : [OPTIONS.db];
-    console.log(`load test ในโปรเซส · ${kinds.join(" + ")} · workload ${OPTIONS.workloads.join(", ")} · ${OPTIONS.txs.join(" / ")} tx · ${OPTIONS.blocks} block (+${OPTIONS.warmup} อุ่นเครื่อง)`
-      + (kinds.includes("lmdb") ? ` · LMDB ที่ ${OPTIONS.dataDir}` : ""));
+    console.log(`in-process load test · ${kinds.join(" + ")} · workload ${OPTIONS.workloads.join(", ")} · ${OPTIONS.txs.join(" / ")} tx · ${OPTIONS.blocks} blocks (+${OPTIONS.warmup} warm-up)`
+      + (kinds.includes("lmdb") ? ` · LMDB at ${OPTIONS.dataDir}` : ""));
     report.runs = [];
     for (const workload of OPTIONS.workloads) {
       for (const txs of OPTIONS.txs) {
@@ -537,12 +537,12 @@ async function main() {
     console.log("");
     printTable(report.runs.map((r) => ({ ...r, workload: `${r.workload} ${r.txs}` })));
     const problems = report.runs.filter((r) => r.failedTxs || r.rejectedAdds);
-    for (const r of problems) console.log(`⚠️ ${r.db} ${r.workload} ${r.txs}: tx ล้มใน block ${r.failedTxs} · ถูกปฏิเสธตอนรับ ${r.rejectedAdds} ${JSON.stringify(r.rejectReasons)}`);
+    for (const r of problems) console.log(`⚠️ ${r.db} ${r.workload} ${r.txs}: txs failed in block ${r.failedTxs} · rejected at intake ${r.rejectedAdds} ${JSON.stringify(r.rejectReasons)}`);
   }
   report.finishedAt = new Date().toISOString();
   if (OPTIONS.out) {
     fs.writeFileSync(OPTIONS.out, JSON.stringify(report, (key, value) => (typeof value === "bigint" ? `${value}` : value), 2));
-    console.log(`รายงาน JSON: ${OPTIONS.out}`);
+    console.log(`JSON report: ${OPTIONS.out}`);
   }
 }
 

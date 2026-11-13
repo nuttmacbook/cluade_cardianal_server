@@ -7,11 +7,11 @@ import { VM, MemoryDB } from "./helpers.js";
 import { DB, DEFAULT_MAP_SIZE, parseSize } from "../src/storage/db.js";
 
 /*
- * เชนยาว (หลายสิบล้าน block) ต้องไม่ทำให้ request ปกติช้าตามความยาวเชน
- *   - historyfrom: replayBlock / snapshotAt เช็คครั้งเดียวว่ามี history ครบ (ไม่ไล่ blockundo ทุก block)
- *   - pageSnapshotAt: หา key จาก history แบบกระโดดทีละ key + แบ่งหน้า (ไม่อ่าน blockundo)
- *   - rebuildFrom: ทำทีละชุด ไม่ถือทั้งเชนไว้ในหน่วยความจำ · บันทึกทับ block เดิม (overwrite)
- *   - LMDB: mapSize ค่าเริ่ม 1 TB · LMDB_MAP_SIZE · stats() สำหรับ /health
+ * a long chain (tens of millions of blocks) must not slow normal requests in proportion to its length
+ *   - historyfrom: replayBlock / snapshotAt check once that history is complete (no scan of every block's blockundo)
+ *   - pageSnapshotAt: finds keys from history by jumping one key at a time + paging (does not read blockundo)
+ *   - rebuildFrom: works in batches, never holding the whole chain in memory · writes over existing blocks (overwrite)
+ *   - LMDB: mapSize default 1 TB · LMDB_MAP_SIZE · stats() for /health
  */
 
 const T = Date.parse("2026-02-01T00:00:00Z");
@@ -20,7 +20,7 @@ const OPTIONS = {
   requireNonce: true, chargeGas: true, recordTransactions: true, recordBlocks: true, recordHistory: true,
   gas: { call: 100, read: 10, write: 50, byte: 1, price: 1 },
 };
-// set = เขียน · drop = ลบ (key ที่ถูกลบต้องยังเห็นใน snapshot ของ block ก่อนลบ) · key ซ้อนชั้น map("a", x, y)
+// set = write · drop = delete (a deleted key must still show in snapshots of blocks before the delete) · nested key map("a", x, y)
 const STORE = `function program() {
   function set(params) { writeDB(map("k", params.input.k), params.input.v) }
   function drop(params) { deleteDB(map("k", params.input.k)) }
@@ -28,7 +28,7 @@ const STORE = `function program() {
   return { set, drop, nested }
 }`;
 
-/** นับว่าอ่าน key ชนิดไหนจาก DB ไปกี่ครั้ง */
+/** Count how many times each kind of key is read from the DB */
 function countingDB() {
   const db = new MemoryDB();
   const counts = new Map();
@@ -40,7 +40,7 @@ function countingDB() {
   return { db, counts };
 }
 
-/** เชน n block: block 1 deploy · แต่ละ block เขียน / ลบ key ตามสูตร (มีทั้ง key ที่ถูกลบภายหลัง และ key ซ้อนชั้น) */
+/** Chain of n blocks: block 1 deploys · each block writes / deletes keys by formula (including keys deleted later and nested keys) */
 function buildChain(blocks = 12, vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS)) {
   vm.db.load({ "alice:native:received": "1000000n" });
   let nonce = 0;
@@ -53,14 +53,14 @@ function buildChain(blocks = 12, vm = new VM.VirtualMachine(new MemoryDB(), OPTI
     const call = (functionName, input) => assert.equal(block.call({ programUuid: "store", functionName, input, context: user("alice"), nonce: nonce++ }).status, "success");
     call("set", { k: `a${n % 5}`, v: `${n}n` });
     call("set", { k: `b${n}`, v: `${n}n` });
-    if (n % 3 === 0) call("drop", { k: `b${n - 1}` });                  // ถูกลบหลังจากนั้น
+    if (n % 3 === 0) call("drop", { k: `b${n - 1}` });                  // deleted later
     if (n % 4 === 0) call("nested", { k: `a${n % 5}`, sub: "x", v: `${n}n` });
     block.commit();
   }
   return vm;
 }
 
-/** snapshot แบบเดิม: ไล่ blockundo ทุก block (ใช้เป็นคำตอบที่ถูก) */
+/** The old snapshot: scans every block's blockundo (used as the reference answer) */
 function bruteSnapshot(vm, number, prefix) {
   const keys = new Set(vm.listKeys(prefix));
   for (let n = vm.latestBlockNumber(); n > number; n -= 1) for (const key of vm.getBlockUndo(n) ?? []) if (key.startsWith(prefix)) keys.add(key);
@@ -73,7 +73,7 @@ function bruteSnapshot(vm, number, prefix) {
 //  historyfrom
 // ---------------------------------------------------------------------------
 
-test("historyfrom: เชนใหม่ = 1 · block ที่ไม่เก็บ history → นับใหม่จาก block ถัดไป", () => {
+test("historyfrom: new chain = 1 · a block without history → restart from the next block", () => {
   const vm = buildChain(4);
   assert.equal(vm.read(VM.HISTORY_FROM_KEY), 1);
   assert.equal(vm.historyFrom(), 1);
@@ -83,15 +83,15 @@ test("historyfrom: เชนใหม่ = 1 · block ที่ไม่เก�
   assert.equal(vm.historyFrom(), 6);
   const next = vm.createBlock({ timestamp: T + 11_000, feeRecipient: "miner" });
   next.commit();
-  assert.equal(vm.historyFrom(), 6);   // block ที่เก็บ history ต่อไม่ได้ย้อนค่าลง
+  assert.equal(vm.historyFrom(), 6);   // later blocks with history do not move the value back
 
-  assert.throws(() => vm.replayBlock(5), /ไม่มีข้อมูลย้อนหลัง/);
+  assert.throws(() => vm.replayBlock(5), /no history for block/);
   assert.equal(vm.replayBlock(6).hash, vm.getBlock(6).hash);
-  assert.throws(() => vm.snapshotAt(4, "store:storage:"), /ไม่มีข้อมูลย้อนหลัง/);
-  assert.doesNotThrow(() => vm.snapshotAt(5, "store:storage:"));   // ณ ตอนปิด block 5 = ใช้ history ของ block 6 ขึ้นไป
+  assert.throws(() => vm.snapshotAt(4, "store:storage:"), /no history for block/);
+  assert.doesNotThrow(() => vm.snapshotAt(5, "store:storage:"));   // as of closing block 5 = uses history from block 6 onward
 });
 
-test("historyfrom: เชนเก่าที่ยังไม่มีค่านี้ → คำนวณจาก blockundo แล้ว block ถัดไปบันทึกให้", () => {
+test("historyfrom: an old chain without this value → computed from blockundo, then saved by the next block", () => {
   const vm = buildChain(5);
   vm.commit([{ type: "del", dbKey: VM.HISTORY_FROM_KEY }]);
   assert.equal(vm.historyFrom(), 1);
@@ -100,7 +100,7 @@ test("historyfrom: เชนเก่าที่ยังไม่มีค่�
   assert.equal(vm.read(VM.HISTORY_FROM_KEY), 1);
 });
 
-test("replayBlock: ไม่อ่าน blockundo เลย (เช็คครั้งเดียวจาก historyfrom) ไม่ว่าเชนจะยาวแค่ไหน", () => {
+test("replayBlock: never reads blockundo (one check against historyfrom) however long the chain is", () => {
   const { db, counts } = countingDB();
   const vm = buildChain(30, new VM.VirtualMachine(db, OPTIONS));
   counts.clear();
@@ -113,20 +113,20 @@ test("replayBlock: ไม่อ่าน blockundo เลย (เช็คคร
 //  snapshotAt / pageSnapshotAt
 // ---------------------------------------------------------------------------
 
-test("pageSnapshotAt: ได้ผลเท่าการไล่ blockundo ทุก block (รวม key ที่ถูกลบภายหลังและ key ซ้อนชั้น)", () => {
+test("pageSnapshotAt: gives the same result as scanning every blockundo (including later-deleted keys and nested keys)", () => {
   const vm = buildChain(12);
   for (let n = 1; n <= 12; n += 1) {
     for (const prefix of ["store:storage:", "store:storage:k:a1", ""]) {
       assert.deepEqual(vm.snapshotAt(n, prefix), bruteSnapshot(vm, n, prefix), `block ${n} prefix ${prefix}`);
     }
   }
-  // key ที่ถูกลบภายหลังยังเห็น ณ block ก่อนลบ
+  // a key deleted later still shows at blocks before the delete
   assert.equal(vm.snapshotAt(4, "store:storage:")["store:storage:k:b4"], "4n");
   assert.equal(vm.snapshotAt(5, "store:storage:")["store:storage:k:b5"], "5n");
-  assert.equal(vm.snapshotAt(6, "store:storage:")["store:storage:k:b5"], undefined);   // ลบใน block 6
+  assert.equal(vm.snapshotAt(6, "store:storage:")["store:storage:k:b5"], undefined);   // deleted in block 6
 });
 
-test("pageSnapshotAt: แบ่งหน้าแล้วต่อกันได้ครบ ไม่ซ้ำ · ไม่อ่าน blockundo", () => {
+test("pageSnapshotAt: pages join up completely with no repeats · does not read blockundo", () => {
   const { db, counts } = countingDB();
   const vm = buildChain(12, new VM.VirtualMachine(db, OPTIONS));
   const full = Object.entries(vm.snapshotAt(7, "store:storage:"));
@@ -146,21 +146,21 @@ test("pageSnapshotAt: แบ่งหน้าแล้วต่อกันไ�
   }
 });
 
-test("pageSnapshotAt: block เกินล่าสุด / ติดลบ → ไม่พบ block", () => {
+test("pageSnapshotAt: block past the latest / negative → block not found", () => {
   const vm = buildChain(3);
-  assert.throws(() => vm.snapshotAt(4), /ไม่พบ block/);
-  assert.throws(() => vm.snapshotAt(-1), /ไม่พบ block/);
+  assert.throws(() => vm.snapshotAt(4), /block 4 not found/);
+  assert.throws(() => vm.snapshotAt(-1), /block -1 not found/);
   assert.deepEqual(vm.snapshotAt(3, "store:storage:"), Object.fromEntries(vm.listProgramStorage("store").map(({ key, value }) => [`store:storage:${key.join(":")}`, value])));
 });
 
 // ---------------------------------------------------------------------------
-//  rebuildFrom ทีละชุด
+//  rebuildFrom in batches
 // ---------------------------------------------------------------------------
 
-/** ทุกอย่างใน DB ยกเว้นสิ่งที่ต่างกันได้ตามลำดับการเขียน (ไม่มี) */
+/** Everything in the DB except what may differ by write order (nothing) */
 const everything = (vm) => vm.db.snapshot();
 
-test("rebuildFrom ทีละชุด: DB หลัง rebuild = DB ของเชนที่สร้างถึง target ตรง ๆ (ทุก key รวม history / blockundo / ดัชนี)", () => {
+test("rebuildFrom in batches: the DB after rebuild = the DB of a chain built straight to target (every key, including history / blockundo / indexes)", () => {
   for (const batch of [1, 3, 10_000]) {
     for (const target of [0, 1, 5, 11]) {
       const vm = buildChain(12);
@@ -179,7 +179,7 @@ test("rebuildFrom ทีละชุด: DB หลัง rebuild = DB ของ�
   }
 });
 
-test("rebuildFrom: rebuild แล้วเชนเดินต่อได้ · replay / snapshot ใช้ได้ทุก block", () => {
+test("rebuildFrom: after rebuild the chain continues · replay / snapshot work for every block", () => {
   const vm = buildChain(10);
   vm.rebuildFrom(6, { batch: 4 });
   assert.equal(vm.historyFrom(), 1);
@@ -191,12 +191,12 @@ test("rebuildFrom: rebuild แล้วเชนเดินต่อได้ �
   assert.deepEqual(vm.snapshotAt(3, "store:storage:"), bruteSnapshot(vm, 3, "store:storage:"));
 });
 
-test("rebuildFrom: history ไม่ครบตั้งแต่ block 1 → ปฏิเสธก่อนแตะ DB", () => {
+test("rebuildFrom: history incomplete from block 1 → rejected before touching the DB", () => {
   const vm = buildChain(3);
   const gap = vm.createBlock({ timestamp: T + 10_000, feeRecipient: "miner", recordHistory: false });
   gap.commit();
   const before = everything(vm);
-  assert.throws(() => vm.rebuildFrom(1), /ไม่มีข้อมูลย้อนหลัง/);
+  assert.throws(() => vm.rebuildFrom(1), /no history for block/);
   assert.deepEqual(everything(vm), before);
 });
 
@@ -204,13 +204,13 @@ test("rebuildFrom: history ไม่ครบตั้งแต่ block 1 → �
 //  LMDB
 // ---------------------------------------------------------------------------
 
-test("LMDB: mapSize ค่าเริ่ม 1 TB · parseSize · stats() บอกที่ใช้ไปเทียบ mapSize", () => {
+test("LMDB: mapSize default 1 TB · parseSize · stats() reports usage against mapSize", () => {
   assert.equal(DEFAULT_MAP_SIZE, 1024 ** 4);
   assert.equal(parseSize("1T"), 1024 ** 4);
   assert.equal(parseSize("500g"), 500 * 1024 ** 3);
   assert.equal(parseSize("64MB"), 64 * 1024 ** 2);
   assert.equal(parseSize("4096"), 4096);
-  assert.throws(() => parseSize("lots"), /ขนาดไม่ถูกต้อง/);
+  assert.throws(() => parseSize("lots"), /Invalid size/);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chain-scale-"));
   try {
@@ -230,8 +230,8 @@ test("LMDB: mapSize ค่าเริ่ม 1 TB · parseSize · stats() บอ
 //  server: /health · /state/:id?block=&limit=&cursor=
 // ---------------------------------------------------------------------------
 
-test("server: /health บอก historyFrom + พื้นที่ DB · /state ณ block เก่าแบ่งหน้าได้", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("server: /health reports historyFrom + DB space · /state at an old block is paged", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -241,9 +241,9 @@ test("server: /health บอก historyFrom + พื้นที่ DB · /state
     const health = await get("/health");
     assert.equal(health.status, 200);
     assert.equal(health.body.ok, true);
-    assert.equal(health.body.db, null);   // ไม่มี DATA = MemoryDB
+    assert.equal(health.body.db, null);   // no DATA = MemoryDB
 
-    // เชนเล็ก ๆ บน vm ของ server: โปรแกรม "store" เขียน key ทีละ block
+    // a small chain on the server's vm: program "store" writes a key per block
     vm.db.load({ "alice:native:received": "1000000000000000000000n" });
     let nonce = 0;
     const deploy = vm.createBlock({ timestamp: Date.now() - 10_000, feeRecipient: "miner" });

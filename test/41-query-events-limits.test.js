@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 import { EVENTFUL } from "./programs.js";
 
-/* query แบบอ่านอย่างเดียว, ดัชนี event และเพดานขนาดค่า */
+/* read-only query, event index, and value size cap */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -22,7 +22,7 @@ function setup(options = {}) {
 //  query
 // ---------------------------------------------------------------------------
 
-test("query: อ่านค่าได้โดยไม่กิน nonce ไม่เสียค่าแก๊ส ไม่เขียน DB", () => {
+test("query: reads values without using a nonce, paying gas, or writing the DB", () => {
   const vm = setup();
   const before = vm.db.snapshot();
 
@@ -31,26 +31,26 @@ test("query: อ่านค่าได้โดยไม่กิน nonce ไ
   assert.equal(res.readOnly, true);
   assert.equal(res.writes, undefined);
   assert.equal(res.fee, "0n");
-  assert.deepEqual(res.events.map((event) => event.name), ["Transfer"]);   // ยังเห็น event ที่จะเกิด
+  assert.deepEqual(res.events.map((event) => event.name), ["Transfer"]);   // still shows the events that would be emitted
 
-  assert.deepEqual(vm.db.snapshot(), before);          // DB ไม่เปลี่ยน
-  assert.equal(vm.db.readKeys(["alice:nonce"])[0], 1); // nonce ยังเท่าเดิม (จาก deploy)
+  assert.deepEqual(vm.db.snapshot(), before);          // DB unchanged
+  assert.equal(vm.db.readKeys(["alice:nonce"])[0], 1); // nonce unchanged (from deploy)
 });
 
-test("query: ระบุผู้เรียกได้ และ error ของโปรแกรมยังบอกเหมือนเดิม", () => {
+test("query: caller can be set, and program errors are reported as usual", () => {
   const vm = setup();
   const ok = vm.query({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 10 }, context: user("alice") });
   assert.equal(ok.status, "success");
 
   const failed = vm.query({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 99_999 }, context: user("alice") });
-  assert.equal(failed.error.message, "ยอดไม่พอ");
+  assert.equal(failed.error.message, "insufficient balance");
 });
 
 // ---------------------------------------------------------------------------
-//  ดัชนี event
+//  Event index
 // ---------------------------------------------------------------------------
 
-test("event: ถูกทำดัชนีตอน commit และค้นย้อนหลังได้", () => {
+test("event: indexed at commit and searchable later", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 10 }, context: user("alice"), nonce: 1 });
@@ -59,8 +59,8 @@ test("event: ถูกทำดัชนีตอน commit และค้น�
 
   const events = vm.listEvents({ program: "token", name: "Transfer" });
   assert.equal(events.length, 2);
-  assert.equal(vm.listEvents({ program: "token" }).length, 3);   // รวม Created ตอน init
-  assert.deepEqual(events.map((event) => event.data.to), ["carol", "bob"]);          // ใหม่ไปเก่า
+  assert.equal(vm.listEvents({ program: "token" }).length, 3);   // includes Created from init
+  assert.deepEqual(events.map((event) => event.data.to), ["carol", "bob"]);          // newest first
   assert.equal(events[0].blockNumber, 2);
   assert.equal(events[0].txIndex, 1);
   assert.equal(events[0].txHash, vm.getBlock(2).txHashes[1]);
@@ -68,14 +68,14 @@ test("event: ถูกทำดัชนีตอน commit และค้น�
   assert.equal(vm.listEvents({ program: "token", name: "Transfer", reverse: false })[0].data.to, "bob");
 });
 
-test("event: กรองตามชื่อ event ได้", () => {
+test("event: can filter by event name", () => {
   const vm = setup();
   assert.deepEqual(vm.listEvents({ program: "token", name: "Created" }).map((event) => event.name), ["Created"]);
   assert.deepEqual(vm.listEvents({ program: "token", name: "RelayDone" }), []);
-  assert.deepEqual(vm.listEvents({ program: "ไม่มีโปรแกรมนี้" }), []);
+  assert.deepEqual(vm.listEvents({ program: "no-such-program" }), []);
 });
 
-test("event: tx ที่ล้มไม่เข้าดัชนี", () => {
+test("event: failed txs are not indexed", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 99_999 }, context: user("alice"), nonce: 1 });
@@ -83,13 +83,13 @@ test("event: tx ที่ล้มไม่เข้าดัชนี", () => {
   assert.deepEqual(vm.listEvents({ program: "token", name: "RelayDone" }), []);
 });
 
-test("event: decodeDbKey อ่าน key ของดัชนีออก", () => {
+test("event: decodeDbKey decodes index keys", () => {
   assert.deepEqual(VM.decodeDbKey("event:token:Transfer:000000000002:0001:0000"),
     { kind: "event", program: "token", name: "Transfer", number: 2, txIndex: 1, eventIndex: 0 });
 });
 
 // ---------------------------------------------------------------------------
-//  เพดานขนาดค่า
+//  Value size cap
 // ---------------------------------------------------------------------------
 
 const BIG = `
@@ -101,7 +101,7 @@ function program() {
 }
 `;
 
-test("ค่าใหญ่เกิน maxValueSize → tx ล้มใบเดียว", () => {
+test("value larger than maxValueSize → only that tx fails", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { maxValueSize: 1000, recordBlocks: true });
   vm.commit(vm.deploy({ programUuid: "big", code: BIG, context: user("alice") }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "big" }, { timestamp: T }).writes);
@@ -111,11 +111,11 @@ test("ค่าใหญ่เกิน maxValueSize → tx ล้มใบเ�
     assert.equal(call(fn, 100).status, "success", fn);
     const tooBig = call(fn, 5000);
     assert.equal(tooBig.error.code, "INVALID_REQUEST", fn);
-    assert.match(tooBig.error.message, /ค่าใหญ่เกินกำหนด/);
+    assert.match(tooBig.error.message, /value too large/);
   }
 });
 
-test("ค่าเริ่มต้นของเพดาน", () => {
+test("default caps", () => {
   assert.equal(VM.DEFAULT_OPTIONS.maxValueSize, 64 * 1024);
   assert.equal(VM.DEFAULT_OPTIONS.maxKeySize, 1000);
 });

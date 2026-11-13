@@ -7,7 +7,7 @@ simulate-report*.json
 scenario-report*.json
 scenario-full-report*.json
 
-# ไฟล์ตั้งค่าเครื่องจริง (มี key) · ตัวอย่างอยู่ใน deploy/*.example
+# Real machine config files (contain keys) · examples live in deploy/*.example
 deploy/*.env
 deploy/genesis.mainnet.json
 deploy/system-programs.json

@@ -1,5 +1,5 @@
-/* explorerscan/ui/tabs/storage.js [แก้ได้ · หน้าตา]
-   แท็บ Storage: ข้อมูลที่โปรแกรมเก็บ แยกตามจำนวนส่วนของ key + ค้นค่าทีละ key */
+/* explorerscan/ui/tabs/storage.js [editable · look]
+   Storage tab: data the program stores, grouped by number of key parts + look up values by key */
 
 // ---------- program storage, split by how many parts the key has ----------
 //   Variables  1-part keys (owner, price)                → all shown with values

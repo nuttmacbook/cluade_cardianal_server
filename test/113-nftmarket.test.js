@@ -9,7 +9,7 @@ import { WALLET_PROGRAM } from "../src/standards/wallet.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
 /*
- * ตลาด NFT (src/standards/nftmarket.js): วางขายแบบ escrow · ERC-721 / ERC-1155 · จ่ายเหรียญหลักหรือ token · ค่าธรรมเนียมคงที่ · ข้อเสนอซื้อ
+ * NFT market (src/standards/nftmarket.js): escrow listings · ERC-721 / ERC-1155 · pay with native coin or tokens · fixed fee · buy offers
  */
 
 const T = Date.parse("2026-11-11T00:00:00Z");
@@ -21,14 +21,14 @@ const FEE = "0x00000000000000000000000000000000000000fe";
 const NFT = "0x0000000000000000000000000000000000000a01";
 const ITEMS = "0x0000000000000000000000000000000000000a02";
 const TOKEN = "0x0000000000000000000000000000000000000a03";
-const MARKET = "0x0000000000000000000000000000000000000a04";   // ค่าธรรมเนียม 2.5%
-const FREE = "0x0000000000000000000000000000000000000a05";     // ไม่มีค่าธรรมเนียม
+const MARKET = "0x0000000000000000000000000000000000000a04";   // 2.5% fee
+const FREE = "0x0000000000000000000000000000000000000a05";     // no fee
 const WALLET = "0x0000000000000000000000000000000000000a06";
 const ATTACKER = "0x0000000000000000000000000000000000000a07";
 const COIN = 10n ** 18n;
 const gas = {};
 
-// โปรแกรมผู้ซื้อที่พยายามเรียกตลาดซ้อนตอนได้รับ NFT
+// buyer program that tries to re-enter the market when receiving an NFT
 const ATTACKER_PROGRAM = `function program() {
   function initialization() {}
   function attack(params) {
@@ -79,7 +79,7 @@ function setup() {
   ok(deploy(FREE, NFT_MARKET_PROGRAM, {}));
   ok(deploy(WALLET, WALLET_PROGRAM, { owner: BOB }));
   ok(deploy(ATTACKER, ATTACKER_PROGRAM, {}));
-  for (let i = 0; i < 4; i++) ok(send(DEPLOYER, NFT, "mint", { to: ALICE }));   // tokenId 1..4 ของ alice
+  for (let i = 0; i < 4; i++) ok(send(DEPLOYER, NFT, "mint", { to: ALICE }));   // alice's tokenIds 1..4
   ok(send(DEPLOYER, ITEMS, "mint", { to: ALICE, id: "7n", amount: "10n" }));
   ok(send(BOB, TOKEN, "transfer", { to: CAROL, amount: "100000000n" }));
   for (const market of [MARKET, FREE]) {
@@ -91,7 +91,7 @@ function setup() {
   return { vm, ok, deploy, send, fails, query, balance, tokens, items };
 }
 
-/** ยอดที่ตลาดถือ = ผลรวมของรายการ / ข้อเสนอที่ยังเปิดอยู่ */
+/** the market's holdings = sum of open listings / offers */
 function assertEscrow(t, market) {
   const all = t.query(market, "listings", { limit: "50n" }).items;
   for (const l of all.filter((x) => x.status === "active" && x.kind === "erc721")) {
@@ -112,7 +112,7 @@ function assertEscrow(t, market) {
   assert.equal(t.tokens(market), token, "token escrow");
 }
 
-test("nftmarket: โค้ดผ่าน autoreview · export รายชื่อฟังก์ชัน · ค่าเริ่มต้น", () => {
+test("nftmarket: code passes autoreview · exported function list · defaults", () => {
   const review = reviewProgram(NFT_MARKET_PROGRAM);
   assert.ok(review.ok, review.message);
   assert.deepEqual(NFT_MARKET_FUNCTIONS, ["list", "listMulti", "buy", "updatePrice", "cancel", "makeOffer", "cancelOffer", "acceptOffer"]);
@@ -124,7 +124,7 @@ test("nftmarket: โค้ดผ่าน autoreview · export รายชื�
   assert.equal(t.query(MARKET, "listingCount"), "0n");
 });
 
-test("nftmarket: init ตรวจค่าธรรมเนียม (0..1000 bps · ต้องมี feeRecipient)", () => {
+test("nftmarket: init validates the fee (0..1000 bps · feeRecipient required)", () => {
   const t = setup();
   const bad = [{ feeBps: "1001n", feeRecipient: FEE }, { feeBps: "100n" }, { feeBps: "-1n", feeRecipient: FEE },
     { feeBps: "5n", feeRecipient: "0x0000000000000000000000000000000000000000" }, { feeBps: "5n", feeRecipient: "fee" }, { feeBps: 5 }];
@@ -132,7 +132,7 @@ test("nftmarket: init ตรวจค่าธรรมเนียม (0..1000 
   t.ok(t.deploy("0x00000000000000000000000000000000000bffff", NFT_MARKET_PROGRAM, { feeBps: "1000n", feeRecipient: FEE }));
 });
 
-test("nftmarket: ERC-721 ขายด้วยเหรียญหลัก · ค่าธรรมเนียม 2.5% · ต้องจ่ายราคาพอดี", () => {
+test("nftmarket: ERC-721 sold for native coin · 2.5% fee · the exact price must be paid", () => {
   const t = setup();
   const res = t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: `${10n * COIN}n` }));
   gas.list = res.gasUsed;
@@ -171,16 +171,16 @@ test("nftmarket: ERC-721 ขายด้วยเหรียญหลัก · 
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ERC-721 ขายด้วย token · ต้องระบุ price · ค่าธรรมเนียมปัดขึ้น · ตลาดไม่มีค่าธรรมเนียม", () => {
+test("nftmarket: ERC-721 sold for tokens · price required · fee rounds up · fee-free market", () => {
   const t = setup();
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1999n", payToken: TOKEN }));
   t.fails(t.send(BOB, MARKET, "buy", { listingId: "0n" }, { value: "1" }), "paid in tokens");
-  t.fails(t.send(BOB, MARKET, "buy", { listingId: "0n" }), "price is required when paying with a token");   // กันขึ้นราคาตัดหน้า
-  t.fails(t.send(DEPLOYER, MARKET, "buy", { listingId: "0n", price: "1999n" }), "insufficient");   // ไม่มี token / allowance
+  t.fails(t.send(BOB, MARKET, "buy", { listingId: "0n" }), "price is required when paying with a token");   // guards against front-run price increases
+  t.fails(t.send(DEPLOYER, MARKET, "buy", { listingId: "0n", price: "1999n" }), "insufficient");   // no tokens / allowance
   const bobBefore = t.tokens(BOB);
   const buy = t.ok(t.send(BOB, MARKET, "buy", { listingId: "0n", price: "1999n" }));
   gas.buyToken = buy.gasUsed;
-  const fee = (1999n * 250n + 9999n) / 10000n;   // 49.975 → 50 (ปัดขึ้น: แยกซื้อทีละชิ้นหนีค่าธรรมเนียมไม่ได้)
+  const fee = (1999n * 250n + 9999n) / 10000n;   // 49.975 → 50 (rounded up: buying piece by piece cannot dodge the fee)
   assert.equal(fee, 50n);
   assert.equal(buy.result.fee, "50n");
   assert.equal(t.tokens(ALICE), 1999n - 50n);
@@ -189,20 +189,20 @@ test("nftmarket: ERC-721 ขายด้วย token · ต้องระบุ
   assert.equal(t.tokens(MARKET), 0n);
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "1n" }), BOB);
 
-  // ไม่มีค่าธรรมเนียม: ผู้ขายได้เต็ม
+  // no fee: the seller gets everything
   t.ok(t.send(ALICE, FREE, "list", { nft: NFT, tokenId: "2n", price: "500n", payToken: TOKEN }));
   const free = t.ok(t.send(CAROL, FREE, "buy", { listingId: "0n", price: "500n" }));
   assert.equal(free.result.fee, "0n");
   assert.equal(t.tokens(ALICE), 1949n + 500n);
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "2n" }), CAROL);
-  // ราคาเล็ก ๆ ก็ยังเสียค่าธรรมเนียมอย่างน้อย 1 หน่วย (ปัดขึ้น)
+  // tiny prices still pay at least 1 unit of fee (rounded up)
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "3n", price: "39n", payToken: TOKEN }));
   assert.equal(t.ok(t.send(BOB, MARKET, "buy", { listingId: "1n", price: "39n" })).result.fee, "1n");
   assertEscrow(t, MARKET);
   assertEscrow(t, FREE);
 });
 
-test("nftmarket: list ตรวจค่า · คนอื่นวางขายแทนไม่ได้ · ไม่ approve = ล้ม · ห้ามแนบ value", () => {
+test("nftmarket: list validates values · others cannot list on your behalf · no approve = fails · no value allowed", () => {
   const t = setup();
   t.fails(t.send(BOB, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }), "only the nft owner");
   t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "0n" }), "price must be");
@@ -216,14 +216,14 @@ test("nftmarket: list ตรวจค่า · คนอื่นวางขา
   t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }, { value: "5" }), "does not accept native value");
   t.ok(t.send(ALICE, NFT, "setApprovalForAll", { operator: MARKET, approved: false }));
   t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }), "not owner nor approved");
-  // approve ชิ้นเดียวก็พอ
+  // approving the single item is enough
   t.ok(t.send(ALICE, NFT, "approve", { to: MARKET, tokenId: "1n" }));
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }));
-  t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }), "only the nft owner");   // อยู่ใน escrow แล้ว
+  t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "1n" }), "only the nft owner");   // already in escrow
   assert.equal(t.query(MARKET, "listingCount"), "1n");
 });
 
-test("nftmarket: ส่ง NFT / ของเข้าตลาดตรง ๆ ถูกปฏิเสธ · hook เรียกตรงไม่ได้", () => {
+test("nftmarket: sending NFTs / items to the market directly is rejected · hooks cannot be called directly", () => {
   const t = setup();
   t.fails(t.send(ALICE, NFT, "safeTransferFrom", { from: ALICE, to: MARKET, tokenId: "1n" }), "direct transfers are not accepted");
   t.fails(t.send(ALICE, ITEMS, "safeTransferFrom", { from: ALICE, to: MARKET, id: "7n", amount: "1n" }), "direct transfers are not accepted");
@@ -233,7 +233,7 @@ test("nftmarket: ส่ง NFT / ของเข้าตลาดตรง ๆ 
   assert.equal(t.items(ALICE), 10n);
 });
 
-test("nftmarket: แก้ราคา / ยกเลิก / วางขายใหม่ · คนอื่นทำแทนไม่ได้ · ซื้อรายการที่ยกเลิกไม่ได้", () => {
+test("nftmarket: update price / cancel / relist · others cannot do it for you · cancelled listings cannot be bought", () => {
   const t = setup();
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "100n", payToken: TOKEN }));
   t.fails(t.send(BOB, MARKET, "updatePrice", { listingId: "0n", price: "1n" }), "only the seller");
@@ -241,7 +241,7 @@ test("nftmarket: แก้ราคา / ยกเลิก / วางขาย
   const up = t.ok(t.send(ALICE, MARKET, "updatePrice", { listingId: "0n", price: "200n" }));
   gas.updatePrice = up.gasUsed;
   assert.deepEqual(up.events.find((e) => e.name === "PriceUpdated").data, { listingId: "0n", oldPrice: "100n", price: "200n" });
-  t.fails(t.send(BOB, MARKET, "buy", { listingId: "0n", price: "100n" }), "price changed");   // กันขึ้นราคาตัดหน้า
+  t.fails(t.send(BOB, MARKET, "buy", { listingId: "0n", price: "100n" }), "price changed");   // guards against front-run price increases
 
   t.fails(t.send(BOB, MARKET, "cancel", { listingId: "0n" }), "only the seller");
   const cancel = t.ok(t.send(ALICE, MARKET, "cancel", { listingId: "0n" }));
@@ -253,7 +253,7 @@ test("nftmarket: แก้ราคา / ยกเลิก / วางขาย
   t.fails(t.send(ALICE, MARKET, "cancel", { listingId: "0n" }), "listing is not active");
   t.fails(t.send(ALICE, MARKET, "updatePrice", { listingId: "0n", price: "5n" }), "listing is not active");
 
-  // วางขายใหม่ได้ (id ใหม่)
+  // can relist (new id)
   assert.equal(t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "300n", payToken: TOKEN })).result, "1n");
   t.ok(t.send(BOB, MARKET, "buy", { listingId: "1n", price: "300n" }));
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "1n" }), BOB);
@@ -262,7 +262,7 @@ test("nftmarket: แก้ราคา / ยกเลิก / วางขาย
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ERC-1155 ซื้อบางส่วน · จ่ายเหรียญหลักและ token · ยกเลิกคืนส่วนที่เหลือ", () => {
+test("nftmarket: ERC-1155 partial buys · paid in native coin and tokens · cancel returns the rest", () => {
   const t = setup();
   t.fails(t.send(ALICE, MARKET, "listMulti", { multiToken: ITEMS, id: "7n", amount: "0n", pricePerUnit: "1n" }), "amount must be");
   t.fails(t.send(ALICE, MARKET, "listMulti", { multiToken: ITEMS, id: "7n", amount: "11n", pricePerUnit: "1n" }), "insufficient balance");
@@ -284,29 +284,29 @@ test("nftmarket: ERC-1155 ซื้อบางส่วน · จ่ายเ�
   let listing = t.query(MARKET, "getListing", { listingId: "0n" });
   assert.deepEqual([listing.amount, listing.sold, listing.status], ["4n", "2n", "active"]);
   t.fails(t.send(CAROL, MARKET, "buy", { listingId: "0n", amount: "5n" }, { value: `${5n * COIN}` }), "amount exceeds");
-  t.ok(t.send(CAROL, MARKET, "buy", { listingId: "0n" }, { value: `${COIN}` }));   // ไม่ส่ง amount = 1
+  t.ok(t.send(CAROL, MARKET, "buy", { listingId: "0n" }, { value: `${COIN}` }));   // no amount = 1
   assert.equal(t.items(CAROL), 1n);
   assertEscrow(t, MARKET);
 
-  // token: 3 ชิ้น × 10 = 30 → fee 0.75 ปัดขึ้นเป็น 1
+  // token: 3 items × 10 = 30 → fee 0.75 rounds up to 1
   t.ok(t.send(CAROL, MARKET, "buy", { listingId: "1n", amount: "3n", price: "10n" }));
   assert.equal(t.tokens(ALICE), 29n);
   assert.equal(t.items(CAROL), 4n);
 
-  // ยกเลิก: คืน 3 ชิ้นที่เหลือของรายการแรก
+  // cancel: returns the 3 remaining items of the first listing
   t.ok(t.send(ALICE, MARKET, "cancel", { listingId: "0n" }));
   assert.equal(t.items(ALICE), 3n);
   listing = t.query(MARKET, "getListing", { listingId: "0n" });
   assert.deepEqual([listing.amount, listing.sold, listing.status], ["0n", "3n", "cancelled"]);
   assertEscrow(t, MARKET);
-  // ซื้อชิ้นสุดท้ายของรายการ token → sold
+  // buying the last item of the token listing → sold
   t.ok(t.send(BOB, MARKET, "buy", { listingId: "1n", price: "10n" }));
   assert.equal(t.query(MARKET, "getListing", { listingId: "1n" }).status, "sold");
   assert.equal(t.items(MARKET), 0n);
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ข้อเสนอด้วย token · รับโดยเจ้าของที่ไม่ได้วางขาย · คนอื่นรับ / ยกเลิกไม่ได้", () => {
+test("nftmarket: token offers · accepted by an owner who has not listed · others cannot accept / cancel", () => {
   const t = setup();
   t.fails(t.send(ALICE, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", payToken: TOKEN, amount: "1n" }), "your own nft");
   t.fails(t.send(BOB, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", payToken: TOKEN, amount: "0n" }), "amount must be");
@@ -339,7 +339,7 @@ test("nftmarket: ข้อเสนอด้วย token · รับโดย�
   t.fails(t.send(BOB, MARKET, "cancelOffer", { offerId: "0n" }), "offer is not active");
   assertEscrow(t, MARKET);
 
-  // เจ้าของใหม่ (bob) รับข้อเสนอของ carol ได้ · carol ยกเลิกไม่ทันแล้ว
+  // the new owner (bob) can accept carol's offer · too late for carol to cancel
   t.ok(t.send(BOB, NFT, "setApprovalForAll", { operator: MARKET, approved: true }));
   const carolBefore = t.tokens(CAROL);
   t.ok(t.send(BOB, MARKET, "acceptOffer", { offerId: "1n" }));
@@ -348,7 +348,7 @@ test("nftmarket: ข้อเสนอด้วย token · รับโดย�
   assertEscrow(t, MARKET);
   assert.deepEqual(t.query(MARKET, "offersFor", { nft: NFT, tokenId: "1n", activeOnly: true }).items, []);
 
-  // ผู้เสนอกลายเป็นเจ้าของเองทีหลัง → รับข้อเสนอของตัวเองไม่ได้ (ยกเลิกเอาเงินคืนได้)
+  // the offerer later becomes the owner → cannot accept their own offer (can cancel for a refund)
   t.ok(t.send(CAROL, MARKET, "makeOffer", { nft: NFT, tokenId: "2n", payToken: TOKEN, amount: "10n" }));
   t.ok(t.send(ALICE, NFT, "transferFrom", { from: ALICE, to: CAROL, tokenId: "2n" }));
   t.ok(t.send(CAROL, NFT, "setApprovalForAll", { operator: MARKET, approved: true }));
@@ -357,7 +357,7 @@ test("nftmarket: ข้อเสนอด้วย token · รับโดย�
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ข้อเสนอด้วยเหรียญหลัก · รับขณะวางขายอยู่ → รายการปิด · ยกเลิกคืนเงิน · หมดอายุ", () => {
+test("nftmarket: native coin offers · accepting while listed → listing closes · cancel refunds · expiry", () => {
   const t = setup();
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: `${10n * COIN}n` }));
   t.fails(t.send(ALICE, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", payToken: "", amount: "5n" }, { value: "5" }), "your own nft");
@@ -366,7 +366,7 @@ test("nftmarket: ข้อเสนอด้วยเหรียญหลัก
   const offer = t.ok(t.send(BOB, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", amount: `${8n * COIN}n` }, { value: `${8n * COIN}` }));
   gas.makeOfferNative = offer.gasUsed;
   assert.equal(t.balance(MARKET), 8n * COIN);
-  // carol เสนอแบบหมดอายุเร็ว แล้วยกเลิกเอง
+  // carol makes a short-lived offer, then cancels it herself
   const expiresAt = BigInt(T / 1000) + 1000n;
   t.ok(t.send(CAROL, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", amount: `${9n * COIN}n`, expiresAt: `${expiresAt}n` }, { value: `${9n * COIN}` }));
   assertEscrow(t, MARKET);
@@ -383,7 +383,7 @@ test("nftmarket: ข้อเสนอด้วยเหรียญหลัก
   t.fails(t.send(CAROL, MARKET, "buy", { listingId: "0n" }, { value: `${10n * COIN}` }), "listing is not active");
   assertEscrow(t, MARKET);
 
-  // ข้อเสนอที่หมดอายุแล้ว: รับไม่ได้ แต่ผู้เสนอยกเลิกเอาเงินคืนได้
+  // expired offers: cannot be accepted, but the offerer can cancel for a refund
   const late = t.vm.createBlock({ timestamp: Number(expiresAt + 10n) * 1000 });
   const expired = late.call({ programUuid: MARKET, functionName: "acceptOffer", input: { offerId: "1n" }, context: { sender: BOB, origin: BOB }, gasLimit: 5_000_000 });
   t.fails(expired, "offer expired");
@@ -396,16 +396,16 @@ test("nftmarket: ข้อเสนอด้วยเหรียญหลัก
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ผู้ซื้อที่เป็นโปรแกรม · เรียกตลาดซ้อน (reentrancy) ถูกปฏิเสธ", () => {
+test("nftmarket: program buyers · re-entering the market (reentrancy) is rejected", () => {
   const t = setup();
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "5n" }));
   t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "2n", price: "5n" }));
-  // กระเป๋าโปรแกรม (มี onERC721Received) ซื้อผ่าน execute
+  // a program wallet (with onERC721Received) buys via execute
   t.vm.db.load({ [VM.nativeKey(WALLET, "received")]: "100n" });
   t.ok(t.send(BOB, WALLET, "execute", { target: MARKET, fn: "buy", input: { listingId: "0n" }, value: "5n" }));
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "1n" }), WALLET);
 
-  // ผู้โจมตีพยายามยกเลิกรายการระหว่างได้รับ NFT → ทั้ง tx ล้ม
+  // the attacker tries to cancel the listing while receiving the NFT → the whole tx fails
   const res = t.send(BOB, ATTACKER, "attack", { market: MARKET, listingId: "1n", other: "1n" }, { value: "5" });
   t.fails(res, "reentrant call");
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "2n" }), MARKET);
@@ -413,7 +413,7 @@ test("nftmarket: ผู้ซื้อที่เป็นโปรแกรม
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: รายการแบบแบ่งหน้า · กรองตาม collection / ผู้ขาย / activeOnly · limit สูงสุด 50", () => {
+test("nftmarket: paged listings · filter by collection / seller / activeOnly · max limit 50", () => {
   const t = setup();
   for (const id of ["1n", "2n", "3n"]) t.ok(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: id, price: "5n" }));
   t.ok(t.send(ALICE, MARKET, "listMulti", { multiToken: ITEMS, id: "7n", amount: "1n", pricePerUnit: "5n" }));
@@ -432,12 +432,12 @@ test("nftmarket: รายการแบบแบ่งหน้า · กร�
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ค่าแก๊สของงานหลักอยู่ใต้ 5M ต่อ tx (fork bluewolf)", () => {
+test("nftmarket: gas of the main operations stays under 5M per tx (fork bluewolf)", () => {
   for (const [name, used] of Object.entries(gas)) assert.ok(used > 0 && used < 1_000_000, `${name} = ${used}`);
   console.log("nftmarket gasUsed", gas);
 });
 
-test("nftmarket: makeOffer expiresAt เป็นมิลลิวินาที → ล้ม · ซื้อด้วย token ไม่ส่ง price → ล้ม", () => {
+test("nftmarket: makeOffer with expiresAt in milliseconds → fails · buying with a token without price → fails", () => {
   const t = setup();
   const b0 = t.balance(BOB);
   t.fails(t.send(BOB, MARKET, "makeOffer", { nft: NFT, tokenId: "1n", amount: "5n", expiresAt: `${BigInt(T + 3_600_000)}n` }, { value: "5" }), "milliseconds");
@@ -450,7 +450,7 @@ test("nftmarket: makeOffer expiresAt เป็นมิลลิวินาท�
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ผู้รับค่าธรรมเนียมซื้อรายการที่จ่ายด้วย token ได้", () => {
+test("nftmarket: the fee recipient can buy a token-priced listing", () => {
   const t = setup();
   t.ok(t.send(BOB, TOKEN, "transfer", { to: FEE, amount: "10000n" }));
   t.ok(t.send(FEE, TOKEN, "approve", { spender: MARKET, amount: "10000n" }));
@@ -464,7 +464,7 @@ test("nftmarket: ผู้รับค่าธรรมเนียมซื้
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ค่าธรรมเนียมปัดขึ้น — ซื้อ 1155 ทีละชิ้น 100 ครั้ง จ่าย ≥ ซื้อ 100 ชิ้นครั้งเดียว", () => {
+test("nftmarket: fee rounds up — buying a 1155 one at a time 100 times pays ≥ buying 100 at once", () => {
   const t = setup();
   t.ok(t.send(DEPLOYER, ITEMS, "mint", { to: ALICE, id: "7n", amount: "190n" }));
   t.ok(t.send(ALICE, MARKET, "listMulti", { multiToken: ITEMS, id: "7n", amount: "200n", pricePerUnit: "39n", payToken: TOKEN }));
@@ -478,7 +478,7 @@ test("nftmarket: ค่าธรรมเนียมปัดขึ้น — �
   assertEscrow(t, MARKET);
 });
 
-test("nftmarket: ห้ามแนบ native value — list / updatePrice / getListing ล้ม · ตลาดไม่ถือเหรียญหลัก", () => {
+test("nftmarket: no native value allowed — list / updatePrice / getListing fail · the market holds no native coin", () => {
   const t = setup();
   const a0 = t.balance(ALICE);
   t.fails(t.send(ALICE, MARKET, "list", { nft: NFT, tokenId: "1n", price: "100n" }, { value: "7" }), "does not accept native value");

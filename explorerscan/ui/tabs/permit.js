@@ -1,5 +1,5 @@
-/* explorerscan/ui/tabs/permit.js [แก้ได้ · หน้าตา]
-   แท็บ Permit ของโทเคน (ERC-2612): เซ็นอนุญาตแบบ EIP-712 แล้วส่ง */
+/* explorerscan/ui/tabs/permit.js [editable · look]
+   Token Permit tab (ERC-2612): sign an EIP-712 approval, then send */
 
 // ---------- permit tab of a token (ERC-2612): the owner signs EIP-712 typed data with eth_signTypedData_v4 ----------
 //   domain { name: name(), version: "1", chainId, verifyingContract: token } · Permit(owner, spender, value, nonce, deadline)

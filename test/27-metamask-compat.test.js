@@ -4,10 +4,10 @@ import { ethers } from "ethers";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * ตรวจข้ามกับไลบรารีมาตรฐาน (ethers) ซึ่งใช้อัลกอริทึมเดียวกับ MetaMask
- *   - ลายเซ็นที่เราสร้าง → ethers ตรวจผ่าน
- *   - ลายเซ็นที่ wallet (ethers) สร้าง → เรากู้ address ได้ถูกต้อง
- * ผ่านเทสต์ชุดนี้ = ผู้ใช้เซ็นด้วย MetaMask ได้เลย ไม่ต้องทำ wallet เอง
+ * cross-check against the standard library (ethers), which uses the same algorithm as MetaMask
+ *   - signatures we create → ethers verifies them
+ *   - signatures a wallet (ethers) creates → we recover the correct address
+ * passing this suite = users can sign with MetaMask directly, no custom wallet needed
  */
 
 const PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -25,29 +25,29 @@ const TX = {
   gasLimit: 50000,
 };
 
-/** โครงสร้างที่ส่งให้ ethers (ตัด EIP712Domain ออกตามที่ ethers ต้องการ) */
+/** structure passed to ethers (EIP712Domain removed, as ethers requires) */
 function forEthers(tx) {
   const typed = sign.buildTypedData(tx);
   const { EIP712Domain, ...types } = typed.types;
   return { domain: typed.domain, types, message: typed.message };
 }
 
-test("address: ที่ได้จาก private key ตรงกับของ ethers", () => {
+test("address: derived from a private key matches ethers", () => {
   assert.equal(sign.addressOf(PRIVATE_KEY), wallet.address.toLowerCase());
 });
 
-test("digest: EIP-712 hash ตรงกับที่ ethers คำนวณ", () => {
+test("digest: EIP-712 hash matches what ethers computes", () => {
   const { domain, types, message } = forEthers(TX);
   assert.equal(sign.hashTypedData(TX), ethers.TypedDataEncoder.hash(domain, types, message));
 });
 
-test("ลายเซ็นของเรา → ethers ตรวจแล้วได้ address เดิม", () => {
+test("our signature → ethers verifies and gets the same address", () => {
   const signature = sign.signTransaction(TX, PRIVATE_KEY);
   const { domain, types, message } = forEthers(TX);
   assert.equal(ethers.verifyTypedData(domain, types, message, signature).toLowerCase(), wallet.address.toLowerCase());
 });
 
-test("ลายเซ็นจาก wallet (แบบเดียวกับ MetaMask) → เรากู้ address ได้ถูกต้อง", async () => {
+test("signature from a wallet (same as MetaMask) → we recover the correct address", async () => {
   const { domain, types, message } = forEthers(TX);
   const signature = await wallet.signTypedData(domain, types, message);   // = eth_signTypedData_v4
 
@@ -58,14 +58,14 @@ test("ลายเซ็นจาก wallet (แบบเดียวกับ M
   assert.deepEqual(verified.request.context, { sender: wallet.address.toLowerCase(), origin: wallet.address.toLowerCase() });
 });
 
-test("ลายเซ็นของเรากับของ wallet เป็นค่าเดียวกันทุกตัวอักษร", async () => {
+test("our signature and the wallet's are identical character for character", async () => {
   const { domain, types, message } = forEthers(TX);
   const ours = sign.signTransaction(TX, PRIVATE_KEY);
   const theirs = await wallet.signTypedData(domain, types, message);
   assert.equal(ours, theirs);
 });
 
-test("ทุก action เซ็นและกู้กลับได้ตรงกับ ethers", async () => {
+test("every action signs and recovers consistently with ethers", async () => {
   const variants = [
     TX,
     { ...TX, action: "transfer", to: "0xfabb0ac9d68b0b445fb7357272ff202c5651694a", method: "", input: {}, value: 250 },
@@ -80,7 +80,7 @@ test("ทุก action เซ็นและกู้กลับได้ตร
   }
 });
 
-test("แก้ tx หลังเซ็น → ethers ก็กู้ได้เป็นคนอื่น (ตรงกับผลของเรา)", async () => {
+test("tampering with a tx after signing → ethers also recovers someone else (matches our result)", async () => {
   const { domain, types, message } = forEthers(TX);
   const signature = await wallet.signTypedData(domain, types, message);
   const tampered = { ...TX, input: { ...TX.input, amount: 999 } };
@@ -88,10 +88,10 @@ test("แก้ tx หลังเซ็น → ethers ก็กู้ได้�
   const theirs = ethers.verifyTypedData(...Object.values(forEthers(tampered)), signature).toLowerCase();
   assert.notEqual(theirs, wallet.address.toLowerCase());
   assert.equal(sign.recoverSigner(tampered, signature), theirs);
-  assert.throws(() => sign.verifyTransaction({ tx: tampered, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: tampered, signature }), /signature does not match from/);
 });
 
-test("สิ่งที่ผู้ใช้เห็นใน MetaMask", () => {
+test("what the user sees in MetaMask", () => {
   const typed = sign.buildTypedData(TX);
   assert.deepEqual(typed.domain, { name: "Bluewolfchain", version: "2" });
   assert.deepEqual(typed.message, {

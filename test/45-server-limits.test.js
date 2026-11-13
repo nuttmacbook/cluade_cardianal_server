@@ -6,7 +6,7 @@ import { RateLimiter } from "../src/node/ratelimit.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN } from "./programs.js";
 
-/* กันโปรแกรมที่รันนานทำให้ server ค้าง: timeout สั้น, rate limit ต่อ IP, ตรวจราคาถูกก่อน simulate */
+/* keep long-running programs from hanging the server: short timeout, per-IP rate limit, cheap checks before simulate */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const KEY = sign.randomPrivateKey();
@@ -19,27 +19,27 @@ const LOOP = `function program() {
 // ---------------------------------------------------------------------------
 //  RateLimiter
 
-test("RateLimiter: เกินกำหนด → ปฏิเสธ, ครั้งที่ถูกปฏิเสธไม่ถูกนับ, พ้นช่วงแล้วเรียกได้อีก", () => {
+test("RateLimiter: over the limit → rejected, rejected calls are not counted, allowed again once the window passes", () => {
   const limiter = new RateLimiter({ limit: 2, windowMs: 1000 });
   assert.equal(limiter.allow("a", { now: T }), true);
   assert.equal(limiter.allow("a", { now: T + 100 }), true);
   assert.equal(limiter.allow("a", { now: T + 200 }), false);
   assert.equal(limiter.allow("a", { now: T + 300 }), false);
   assert.equal(limiter.retryAfter("a", { now: T + 300 }), 1);
-  assert.equal(limiter.allow("b", { now: T + 300 }), true);       // นับแยกตาม key
-  assert.equal(limiter.allow("a", { now: T + 1000 }), true);      // ครั้งแรกพ้นช่วงแล้ว
+  assert.equal(limiter.allow("b", { now: T + 300 }), true);       // counted per key
+  assert.equal(limiter.allow("a", { now: T + 1000 }), true);      // the first call has left the window
 });
 
-test("RateLimiter: limit 0 → ไม่จำกัด", () => {
+test("RateLimiter: limit 0 → unlimited", () => {
   const limiter = new RateLimiter({ limit: 0 });
   for (let i = 0; i < 1000; i += 1) assert.equal(limiter.allow("a", { now: T }), true);
 });
 
-test("RateLimiter: จำ key ไม่เกิน maxKeys (ทิ้งตัวที่ไม่ได้ใช้นานสุด)", () => {
+test("RateLimiter: remembers at most maxKeys keys (drops the least recently used)", () => {
   const limiter = new RateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2 });
   limiter.allow("a", { now: T });
   limiter.allow("b", { now: T });
-  limiter.allow("c", { now: T });                                 // "a" ถูกทิ้ง
+  limiter.allow("c", { now: T });                                 // "a" is dropped
   assert.equal(limiter.allow("a", { now: T }), true);
   assert.equal(limiter.allow("c", { now: T }), false);
 });
@@ -62,45 +62,45 @@ const signed = (nonce) => {
   return { tx, signature: sign.signTransaction(tx, KEY) };
 };
 
-test("mempool: nonce ผิด → ไม่เรียก simulate เลย", () => {
+test("mempool: wrong nonce → simulate is never called", () => {
   const pool = new Mempool(setup());
   let calls = 0;
   const res = pool.add(signed(5), { simulate: () => { calls += 1; return { ok: true }; } });
   assert.equal(res.ok, false);
-  assert.equal(res.reason, "nonce ต้องเป็น 0");
+  assert.equal(res.reason, "nonce must be 0");
   assert.equal(calls, 0);
 });
 
-test("mempool: simulate ไม่ผ่าน → ไม่เข้าคิว แต่ถูกนับใน rate limit", () => {
+test("mempool: simulate fails → not queued, but counted in the rate limit", () => {
   const pool = new Mempool(setup(), { rateLimit: 2, rateWindowMs: 1000 });
   let calls = 0;
-  const failing = () => { calls += 1; return { ok: false, error: "โปรแกรมทำงานเกินเวลาที่กำหนด" }; };
+  const failing = () => { calls += 1; return { ok: false, error: "program ran past the time limit" }; };
 
   const first = pool.add(signed(0), { now: T, simulate: failing });
-  assert.deepEqual([first.ok, first.reason, first.simulation.ok], [false, "โปรแกรมทำงานเกินเวลาที่กำหนด", false]);
+  assert.deepEqual([first.ok, first.reason, first.simulation.ok], [false, "program ran past the time limit", false]);
   assert.equal(pool.size, 0);
   pool.add(signed(0), { now: T, simulate: failing });
 
   const third = pool.add(signed(0), { now: T, simulate: failing });
-  assert.equal(third.reason, "ส่งถี่เกินกำหนด");
-  assert.equal(calls, 2);                                         // ครั้งที่ 3 ไม่ได้ simulate
+  assert.equal(third.reason, "sending too frequently");
+  assert.equal(calls, 2);                                         // the 3rd call is not simulated
 });
 
-test("mempool: simulate ผ่าน → เข้าคิวและคืนผล simulation", () => {
+test("mempool: simulate passes → queued, simulation result returned", () => {
   const pool = new Mempool(setup());
   const res = pool.add(signed(0), { simulate: () => ({ ok: true, gasUsed: 123 }) });
   assert.deepEqual([res.ok, res.simulation.gasUsed, pool.size], [true, 123, 1]);
 });
 
 // ---------------------------------------------------------------------------
-//  server.js ผ่าน HTTP จริง
+//  server.js over real HTTP
 
 let server, vm, url;
 
 before(async () => {
-  process.env.TIMEOUT_MS = "1000";   // ลูป 3M แก๊สใน QuickJS ใช้ ~100ms (ช้ากว่านั้นเมื่อเครื่องโหลดหนัก) ต้องหมดแก๊สก่อนหมดเวลา
+  process.env.TIMEOUT_MS = "1000";   // a 3M-gas loop in QuickJS takes ~100ms (slower under heavy load) and must run out of gas before the timeout
   process.env.RATE_LIMIT = "4";
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   ({ server, vm } = await import("../server.js"));
   const plain = new VM.VirtualMachine(vm.db);
   vm.commit(plain.deploy({ programUuid: "loop", code: LOOP, context: { sender: alice, origin: alice } }).writes);
@@ -113,17 +113,17 @@ after(() => server.close());
 
 const post = (path, body) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
-test("server: /query ที่วนไม่รู้จบหมดแก๊ส (OUT_OF_GAS) ไม่ค้าง 30 วินาที", async () => {
+test("server: /query with an infinite loop runs out of gas (OUT_OF_GAS) instead of hanging 30 seconds", async () => {
   const started = Date.now();
   const res = await post("/query", { programUuid: "loop", functionName: "spin", input: {}, context: { sender: alice, origin: alice } });
   const elapsed = Date.now() - started;
   assert.equal(res.status, 400);
-  assert.equal((await res.json()).error.code, "OUT_OF_GAS");   // เพดาน maxTxGas ของ server
-  assert.ok(elapsed < 1500, `ใช้เวลา ${elapsed}ms`);
+  assert.equal((await res.json()).error.code, "OUT_OF_GAS");   // server maxTxGas cap
+  assert.ok(elapsed < 1500, `took ${elapsed}ms`);
 });
 
-test("server: POST เกิน RATE_LIMIT ต่อ IP → 429 พร้อม retry-after", async () => {
-  // เทสต์ก่อนหน้าใช้ไป 1 ครั้ง เหลือ 3
+test("server: POST over RATE_LIMIT per IP → 429 with retry-after", async () => {
+  // the previous test used 1, leaving 3
   for (let i = 0; i < 3; i += 1) assert.notEqual((await post("/query", {})).status, 429);
   const res = await post("/sendtx", {});
   assert.equal(res.status, 429);
@@ -131,6 +131,6 @@ test("server: POST เกิน RATE_LIMIT ต่อ IP → 429 พร้อม 
   assert.match((await res.json()).error, /Too many requests/);
 });
 
-test("server: GET ไม่ถูกจำกัด", async () => {
+test("server: GET is not limited", async () => {
   for (let i = 0; i < 10; i += 1) assert.equal((await fetch(`${url}/genesis`)).status, 200);
 });

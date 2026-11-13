@@ -1,72 +1,72 @@
 /**
- * sandbox ของโปรแกรม: รันโค้ดของผู้ใช้ใน QuickJS ที่คอมไพล์เป็น WebAssembly (quickjs-emscripten แบบ sync)
+ * Program sandbox: runs user code in QuickJS compiled to WebAssembly (quickjs-emscripten, sync variant)
  *
  *   const sandbox = new Sandbox(tx, { memoryLimitBytes, maxStackBytes, nodeGas, builtinGas, timestamp, wallClock, map })
  *   sandbox.invoke({ programUuid, source, functionName, params, api, blockNumber })  → outcome
- *   sandbox.dispose()                                                               ← ทุก tx ต้องเรียก (runAction ทำให้)
+ *   sandbox.dispose()                                                               ← required for every tx (runAction does it)
  *
- * โครงสร้าง
- *   QuickJS สำหรับรันโปรแกรมมี instance เดียว (WebAssembly memory ของตัวเอง) และ runtime เดียว
- *   ตอน import: สร้าง runtime + context สำรองไว้ POOL_SIZE ตัว (โหลด prelude แล้ว) → ถ่าย snapshot ของ memory
- *   ต้น tx ชั้นนอกสุด: คืน memory เป็น snapshot (≈ 0.1 ms) → ทุก tx เริ่มจาก heap ที่เหมือนกันทุกไบต์
- *     · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียกของ tx (runProgram ซ้อนรันใน runtime เดียวกัน)
- *     · 1 โปรแกรม (address + โค้ด) = 1 context — โปรแกรมต่างตัวไม่เห็น global ของกันและกัน
- *     · ไม่มีอะไรจาก tx ก่อนหน้าค้างอยู่เลย (global ที่โปรแกรมแก้ / object / ขยะของ GC)
- *   ทุก call รันฟังก์ชัน factory ของโปรแกรมใหม่ → ตัวแปรระดับบนสุดไม่ค้างข้าม call (เหมือนเดิม)
- *   โค้ดในโปรแกรมไม่มีทางได้ object ของ host: ค่าทุกตัวข้ามเขตแดนเป็นข้อความ JSON (BigInt / undefined / ค่าพิเศษติดป้าย)
+ * Structure
+ *   There is a single QuickJS instance for running programs (with its own WebAssembly memory) and a single runtime
+ *   At import: create the runtime + POOL_SIZE spare contexts (prelude loaded) → take a snapshot of memory
+ *   At the start of each outermost tx: restore memory to the snapshot (≈ 0.1 ms) → every tx starts from a byte-identical heap
+ *     · memory / stack / time are counted across the tx's whole call chain (nested runProgram runs in the same runtime)
+ *     · 1 program (address + code) = 1 context; different programs cannot see each other's globals
+ *     · nothing from earlier txs is left over (globals a program modified / objects / GC garbage)
+ *   Every call runs the program's factory function afresh → top-level variables do not persist across calls (as before)
+ *   Program code can never get a host object: every value crosses the boundary as JSON text (BigInt / undefined / special values are tagged)
  *
- * แก๊ส: __gas(n) นับใน sandbox เอง (ตัวนับของแต่ละ call) แล้วส่งยอดค้างให้ host ทุกครั้งที่เรียก API
- *   เกินยอดที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดียวกับการนับทีละครั้ง (ตัวเลขแก๊สเท่าเดิมทุกหน่วย)
- *   tx ล้มกลางทาง (หน่วยความจำเกิน) → ยอดค้างส่งกลับใน "f<n>|" ให้ host คิดด้วย
+ * Gas: __gas(n) is counted inside the sandbox (per-call counter), and the pending total is sent to the host on every API call
+ *   exceeding the remaining budget → ask the host immediately → OUT_OF_GAS at exactly the same point as counting one by one (gas figures identical to the unit)
+ *   tx fails midway (memory exceeded) → the pending total is sent back in "f<n>|" for the host to charge too
  *
- * แก๊สตามขนาดข้อมูล (prelude): builtin ต่อหน่วย · 1 หน่วย = 1 สมาชิก / property หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
- *   เมธอดในตัวที่คัดลอก / สร้างข้อมูลถูกห่อไว้ก่อนโค้ดของผู้ใช้รัน (ของจริงอยู่ใน closure เท่านั้น) → เรียกทางไหนก็คิดเท่ากัน
- *   __spread (spread / rest ของ array) · __props (spread / rest ของ object) · __str (string จาก + / +=) — gasmeter.js แทรกให้
- *   iterator ในตัวของ array / string / Set / Map ถูกล็อก → __spread รู้แน่ว่า engine จะคัดลอกกี่สมาชิก (คัดลอกแบบเร็วเหมือนเดิม)
- *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError ถูกห่อด้วย Proxy (global + prototype.constructor)
- *   Proxy ที่โปรแกรมสร้างถูกจดไว้ (ownKeys / length ตอบไม่เหมือนกันได้ทุกครั้ง → คัดลอกเองทีละ property)
+ * Gas by data size (prelude): builtin per unit · 1 unit = 1 element / property or 32 characters / bytes (rounded up)
+ *   built-in methods that copy / create data are wrapped before user code runs (the originals live only in a closure) → charged the same however they are called
+ *   __spread (array spread / rest) · __props (object spread / rest) · __str (strings from + / +=), inserted by gasmeter.js
+ *   built-in iterators of array / string / Set / Map are locked → __spread knows exactly how many elements the engine will copy (fast copy as before)
+ *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError are wrapped with Proxy (global + prototype.constructor)
+ *   Proxies created by the program are tracked (ownKeys / length can answer differently every time → copied manually property by property)
  *
- * แก๊สตามงาน CPU ของ BigInt (prelude "BigInt" · เทสต์ 81): operator ที่ gasmeter.js แปลงเป็น __mul / __lt … คิดตามจำนวน word 64 bit
- *   ค่า ≤ 512 bit ไม่คิดเพิ่ม · งานที่รู้ขนาดล่วงหน้า (** / << / * / แปลง string) คิดก่อนทำ · ผลเกิน BIGINT_MAX_BITS (8192 bit) = RangeError
- *   (เพดานกันงานที่ engine ทำเองโดยไม่ผ่านตัวนับ: แปลง BigInt เป็น string ข้างในเมธอดในตัว ≈ W² — 8192 bit ≈ 0.4 ms ต่อครั้ง)
- *   ทุกทางที่ engine แปลง BigInt ↔ string ถูกคิดก่อน: operator / ชื่อ property / ค่าที่ฟังก์ชันคืน / เมธอดในตัวที่รับหรือคืน BigInt
- * regular expression ปิดทั้งหมด (RegExp / match / matchAll / search / exec / test …) — backtrack แบบ exponential คิดแก๊สล่วงหน้าไม่ได้
+ * Gas by BigInt CPU work (prelude "BigInt" · test 81): operators that gasmeter.js rewrites to __mul / __lt … are charged by number of 64-bit words
+ *   values ≤ 512 bits cost nothing extra · work whose size is known up front (** / << / * / string conversion) is charged before running · results above BIGINT_MAX_BITS (8192 bits) = RangeError
+ *   (the ceiling bounds work the engine does on its own without the counter: converting BigInt to string inside built-in methods ≈ W²; 8192 bits ≈ 0.4 ms per call)
+ *   every path where the engine converts BigInt ↔ string is charged first: operators / property names / function return values / built-in methods that take or return BigInt
+ * regular expressions are fully disabled (RegExp / match / matchAll / search / exec / test …): exponential backtracking cannot be charged up front
  *
- * หน่วยความจำ: memory limit ในตัว QuickJS ใช้ไม่ได้บน emscripten (นับแค่ 8 ไบต์ต่อก้อน) จึงคุมที่ heap ของ WebAssembly แทน
- *   ต้น tx (หลังคืน snapshot): จองก้อน "ลูกโป่ง" ให้เหลือที่ว่างพอดี memoryLimitBytes + สำรองของ host แล้วล็อกไม่ให้ memory โต
- *   → malloc ล้มที่จุดเดียวกันทุกเครื่อง (ไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · ล็อกโดนแตะเมื่อไร = OUT_OF_MEMORY (catch ไม่ได้)
+ * Memory: QuickJS's built-in memory limit does not work on emscripten (it counts only 8 bytes per block), so the WebAssembly heap is controlled instead
+ *   At tx start (after restoring the snapshot): allocate a "balloon" block so that exactly memoryLimitBytes + the host reserve stays free, then lock memory from growing
+ *   → malloc fails at the same point on every machine (independent of how far memory had grown) · touching the lock = OUT_OF_MEMORY (cannot be caught)
  */
 import { getQuickJS, newQuickJSWASMModuleFromVariant, newVariant, RELEASE_SYNC } from "quickjs-emscripten";
 import { BIGINT_MAX_BITS } from "./gasmeter.js";
 
 export const SANDBOX_DEFAULTS = {
-  memoryLimitBytes: 32 * 1024 * 1024,   // หน่วยความจำต่อ tx (รวมทุกโปรแกรมในสายการเรียก)
-  maxStackBytes: 256 * 1024,            // stack ของ QuickJS ต่อ tx (≈ 1,400 ชั้นของการเรียกฟังก์ชันซ้อน) — มากกว่านี้เสี่ยง stack ของ Node เอง
+  memoryLimitBytes: 32 * 1024 * 1024,   // memory per tx (across all programs in the call chain)
+  maxStackBytes: 256 * 1024,            // QuickJS stack per tx (≈ 1,400 levels of nested function calls); more than this risks overflowing Node's own stack
 };
 
-/** ช่วงที่ตั้งได้: stack ของ QuickJS ใช้ stack จริงของ Node ด้วย — 512 KB ทำให้ Node stack ล้นจน WebAssembly พัง */
+/** allowed range: the QuickJS stack also uses Node's real stack; 512 KB overflows Node's stack and breaks WebAssembly */
 export const SANDBOX_LIMITS = {
   memoryLimitBytes: [1024 * 1024, 1024 * 1024 * 1024],
   maxStackBytes: [16 * 1024, 256 * 1024],
 };
 
 const PAGE = 64 * 1024;
-const HOST_RESERVE = 2 * 1024 * 1024;   // ที่สำรองให้ host ใช้ต่อหลังโปรแกรมใช้หน่วยความจำจนเต็ม
-const HOST_HEADROOM = 256 * 1024;       // host ตรวจว่ายังมีที่ว่างเท่านี้ก่อนทำงานทุกครั้ง (ไม่มี = OUT_OF_MEMORY)
-const POOL_SIZE = 8;                    // context ที่เตรียมไว้ใน snapshot (tx ที่ใช้โปรแกรมมากกว่านี้สร้างเพิ่มเอง ช้ากว่า)
-const LOW_REGION = 1024 * 1024;         // ส่วนล่างของ memory: ข้อมูล static ของ QuickJS / malloc (~90 KB) ที่เหลือคือ stack ของ C
-const MAX_MEMORY_PAGES = 32768;         // 2 GB (เพดานของ wasm32)
+const HOST_RESERVE = 2 * 1024 * 1024;   // reserve left for the host to keep working after a program fills memory
+const HOST_HEADROOM = 256 * 1024;       // the host checks that at least this much is free before every operation (otherwise = OUT_OF_MEMORY)
+const POOL_SIZE = 8;                    // contexts prepared in the snapshot (txs that use more programs than this create extra ones, which is slower)
+const LOW_REGION = 1024 * 1024;         // bottom of memory: QuickJS / malloc static data (~90 KB); the rest is the C stack
+const MAX_MEMORY_PAGES = 32768;         // 2 GB (the wasm32 ceiling)
 
 // ---------------------------------------------------------------------------
-//  instance ของ QuickJS
+//  QuickJS instance
 // ---------------------------------------------------------------------------
 
 const realGrow = WebAssembly.Memory.prototype.grow;
 const executorMemory = new WebAssembly.Memory({ initial: 256, maximum: MAX_MEMORY_PAGES });
 let memoryLocked = false;
-let current = null;   // sandbox ที่กำลังถือ heap (มีได้ทีละตัว)
+let current = null;   // the sandbox currently holding the heap (only one at a time)
 
-// emscripten ขยาย memory ผ่าน grow เท่านั้น → ระหว่าง tx ห้ามโต (malloc ล้ม = เกินกำหนด)
+// emscripten grows memory only via grow → no growing during a tx (malloc fails = limit exceeded)
 executorMemory.grow = function grow(delta) {
   if (memoryLocked) {
     current?.flagOutOfMemory();
@@ -75,22 +75,22 @@ executorMemory.grow = function grow(delta) {
   return realGrow.call(this, delta);
 };
 
-/** QuickJS สำหรับรันโปรแกรม (heap แยกจากตัวตรวจ syntax) */
+/** QuickJS for running programs (heap separate from the syntax checker) */
 const executor = await newQuickJSWASMModuleFromVariant(newVariant(RELEASE_SYNC, { wasmMemory: executorMemory }));
-/** QuickJS สำหรับตรวจ syntax ตอนคอมไพล์ (ไม่รันโค้ด) */
+/** QuickJS for checking syntax at compile time (does not run code) */
 const checker = await getQuickJS();
 const checkerContext = checker.newContext();
 const heap = executor.module;   // emscripten module: _malloc / _free
 
-let brokenReason = null;   // WebAssembly พัง (ไม่ควรเกิด) → ทุก tx ล้มเป็น INTERNAL แทนที่จะรันต่อบน heap ที่เสีย
+let brokenReason = null;   // WebAssembly broke (should never happen) → every tx fails as INTERNAL instead of running on a corrupted heap
 
-/** สถิติสำหรับทดสอบว่าไม่มีของค้าง: sandbox ที่ถือ heap / context ที่สร้างเพิ่ม / handle ที่ยังไม่คืน */
+/** stats for testing that nothing leaks: sandbox holding the heap / extra contexts created / handles not yet released */
 export const sandboxStats = { active: 0, extraContexts: 0, handles: 0, transactions: 0 };
 export const sandboxMemoryBytes = () => executorMemory.buffer.byteLength;
 
 /**
- * ตรวจ syntax ด้วย QuickJS (V8 กับ QuickJS รับ syntax ไม่ตรงกันทุกข้อ) — คืนข้อความ error หรือ null
- * compileOnly: ไม่มีโค้ดของผู้ใช้ถูกรัน
+ * Check syntax with QuickJS (V8 and QuickJS do not accept exactly the same syntax); returns the error message or null
+ * compileOnly: no user code is executed
  */
 export function checkGuestSyntax(source) {
   const result = checkerContext.evalCode(source, "program", { compileOnly: true });
@@ -104,13 +104,13 @@ export function checkGuestSyntax(source) {
 }
 
 // ---------------------------------------------------------------------------
-//  ข้อตกลงระหว่าง host ↔ โปรแกรม
+//  host ↔ program contract
 // ---------------------------------------------------------------------------
 
 /**
- * API ที่เรียกข้ามไป host: [ชื่อ, ชนิดของ argument แต่ละตัว]
- *   k = key (string / map(...))   p = ค่าเดี่ยว (object ถูกส่งเป็น "ไม่ใช่ข้อมูล")   d = ข้อมูลทั้งก้อน
- *   R = options ของ runProgram ({ value, readonly })   C = options ของ cloneProgram ({ salt, value })
+ * APIs that call across to the host: [name, kind of each argument]
+ *   k = key (string / map(...))   p = single value (objects are sent as "not data")   d = whole data structure
+ *   R = runProgram options ({ value, readonly })   C = cloneProgram options ({ salt, value })
  */
 export const API_OPS = [
   ["readDB", "k"], ["writeDB", "kd"], ["deleteDB", "k"],
@@ -124,9 +124,9 @@ export const API_OPS = [
 ];
 const OP = { sync: 0, random: 1, clock: 2, check: 3, api: 10 };
 
-const TAG = "\u0000";   // ป้ายของค่าที่ JSON ไม่มี: { "\u0000": "b", v: "123" } = 123n
+const TAG = "\u0000";   // tags for values JSON lacks: { "\u0000": "b", v: "123" } = 123n
 
-/** ค่าจากโปรแกรมที่ไม่ใช่ข้อมูล (function / symbol / Date / class ...) — host เห็นเป็น object ที่ไม่ใช่ plain object */
+/** non-data values from a program (function / symbol / Date / class ...); the host sees them as an object that is not a plain object */
 export class GuestValue {
   constructor(type) {
     this.type = type;
@@ -151,10 +151,10 @@ function hostReplacer(key, value) {
   }
 }
 
-/** ค่าของ host → ข้อความ (BigInt / undefined / NaN ติดป้าย) */
+/** host value → text (BigInt / undefined / NaN tagged) */
 export const encodeForGuest = (value) => JSON.stringify(value, hostReplacer);
 
-/** ข้อความจากโปรแกรม → ค่าของ host (object / array ใหม่ทั้งหมด ไม่มี reference ข้ามฝั่ง) */
+/** text from a program → host value (all new objects / arrays, no references across the boundary) */
 export function decodeFromGuest(text, makeMap) {
   const revive = (node) => {
     if (typeof node !== "object" || node === null) return node;
@@ -170,7 +170,7 @@ export function decodeFromGuest(text, makeMap) {
         case "x": return new GuestValue(String(node.t));
         case "m": return makeMap(...node.v.map(revive));
         case "o": return Object.fromEntries(node.v.map(([name, item]) => [name, revive(item)]));
-        default: throw new Error(`ป้ายข้อมูลไม่รู้จัก: ${node[TAG]}`);
+        default: throw new Error(`Unknown data tag: ${node[TAG]}`);
       }
     }
     for (const name of Object.keys(node)) node[name] = revive(node[name]);
@@ -180,14 +180,14 @@ export function decodeFromGuest(text, makeMap) {
 }
 
 // ---------------------------------------------------------------------------
-//  โค้ดฝั่งโปรแกรม (prelude): รันก่อนโค้ดของผู้ใช้ในทุก context
-//  ฟังก์ชันนี้ถูกแปลงเป็นข้อความ (toString) — ห้ามอ้างอะไรนอกตัวมันเอง
+//  program-side code (prelude): runs before user code in every context
+//  this function is converted to text (toString); it must not reference anything outside itself
 // ---------------------------------------------------------------------------
 
 /* eslint-disable no-new-func */
 function prelude(host, opText) {
   "use strict";
-  // ---- เก็บของจริงไว้ก่อนโค้ดของผู้ใช้ได้รัน (ผู้ใช้แก้ global / prototype ทีหลังก็ไม่กระทบตัวนี้) ----
+  // ---- Capture the originals before user code runs (later changes to globals / prototypes by the user do not affect these) ----
   const G = globalThis;
   const { keys, getPrototypeOf, freeze, defineProperty, hasOwn, getOwnPropertyDescriptor } = Object;
   const ObjectProto = Object.prototype;
@@ -236,7 +236,7 @@ function prelude(host, opText) {
   const ERROR_TYPES = { __proto__: null, Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError };
 
   const OP = jsonParse(opText);
-  // ค่าของ tx: ตั้งโดย configure() ตอนโปรแกรมได้ context นี้ (context ถูกเตรียมไว้ก่อนมี tx)
+  // tx values: set by configure() when a program gets this context (the context is prepared before any tx exists)
   let NODE_GAS = 0;
   let BUILTIN_GAS = 0;
   let TIMESTAMP = 0;
@@ -244,17 +244,17 @@ function prelude(host, opText) {
   const TAG_IN_JSON = "\\u0000";
   const UNDEFINED = '{"\\u0000":"u"}';
 
-  const MAP_PARTS = new WeakMapFn();     // object จาก map(...) → ส่วนของ key
-  const HOST_ERRORS = new WeakMapFn();   // error ที่มาจาก host → เลขอ้างอิง (throw ต่อ = host ได้ error ตัวเดิม)
+  const MAP_PARTS = new WeakMapFn();     // object from map(...) → its key parts
+  const HOST_ERRORS = new WeakMapFn();   // error that came from the host → reference id (rethrowing it gives the host the same error)
   const DEAD = new ErrorFn("transaction aborted");
-  let dead = false;   // แก๊สหมด / หมดเวลา / DB พัง / หน่วยความจำเกิน → ทุกอย่างหลังจากนี้ throw ซ้ำ (catch ไม่ได้)
+  let dead = false;   // out of gas / timeout / DB failure / memory exceeded → everything after this rethrows (cannot be caught)
   const die = () => {
     dead = true;
     throw DEAD;
   };
-  let ACT = null;     // ตัวนับแก๊สของ call ที่กำลังรันใน context นี้ (invoke ตั้ง / คืนค่าเดิมเมื่อจบ — เรียกซ้อนกลับมาโปรแกรมเดิมได้)
+  let ACT = null;     // gas counter of the call currently running in this context (set by invoke / restored when it ends — a nested call back into the same program is allowed)
 
-  // ---- แปลงค่าเป็นข้อความ ----
+  // ---- Values to text ----
   const opaque = (type) => '{"\\u0000":"x","t":"' + type + '"}';
   const isMap = (value) => apply(wmHas, MAP_PARTS, [value]);
   function encodeNumber(value) {
@@ -264,7 +264,7 @@ function prelude(host, opText) {
     if (value === 0 && 1 / value < 0) return '{"\\u0000":"n","v":"-0"}';
     return "" + value;
   }
-  /** ค่าเดี่ยว: object ทั่วไปไม่ถูกเปิดดู (host ตรวจชนิดแล้วปฏิเสธเหมือนเดิม) */
+  /** Single value: plain objects are not inspected (the host checks the type and rejects as before) */
   function encodeShallow(value) {
     switch (typeof value) {
       case "string": return jsonStringify(value);
@@ -287,7 +287,7 @@ function prelude(host, opText) {
     for (let i = 0; i < parts.length; i++) text += (i ? "," : "") + encodeShallow(parts[i]);
     return text + "]}";
   }
-  /** ข้อมูลทั้งก้อน: array / plain object ลงลึก · อย่างอื่นเป็น "ไม่ใช่ข้อมูล" */
+  /** Whole data tree: recurse into arrays / plain objects · anything else is "not data" */
   function encode(value) {
     if (typeof value !== "object" || value === null) return encodeShallow(value);
     if (isMap(value)) return encodeMap(value);
@@ -312,7 +312,7 @@ function prelude(host, opText) {
     return text + "}";
   }
 
-  // ---- แปลงข้อความจาก host เป็นค่า ----
+  // ---- Host text to values ----
   function revive(node) {
     if (typeof node !== "object" || node === null) return node;
     if (isArray(node)) {
@@ -338,14 +338,14 @@ function prelude(host, opText) {
     return node;
   }
   const decode = (text) => (apply(indexOf, text, [TAG_IN_JSON]) === -1 ? jsonParse(text) : revive(jsonParse(text)));
-  /** BigInt จาก host (input ของ tx / ค่าใน DB): ยาวเกินเพดาน = RangeError ก่อนแปลง · ค่าแปลงสะสมไว้คิดหลังรู้ยอดแก๊สล่าสุด */
+  /** BigInt from the host (tx input / DB values): longer than the cap = RangeError before conversion · conversion cost is accumulated and charged once the latest gas balance is known */
   let reviveUnits = 0;
   function reviveBigInt(text) {
     if (text.length > MAX_DIGITS) throw new RangeErrorFn(CAP_MESSAGE);
     reviveUnits += parseUnits(text);
     return checked(BigIntFn(text));
   }
-  /** คิดค่าแปลง BigInt ที่ decode สะสมไว้ */
+  /** Charge the accumulated BigInt decode conversion cost */
   function chargeRevive() {
     const units = reviveUnits;
     reviveUnits = 0;
@@ -360,7 +360,7 @@ function prelude(host, opText) {
     return error;
   }
 
-  /** คำตอบจาก host: "f" = tx ล้มทั้งใบ · [ชนิด, แก๊สที่เหลือ, ค่า] */
+  /** Host reply: "f" = the whole tx fails · [type, remaining gas, value] */
   function receive(act, reply) {
     if (reply === "f" || typeof reply !== "string") die();
     reviveUnits = 0;
@@ -371,7 +371,7 @@ function prelude(host, opText) {
     return message[2];
   }
 
-  // ---- เวลาของ block / ตัวสุ่มของ tx (เหมือนที่ host เคยให้) ----
+  // ---- Block time / tx randomness (same as the host used to provide) ----
   const BLOCK_DATE = new ProxyFn(DateFn, {
     construct: (target, args, newTarget) => construct(target, args.length ? args : [TIMESTAMP], newTarget),
     apply: () => new DateFn(TIMESTAMP).toString(),
@@ -384,13 +384,13 @@ function prelude(host, opText) {
   };
   const SEEDED_MATH = new ProxyFn(MathObj, { get: (target, prop, receiver) => (prop === "random" ? random : reflectGet(target, prop, receiver)) });
 
-  // ---- global ของ context: ไม่มีอะไรที่ไม่แน่นอนหรือหนีการนับแก๊สได้ ----
+  // ---- Context globals: nothing nondeterministic or able to escape gas metering ----
   const define = (target, name, value) => defineProperty(target, name, { value, writable: true, enumerable: false, configurable: true });
   define(G, "Date", BLOCK_DATE);
   define(G, "Math", SEEDED_MATH);
-  // โค้ดที่สร้างตอนรัน (eval / new Function) ไม่ผ่านตัวนับแก๊ส → ปิด
+  // Code created at run time (eval / new Function) bypasses the gas meter → disabled
   const deny = () => {
-    throw new EvalErrorFn("eval / Function ใช้ในโปรแกรมไม่ได้");
+    throw new EvalErrorFn("eval / Function are not allowed in programs");
   };
   const lock = (Constructor) => new ProxyFn(Constructor, { apply: deny, construct: deny });
   const FUNCTION_TYPES = [
@@ -402,17 +402,17 @@ function prelude(host, opText) {
   for (let i = 0; i < FUNCTION_TYPES.length; i++) define(FUNCTION_TYPES[i].prototype, "constructor", lock(FUNCTION_TYPES[i]));
   define(G, "Function", lock(Function));
   define(G, "eval", function evalDisabled() { deny(); });
-  define(G, "console", freeze({ log() {}, info() {}, warn() {}, error() {}, debug() {} }));   // ใช้ได้แต่ไม่พิมพ์อะไร
+  define(G, "console", freeze({ log() {}, info() {}, warn() {}, error() {}, debug() {} }));   // callable but prints nothing
 
-  // ---- แก๊สตามขนาดข้อมูล (ราคา BUILTIN_GAS ต่อ "หน่วย") ----
-  //   1 หน่วย = 1 สมาชิก (array / typed array / Set / Map / property ของ object / argument) หรือ 32 ตัวอักษร / 32 byte (ปัดขึ้น)
-  //   ตัวเลข / BigInt / boolean / function / null / undefined = 1 หน่วย
-  // คิดก่อนทำงานเมื่อรู้ขนาดล่วงหน้า (ข้อมูลเข้า, repeat / padStart / ArrayBuffer(n) …) และคิดขนาดผลลัพธ์อีกครั้งหลังทำ
+  // ---- Gas by data size (BUILTIN_GAS price per "unit") ----
+  // 1 unit = 1 element (array / typed array / Set / Map / object property / argument) or 32 characters / 32 bytes (rounded up)
+  // number / BigInt / boolean / function / null / undefined = 1 unit
+  // Charged before the work when the size is known in advance (input data, repeat / padStart / ArrayBuffer(n) …), and the result size is charged again afterwards
   const CHUNK = 32;
-  const STRING_MAX = 1073741823;   // ความยาว string สูงสุดของ QuickJS — เกินนี้ engine throw RangeError เอง (ไม่คิดแก๊สล่วงหน้า)
-  const BYTES_MAX = 2147483647;    // ขนาด ArrayBuffer สูงสุด — เกินนี้ engine throw RangeError เอง
+  const STRING_MAX = 1073741823;   // QuickJS maximum string length — beyond this the engine throws RangeError itself (not precharged)
+  const BYTES_MAX = 2147483647;    // maximum ArrayBuffer size — beyond this the engine throws RangeError itself
   const textUnits = (length) => ceil(length / CHUNK);
-  /** จำนวนเต็ม ≥ 0 จากค่าใดก็ได้ (แบบ ToIntegerOrInfinity ที่ติดลบ / NaN = 0) */
+  /** Integer ≥ 0 from any value (ToIntegerOrInfinity with negative / NaN = 0) */
   const toCount = (value) => {
     const n = NumberFn(value);
     return n > 0 ? floor(n) : 0;
@@ -428,7 +428,7 @@ function prelude(host, opText) {
     switch (typeof value) {
       case "string": return textUnits(value.length);
       case "object": break;
-      case "bigint": return isSmall(value) ? 1 : convUnits(value);   // เมธอดในตัวที่รับ BigInt อาจแปลงเป็น string (W²)
+      case "bigint": return isSmall(value) ? 1 : convUnits(value);   // builtins that take a BigInt may convert it to a string (W²)
       default: return 1;
     }
     if (value === null) return 1;
@@ -462,7 +462,7 @@ function prelude(host, opText) {
     return bytes >= 0 ? textUnits(bytes) : -1;
   }
 
-  /** ส่งยอดค้างให้ host (เกินยอดที่เหลือ → host ตอบ "f" = OUT_OF_GAS) */
+  /** Send the pending amount to the host (more than what remains → host replies "f" = OUT_OF_GAS) */
   function hostCall(act, op, payload) {
     if (dead) throw DEAD;
     const pending = act.pending;
@@ -474,30 +474,30 @@ function prelude(host, opText) {
     act.pending += amount;
     if (act.pending > act.budget) hostCall(act, OP.sync, "");
   }
-  /** คิดแก๊สตามจำนวนหน่วยให้ call ที่กำลังรัน (ไม่มี call = โค้ดของ VM เอง ไม่คิด) */
+  /** Charge gas by unit count to the running call (no call = the VM's own code, not charged) */
   function chargeUnits(units) {
     if (dead) throw DEAD;
     if (ACT !== null && units > 0 && BUILTIN_GAS !== 0) chargeGas(ACT, units * BUILTIN_GAS);
   }
 
-  // ---- BigInt: แก๊สตามงานของ CPU (เทสต์ 81) ----
-  // W = จำนวน word 64 bit ของค่าสัมบูรณ์ (อย่างน้อย 1) · ค่าที่ ≤ 512 bit ไม่คิดเพิ่ม → แก๊สของโปรแกรมทั่วไปเท่าเดิม
-  // ราคา (builtin ต่อหน่วย) เมื่อตัวตั้งหรือผลลัพธ์ > 512 bit (ขั้นต่ำ BIG_BASE = 16: ค่าวัดขนาด + จองหน่วยความจำ):
-  //   + −    16 (≤ 1024 bit) · 64 (ใหญ่กว่า)                        — คิดหลังทำ (ตัวตั้งไม่เกินเพดาน งานต่อครั้งจึงจำกัด)
-  //   ×      ⌈Wa·Wb / 4⌉                                            — คิดหลังทำ (≤ 128 × 128 word ≈ 0.1 ms)
-  //   ÷ %    ⌈max(1, Wa − Wb + 1) · Wb / 4⌉                         — คิดหลังทำ
-  //   **     ⌈Wr² / 4⌉ (Wr = word ของผลลัพธ์จาก bit × exponent)       — คิดก่อนคำนวณ: 2n ** 10n ** 9n หมดแก๊สทันที
-  //   << >>  ⌈Wr / 2⌉                                               — คิดก่อนคำนวณ
-  //   BigInt → string (ทุกฐาน) W² · string → BigInt W² (W = ⌈ความยาว / 19⌉) — คิดก่อนแปลง
-  // ผลเกิน BIG_BITS → RangeError: engine แปลง BigInt เป็น string เองได้หลายที่ที่ไม่ผ่านตัวนับ (เช่น ข้างในเมธอดในตัวที่ไม่ได้ห่อ)
-  //   เพดานทำให้งานที่หลุดตัวนับแบบใดก็ตามใช้เวลาไม่เกิน ~0.4 ms ต่อครั้ง (8192 bit) แทนที่จะเป็นวินาที (QuickJS รับได้ถึง ~1M bit)
-  // ขนาดวัดด้วย Number(x) (เร็วกว่าเทียบ BigInt) — ปัดเศษตรงขอบ 2^k ได้ แต่ได้ค่าเดียวกันทุกเครื่อง (wasm + IEEE 754)
+  // ---- BigInt: gas by CPU work (test 81) ----
+  // W = number of 64-bit words of the absolute value (at least 1) · values ≤ 512 bits cost nothing extra → gas for ordinary programs is unchanged
+  // Prices (builtin per unit) when an operand or the result is > 512 bits (minimum BIG_BASE = 16: size measurement + allocation):
+  //   + −    16 (≤ 1024 bits) · 64 (larger)                         — charged after (operands are within the cap, so work per op is bounded)
+  //   ×      ⌈Wa·Wb / 4⌉                                            — charged after (≤ 128 × 128 words ≈ 0.1 ms)
+  //   ÷ %    ⌈max(1, Wa − Wb + 1) · Wb / 4⌉                         — charged after
+  //   **     ⌈Wr² / 4⌉ (Wr = result words from bits × exponent)      — charged before computing: 2n ** 10n ** 9n runs out of gas at once
+  //   << >>  ⌈Wr / 2⌉                                               — charged before computing
+  //   BigInt → string (any radix) W² · string → BigInt W² (W = ⌈length / 19⌉) — charged before converting
+  // Result over BIG_BITS → RangeError: the engine converts BigInt to string by itself in many places the meter does not see (e.g. inside unwrapped builtins)
+  //   the cap bounds any such unmetered work to ~0.4 ms per op (8192 bits) instead of seconds (QuickJS accepts up to ~1M bits)
+  // Size is measured with Number(x) (faster than BigInt comparison) — may round at 2^k boundaries, but gives the same value on every machine (wasm + IEEE 754)
   const BIG_BITS = OP.bigBits;
   const SMALL_WORDS = 8;
   const BIG_BASE = 16;
-  const MAX_DIGITS = ceil(BIG_BITS * 0.30103) + 1;   // ตัวอักษรของเลขฐาน 10 ที่ยาวที่สุดที่ไม่เกินเพดาน (รวมเครื่องหมาย)
-  const MAX_UNITS = 4503599627370496;                // 2^52 — ค่าที่ใหญ่กว่านี้หมดแก๊สแน่นอนอยู่แล้ว
-  const CAP_MESSAGE = "BigInt ใหญ่เกิน " + BIG_BITS + " bit (1024 ไบต์)";
+  const MAX_DIGITS = ceil(BIG_BITS * 0.30103) + 1;   // characters of the longest base-10 number within the cap (sign included)
+  const MAX_UNITS = 4503599627370496;                // 2^52 — anything larger certainly runs out of gas anyway
+  const CAP_MESSAGE = "BigInt exceeds " + BIG_BITS + " bits (1024 bytes)";
   const SMALL_FLOAT = 2 ** 512;
   const TWO_32 = 4294967296;
   const SAFE = 9007199254740992;   // 2^53
@@ -509,16 +509,16 @@ function prelude(host, opText) {
   const log2 = MathObj.log2;
   const isInfinite = (n) => n === Infinity || n === -Infinity;
 
-  /** |x| < 2^512 (ตามค่า number ที่ปัดแล้ว) */
+  /** |x| < 2^512 (by the rounded number value) */
   function isSmall(x) {
     const n = NumberFn(x);
     return n < SMALL_FLOAT && n > -SMALL_FLOAT;
   }
-  /** จำนวน bit ของ |x|: ตรงทุกค่าที่ < 2^53 · ใหญ่กว่านั้นอาจเกินจริง 1 bit (number ปัดขึ้นเป็น 2^k) */
+  /** Bit count of |x|: exact for all values < 2^53 · larger values may be 1 bit too high (number rounds up to 2^k) */
   function bitsOf(x) {
     let n = NumberFn(x);
     let base = 0;
-    while (isInfinite(n)) {   // ≥ 2^1024: เลื่อนลงทีละ 1000 bit (ค่าไม่เกินเพดาน → ไม่เกิน 9 รอบ)
+    while (isInfinite(n)) {   // ≥ 2^1024: shift down 1000 bits at a time (value within the cap → at most 9 rounds)
       x = x >> SHIFT_STEP;
       base += 1000;
       n = NumberFn(x);
@@ -535,7 +535,7 @@ function prelude(host, opText) {
   function chargeBig(units) {
     if (units > 0) chargeUnits(units < MAX_UNITS ? ceil(units) : MAX_UNITS);
   }
-  /** BigInt → string: W² (ค่า ≤ 512 bit = 0) */
+  /** BigInt → string: W² (values ≤ 512 bits = 0) */
   function convUnits(x) {
     if (isSmall(x)) return 0;
     const words = wordsOf(x);
@@ -545,8 +545,8 @@ function prelude(host, opText) {
     const units = convUnits(x);
     if (units > 0) chargeBig(units);
   }
-  /** string → BigInt: W² จากความยาว (ฐาน 10 ≈ 19 ตัวอักษรต่อ word · ฐานอื่นคิดเท่ากัน)
-   *  ≤ 171 ตัวอักษร (9 word: ค่า 512 bit ยาว 155 หลัก) ไม่คิดเพิ่ม เหมือนค่า ≤ 512 bit ของ BigInt → string */
+  /** string → BigInt: W² from the length (base 10 ≈ 19 characters per word · other radixes charged the same)
+   * ≤ 171 characters (9 words: a 512-bit value is 155 digits) cost nothing extra, like values ≤ 512 bits for BigInt → string */
   function parseUnits(text) {
     const words = ceil(text.length / 19);
     return words > SMALL_WORDS + 1 ? words * words : 0;
@@ -558,9 +558,9 @@ function prelude(host, opText) {
     if (r < LIMIT && r > NLIMIT) return r;
     return overLimit();
   }
-  /** ผลที่ไม่รู้ว่าเล็ก: ตรวจเพดานเฉพาะค่าที่ใหญ่ (ทางเร็วของค่าเล็กไม่ต้องเทียบ BigInt) */
+  /** Result not known to be small: check the cap only for large values (fast path for small values skips the BigInt comparison) */
   const checked = (r) => (isSmall(r) ? r : capped(r));
-  /** + − ของค่าใหญ่: 16 (≤ ~1024 bit) / 64 */
+  /** + − on large values: 16 (≤ ~1024 bits) / 64 */
   function linearCost(a, r) {
     chargeBig(isInfinite(NumberFn(a)) || isInfinite(NumberFn(r)) ? 64 : BIG_BASE);
     return capped(r);
@@ -577,8 +577,8 @@ function prelude(host, opText) {
     chargeBig(units > BIG_BASE ? units : BIG_BASE);
   }
 
-  // ToPrimitive ตามมาตรฐาน (เรียก valueOf / toString / @@toPrimitive ของโปรแกรมครั้งเดียวเหมือน engine) →
-  // operator ได้ค่าพื้นฐานก่อน engine จะแปลง string ↔ BigInt เอง
+  // Standard ToPrimitive (calls the program's valueOf / toString / @@toPrimitive once, like the engine) →
+  // the operator gets primitives before the engine would convert string ↔ BigInt itself
   const isObject = (value) => (typeof value === "object" && value !== null) || typeof value === "function";
   function toPrimitive(value, hint) {
     const exotic = value[SymbolToPrimitive];
@@ -602,7 +602,7 @@ function prelude(host, opText) {
     }
     throw new TypeErrorFn("cannot convert object to primitive value");
   }
-  /** BigInt / object → ค่าที่ใช้เป็นชื่อ property (BigInt = แปลงเป็นเลขฐาน 10: W²) */
+  /** BigInt / object → value used as a property name (BigInt = converted to base 10: W²) */
   function toKey(key) {
     if (typeof key === "bigint") {
       chargeConv(key);
@@ -615,7 +615,7 @@ function prelude(host, opText) {
     }
     return key;
   }
-  /** ToString ของ engine (symbol → TypeError) โดยคิดค่าแปลง BigInt ก่อน */
+  /** Engine ToString (symbol → TypeError), charging BigInt conversion first */
   function toText(value) {
     switch (typeof value) {
       case "string": return value;
@@ -626,38 +626,38 @@ function prelude(host, opText) {
       default: return StringFn(value);
     }
   }
-  /** BigInt เทียบกับ string → engine แปลง string เป็น BigInt (W²) */
+  /** BigInt compared with string → the engine converts the string to BigInt (W²) */
   function parseCost(a, b) {
     if (typeof a === "bigint") {
       if (typeof b === "string") chargeBig(parseUnits(b));
     } else if (typeof b === "bigint" && typeof a === "string") chargeBig(parseUnits(a));
   }
 
-  // operator (gasmeter.js แปลง a OP b → __op(a, b)) · number ล้วนทำทันที · object → ToPrimitive ก่อนแบบ engine
+  // operators (gasmeter.js rewrites a OP b → __op(a, b)) · plain numbers run immediately · object → ToPrimitive first, like the engine
   function bigAdd(a, b) {
     if (typeof a === "number" && typeof b === "number") return a + b;
     if (isObject(a)) a = toPrimitive(a, "default");
     if (isObject(b)) b = toPrimitive(b, "default");
     if (typeof a === "bigint") {
       if (typeof b === "bigint") {
-        // ผลเล็กและ a เล็ก → b เล็กด้วย (|b| ≤ |a| + |a + b|)
+        // small result and small a → b is small too (|b| ≤ |a| + |a + b|)
         const r = a + b;
         return isSmall(r) && isSmall(a) ? r : linearCost(a, r);
       }
       if (typeof b === "string") chargeConv(a);
     } else if (typeof b === "bigint" && typeof a === "string") chargeConv(b);
     const r = a + b;
-    if (typeof r === "string") chargeUnits(textUnits(r.length));   // แบบ __str เดิม
+    if (typeof r === "string") chargeUnits(textUnits(r.length));   // as the old __str did
     return r;
   }
   function bigSub(a, b) {
     if (typeof a === "number" && typeof b === "number") return a - b;
     if (isObject(a)) {
       a = toPrimitive(a, "number");
-      if (typeof a === "symbol") return a - b;   // engine throw ก่อนแปลงตัวขวา
+      if (typeof a === "symbol") return a - b;   // the engine throws before converting the right operand
     }
     if (isObject(b)) b = toPrimitive(b, "number");
-    const r = a - b;   // BigInt − BigInt เท่านั้นที่ได้ BigInt (ผสมกับ number = TypeError)
+    const r = a - b;   // only BigInt − BigInt yields a BigInt (mixing with number = TypeError)
     return typeof r !== "bigint" || (isSmall(r) && isSmall(a)) ? r : linearCost(a, r);
   }
   function bigMul(a, b) {
@@ -667,8 +667,8 @@ function prelude(host, opText) {
       if (typeof a === "symbol") return a * b;
     }
     if (isObject(b)) b = toPrimitive(b, "number");
-    // ตัวตั้งไม่เกินเพดาน → งานต่อครั้ง ≤ 128 × 128 word (~0.1 ms) จึงคำนวณก่อนแล้วคิดตามขนาดได้
-    const r = a * b;   // ผลเล็ก → ตัวตั้งเล็กทั้งคู่ (หรือมี 0)
+    // operands are within the cap → work per op ≤ 128 × 128 words (~0.1 ms), so compute first and charge by size
+    const r = a * b;   // small result → both operands are small (or one is 0)
     return typeof r !== "bigint" || isSmall(r) ? r : productCost(a, b, r);
   }
   function bigDivide(a, b, modulo) {
@@ -677,7 +677,7 @@ function prelude(host, opText) {
       if (typeof a === "symbol") return modulo ? a % b : a / b;
     }
     if (isObject(b)) b = toPrimitive(b, "number");
-    // งาน = ผลหาร × ตัวหาร → ไม่คิดเมื่อตัวตั้งเล็กทั้งคู่ (a / b: ผลหารเล็ก + ตัวหารเล็ก = ตัวตั้งเล็ก)
+    // work = quotient × divisor → not charged when both operands are small (a / b: small quotient + small divisor = small operands)
     if (modulo) {
       const r = a % b;
       if (typeof r === "bigint" && !(isSmall(a) && isSmall(b))) quotientCost(a, b);
@@ -705,17 +705,17 @@ function prelude(host, opText) {
     if (typeof a !== "bigint" || typeof b !== "bigint") return a ** b;
     const base = NumberFn(a);
     const exponent = NumberFn(b);
-    // exponent < 2 (ติดลบ = RangeError) หรือฐาน 0 / ±1 → ผลไม่โต engine ทำเร็วเอง
+    // exponent < 2 (negative = RangeError) or base 0 / ±1 → the result does not grow; the engine is fast on its own
     if (exponent < 2 || (base < 2 && base > -2)) return a ** b;
     const bits = bitsOf(a);
-    const words = ceil((bits * exponent) / 64);   // ผลลัพธ์ ≤ bits × exponent bit
+    const words = ceil((bits * exponent) / 64);   // result ≤ bits × exponent bits
     if (words > SMALL_WORDS) {
       const units = (words * words) / 4;
       chargeBig(units > BIG_BASE ? units : BIG_BASE);
     }
-    // ผลลัพธ์ ≥ (bits − 1) × exponent + 1 bit (bits ของค่า ≥ 2^53 อาจเกินจริง 1 → หักเผื่อ) → เกินแน่นอนไม่ต้องคำนวณ
+    // result ≥ (bits − 1) × exponent + 1 bits (bits of values ≥ 2^53 may be 1 too high → allow for it) → certainly over the cap, no need to compute
     if ((bits - (base < SAFE && base > -SAFE ? 1 : 2)) * exponent + 1 > BIG_BITS) return overLimit();
-    return checked(a ** b);   // ถึงตรงนี้ผลลัพธ์ ≤ ~2 เท่าของเพดาน → งานจำกัด
+    return checked(a ** b);   // here the result is ≤ ~2× the cap → work is bounded
   }
   function bigShift(a, b, left) {
     if (isObject(a)) {
@@ -725,7 +725,7 @@ function prelude(host, opText) {
     if (isObject(b)) b = toPrimitive(b, "number");
     if (typeof a === "bigint" && typeof b === "bigint") {
       const value = NumberFn(a);
-      const amount = left ? NumberFn(b) : -NumberFn(b);   // จำนวน bit ที่เลื่อนไปทางซ้าย (>> ด้วยค่าติดลบ = เลื่อนซ้าย)
+      const amount = left ? NumberFn(b) : -NumberFn(b);   // number of bits shifted left (>> by a negative amount = left shift)
       if (value === 0) return left ? a << b : a >> b;
       if (amount > 0) {
         const bits = bitsOf(a);
@@ -734,7 +734,7 @@ function prelude(host, opText) {
         if (bits - (value < SAFE && value > -SAFE ? 0 : 1) + amount > BIG_BITS) return overLimit();
         return checked(left ? a << b : a >> b);
       }
-      if (!isSmall(a)) chargeBig(isInfinite(value) ? 64 : BIG_BASE);   // เลื่อนขวา = งานเส้นตรงตามตัวตั้ง
+      if (!isSmall(a)) chargeBig(isInfinite(value) ? 64 : BIG_BASE);   // right shift = work linear in the operand
     }
     return left ? a << b : a >> b;
   }
@@ -746,7 +746,7 @@ function prelude(host, opText) {
     if (typeof a === "number" && typeof b === "number") return a >> b;
     return bigShift(a, b, false);
   }
-  /** a < b ฯลฯ: ToPrimitive (number) ทั้งสองข้างก่อน แล้วคิดค่าแปลง string → BigInt */
+  /** a < b etc.: ToPrimitive (number) on both sides first, then charge string → BigInt conversion */
   function relational(a, b) {
     if (typeof a === "object" || typeof a === "function") a = isObject(a) ? toPrimitive(a, "number") : a;
     if (typeof b === "object" || typeof b === "function") b = isObject(b) ? toPrimitive(b, "number") : b;
@@ -780,7 +780,7 @@ function prelude(host, opText) {
     relational(a, b);
     return RELATION[0] >= RELATION[1];
   }
-  /** a == b: ชนิดเดียวกัน = เทียบตรง ๆ · object กับค่าพื้นฐาน → ToPrimitive (default) ตามมาตรฐาน */
+  /** a == b: same type = compare directly · object vs primitive → ToPrimitive (default) per the spec */
   function bigEq(a, b) {
     if (typeof a === typeof b) {
       if (typeof a === "string" && a.length === b.length) chargeTextCompare(a.length);
@@ -793,7 +793,7 @@ function prelude(host, opText) {
     return a == b;
   }
   const bigNe = (a, b) => !bigEq(a, b);
-  /** a === b · a !== b: string ยาวเท่ากัน = engine เทียบทีละตัวอักษร (ความยาวต่างกัน = รู้ทันที) */
+  /** a === b · a !== b: equal-length strings = the engine compares character by character (different lengths = known at once) */
   function strictEq(a, b) {
     if (typeof a === "string" && typeof b === "string" && a.length === b.length) chargeTextCompare(a.length);
     return a === b;
@@ -803,49 +803,49 @@ function prelude(host, opText) {
     if (typeof value === "string" && value.length > CHUNK) chargeUnits((textUnits(value.length) - 1) * cases);
     return value;
   }
-  /** เทียบ string: 32 ตัวอักษรแรกรวมในแก๊สของ operator แล้ว ที่เกินคิด 1 หน่วยต่อ 32 ตัวอักษร (โปรแกรมทั่วไปแก๊สเท่าเดิม) */
+  /** String comparison: the first 32 characters are included in the operator's gas; beyond that, 1 unit per 32 characters (ordinary programs pay the same gas) */
   function chargeTextCompare(length) {
     if (length > CHUNK) chargeUnits(textUnits(length) - 1);
   }
-  /** k in o (o ไม่ใช่ object → TypeError ก่อนแปลง k แบบ engine) */
+  /** k in o (o not an object → TypeError before converting k, like the engine) */
   function bigIn(key, object) {
     if (!isObject(object)) return key in object;
     return toKey(key) in object;
   }
-  /** ค่าที่ฟังก์ชันของโปรแกรมคืนเป็น BigInt ใหญ่ → คิดค่าแปลงเป็น string ไว้ก่อน (ผู้เรียกอาจเป็น engine เช่น valueOf / toString / getter) */
+  /** A large BigInt returned by a program function → precharge its string conversion (the caller may be the engine, e.g. valueOf / toString / getter) */
   function bigReturn(value) {
     chargeConv(value);
     return value;
   }
   const COMPOUND_OPS = { "+": bigAdd, "-": bigSub, "*": bigMul, "/": bigDiv, "%": bigMod, "**": bigPow, "<<": bigShl, ">>": bigShr };
-  /** o[k] op= y เมื่อ o / k เป็นนิพจน์ซับซ้อน: อ่านค่าเดิมก่อนคำนวณ y ตามมาตรฐาน (y ส่งมาเป็นฟังก์ชัน) */
+  /** o[k] op= y when o / k are complex expressions: read the old value before computing y, per the spec (y is passed as a function) */
   function bigCompound(object, key, symbol, rhs) {
     let name = toKey(key);
-    if (typeof name === "bigint") name = StringFn(name);   // แปลงครั้งเดียว (คิดแล้วใน toKey)
+    if (typeof name === "bigint") name = StringFn(name);   // convert once (already charged in toKey)
     const old = object[name];
     const result = COMPOUND_OPS[symbol](old, rhs());
     object[name] = result;
     return result;
   }
 
-  // ---- เมธอดในตัว: ห่อของจริงไว้ (ของเดิมอยู่ใน closure นี้เท่านั้น โค้ดของโปรแกรมเอื้อมไม่ถึง) ----
-  // สูตรทั่วไป: ก่อนเรียก = ขนาดของ this + ทุก argument (+ ขนาดที่รู้ล่วงหน้า) · หลังเรียก = ขนาดของผลลัพธ์
-  // เรียกทางไหนก็คิดเท่ากัน: a.join() · Array.prototype.join.call(a) · Reflect.apply(…) · const j = a.join · แปลง array เป็น string โดยนัย
-  // (Array.prototype.toString / ToPrimitive เรียก this.join → ตัวที่ห่อแล้ว)
-  const WRAPPED = new WeakMapFn();     // ตัวห่อ → ของจริง (Function.prototype.toString แสดงของจริง)
-  const WRAPPER_OF = new WeakMapFn();  // ของจริง → ตัวห่อ (ฟังก์ชันเดียวกันใน 2 ที่ เช่น trimLeft / trimStart ได้ตัวห่อเดียวกัน)
-  // argument ได้ไม่เกิน 65,535 ตัว (เกิน = engine throw RangeError เอง) → คิดไม่เกินนั้น
+  // ---- Builtin methods: wrap the originals (the originals live only in this closure, out of reach of program code) ----
+  // General formula: before the call = size of this + every argument (+ any size known in advance) · after the call = size of the result
+  // Every call path costs the same: a.join() · Array.prototype.join.call(a) · Reflect.apply(…) · const j = a.join · implicit array-to-string conversion
+  // (Array.prototype.toString / ToPrimitive call this.join → the wrapped one)
+  const WRAPPED = new WeakMapFn();     // wrapper → original (Function.prototype.toString shows the original)
+  const WRAPPER_OF = new WeakMapFn();  // original → wrapper (one function in 2 places, e.g. trimLeft / trimStart, gets one wrapper)
+  // at most 65,535 arguments (more = the engine throws RangeError itself) → charge no more than that
   const MAX_ARGS = 65536;
   const listUnits = (list) => {
     const n = list !== null && typeof list === "object" ? toCount(list.length) : 0;
     return n < MAX_ARGS ? n : MAX_ARGS;
   };
-  // ขนาดที่รู้ก่อนสร้างผลลัพธ์ (ค่าที่อ่านแล้วถูกใส่กลับใน args → engine เห็นค่าเดียวกับที่คิดแก๊ส)
+  // Sizes known before the result is built (values already read are put back into args → the engine sees the same values gas was charged for)
   const EXPECT = new WeakMapFn();
   const expect = (fn, measure) => apply(wmSet, EXPECT, [fn, measure]);
   /**
-   * ตัวเลขใน args[index] → ToNumber ครั้งเดียว (valueOf ของโปรแกรมรันครั้งเดียว) แล้วใส่ผลกลับให้ engine ใช้ค่าเดียวกัน
-   * คืนจำนวนเต็ม ≥ 0 สำหรับคิดแก๊ส · BigInt / Symbol ไม่แตะ (engine throw TypeError เอง) · ค่าติดลบ / ใหญ่เกินส่งต่อให้ engine throw RangeError
+   * Number in args[index] → ToNumber once (the program's valueOf runs once), then put the result back so the engine uses the same value
+   * Returns an integer ≥ 0 for gas · BigInt / Symbol untouched (the engine throws TypeError itself) · negative / too-large values are passed on for the engine to throw RangeError
    */
   function countArg(args, index) {
     if (index >= args.length) return 0;
@@ -874,7 +874,7 @@ function prelude(host, opText) {
   };
   if (BufferProto.resize) expect(BufferProto.resize, resizeTo);
   if (SharedProto?.grow) expect(SharedProto.grow, resizeTo);
-  // คิดแทนสูตรทั่วไป (ไม่นับ this / ตัวอื่น): apply / construct คัดลอก array ของ argument
+  // Replaces the general formula (this / other arguments not counted): apply / construct copy the argument array
   const MEASURE = new WeakMapFn();
   apply(wmSet, MEASURE, [Function.prototype.apply, (self, args) => listUnits(args[1])]);
   apply(wmSet, MEASURE, [Reflect.apply, (self, args) => 1 + listUnits(args[2])]);
@@ -894,7 +894,7 @@ function prelude(host, opText) {
       wrapper = { [name](...args) {
         if (dead) throw DEAD;
         const metering = ACT !== null && BUILTIN_GAS !== 0;
-        let prepaid = 0;   // ขนาดผลลัพธ์ที่คิดล่วงหน้าแล้ว (repeat / padStart …) → หลังทำคิดเฉพาะส่วนที่เกิน
+        let prepaid = 0;   // result size already precharged (repeat / padStart …) → afterwards charge only the excess
         if (metering) {
           let units;
           if (measure !== undefined) units = measure(this, args);
@@ -909,23 +909,23 @@ function prelude(host, opText) {
           chargeUnits(units);
         }
         const result = apply(original, this, args);
-        // apply / construct: ผลลัพธ์คือผลของฟังก์ชันปลายทาง (คิดเองแล้วถ้าเป็นเมธอดในตัว) → ไม่คิดซ้ำ
+        // apply / construct: the result is the target function's result (already charged if it is a builtin) → do not charge twice
         if (metering && measure === undefined) chargeUnits(sizeOf(result) - prepaid);
         return result;
       } }[name];
       defineProperty(wrapper, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
-      const native = apply(wmGet, WRAPPED, [original]);   // ตัวที่เขียนใหม่ (join …) → แสดงของจริงของ engine
+      const native = apply(wmGet, WRAPPED, [original]);   // rewritten ones (join …) → show the engine's original
       apply(wmSet, WRAPPED, [wrapper, native === undefined ? original : native]);
       apply(wmSet, WRAPPER_OF, [original, wrapper]);
     }
     defineProperty(target, key, { value: wrapper, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
   }
 
-  // ---- เมธอดในตัวที่ engine แปลงค่าที่อ่านจาก property เป็น string เอง (BigInt ใน array / message ของ error …) ----
-  // เขียนใหม่ตามมาตรฐานทีละขั้น (อ่านแต่ละค่าครั้งเดียว) แล้วคิดค่าแปลง BigInt ก่อน · ตัวห่อ (meterMethod) คิดแก๊สตามขนาดเท่าเดิม
+  // ---- Builtins where the engine itself converts values read from properties to strings (BigInts in arrays / error messages …) ----
+  // Reimplemented step by step per the spec (each value read once), charging BigInt conversion first · the wrapper (meterMethod) charges by size as before
   const nativeJoin = ArrayProto.join;
   const toLength = (value) => {
-    const n = +value;   // BigInt → TypeError เหมือน ToLength
+    const n = +value;   // BigInt → TypeError, like ToLength
     if (!(n > 0)) return 0;
     return n < MAX_INDEX ? floor(n) : MAX_INDEX;
   };
@@ -971,25 +971,25 @@ function prelude(host, opText) {
             const close = iterator.return;
             if (close !== undefined && close !== null) apply(close, iterator, []);
           } catch {
-            // error เดิมสำคัญกว่า (ตามมาตรฐาน)
+            // the original error takes precedence (per the spec)
           }
           throw error;
         }
       }
     } }.fromEntries],
-    // flat: engine ไล่ array ซ้อนเองทุกชั้น (ผลลัพธ์อาจเล็กแต่งานเท่าจำนวนสมาชิกทุกชั้น) → ทำตามมาตรฐานเอง คิด 1 หน่วยต่อสมาชิกที่ไล่
+    // flat: the engine walks every nested level itself (result may be small but work equals elements at all levels) → follow the spec ourselves, 1 unit per element visited
     [ArrayProto, { flat(depth) {
       const source = requireObject(this);
       const length = toLength(source.length);
       let limit = 1;
       if (depth !== undefined) {
-        limit = +depth;   // BigInt → TypeError เหมือน ToIntegerOrInfinity
+        limit = +depth;   // BigInt → TypeError, like ToIntegerOrInfinity
         limit = limit !== limit || limit < 0 ? 0 : limit === Infinity ? Infinity : floor(limit);
       }
       const out = [];
       let n = 0;
       const flatten = (array, arrayLength, level) => {
-        chargeUnits(FLAT_ARRAY_UNITS + arrayLength);   // ต่อ array ที่ไล่ (ค่าเรียก + อ่านความยาว) + ต่อสมาชิก
+        chargeUnits(FLAT_ARRAY_UNITS + arrayLength);   // per array visited (call + length read) + per element
         for (let k = 0; k < arrayLength; k++) {
           if (!(k in array)) continue;
           const element = array[k];
@@ -1000,9 +1000,9 @@ function prelude(host, opText) {
       flatten(source, length, limit);
       return out;
     } }.flat],
-    // JSON.stringify: QuickJS ตรวจการวนด้วยการไล่ stack ของ object ที่ซ้อนอยู่ → งาน ≈ ความลึก² (300 ชั้น ≈ 0.8 ms ต่อครั้ง)
-    //   ใส่ replacer ของ VM: คิด 1 หน่วย + ความลึก ÷ 8 ต่อ object ที่ถูกแปลง (replacer ของโปรแกรมยังถูกเรียกแบบเดิม)
-    //   replacer แบบ array (รายชื่อ property) → แปลงเป็น object ใหม่ที่มีเฉพาะ property ตามลำดับรายชื่อ (ผลเหมือน engine)
+    // JSON.stringify: QuickJS detects cycles by walking the stack of nested objects → work ≈ depth² (300 levels ≈ 0.8 ms per call)
+    //   install a VM replacer: 1 unit + depth ÷ 8 per object converted (the program's replacer is still called as before)
+    //   array replacer (property list) → converted to a new object holding only those properties in list order (same result as the engine)
     [JSON, { stringify(value, replacer, space) {
       const user = typeof replacer === "function" ? replacer : null;
       let names = null;
@@ -1026,7 +1026,7 @@ function prelude(host, opText) {
       const meter = function (key, item) {
         let result = user === null ? item : apply(user, this, [key, item]);
         if (result === null || typeof result !== "object") {
-          chargeUnits(2);   // ต่อค่าที่ถูกแปลง (เรียก replacer ของ VM + แปลงค่า)
+          chargeUnits(2);   // per value converted (VM replacer call + conversion)
         } else {
           const depth = (isObject(this) ? apply(wmGet, depths, [this]) ?? 0 : 0) + 1;
           chargeUnits(4 + floor(depth / 8));
@@ -1045,20 +1045,20 @@ function prelude(host, opText) {
       };
       return apply(jsonStringify, JSON, [value, meter, space]);
     } }.stringify],
-    // JSON.parse: งานต่อตัวอักษรสูงกว่าการคัดลอก → คิดเพิ่ม 1 หน่วยต่อ 32 ตัวอักษรก่อนแปลง (แปลงข้อความครั้งเดียว ส่งต่อให้ engine)
+    // JSON.parse: per-character work exceeds copying → 1 extra unit per 32 characters before parsing (text converted once, then passed to the engine)
     [JSON, { parse(text, reviver) {
       const source = toText(text);
       chargeUnits(textUnits(source.length));
       return reviver === undefined ? apply(jsonParse, JSON, [source]) : apply(jsonParse, JSON, [source, reviver]);
     } }.parse],
-    // normalize: ตารางแปลงของ Unicode ช้ากว่าการคัดลอกราว 10 เท่า → คิดเพิ่ม 8 หน่วยต่อ 32 ตัวอักษร
+    // normalize: Unicode mapping tables are about 10× slower than copying → 8 extra units per 32 characters
     [String.prototype, { normalize(form) {
       if (this === null || this === undefined) throw new TypeErrorFn("not an object");
       const self = toText(this);
       chargeUnits(textUnits(self.length) * 8);
       return form === undefined ? apply(stringNormalize, self, []) : apply(stringNormalize, self, [form]);
     } }.normalize],
-    // Map / Set: key ที่เป็น string ต้อง hash ทั้งข้อความทุกครั้ง (20,000 ตัวอักษร ≈ 25 µs ต่อครั้ง) → คิดตามความยาวของ key
+    // Map / Set: string keys are hashed in full on every call (20,000 characters ≈ 25 µs per call) → charge by key length
     [MapProto, { get(key) { chargeKey(key, 1); return apply(mapGet, this, [key]); } }.get],
     [MapProto, { has(key) { chargeKey(key, 1); return apply(mapHas, this, [key]); } }.has],
     [MapProto, { set(key, value) { chargeKey(key, 2); return apply(mapSet, this, [key, value]); } }.set],
@@ -1100,7 +1100,7 @@ function prelude(host, opText) {
   const mapHas = Map.prototype.has;
   const mapSet = Map.prototype.set;
   const mapDelete = Map.prototype.delete;
-  /** key ของ Map / Set ที่เป็น string ยาว: 32 ตัวอักษรแรกรวมในแก๊สของการเรียกแล้ว ที่เกินคิด factor หน่วยต่อ 32 ตัวอักษร */
+  /** Long string keys of Map / Set: the first 32 characters are included in the call's gas; beyond that, factor units per 32 characters */
   function chargeKey(key, factor) {
     if (typeof key === "string" && key.length > CHUNK) chargeUnits((textUnits(key.length) - 1) * factor);
   }
@@ -1117,13 +1117,13 @@ function prelude(host, opText) {
   };
   const isStringObject = (value) => hasBrand(stringValueOf, value);
   const isNumberObject = (value) => hasBrand(numberValueOf, value);
-  /** String / Number / Boolean / BigInt object: engine แปลงเป็นค่าพื้นฐานเอง ไม่ไล่ property */
+  /** String / Number / Boolean / BigInt objects: the engine converts them to primitives itself without walking properties */
   const isBoxed = (value) => isStringObject(value) || isNumberObject(value) || hasBrand(booleanValueOf, value) || hasBrand(bigintValueOf, value);
-  /** ลำดับปริยายของ sort: เทียบแบบ string (คิดค่าแปลง BigInt ทุกครั้งที่ engine จะแปลง) */
+  /** Default sort order: string comparison (charging BigInt conversion every time the engine converts) */
   function compareText(x, y) {
     const a = toText(x);
     const b = toText(y);
-    // การเทียบแต่ละครั้งของ sort ปริยาย = 1 หน่วย + ความยาวที่ต้องไล่ (ตัวห่อของ sort คิดแค่ขนาด array ครั้งเดียว ไม่ครอบ n log n ครั้ง)
+    // each default sort comparison = 1 unit + length scanned (the sort wrapper charges array size once, not the n log n comparisons)
     const length = a.length < b.length ? a.length : b.length;
     chargeUnits(length > CHUNK ? textUnits(length) + 1 : 2);
     return a < b ? -1 : a > b ? 1 : 0;
@@ -1134,7 +1134,7 @@ function prelude(host, opText) {
     const name = impl.name;
     const original = target[name];
     defineProperty(impl, "length", { value: original.length, writable: false, enumerable: false, configurable: true });
-    apply(wmSet, WRAPPED, [impl, original]);   // Function.prototype.toString แสดงของจริง
+    apply(wmSet, WRAPPED, [impl, original]);   // Function.prototype.toString shows the original
     define(target, name, impl);
   }
 
@@ -1175,7 +1175,7 @@ function prelude(host, opText) {
     if (target === null) continue;
     for (let j = 0; j < names.length; j++) meterMethod(target, names[j]);
   }
-  // Function.prototype.toString: ตัวห่อแสดงเป็นของจริง ("[native code]")
+  // Function.prototype.toString: wrappers show as the original ("[native code]")
   define(Function.prototype, "toString", { toString() {
     if (dead) throw DEAD;
     const original = typeof this === "function" ? apply(wmGet, WRAPPED, [this]) : undefined;
@@ -1184,10 +1184,10 @@ function prelude(host, opText) {
     return result;
   } }.toString);
 
-  // ---- spread / rest ของ array: [...a] · f(...a) · new F(...a) · const [x, ...r] = a → __spread(a) ----
-  // ล็อก iterator ในตัวของ array / string / Set / Map (แก้ไม่ได้) → รู้แน่ว่า engine จะคัดลอกกี่สมาชิก
-  // array / string / Set / Map ธรรมดา = คิดตามขนาดแล้วให้ engine คัดลอกแบบเร็วเหมือนเดิม
-  // อย่างอื่น (iterator ที่สร้างไว้ก่อน / generator / Proxy / ตัวที่มี [Symbol.iterator] ของตัวเอง) = วนเองทีละสมาชิก คิด 1 หน่วยต่อสมาชิก
+  // ---- Array spread / rest: [...a] · f(...a) · new F(...a) · const [x, ...r] = a → __spread(a) ----
+  // Lock the builtin iterators of array / string / Set / Map (cannot be changed) → we know exactly how many elements the engine will copy
+  // plain array / string / Set / Map = charge by size, then let the engine do its fast copy as before
+  // anything else (pre-made iterators / generators / Proxy / objects with their own [Symbol.iterator]) = iterate ourselves, 1 unit per element
   const fixProperty = (target, key) => {
     const desc = getOwnPropertyDescriptor(target, key);
     defineProperty(target, key, { value: desc.value, writable: false, enumerable: desc.enumerable, configurable: false });
@@ -1208,7 +1208,7 @@ function prelude(host, opText) {
   }
   function spreadValue(value) {
     if (dead) throw DEAD;
-    if (value === null || (typeof value !== "object" && typeof value !== "function" && typeof value !== "string")) return value;   // engine throw "not iterable" เอง
+    if (value === null || (typeof value !== "object" && typeof value !== "function" && typeof value !== "string")) return value;   // the engine throws "not iterable" itself
     const units = spreadUnits(value);
     if (units >= 0) {
       chargeUnits(units);
@@ -1226,9 +1226,9 @@ function prelude(host, opText) {
     }
   }
 
-  // ---- constructor ที่จองหน่วยความจำตามตัวเลขที่ส่งมา ----
-  // ห่อด้วย Proxy แล้วชี้ global + prototype.constructor มาที่ตัวห่อ (subclass / species ผ่านตัวห่อด้วย)
-  // Array(n) ไม่ต้องห่อ: QuickJS ไม่จองที่ให้สมาชิกจนกว่าจะใส่ค่า (fill / map / spread … คิดตาม length อยู่แล้ว)
+  // ---- Constructors that allocate memory based on a numeric argument ----
+  // Wrapped in a Proxy, with the global + prototype.constructor pointing at the wrapper (subclasses / species go through the wrapper too)
+  // Array(n) needs no wrapper: QuickJS allocates no element storage until values are set (fill / map / spread … already charge by length)
   function meterConstructor(name, before, after, callable = false) {
     const Ctor = G[name];
     if (typeof Ctor !== "function") return;
@@ -1241,7 +1241,7 @@ function prelude(host, opText) {
         return object;
       },
     };
-    // เรียกแบบไม่มี new: typed array / ArrayBuffer throw TypeError เอง · RegExp(…) สร้างได้ → คิดแบบเดียวกัน
+    // called without new: typed arrays / ArrayBuffer throw TypeError themselves · RegExp(…) constructs → charged the same way
     if (callable) {
       handler.apply = (target, self, args) => {
         if (dead) throw DEAD;
@@ -1259,7 +1259,7 @@ function prelude(host, opText) {
     let max = length;
     const options = args[1];
     if (options !== null && typeof options === "object") {
-      const limit = [options.maxByteLength];   // อ่านครั้งเดียว แล้วส่งค่าที่อ่านต่อให้ engine
+      const limit = [options.maxByteLength];   // read once, then pass the read value on to the engine
       if (limit[0] !== undefined) {
         max = countArg(limit, 0);
         args[1] = { maxByteLength: limit[0] };
@@ -1270,7 +1270,7 @@ function prelude(host, opText) {
   };
   meterConstructor("ArrayBuffer", bufferUnits);
   if (SharedArrayBufferFn) meterConstructor("SharedArrayBuffer", bufferUnits);
-  // BigInt64Array / BigUint64Array: ใส่ string ลงช่อง (ta[i] = "999…") = engine แปลง string เป็น BigInt เองโดยไม่ผ่านตัวนับ → ปิด
+  // BigInt64Array / BigUint64Array: storing a string into a slot (ta[i] = "999…") makes the engine convert string to BigInt unmetered → disabled
   delete G.BigInt64Array;
   delete G.BigUint64Array;
   const TYPED_NAMES = ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
@@ -1282,29 +1282,29 @@ function prelude(host, opText) {
     const width = Ctor.BYTES_PER_ELEMENT;
     meterConstructor(TYPED_NAMES[i], (args) => {
       const source = args[0];
-      if (source !== null && typeof source === "object") return 0;   // คัดลอกจาก array / iterable → คิดหลังสร้าง
+      if (source !== null && typeof source === "object") return 0;   // copying from an array / iterable → charged after construction
       const length = countArg(args, 0);
       return length * width <= BYTES_MAX ? length : 0;
     }, (args, object) => {
       const source = args[0];
-      if (source === null || typeof source !== "object" || isBuffer(source)) return 0;   // มุมมองบน buffer เดิม = ไม่คัดลอก
+      if (source === null || typeof source !== "object" || isBuffer(source)) return 0;   // a view over an existing buffer = no copy
       return apply(typedLength, object, []);
     });
   }
-  // ตัวที่รับ iterable แล้วคัดลอกทุกสมาชิก: แทน iterable ด้วยผลของ __spread (คิดแก๊สแล้ว)
+  // Constructors that take an iterable and copy every element: replace the iterable with the result of __spread (already charged)
   const spreadFirst = (args) => {
     if (args.length && args[0] !== null && args[0] !== undefined) args[0] = spreadValue(args[0]);
     return 0;
   };
   const COLLECTIONS = ["Set", "Map", "WeakSet", "WeakMap"];
   for (let i = 0; i < COLLECTIONS.length; i++) meterConstructor(COLLECTIONS[i], spreadFirst);
-  meterConstructor("AggregateError", (args) => spreadFirst(args) + bigArgUnits(args[1]), undefined, true);   // + message (แปลงเป็น string)
-  // ---- regular expression: ปิดทั้งหมด ----
-  // engine ของ QuickJS backtrack ได้แบบ exponential (/(a+)+$/ กับ "aaa…b") และไม่มีทางรู้งานล่วงหน้า → คิดแก๊สให้ตรงกับ CPU ไม่ได้
-  // ทางที่สร้าง / รัน regex: RegExp(…) · match / matchAll / search (สร้างจาก string) · exec / test / Symbol.* ของ RegExp.prototype
-  //   (Symbol.split / matchAll สร้าง regex ใหม่จาก object ใดก็ได้ผ่าน species) · literal ถูก gasmeter.js ปฏิเสธตอน deploy
+  meterConstructor("AggregateError", (args) => spreadFirst(args) + bigArgUnits(args[1]), undefined, true);   // + message (converted to string)
+  // ---- Regular expressions: fully disabled ----
+  // QuickJS's engine can backtrack exponentially (/(a+)+$/ against "aaa…b") and the work cannot be known in advance → gas cannot match CPU
+  // Ways to create / run a regex: RegExp(…) · match / matchAll / search (built from a string) · exec / test / Symbol.* of RegExp.prototype
+  //   (Symbol.split / matchAll build a new regex from any object via species) · literals are rejected by gasmeter.js at deploy
   const noRegExp = () => {
-    throw new TypeErrorFn("regular expression ใช้ในโปรแกรมไม่ได้ (เวลาทำงานไม่แน่นอน — ใช้ indexOf / includes / split แทน)");
+    throw new TypeErrorFn("regular expressions are not allowed in programs (unbounded run time — use indexOf / includes / split instead)");
   };
   const RegExpFn = RegExp;
   const LockedRegExp = new ProxyFn(RegExpFn, { apply: noRegExp, construct: noRegExp });
@@ -1329,9 +1329,9 @@ function prelude(host, opText) {
     }
   }
 
-  // ---- BigInt ที่ engine แปลงเป็น string เองในตัวเมธอด / ค่า BigInt ที่เมธอดในตัวคืนให้ engine ----
-  // argument ที่เป็น BigInt ใหญ่ = W² (แปลงเป็นชื่อ property / string) · ผลที่เป็น BigInt ใหญ่ = W² (เผื่อผู้เรียกเป็น engine
-  //   เช่น { toString: Array.prototype.pop } · Map.prototype.get.bind(…)) · ค่า ≤ 512 bit ไม่คิด → แก๊สเท่าเดิม
+  // ---- BigInts the engine converts to strings inside methods / BigInt values that builtins return to the engine ----
+  // Large BigInt arguments = W² (converted to a property name / string) · large BigInt results = W² (in case the caller is the engine,
+  //   e.g. { toString: Array.prototype.pop } · Map.prototype.get.bind(…)) · values ≤ 512 bits not charged → gas unchanged
   function bigArgUnits(value) {
     return typeof value === "bigint" ? convUnits(value) : 0;
   }
@@ -1370,15 +1370,15 @@ function prelude(host, opText) {
     const names = GUARDED[i][1];
     for (let j = 0; j < names.length; j++) guardBigInt(GUARDED[i][0], names[j]);
   }
-  // parseInt / parseFloat: global กับ Number.* เป็นตัวเดียวกัน (ตามมาตรฐาน)
+  // parseInt / parseFloat: the global and Number.* are the same function (per the spec)
   define(NumberFn, "parseInt", guardBigInt(G, "parseInt"));
   define(NumberFn, "parseFloat", guardBigInt(G, "parseFloat"));
-  // String(x) / new String(x) · Symbol(x) · Error(x) / new Error(x) …: argument แปลงเป็น string
+  // String(x) / new String(x) · Symbol(x) · Error(x) / new Error(x) …: the argument is converted to a string
   meterConstructor("String", (args) => bigArgUnits(args[0]), undefined, true);
   meterConstructor("Symbol", (args) => bigArgUnits(args[0]), undefined, true);
   const ERROR_NAMES = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError", "URIError", "InternalError"];
   for (let i = 0; i < ERROR_NAMES.length; i++) meterConstructor(ERROR_NAMES[i], (args) => bigArgUnits(args[0]), undefined, true);
-  // BigInt(x): string → W² ก่อนแปลง · ผลเกินเพดาน = RangeError · ผลใหญ่ = W² (เผื่อผู้เรียกเป็น engine)
+  // BigInt(x): string → W² before converting · result over the cap = RangeError · large result = W² (in case the caller is the engine)
   function toBigIntInput(value) {
     if (isObject(value)) value = toPrimitive(value, "number");
     if (typeof value === "string") chargeBig(parseUnits(value));
@@ -1397,7 +1397,7 @@ function prelude(host, opText) {
   apply(wmSet, WRAPPED, [LockedBigInt, BigIntFn]);
   define(G, "BigInt", LockedBigInt);
   define(BigIntProto, "constructor", LockedBigInt);
-  // BigInt.asIntN / asUintN(bits, x): ผลยาวได้ถึง bits → คิดก่อน · asUintN ของค่าติดลบ = bits เต็ม (เกินเพดาน = RangeError)
+  // BigInt.asIntN / asUintN(bits, x): the result can be up to bits long → charged first · asUintN of a negative value = full bits (over the cap = RangeError)
   const AS_N = [["asIntN", true], ["asUintN", false]];
   for (let i = 0; i < AS_N.length; i++) {
     const name = AS_N[i][0];
@@ -1405,7 +1405,7 @@ function prelude(host, opText) {
     const original = BigIntFn[name];
     const wrapper = { [name](bits, bigint) {
       if (dead) throw DEAD;
-      const n = +bits;   // ToIndex (BigInt → TypeError) · ค่าที่แปลงแล้วส่งต่อให้ engine ตรวจช่วงเอง
+      const n = +bits;   // ToIndex (BigInt → TypeError) · the converted value is passed on for the engine to range-check
       const value = toBigIntInput(bigint);
       if (typeof value === "bigint" && n > 0 && n <= MAX_INDEX) {
         const words = ceil((n < BIG_BITS + 64 ? n : BIG_BITS + 64) / 64);
@@ -1422,7 +1422,7 @@ function prelude(host, opText) {
     apply(wmSet, WRAPPED, [wrapper, original]);
     define(BigIntFn, name, wrapper);
   }
-  // DataView.setBigInt64 / setBigUint64(i, x): string → BigInt ในตัว engine → แปลงเอง (คิดแก๊ส) ก่อนส่งต่อ
+  // DataView.setBigInt64 / setBigUint64(i, x): string → BigInt happens inside the engine → convert ourselves (charged) before passing on
   const DV_SETTERS = ["setBigInt64", "setBigUint64"];
   for (let i = 0; i < DV_SETTERS.length; i++) {
     const name = DV_SETTERS[i];
@@ -1437,14 +1437,14 @@ function prelude(host, opText) {
     define(DataView.prototype, name, wrapper);
   }
 
-  // ---- Proxy ที่โปรแกรมสร้าง: จดไว้ (ownKeys / length ของ Proxy ตอบไม่เหมือนกันได้ทุกครั้งที่ถาม) ----
+  // ---- Proxies created by programs: tracked (a Proxy's ownKeys / length may answer differently every time) ----
   const PROXIES = new WeakSetFn();
   const revocable = { revocable(target, handler) {
     const result = apply(proxyRevocable, ProxyFn, [target, handler]);
     apply(wsAdd, PROXIES, [result.proxy]);
     return result;
   } }.revocable;
-  define(ProxyFn, "revocable", revocable);   // ของเดิมเก็บไว้ใน proxyRevocable เท่านั้น
+  define(ProxyFn, "revocable", revocable);   // the original is kept only in proxyRevocable
   define(G, "Proxy", new ProxyFn(ProxyFn, {
     construct(target, args, newTarget) {
       const proxy = construct(target, args, newTarget);
@@ -1453,16 +1453,16 @@ function prelude(host, opText) {
     },
   }));
 
-  /** a + b · a += b → ผลเป็น string = คิดตามความยาว (QuickJS ต่อแบบ rope แล้วคัดลอกจริงตอนใช้งาน — ก้อนใหญ่จึงต้องคิดตอนต่อ) */
+  /** a + b · a += b → string result = charged by length (QuickJS concatenates as a rope and copies on use — so large pieces must be charged at concatenation) */
   function meterString(value) {
     if (typeof value === "string") chargeUnits(textUnits(value.length));
     return value;
   }
-  /** { ...x } และ const { a, ...rest } = x → คิดตามจำนวน property ที่จะถูกคัดลอก */
+  /** { ...x } and const { a, ...rest } = x → charged by the number of properties to be copied */
   function meterProps(value) {
     if (value === null || value === undefined) return value;
     if (typeof value === "string") {
-      chargeUnits(value.length);   // { ..."abc" } = 1 property ต่อตัวอักษร
+      chargeUnits(value.length);   // { ..."abc" } = 1 property per character
       return value;
     }
     if (typeof value !== "object" && typeof value !== "function") return value;
@@ -1472,7 +1472,7 @@ function prelude(host, opText) {
     else chargeUnits(keys(value).length);
     return value;
   }
-  /** Proxy: คัดลอกเองทีละ property (คิดแก๊สตามรายการที่ ownKeys ตอบจริง) แล้วให้ engine คัดลอกสำเนาธรรมดาต่อ */
+  /** Proxy: copy property by property ourselves (gas by the list ownKeys actually returns), then let the engine copy the plain copy */
   function copyProxy(proxy) {
     const list = ownKeys(proxy);
     const length = list.length;
@@ -1488,7 +1488,7 @@ function prelude(host, opText) {
     return out;
   }
 
-  // ---- API ของแต่ละ call ----
+  // ---- Per-call API ----
   function makeMap(...parts) {
     const key = {};
     apply(wmSet, MAP_PARTS, [key, parts]);
@@ -1546,12 +1546,12 @@ function prelude(host, opText) {
   }
 
   /**
-   * รัน 1 call: ผล = "v<แก๊สค้าง>|<ค่า>" · "e<แก๊สค้าง>|<error>" · "a<แก๊สค้าง>|" (async) · "f<แก๊สค้าง>|" (tx ล้มทั้งใบ)
-   * แก๊สค้างของ "f" = งานที่ทำไปแล้วแต่ยังไม่ได้ส่ง host (หน่วยความจำเกินกลางทาง) → host คิดด้วย (ไม่เกิน gasLimit)
+   * Run 1 call: result = "v<pending gas>|<value>" · "e<pending gas>|<error>" · "a<pending gas>|" (async) · "f<pending gas>|" (whole tx fails)
+   * Pending gas of "f" = work already done but not yet reported to the host (memory exceeded midway) → the host charges it too (up to gasLimit)
    */
   function invoke(factory, name, paramsText, address, blockNumberText, budget) {
     const act = { pending: 0, budget };
-    const outer = ACT;   // โปรแกรมเดียวกันถูกเรียกซ้อน (A → B → A) → คืนตัวนับของชั้นนอกเมื่อจบ
+    const outer = ACT;   // the same program called reentrantly (A → B → A) → restore the outer counter when done
     ACT = act;
     let outcome;
     try {
@@ -1565,11 +1565,11 @@ function prelude(host, opText) {
       try {
         outcome = dead ? "f" + act.pending + "|" : "e" + act.pending + "|" + describe(error);
       } catch {
-        outcome = dead ? "f" + act.pending + "|" : "e" + act.pending + '|{"t":"s","text":"โปรแกรมทำงานผิดพลาด"}';
+        outcome = dead ? "f" + act.pending + "|" : "e" + act.pending + '|{"t":"s","text":"program error"}';
       }
     }
     ACT = outer;
-    // ต้องเหลือที่ว่างให้ส่งผลกลับ host (เต็มพอดีโดยไม่ล้ม = ให้ host ตรวจ / ปล่อยที่สำรอง)
+    // must leave room to send the result back to the host (exactly full without failing = let the host check / release the reserve)
     try {
       new ArrayBufferFn(4096);
     } catch {
@@ -1578,7 +1578,7 @@ function prelude(host, opText) {
     return outcome;
   }
 
-  /** ผูก context กับ tx: แก๊สต่อหน่วย / เวลาของ block / นาฬิกาจริง (เทสต์เท่านั้น) → คืน invoke */
+  /** Bind the context to a tx: gas per unit / block time / real clock (tests only) → returns invoke */
   return function configure(configText) {
     const config = jsonParse(configText);
     NODE_GAS = config.nodeGas;
@@ -1600,13 +1600,13 @@ const HOST_CALL = Symbol("host call");
 const INTERRUPT = Symbol("interrupt");
 
 // ---------------------------------------------------------------------------
-//  runtime + context สำรอง + snapshot (สร้างครั้งเดียวตอน import)
+//  runtime + spare contexts + snapshot (created once at import)
 // ---------------------------------------------------------------------------
 
-/** context ใหม่ที่โหลด prelude แล้ว: { ctx, configure } (configure(configText) → invoke) */
+/** new context with the prelude loaded: { ctx, configure } (configure(configText) → invoke) */
 function createContext(rt) {
   const ctx = rt.newContext();
-  // ฟังก์ชันเดียวที่โปรแกรมเรียกออกมาได้: ส่งต่อให้ sandbox ของ tx ที่กำลังรัน (ไม่มี tx = tx ล้มแล้ว)
+  // the only function a program can call out to: forwarded to the sandbox of the running tx (no tx = the tx has already failed)
   const host = ctx.newFunction("host", (op, pending, payload) =>
     (current ? current[HOST_CALL](ctx, op, pending, payload) : ctx.newString("f")));
   const opHandle = ctx.newString(OP_TEXT);
@@ -1625,12 +1625,12 @@ function createContext(rt) {
   host.dispose();
   if (failure) {
     ctx.dispose();
-    throw new Error(`เตรียม context ของ sandbox ไม่สำเร็จ: ${failure.name}: ${failure.message}`);
+    throw new Error(`failed to prepare the sandbox context: ${failure.name}: ${failure.message}`);
   }
   return { ctx, configure };
 }
 
-/** error ที่ QuickJS throw ออกมาถึง host → { name, message } (คืน handle เสมอ) */
+/** error thrown out of QuickJS to the host → { name, message } (always releases the handle) */
 function readError(ctx, errorHandle) {
   try {
     const error = ctx.dump(errorHandle);
@@ -1644,14 +1644,14 @@ function readError(ctx, errorHandle) {
 }
 
 /**
- * ตำแหน่งใน memory ที่ malloc (dlmalloc) เก็บต้นของก้อนว่างก้อนสุดท้าย ("top") — เหนือ top ขึ้นไปไม่มีข้อมูลที่ใช้อยู่
- * หาจากการทดลอง: malloc ก้อนใหญ่ (ตัดจาก top เสมอ) แล้วดูว่าค่าไหนขยับจากต้นก้อนไปท้ายก้อนพอดี
- * หาไม่เจอ = null (snapshot จะเก็บ memory ทั้งก้อน: ถูกต้องแต่ช้ากว่า)
+ * The memory location where malloc (dlmalloc) stores the start of the last free block ("top"); nothing in use lies above top
+ * Found by experiment: malloc a large block (always carved from top) and see which value moves from the block start to exactly the block end
+ * Not found = null (the snapshot will store the whole memory: correct but slower)
  */
 function findTopAddress() {
   const scan = () => new Uint32Array(executorMemory.buffer, 0, LOW_REGION / 4).slice();
   const before = scan();
-  const size = SANDBOX_DEFAULTS.memoryLimitBytes + HOST_RESERVE + 2 * PAGE;   // ขยาย memory ไว้ก่อนด้วยในตัว
+  const size = SANDBOX_DEFAULTS.memoryLimitBytes + HOST_RESERVE + 2 * PAGE;   // grow memory up front with the built-in
   const block = heap._malloc(size);
   if (!block) return null;
   const after = scan();
@@ -1666,7 +1666,7 @@ function findTopAddress() {
 const engine = (() => {
   const firstBlock = heap._malloc(16);
   heap._free(firstBlock);
-  const heapStart = Math.max(LOW_REGION, firstBlock - PAGE);   // ใต้ heap คือ stack ของ C (ไม่ต้องเก็บ)
+  const heapStart = Math.max(LOW_REGION, firstBlock - PAGE);   // below the heap is the C stack (no need to store)
   const topAddress = findTopAddress();
 
   const rt = executor.newRuntime();
@@ -1690,8 +1690,8 @@ const engine = (() => {
 })();
 
 /**
- * ภาพ memory ตอนนี้ (ส่วนล่าง + heap ถึงก้อนว่างก้อนสุดท้าย)
- * reuse = ภาพเก่าที่ถูกไล่ออกจากที่เก็บ: คัดลอกทับ buffer เดิมถ้าพอ (จอง buffer ใหม่ 3 MB ช้ากว่าคัดลอกทับ ~10 เท่า)
+ * Image of the current memory (lower region + heap up to the last free block)
+ * reuse = an old image evicted from the store: copy over its existing buffer if large enough (allocating a new 3 MB buffer is ~10× slower than copying over)
  */
 function captureMemory(reuse = null) {
   const view = new Uint8Array(executorMemory.buffer);
@@ -1706,7 +1706,7 @@ function captureMemory(reuse = null) {
   return { low, high: store.subarray(0, length), store };
 }
 
-/** memory ของ QuickJS กลับเป็นภาพที่เก็บไว้ (ค่าเริ่ม = ตอนเพิ่งสร้าง pool) — ห้ามเรียกระหว่างอยู่ใน QuickJS */
+/** restore QuickJS memory to the stored image (default = right after the pool was created); must not be called while inside QuickJS */
 function restoreSnapshot(image = engine) {
   const view = new Uint8Array(executorMemory.buffer);
   view.set(image.low, 0);
@@ -1714,31 +1714,31 @@ function restoreSnapshot(image = engine) {
 }
 
 /**
- * snapshot "อุ่น" ต่อโปรแกรม: ภาพ memory = snapshot ตั้งต้น + factory ของโปรแกรมที่คอมไพล์แล้วใน context ช่องแรก
- *   tx ที่โปรแกรมแรกคือ source นี้เริ่มจากภาพนี้แทน → ไม่ต้องคอมไพล์ซ้ำทุก tx (คอมไพล์ ≈ 1/3 ของเวลาของ token transfer)
- * deterministic: ภาพเป็นผลของ (snapshot ตั้งต้น, source) อย่างเดียว — มีใน cache หรือสร้างใหม่ได้ heap เดียวกันทุกไบต์
- *   ทุกเครื่องจึงเริ่ม tx จาก heap เดียวกันเสมอ ไม่ว่า cache ของเครื่องจะเคยเห็นโปรแกรมนี้หรือไม่ (เทสต์ 89 คุม)
- *   source ที่คอมไพล์ไม่ผ่าน = เริ่มจาก snapshot ตั้งต้นแบบเดิม (ก็เป็นผลของ source อย่างเดียวเช่นกัน)
- * factory เก็บเป็น property ของฟังก์ชัน configure ของช่องแรก (โค้ดของผู้ใช้เข้าไม่ถึง configure)
+ * Per-program "warm" snapshot: memory image = base snapshot + the program's compiled factory in the first context slot
+ *   a tx whose first program is this source starts from this image instead → no recompiling every tx (compiling ≈ 1/3 of a token transfer's time)
+ * deterministic: the image is a function of (base snapshot, source) only; cached or freshly built, the heap is byte-identical
+ *   so every machine always starts a tx from the same heap, whether or not its cache has seen this program before (test 89 covers this)
+ *   source that fails to compile = start from the base snapshot as before (also a function of the source alone)
+ * the factory is stored as a property of the first slot's configure function (user code cannot reach configure)
  *
- * ภาพละ ~3.3 MB (heap ทั้งก้อนถึงก้อนว่างก้อนสุดท้าย) → ค่าเริ่ม 32 ภาพ ≈ 105 MB RAM
- * ไม่มีในที่เก็บ: คืน snapshot ตั้งต้น → คอมไพล์ → memory ตอนนี้ "คือ" ภาพอุ่นแล้ว ใช้ต่อได้เลย (ไม่คืนภาพซ้ำ)
- *   ถ่ายเก็บเฉพาะเมื่อที่เก็บมีที่ (SANDBOX_WARM_CACHE > 0) · 0 = ไม่เก็บ ไม่คัดลอก memory เลย (ต้นทุนเท่าคอมไพล์ทุก tx แบบเดิม)
- *   heap ตอนเริ่ม tx เหมือนกันทุกไบต์ทั้งสามทาง (มีภาพ / เพิ่งคอมไพล์แล้วเก็บ / เพิ่งคอมไพล์ไม่เก็บ) → ตั้งค่าต่างกันข้ามเครื่องได้
+ * ~3.3 MB per image (the whole heap up to the last free block) → default 32 images ≈ 105 MB RAM
+ * not in the store: restore the base snapshot → compile → current memory "is" the warm image already and can be used directly (no second restore)
+ *   stored only when the store has room (SANDBOX_WARM_CACHE > 0) · 0 = never store, never copy memory (same cost as compiling every tx as before)
+ *   the heap at tx start is byte-identical on all three paths (image present / just compiled and stored / just compiled, not stored) → settings may differ across machines
  */
 export const WARM_FACTORY_KEY = "\u0000factory";
-const warmImages = new Map();   // source → ภาพ memory | null (คอมไพล์ไม่ผ่าน) · เรียงตามที่ใช้ล่าสุด (LRU)
+const warmImages = new Map();   // source → memory image | null (compile failed) · ordered by most recent use (LRU)
 export const warmStats = { hits: 0, misses: 0, size: 0, limit: Number(process.env.SANDBOX_WARM_CACHE ?? 32) };
 
-/** ล้างภาพอุ่นทั้งหมด (เทสต์ / เครื่องมือ) — ผลของ tx ไม่เปลี่ยน แค่ต้องสร้างภาพใหม่ */
+/** clear all warm images (tests / tools); tx results do not change, images just have to be rebuilt */
 export function clearWarmCache() {
   warmImages.clear();
   warmStats.size = 0;
 }
 
 /**
- * เตรียม memory ให้เป็นภาพอุ่นของ source (หรือ snapshot ตั้งต้นถ้าคอมไพล์ไม่ผ่าน)
- * คืน true = memory อยู่ในสภาพภาพอุ่นแล้ว (factory อยู่ในช่องแรก) · false = snapshot ตั้งต้น
+ * Prepare memory as the warm image of source (or the base snapshot if it fails to compile)
+ * returns true = memory is in the warm image state (factory in the first slot) · false = base snapshot
  */
 function enterWarm(source) {
   const limit = Math.max(0, warmStats.limit);
@@ -1756,7 +1756,7 @@ function enterWarm(source) {
   const result = ctx.evalCode(source, "program");
   if (result.error) {
     result.error.dispose();
-    restoreSnapshot();   // evalCode ที่ล้มทิ้งขยะไว้ใน heap → กลับเป็น snapshot ตั้งต้นให้เหมือนเครื่องที่จำว่า "ไม่มีภาพ"
+    restoreSnapshot();   // a failed evalCode leaves garbage in the heap → restore the base snapshot, matching a machine that remembered "no image"
     if (limit > 0) remember(source, null, limit);
     return false;
   }
@@ -1766,7 +1766,7 @@ function enterWarm(source) {
   return true;
 }
 
-/** เก็บภาพ (เต็ม = ไล่ตัวที่ใช้นานที่สุด แล้วให้ภาพใหม่ใช้ buffer ของมันต่อ) */
+/** store an image (full = evict the least recently used one and let the new image reuse its buffer) */
 function remember(source, makeImage, limit) {
   let spare = null;
   while (warmImages.size >= limit) {
@@ -1779,8 +1779,8 @@ function remember(source, makeImage, limit) {
 }
 
 /**
- * ตรวจตอน import ว่า snapshot คืนสถานะได้ครบจริง (โครงสร้าง memory ของ quickjs-emscripten ตรงกับที่คาด)
- * รันโปรแกรมทดสอบ → ทำให้ heap สกปรก → คืน snapshot → รันซ้ำ: ผลและตำแหน่ง malloc ต้องตรงกันทุกอย่าง
+ * At import, check that the snapshot really restores state completely (quickjs-emscripten's memory layout matches expectations)
+ * run a test program → dirty the heap → restore the snapshot → run again: the result and malloc positions must match exactly
  */
 function selfCheck() {
   const { ctx, configure } = engine.pool[0];
@@ -1818,15 +1818,15 @@ function selfCheck() {
   dirty.dispose();
   const second = run();
   restoreSnapshot();
-  // แก๊สค้าง (v<n>|) = ค่าของ "x".repeat(i) ที่คิดตามขนาดข้อมูล — ต้องเท่ากันทั้งสองรอบ
+  // pending gas (v<n>|) = the cost of "x".repeat(i) charged by data size; must be equal in both runs
   if (first !== second || !/^v\d+\|\[200,"y","undefined",0,\{"\\u0000":"b","v":"597"\}\]/.test(first)) {
-    throw new Error(`sandbox self-check ไม่ผ่าน: ${first} / ${second}`);
+    throw new Error(`sandbox self-check failed: ${first} / ${second}`);
   }
 }
 selfCheck();
 
 // ---------------------------------------------------------------------------
-//  Sandbox: 1 ตัวต่อ tx ชั้นนอกสุด
+//  Sandbox: 1 per outermost tx
 // ---------------------------------------------------------------------------
 
 export class Sandbox {
@@ -1836,14 +1836,14 @@ export class Sandbox {
   #active = false;
   #disposed = false;
   #programs = new Map();   // programUuid → Map(source → { ctx, invoke, factory, error })
-  #owned = [];             // handle ที่อยู่ตลอด tx (invoke / factory) — คืนตอน dispose
-  #extra = [];             // context ที่สร้างเพิ่มเมื่อ pool ไม่พอ
+  #owned = [];             // handles that live for the whole tx (invoke / factory), released at dispose
+  #extra = [];             // contexts created on demand when the pool runs short
   #nextSlot = 0;
-  #errors = new Map();     // เลขอ้างอิง → error ของ host ที่ส่งเข้าโปรแกรม
+  #errors = new Map();     // reference number → host error passed into the program
   #nextErrorId = 1;
-  #stack = [];             // call ที่กำลังรัน (ตัวท้ายคือผู้เรียก API)
+  #stack = [];             // calls currently running (the last one is the API caller)
   #reserve = 0;
-  #warmSource = null;      // source ที่ factory อยู่ในภาพอุ่นแล้ว (context ช่องแรก)
+  #warmSource = null;      // source whose factory is already in the warm image (first context slot)
   outOfMemory = false;
   timedOut = false;
 
@@ -1862,20 +1862,20 @@ export class Sandbox {
     });
   }
 
-  /** ถูกเรียกจาก grow ของ memory (อยู่ระหว่าง malloc — ห้ามแตะ heap ที่นี่) */
+  /** called from memory grow (in the middle of malloc; must not touch the heap here) */
   flagOutOfMemory() {
     this.outOfMemory = true;
   }
 
   // ---------- heap ----------
 
-  /** เริ่ม tx: คืน snapshot → ตั้ง stack → ลูกโป่ง + ที่สำรอง → ล็อก memory */
+  /** start tx: restore snapshot → set stack → balloon + reserve → lock memory */
   #begin(source) {
-    if (this.#disposed) throw new Error("sandbox ถูกปิดไปแล้ว");
+    if (this.#disposed) throw new Error("sandbox has been disposed");
     if (this.#active) return;
-    if (brokenReason) throw new Error(`QuickJS ใช้งานไม่ได้: ${brokenReason}`);
-    if (current) throw new Error("sandbox ถูกใช้โดย tx อื่นที่ยังไม่จบ");
-    // โปรแกรมแรกของ tx คอมไพล์ไว้แล้วในภาพอุ่น (ดู enterWarm) · ไม่มี = snapshot ตั้งต้น
+    if (brokenReason) throw new Error(`QuickJS is unusable: ${brokenReason}`);
+    if (current) throw new Error("sandbox is in use by another tx that has not finished");
+    // the tx's first program is already compiled in the warm image (see enterWarm) · none = base snapshot
     this.#warmSource = enterWarm(source) ? source : null;
     current = this;
     this.#active = true;
@@ -1888,12 +1888,12 @@ export class Sandbox {
     const capacity = this.#options.memoryLimitBytes + HOST_RESERVE;
     const target = probe + capacity + PAGE;
     if (executorMemory.buffer.byteLength < target) {
-      const grow = heap._malloc(target - probe);   // ให้ emscripten ขยาย memory เอง (ต้องอัปเดต view ของ heap ด้วย)
-      if (!grow) throw new Error("ขยายหน่วยความจำของ QuickJS ไม่ได้");
+      const grow = heap._malloc(target - probe);   // let emscripten grow memory itself (the heap view must be updated too)
+      if (!grow) throw new Error("failed to grow QuickJS memory");
       heap._free(grow);
     }
-    // ลูกโป่ง: เหลือที่ว่างหลัง probe พอดี capacity เสมอ ไม่ว่า memory จะเคยโตไปเท่าไร (คืนเองตอนคืน snapshot)
-    if (!heap._malloc(executorMemory.buffer.byteLength - (probe + capacity))) throw new Error("จองหน่วยความจำของ QuickJS ไม่ได้");
+    // balloon: always leaves exactly capacity free after the probe, however far memory has grown (released automatically on snapshot restore)
+    if (!heap._malloc(executorMemory.buffer.byteLength - (probe + capacity))) throw new Error("failed to allocate QuickJS memory");
     this.#reserve = heap._malloc(HOST_RESERVE);
     memoryLocked = true;
   }
@@ -1903,7 +1903,7 @@ export class Sandbox {
     this.#reserve = 0;
   }
 
-  /** host จะทำงาน: ต้องมีที่ว่างพอ ไม่งั้นถือว่าโปรแกรมใช้หน่วยความจำเกิน */
+  /** the host is about to work: there must be enough free space, otherwise the program is treated as exceeding memory */
   #hasHeadroom() {
     if (!this.outOfMemory) {
       const probe = heap._malloc(HOST_HEADROOM);
@@ -1918,7 +1918,7 @@ export class Sandbox {
     return false;
   }
 
-  /** QuickJS ถามเป็นระยะระหว่างรัน: true = หยุดทันที (catch ไม่ได้) */
+  /** QuickJS asks periodically while running: true = stop immediately (cannot be caught) */
   [INTERRUPT]() {
     if (this.outOfMemory || this.#tx.fatal) return true;
     if (Date.now() > this.#tx.deadline) {
@@ -1936,7 +1936,7 @@ export class Sandbox {
     return handle;
   }
 
-  /** handle ชั่วคราวของ 1 call */
+  /** temporary handles of 1 call */
   static #temp(handle) {
     sandboxStats.handles += 1;
     return handle;
@@ -1947,7 +1947,7 @@ export class Sandbox {
     sandboxStats.handles -= 1;
   }
 
-  // ---------- context ของแต่ละโปรแกรม ----------
+  // ---------- per-program contexts ----------
 
   #context(programUuid, source) {
     let bySource = this.#programs.get(programUuid);
@@ -1992,7 +1992,7 @@ export class Sandbox {
     return entry;
   }
 
-  // ---------- โปรแกรมเรียก host ----------
+  // ---------- program calls the host ----------
 
   #reply(kind, value) {
     return JSON.stringify([kind, this.#tx.gasLimit - this.#tx.gasUsed, value], hostReplacer);
@@ -2001,7 +2001,7 @@ export class Sandbox {
   [HOST_CALL](ctx, opHandle, pendingHandle, payloadHandle) {
     const op = ctx.getNumber(opHandle);
     if (!this.#hasHeadroom()) return ctx.newString("f");
-    if (Date.now() > this.#tx.deadline) {   // interrupt handler อาจถูกเรียกห่างเมื่อโปรแกรมเรียก host ถี่ → ตรวจที่นี่ด้วย
+    if (Date.now() > this.#tx.deadline) {   // the interrupt handler may be called rarely when the program calls the host frequently → check here too
       this.timedOut = true;
       return ctx.newString("f");
     }
@@ -2014,7 +2014,7 @@ export class Sandbox {
       if (pending > 0) tx.useGas(pending);
       if (op === OP.sync) return ctx.newString(this.#reply("v", undefined));
       const spec = API_OPS[op - OP.api];
-      if (!spec) throw new Error(`API ไม่รู้จัก: ${op}`);
+      if (!spec) throw new Error(`Unknown API: ${op}`);
       const args = decodeFromGuest(ctx.getString(payloadHandle), this.#options.map);
       const value = this.#stack.at(-1).api[spec[0]](...args);
       if (this.outOfMemory) {
@@ -2038,7 +2038,7 @@ export class Sandbox {
     }
   }
 
-  // ---------- รัน 1 call ----------
+  // ---------- run 1 call ----------
 
   /**
    * @returns {{ kind: "value", value } | { kind: "throw", hostError } | { kind: "throw", guestError: { name, message, stack } }
@@ -2081,20 +2081,20 @@ export class Sandbox {
       if (this.outOfMemory) return this.#fatal();
       if (tx.fatal) return { kind: "fatal" };
       if (this.timedOut || (error.name === "InternalError" && error.message === "interrupted")) return this.#timeout();
-      return { kind: "throw", guestError: { ...error, stack: null } };   // error ใน prelude เอง (เช่น stack ล้นตอนส่งผล)
+      return { kind: "throw", guestError: { ...error, stack: null } };   // error in the prelude itself (e.g. stack overflow while sending the result)
     }
     const text = ctx.getString(result.value);
     result.value.dispose();
     const bar = text.indexOf("|");
     const pending = Number(text.slice(1, bar));
     if (this.outOfMemory || text[0] === "f") {
-      // tx ล้มทั้งใบ: ยังคิดแก๊สของงานที่ทำไปแล้ว (หน่วยความจำเกิน = เสียค่าแก๊สเท่าที่ใช้จริง ไม่ใช่แค่ส่วนที่ส่งมาก่อนหน้า)
+      // whole tx fails: still charge gas for work already done (memory exceeded = pay the gas actually used, not just the part reported earlier)
       if (pending > 0) tx.gasUsed = Math.min(tx.gasLimit, tx.gasUsed + pending);
       if (this.outOfMemory) return this.#fatal();
       if (!tx.fatal) tx.abort(this.timedOut ? "timeout" : "memory");
       return { kind: "fatal" };
     }
-    if (pending > 0) tx.useGas(pending);   // ไม่เกินยอดที่เหลือเสมอ (เกินถูกส่งมาให้ตรวจทันทีแล้ว)
+    if (pending > 0) tx.useGas(pending);   // never exceeds the remaining budget (overruns were already sent for immediate checking)
     const body = text.slice(bar + 1);
     switch (text[0]) {
       case "v": return { kind: "value", value: decodeFromGuest(body, this.#options.map) };
@@ -2121,7 +2121,7 @@ export class Sandbox {
       case "e": {
         let name = decodeFromGuest(JSON.stringify(desc.name), this.#options.map);
         const message = decodeFromGuest(JSON.stringify(desc.message), this.#options.map);
-        // ข้อความของ QuickJS → ชื่อแบบเดียวกับ V8 (ข้อความจริงของ engine ไม่ถูกส่งออกอยู่แล้ว)
+        // QuickJS message → the same name as V8 (the engine's actual message is never exposed anyway)
         if (name === "InternalError" && (message === "stack overflow" || message === "string too long")) name = "RangeError";
         return { kind: "throw", guestError: { name, message, stack: desc.stack } };
       }
@@ -2129,9 +2129,9 @@ export class Sandbox {
     }
   }
 
-  // ---------- เก็บกวาด ----------
+  // ---------- cleanup ----------
 
-  /** คืน handle / context ที่สร้างใน tx แล้วปล่อย heap (memory จริงถูกล้างตอน tx ถัดไปคืน snapshot) */
+  /** release the handles / contexts created in the tx, then release the heap (real memory is reset when the next tx restores the snapshot) */
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;

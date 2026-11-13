@@ -1,20 +1,20 @@
 /**
- * Merkle Patricia Trie แบบ Ethereum (ระยะ 4.3) — stateRoot ของ block = รากของ trie ของ state ทั้งหมด
+ * Ethereum-style Merkle Patricia Trie (phase 4.3): a block's stateRoot = the root of the trie over the entire state
  *
- *   const trie = new StateTrie({ load: (path) => hex | undefined });   // อ่าน node ที่เก็บไว้ตาม path
- *   const { root, writes } = trie.update([{ dbKey, value }, { dbKey, value: undefined }]);   // undefined = ลบ
- *   trie.proof(dbKey)               → { value, proof: [hex ของ node ตามทางจากราก] }
- *   verifyProof(root, dbKey, proof) → { exists, value }   (ใช้ฝั่ง client ได้ · ไม่มี dependency นอกจาก keccak)
+ *   const trie = new StateTrie({ load: (path) => hex | undefined });   // reads a stored node by path
+ *   const { root, writes } = trie.update([{ dbKey, value }, { dbKey, value: undefined }]);   // undefined = delete
+ *   trie.proof(dbKey)               → { value, proof: [hex of the nodes along the path from the root] }
+ *   verifyProof(root, dbKey, proof) → { exists, value }   (usable on the client · no dependency besides keccak)
  *
- * รูปแบบตรงกับ Ethereum ทุกไบต์ (hex-prefix · RLP · node ที่ encode สั้นกว่า 32 byte ฝังในตัวพ่อ · ราก = keccak(rlp(root)))
- *   key ใน trie = keccak256(utf8(dbKey)) ("secure trie" แบบ state ของ Ethereum) · value = utf8(canonicalJson(ค่า))
- *   trie ว่าง = EMPTY_ROOT (0x56e8…b421) เหมือน Ethereum
+ * The format matches Ethereum byte for byte (hex-prefix · RLP · nodes encoding to under 32 bytes are embedded in the parent · root = keccak(rlp(root)))
+ *   trie key = keccak256(utf8(dbKey)) ("secure trie", like Ethereum state) · value = utf8(canonicalJson(value))
+ *   empty trie = EMPTY_ROOT (0x56e8…b421), same as Ethereum
  *
- * การเก็บ node: ตาม path (nibble จากราก) ไม่ใช่ตาม hash — "trie:<nibbles>" → RLP ของ node (Uint8Array · อ่าน hex ก็ได้)
- *   เก็บแค่ trie ล่าสุด (เขียนทับที่เดิม · node ที่หายไปถูกลบ) → พื้นที่ไม่โตตามจำนวน block (แบบ path-based ของ geth)
- *   ตำแหน่งของ node ใน trie ขึ้นกับ key ที่อยู่ใต้มันเท่านั้น: node ที่ย้ายที่ (leaf / extension ที่ถูกแยกหรือรวม) ถูกโหลดระหว่าง update เสมอ
- *   → path ที่โหลดมาแล้วไม่ถูกเขียนใหม่ = ไม่มี node อยู่ตรงนั้นแล้ว → ลบ
- *   ราก (path ว่าง) เก็บเสมอแม้สั้นกว่า 32 byte
+ * Node storage: by path (nibbles from the root), not by hash: "trie:<nibbles>" → RLP of the node (Uint8Array · hex can also be read)
+ *   only the latest trie is kept (overwritten in place · removed nodes are deleted) → storage does not grow with block count (like geth's path-based scheme)
+ *   a node's position in the trie depends only on the keys beneath it: nodes that move (leaf / extension being split or merged) are always loaded during update
+ *   → a loaded path that is not rewritten = no node lives there anymore → delete
+ *   the root (empty path) is always stored, even if shorter than 32 bytes
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -27,12 +27,12 @@ const EMPTY = new Uint8Array(0);
 const LEAF = 0, EXT = 1, BRANCH = 2;
 const hex0x = (bytes) => `0x${bytesToHex(bytes)}`;
 const fromHex = (value) => {
-  if (value instanceof Uint8Array) return Uint8Array.from(value);   // คัดลอก: buffer ที่ DB คืนมาอาจถูกใช้ซ้ำ
+  if (value instanceof Uint8Array) return Uint8Array.from(value);   // copy: the buffer returned by the DB may be reused
   const text = String(value);
   return hexToBytes(text.startsWith("0x") ? text.slice(2) : text);
 };
 
-// ---------- RLP (item = Uint8Array | item[] | { raw: Uint8Array } = RLP ที่ encode แล้ว ฝังทั้งก้อน) ----------
+// ---------- RLP (item = Uint8Array | item[] | { raw: Uint8Array } = already-encoded RLP, embedded whole) ----------
 
 function lengthPrefix(length, offset) {
   if (length <= 55) return Uint8Array.of(offset + length);
@@ -62,15 +62,15 @@ export function rlpEncode(item) {
 
 export function rlpDecode(bytes) {
   const [item, end] = rlpItem(bytes, 0);
-  if (end !== bytes.length) throw new Error("RLP มีข้อมูลเกิน");
+  if (end !== bytes.length) throw new Error("RLP has trailing data");
   return item;
 }
 
 function rlpItem(bytes, at) {
-  if (at >= bytes.length) throw new Error("RLP สั้นเกินไป");
+  if (at >= bytes.length) throw new Error("RLP too short");
   const first = bytes[at];
   const readLength = (count, from) => {
-    if (from + count > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (from + count > bytes.length) throw new Error("RLP too short");
     let length = 0;
     for (let i = 0; i < count; i++) length = length * 256 + bytes[from + i];
     return length;
@@ -80,7 +80,7 @@ function rlpItem(bytes, at) {
   if (first <= 0xbf) { const count = first - 0xb7; return slice(at + 1 + count, readLength(count, at + 1)); }
   const list = (start, length) => {
     const end = start + length;
-    if (end > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (end > bytes.length) throw new Error("RLP too short");
     const items = [];
     for (let i = start; i < end;) { const [item, next] = rlpItem(bytes, i); items.push(item); i = next; }
     return [items, end];
@@ -90,14 +90,14 @@ function rlpItem(bytes, at) {
   return list(at + 1 + count, readLength(count, at + 1));
 
   function slice(start, length) {
-    if (start + length > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (start + length > bytes.length) throw new Error("RLP too short");
     return [bytes.subarray(start, start + length), start + length];
   }
 }
 
 // ---------- nibble / hex-prefix ----------
 
-/** key → nibble เป็น string ของ hex ("0a3f…") */
+/** key → nibbles as a hex string ("0a3f…") */
 const nibblesOf = (bytes) => bytesToHex(bytes);
 const commonPrefix = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
 
@@ -110,22 +110,22 @@ function hexPrefix(nibbles, leaf) {
 function fromHexPrefix(bytes) {
   const text = bytesToHex(bytes);
   const flag = parseInt(text[0], 16);
-  if (flag > 3) throw new Error("hex-prefix ผิดรูปแบบ");
+  if (flag > 3) throw new Error("malformed hex-prefix");
   return { leaf: flag >= 2, nibbles: text.slice(flag % 2 ? 1 : 2) };
 }
 
 // ---------- node ----------
 //   { kind: LEAF, key, value }  ·  { kind: EXT, key, child }  ·  { kind: BRANCH, children[16], value }
-//   ลูก = node | { stored: hash } (ยังไม่ได้โหลด อยู่ที่ path ของตัวเอง) | null
-//   node ที่ยังไม่ถูกแก้ (clean) มี enc / hash ของตัวเองไว้แล้ว · ที่สร้าง / แก้ใน update นี้ = dirty
+//   child = node | { stored: hash } (not loaded yet, lives at its own path) | null
+//   unmodified (clean) nodes already carry their own enc / hash · nodes created / modified in this update = dirty
 
 const leafNode = (key, value) => ({ kind: LEAF, key, value, dirty: true });
 const extNode = (key, child) => ({ kind: EXT, key, child, dirty: true });
 const branchNode = (children, value) => ({ kind: BRANCH, children, value, dirty: true });
 
-/** item ของ RLP → node (clean) · ลูกที่เป็น hash = { stored } · ลูกที่ฝังมา = node */
+/** RLP item → node (clean) · child given as a hash = { stored } · embedded child = node */
 function nodeFromItem(item, enc = rlpEncode(item)) {
-  if (!Array.isArray(item)) throw new Error("node ของ trie ต้องเป็น list");
+  if (!Array.isArray(item)) throw new Error("trie node must be a list");
   let node;
   if (item.length === 17) {
     node = { kind: BRANCH, children: item.slice(0, 16).map(childFromItem), value: item[16].length ? item[16] : null };
@@ -133,7 +133,7 @@ function nodeFromItem(item, enc = rlpEncode(item)) {
     const { leaf, nibbles } = fromHexPrefix(item[0]);
     node = leaf ? { kind: LEAF, key: nibbles, value: item[1] } : { kind: EXT, key: nibbles, child: childFromItem(item[1]) };
   } else {
-    throw new Error(`node ของ trie ต้องมี 2 หรือ 17 ช่อง (ได้ ${item.length})`);
+    throw new Error(`trie node must have 2 or 17 items (got ${item.length})`);
   }
   node.dirty = false;
   node.enc = enc;
@@ -143,13 +143,13 @@ function nodeFromItem(item, enc = rlpEncode(item)) {
 function childFromItem(item) {
   if (Array.isArray(item)) return nodeFromItem(item);
   if (item.length === 0) return null;
-  if (item.length !== 32) throw new Error("ลูกของ node ต้องเป็น hash 32 byte หรือ node ที่ฝังมา");
+  if (item.length !== 32) throw new Error("node child must be a 32-byte hash or an embedded node");
   return { stored: item };
 }
 
 const decodeNode = (bytes) => nodeFromItem(rlpDecode(bytes), bytes);
 
-/** ref ที่พ่อใช้อ้างถึง node นี้: hash (enc ≥ 32 byte) หรือ RLP ทั้งก้อน (ฝัง) */
+/** ref the parent uses for this node: hash (enc ≥ 32 bytes) or the whole RLP (embedded) */
 function refOf(node) {
   if (node === null) return EMPTY;
   if (node.stored) return node.stored;
@@ -165,25 +165,25 @@ function encodeNode(node) {
 
 export const EMPTY_ROOT = hex0x(keccak_256(rlpEncode(EMPTY)));
 
-/** key ของ dbKey ใน trie (nibble) */
+/** trie key for a dbKey (nibbles) */
 export const trieKeyOf = (dbKey) => nibblesOf(keccak_256(utf8ToBytes(dbKey)));
-/** ค่าของ state ใน trie (byte) — ตรงกับที่ verifyProof ถอดกลับ */
+/** state value in the trie (bytes); matches what verifyProof decodes */
 export const trieValueOf = (value) => utf8ToBytes(canonicalJson(value));
 
 // ---------- trie ----------
 
 /**
- * อ่านจาก storage ทุกครั้ง (ไม่ถือ trie ไว้ใน RAM) — ผู้เรียกต้องบันทึก writes ของ update ก่อนเรียก update / proof ครั้งถัดไป
- * (หรือให้ load มองเห็น writes ที่ยังไม่ commit)
+ * Reads from storage every time (does not hold the trie in RAM); the caller must persist an update's writes before the next update / proof call
+ * (or make load see the uncommitted writes)
  */
 export class StateTrie {
   #load;
   #verify;
-  #gone = new Set();   // path ของ node ที่เก็บไว้แล้วถูกแทน / ลบใน update นี้ → ลบถ้าไม่มี node ใหม่เขียนลงที่เดิม
+  #gone = new Set();   // paths of stored nodes replaced / deleted in this update → delete unless a new node is written at the same place
 
   /**
-   * load(path) → RLP ของ node (Uint8Array หรือ hex) ที่เก็บไว้ที่ path นั้น | undefined · keyOf: dbKey → nibble (ค่าเริ่ม = secure)
-   * verify: ตรวจ hash ของ node ที่อ่านจาก storage ทุกตัว (update ไม่ตรวจโดยค่าเริ่ม: storage เป็นของเครื่องนี้เอง · keccak เป็นต้นทุนหลัก · proof ตรวจเสมอ)
+   * load(path) → RLP of the node (Uint8Array or hex) stored at that path | undefined · keyOf: dbKey → nibbles (default = secure)
+   * verify: check the hash of every node read from storage (update does not verify by default: the storage belongs to this machine · keccak is the main cost · proof always verifies)
    */
   constructor({ load, keyOf = trieKeyOf, verify = false } = {}) {
     this.#load = load;
@@ -199,25 +199,25 @@ export class StateTrie {
     return node;
   }
 
-  /** ลูกที่ยังไม่โหลด → โหลดจาก path ของมัน · verify = ตรวจ hash ให้ตรงกับที่พ่ออ้างไว้ */
+  /** child not loaded yet → load from its path · verify = check the hash matches what the parent referenced */
   #resolve(child, path, verify = this.#verify) {
     if (!child?.stored) return child;
     const node = this.#fetch(path);
-    if (!node) throw new Error(`trie: ไม่พบ node ที่ path '${path}'`);
-    if (verify && bytesToHex(keccak_256(node.enc)) !== bytesToHex(child.stored)) throw new Error(`trie: node ที่ path '${path}' ไม่ตรงกับ hash ที่พ่ออ้างไว้`);
+    if (!node) throw new Error(`trie: no node at path '${path}'`);
+    if (verify && bytesToHex(keccak_256(node.enc)) !== bytesToHex(child.stored)) throw new Error(`trie: node at path '${path}' does not match the hash its parent references`);
     node.hash = child.stored;
     return node;
   }
 
-  /** root ปัจจุบันใน storage */
+  /** current root in storage */
   get root() {
     const node = this.#fetch("");
     return node ? hex0x(keccak_256(node.enc)) : EMPTY_ROOT;
   }
 
   /**
-   * ใส่ / ลบหลาย key แล้วคืน root ใหม่ + writes ของ node (ยังไม่บันทึก — ผู้เรียก commit เอง)
-   * entries: [{ dbKey, value }] · value undefined = ลบ · (เทสต์: key = nibble ตรง ๆ · bytes = ค่าดิบ) · ลำดับมีผลเมื่อ key ซ้ำ (ตัวหลังชนะ)
+   * Insert / delete several keys and return the new root + node writes (not persisted; the caller commits)
+   * entries: [{ dbKey, value }] · value undefined = delete · (tests: key = raw nibbles · bytes = raw value) · order matters for duplicate keys (last one wins)
    */
   update(entries) {
     this.#gone = new Set();
@@ -237,7 +237,7 @@ export class StateTrie {
     return { root: rootHash, writes };
   }
 
-  /** ref → node ใหม่ (หรือ ref เดิมถ้าไม่เปลี่ยน) · node ที่เก็บไว้แล้วถูกแทน → จด path ไว้ลบ */
+  /** ref → new node (or the original ref if unchanged) · a stored node being replaced → record its path for deletion */
   #replace(ref, path, change) {
     const node = this.#resolve(ref, path);
     const next = change(node);
@@ -318,22 +318,22 @@ export class StateTrie {
     const used = children.reduce((list, child, index) => (child ? [...list, index] : list), []);
     if (used.length >= 2 || (used.length === 1 && value)) return branchNode(children, value);
     if (used.length === 0) return value ? leafNode("", value) : null;
-    // เหลือลูกตัวเดียว ไม่มีค่า → รวมกับลูก (ต้องโหลดมาดูชนิด)
+    // only one child left and no value → merge with the child (must load it to see its type)
     const nibble = used[0].toString(16);
     return this.#joinExt(nibble, children[used[0]], path + nibble);
   }
 
-  /** extension(prefix) → child: รวม prefix เข้ากับลูกที่เป็น leaf / extension (ลูกย้ายขึ้นไปที่ path ของพ่อ) */
+  /** extension(prefix) → child: merge prefix into a leaf / extension child (the child moves up to the parent's path) */
   #joinExt(prefix, child, childPath) {
     if (child === null) return null;
     const node = this.#resolve(child, childPath);
-    if (node.kind === BRANCH) return extNode(prefix, child);   // branch อยู่ที่เดิม
+    if (node.kind === BRANCH) return extNode(prefix, child);   // the branch stays in place
     if (node.persisted) this.#gone.add(childPath);
     if (node.kind === LEAF) return leafNode(prefix + node.key, node.value);
     return extNode(prefix + node.key, node.child);
   }
 
-  /** encode node ที่ dirty จากล่างขึ้นบน · node ที่ไม่ฝังในพ่อ (≥ 32 byte) + ราก → เขียนลง path ของมัน */
+  /** encode dirty nodes bottom-up · nodes not embedded in the parent (≥ 32 bytes) + the root → write to their path */
   #finalize(node, path, writes, written) {
     if (!node || node.stored || !node.dirty) return;
     if (node.kind === EXT) this.#finalize(node.child, path + node.key, writes, written);
@@ -342,12 +342,12 @@ export class StateTrie {
     node.hash = undefined;
     node.dirty = false;
     if (node.enc.length >= 32 || path === "") {
-      writes.push({ type: "put", dbKey: trieNodeKey(path), value: node.enc });   // byte ดิบ (LMDB เก็บเป็น binary · เล็กกว่า hex ครึ่งหนึ่ง ไม่ต้องบีบอัด)
+      writes.push({ type: "put", dbKey: trieNodeKey(path), value: node.enc });   // raw bytes (LMDB stores binary · half the size of hex, no compression needed)
       written.add(path);
     }
   }
 
-  /** หลักฐานของ dbKey: node ทุกตัวที่ถูกอ้างด้วย hash ตามทางจากรากถึง key (ราก ก่อน) */
+  /** proof for a dbKey: every node referenced by hash along the path from the root to the key (root first) */
   proof(dbKey) {
     let rest = this.keyOf(dbKey);
     let node = this.#fetch("");
@@ -377,16 +377,16 @@ export class StateTrie {
 }
 
 /**
- * สร้าง trie ทั้งต้นจาก key ที่เรียงแล้ว (ไม่ซ้ำ) ครั้งเดียว — เร็วกว่าใส่ทีละชุดมาก (hash ทุก node ครั้งเดียว · ไม่อ่าน storage)
- *   items = [{ key: nibble, bytes }] เรียงตาม key · onWrite(path, enc) ถูกเรียกกับทุก node ที่ต้องเก็บ (ลูกก่อนพ่อ) → root (hex)
- * ผลเหมือน StateTrie.update ทุกไบต์ (ทั้ง root และ node ที่เก็บ) — ใช้ตอนสร้าง trie ใหม่จาก state ทั้งหมด (rebuildTrie / โหลด snapshot)
+ * Build a whole trie from sorted (unique) keys in one go; much faster than inserting batch by batch (each node hashed once · no storage reads)
+ *   items = [{ key: nibble, bytes }] sorted by key · onWrite(path, enc) is called for every node that must be stored (children before parents) → root (hex)
+ * Output is byte-identical to StateTrie.update (both root and stored nodes); used when building a new trie from the full state (rebuildTrie / snapshot load)
  */
 export function buildTrie(items, onWrite) {
   if (!items.length) return EMPTY_ROOT;
   const seal = (node, path) => {
     node.enc = encodeNode(node);
     node.dirty = false;
-    if (node.enc.length < 32 && path !== "") return node;   // ฝังในพ่อ
+    if (node.enc.length < 32 && path !== "") return node;   // embedded in the parent
     onWrite(path, node.enc);
     return { stored: keccak_256(node.enc), enc: node.enc };
   };
@@ -419,9 +419,9 @@ export function buildTrie(items, onWrite) {
 const parseValue = (bytes) => JSON.parse(new TextDecoder().decode(bytes));
 
 /**
- * ตรวจหลักฐานกับ root (ไม่ต้องเชื่อ node ที่ส่งมา)
- *   → { exists: true, value } | { exists: false } · หลักฐานไม่ครบ / ไม่ตรง root = throw
- * keyOf: ค่าเริ่ม = secure (keccak ของ dbKey) เหมือนที่เชนใช้
+ * Verify a proof against root (no need to trust the nodes supplied)
+ *   → { exists: true, value } | { exists: false } · incomplete proof / root mismatch = throw
+ * keyOf: default = secure (keccak of dbKey), as the chain uses
  */
 export function verifyProof(root, dbKey, proof, { keyOf = trieKeyOf } = {}) {
   if (String(root).toLowerCase() === EMPTY_ROOT) return { exists: false };
@@ -431,11 +431,11 @@ export function verifyProof(root, dbKey, proof, { keyOf = trieKeyOf } = {}) {
   for (;;) {
     let item;
     if (Array.isArray(ref)) {
-      item = ref;                                        // node ที่ฝังในพ่อ
+      item = ref;                                        // node embedded in the parent
     } else {
       if (ref.length === 0) return { exists: false };
       const bytes = byHash.get(bytesToHex(ref));
-      if (!bytes) throw new Error("หลักฐานไม่ครบ: ไม่มี node ที่ hash ตรงกับที่อ้างไว้");
+      if (!bytes) throw new Error("incomplete proof: no node matches the referenced hash");
       item = rlpDecode(bytes);
     }
     if (item.length === 17) {
@@ -444,7 +444,7 @@ export function verifyProof(root, dbKey, proof, { keyOf = trieKeyOf } = {}) {
       rest = rest.slice(1);
       continue;
     }
-    if (item.length !== 2) throw new Error("หลักฐานมี node ผิดรูปแบบ");
+    if (item.length !== 2) throw new Error("proof contains a malformed node");
     const { leaf, nibbles } = fromHexPrefix(item[0]);
     if (leaf) return nibbles === rest ? { exists: true, value: parseValue(item[1]) } : { exists: false };
     if (!rest.startsWith(nibbles)) return { exists: false };

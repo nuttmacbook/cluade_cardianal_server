@@ -1,13 +1,13 @@
 /**
- * DB ของระบบ
- *   DB       — ของจริง เก็บลง LMDB
- *   MemoryDB — หน้าตาเหมือนกันทุกอย่าง แต่เก็บในหน่วยความจำ (ใช้ทดสอบ / ทดลอง)
+ * System DB
+ *   DB       — the real one, stored in LMDB
+ *   MemoryDB — identical interface, but kept in memory (for tests / experiments)
  *
- * VM ต้องการ 3 อย่าง และทุกตัวต้องเป็น sync
- *   readKeys(keys)           → [value, ...] ตามลำดับ key (ไม่มี → undefined)
- *   writeKeys(writes)        บันทึกทั้งหมดแบบ atomic
+ * The VM needs 3 things, all of them sync
+ *   readKeys(keys)           → [value, ...] in key order (missing → undefined)
+ *   writeKeys(writes)        writes everything atomically
  *                            writes = [{ type: "put", dbKey, value } | { type: "del", dbKey }]
- *   listKeys(prefix, opts)   รายชื่อ key ตาม prefix (ใช้ทำ explorer)
+ *   listKeys(prefix, opts)   list keys by prefix (used by the explorer)
  */
 import { open } from "lmdb";
 import path from "node:path";
@@ -16,41 +16,41 @@ import crypto from "node:crypto";
 
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
 const PREFIX_END = "\uffff";
-/** ขนาดจองของ LMDB ค่าเริ่ม 1 TB (บน 64-bit เป็นแค่ address space ไม่กินดิสก์) · เต็มแล้วเขียนไม่ได้ เชนหยุดปิด block */
+/** LMDB reserved size, default 1 TB (on 64-bit this is only address space, not disk) · once full, writes fail and the chain stops sealing blocks */
 export const DEFAULT_MAP_SIZE = 1024 ** 4;
 
-/** "1T" / "500G" / "64M" / จำนวน byte → byte */
+/** "1T" / "500G" / "64M" / byte count → bytes */
 export function parseSize(text) {
   const match = /^\s*(\d+(?:\.\d+)?)\s*([kmgt]?)b?\s*$/i.exec(String(text ?? ""));
-  if (!match) throw new Error(`ขนาดไม่ถูกต้อง: ${text} (เช่น 1T, 500G, 64M)`);
+  if (!match) throw new Error(`Invalid size: ${text} (e.g. 1T, 500G, 64M)`);
   const power = { "": 0, k: 1, m: 2, g: 3, t: 4 }[match[2].toLowerCase()];
   return Math.floor(Number(match[1]) * 1024 ** power);
 }
 
-/** ตัวช่วยที่ทั้ง DB และ MemoryDB ใช้ร่วมกัน */
+/** Helpers shared by DB and MemoryDB */
 class BaseDB {
-  /** ตรวจรูปแบบของ writes ก่อนบันทึก (ผิดแม้รายการเดียว = ไม่บันทึกเลย) */
+  /** Validate writes before saving (a single bad entry = nothing is saved) */
   static checkWrites(writes) {
-    if (!Array.isArray(writes)) throw new Error("writes ต้องเป็น array");
+    if (!Array.isArray(writes)) throw new Error("writes must be an array");
     for (const write of writes) {
       const valid = typeof write?.dbKey === "string"
         && (write.type === "del" || (write.type === "put" && write.value !== undefined));
-      if (!valid) throw new Error(`write ไม่ถูกต้อง: ${JSON.stringify(write)}`);
+      if (!valid) throw new Error(`Invalid write: ${JSON.stringify(write)}`);
     }
     return writes;
   }
 
-  /** [{ dbKey, value }] ตาม prefix */
+  /** [{ dbKey, value }] by prefix */
   listEntries(prefix = "", options) {
     return this.listKeys(prefix, options).map((dbKey) => ({ dbKey, value: this.readKeys([dbKey])[0] }));
   }
 
-  /** ข้อมูลเป็น object เรียงตาม key (debug / test) */
+  /** Data as an object sorted by key (debug / test) */
   snapshot(prefix = "") {
     return Object.fromEntries(this.listEntries(prefix).map(({ dbKey, value }) => [dbKey, value]));
   }
 
-  /** จัดกลุ่มตาม address: { "<address>": { code, storage: {...}, ... } } */
+  /** Grouped by address: { "<address>": { code, storage: {...}, ... } } */
   tree(prefix = "") {
     const grouped = {};
     for (const { dbKey, value } of this.listEntries(prefix)) {
@@ -63,12 +63,12 @@ class BaseDB {
     return grouped;
   }
 
-  /** JSON string อ่านง่าย (maxStringLength: ตัด string ยาว ๆ เช่นโค้ดโปรแกรม) */
+  /** Readable JSON string (maxStringLength: truncates long strings such as program code) */
   dump({ prefix = "", grouped = false, indent = 2, maxStringLength = 0 } = {}) {
     const data = grouped ? this.tree(prefix) : this.snapshot(prefix);
     const shorten = (_key, value) =>
       maxStringLength > 0 && typeof value === "string" && value.length > maxStringLength
-        ? `${value.slice(0, maxStringLength)}… (${value.length} ตัวอักษร)`
+        ? `${value.slice(0, maxStringLength)}… (${value.length} chars)`
         : value;
     return JSON.stringify(data, shorten, indent);
   }
@@ -88,18 +88,18 @@ class BaseDB {
 }
 
 // ============================================================================
-//  DB จริง (LMDB)
+//  Real DB (LMDB)
 // ============================================================================
 
 export class DB extends BaseDB {
-  constructor(dbPath, { compression = true, mapSize = DEFAULT_MAP_SIZE } = {}) {   // จอง address space (ใช้ดิสก์จริงเท่าที่เขียน) · server ตั้งด้วย LMDB_MAP_SIZE
+  constructor(dbPath, { compression = true, mapSize = DEFAULT_MAP_SIZE } = {}) {   // reserves address space (real disk use = what is written) · server sets it via LMDB_MAP_SIZE
     super();
     this.basekey = crypto.createHash("sha256").update(`primarydbkey|${dbPath}`).digest("hex");
     this.queue = [];
-    this.server = open({ path: path.resolve(dbPath), compression, mapSize });   // path เต็ม (/var/data) ใช้ตามนั้น · path สั้นนับจากโฟลเดอร์ที่รัน
+    this.server = open({ path: path.resolve(dbPath), compression, mapSize });   // absolute path (/var/data) is used as is · relative path is resolved from the working directory
   }
 
-  /** ขนาดไฟล์ที่ใช้ (หน้าสูงสุดที่เคยเขียน · หน้าว่างข้างในถูกนำกลับมาใช้) เทียบกับ mapSize → เขียนเกิน mapSize ไม่ได้ */
+  /** File size in use (highest page ever written · free pages inside are reused) vs mapSize → cannot write past mapSize */
   stats() {
     const { pageSize, lastPageNumber, mapSize } = this.server.getStats();
     const usedBytes = (lastPageNumber + 1) * pageSize;
@@ -107,25 +107,25 @@ export class DB extends BaseDB {
   }
 
   /**
-   * สำรอง LMDB ทั้งก้อนลงโฟลเดอร์ใหม่ขณะ server ยังทำงาน (mdb_env_copy: อ่านจาก snapshot เดียว ได้ข้อมูล ณ commit ล่าสุดครบทุก key)
-   *   compact = true → ข้ามหน้าว่าง ไฟล์เล็กลง แต่ช้ากว่า · โฟลเดอร์ปลายทางต้องว่าง (กันทับของเดิม)
+   * Back up the whole LMDB into a new folder while the server keeps running (mdb_env_copy: reads one snapshot, so every key is as of the latest commit)
+   *   compact = true → skips free pages, smaller file but slower · target folder must be empty (prevents overwriting)
    */
   async backup(dir, { compact = false } = {}) {
     const target = path.resolve(dir);
-    if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`โฟลเดอร์ ${target} ไม่ว่าง`);
+    if (fs.existsSync(target) && fs.readdirSync(target).length) throw new Error(`Folder ${target} is not empty`);
     fs.mkdirSync(target, { recursive: true });
     await this.server.backup(target, compact);
     return target;
   }
 
-  // ---------- ที่ VM ใช้ ----------
+  // ---------- used by the VM ----------
 
   readKeys(keys) {
-    if (!Array.isArray(keys)) throw new Error("keys ต้องเป็น array");
-    return keys.map((key) => this.server.get(key)); // get เป็น sync (getMany ของ lmdb เป็น async)
+    if (!Array.isArray(keys)) throw new Error("keys must be an array");
+    return keys.map((key) => this.server.get(key)); // get is sync (lmdb's getMany is async)
   }
 
-  /** บันทึกทั้งหมดใน transaction เดียว (put / del) */
+  /** Write everything in a single transaction (put / del) */
   writeKeys(writes) {
     DB.checkWrites(writes);
     if (writes.length === 0) return 0;
@@ -152,7 +152,7 @@ export class DB extends BaseDB {
     return keys;
   }
 
-  // ---------- ของเดิม ----------
+  // ---------- legacy ----------
 
   write(key, value) {
     this.queue.push({ key, value });
@@ -194,7 +194,7 @@ export class DB extends BaseDB {
 }
 
 // ============================================================================
-//  DB ในหน่วยความจำ (ใช้ทดสอบ / ทดลอง — หน้าตาเหมือน DB ทุกอย่าง)
+//  In-memory DB (for tests / experiments — same interface as DB)
 // ============================================================================
 
 export class MemoryDB extends BaseDB {
@@ -204,7 +204,7 @@ export class MemoryDB extends BaseDB {
   }
 
   readKeys(keys) {
-    if (!Array.isArray(keys)) throw new Error("keys ต้องเป็น array");
+    if (!Array.isArray(keys)) throw new Error("keys must be an array");
     return keys.map((key) => copy(this.data.get(key)));
   }
 

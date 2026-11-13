@@ -1,5 +1,5 @@
-/* explorerscan/ui/tabs/upgrade.js [แก้ได้ · หน้าตา]
-   แท็บ Upgrade: ส่งโค้ดใหม่ (upgrader), โอน / สละสิทธิ์อัปเกรด, admin อนุมัติ / ปฏิเสธ */
+/* explorerscan/ui/tabs/upgrade.js [editable · look]
+   Upgrade tab: submit new code (upgrader), transfer / renounce upgrade rights, admin approve / reject */
 
 // ---------- upgrade tab of a program: new code (upgrader) · upgrade rights · admin review ----------
 const sourceOf = (code) => { try { return JSON.parse(`"${code}"`); } catch { return String(code ?? ""); } };

@@ -4,7 +4,7 @@ import { VM, MemoryDB } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
-/* ตรวจลายเซ็นก่อนส่งเข้า VM: sender / origin มาจากลายเซ็นเท่านั้น */
+/* verify signatures before the VM: sender / origin come only from the signature */
 
 let endpointCounter = 0;
 const ALICE_KEY = sign.randomPrivateKey();
@@ -12,7 +12,7 @@ const BOB_KEY = sign.randomPrivateKey();
 const alice = sign.addressOf(ALICE_KEY);
 const bob = sign.addressOf(BOB_KEY);
 
-/** server: รับ { tx, signature } → ตรวจ → ส่งเข้า VM */
+/** server: receives { tx, signature } → verifies → passes to the VM */
 function submit(vm, tx, signature) {
   const { method, request } = sign.verifyTransaction({ tx, signature });
   const result = vm[method](request);
@@ -36,16 +36,16 @@ const transferTx = (nonce = 0, overrides = {}) => ({
 });
 
 // ---------------------------------------------------------------------------
-//  key / address / ลายเซ็น
+//  key / address / signature
 // ---------------------------------------------------------------------------
 
-test("key: address มาจาก private key แบบเดียวกับ EVM", () => {
+test("key: the address is derived from the private key as in EVM", () => {
   assert.match(alice, /^0x[0-9a-f]{40}$/);
   assert.notEqual(alice, bob);
-  assert.equal(sign.addressOf(ALICE_KEY), alice); // ได้ค่าเดิมเสมอ
+  assert.equal(sign.addressOf(ALICE_KEY), alice); // always the same value
 });
 
-test("sign / recover: กู้ address ของผู้เซ็นได้ถูกต้อง", () => {
+test("sign / recover: recovers the signer's address correctly", () => {
   const tx = transferTx();
   const signature = sign.signTransaction(tx, ALICE_KEY);
   assert.match(signature, /^0x[0-9a-f]{130}$/); // r(32) + s(32) + v(1)
@@ -53,7 +53,7 @@ test("sign / recover: กู้ address ของผู้เซ็นได้�
   assert.equal(sign.recoverSigner(tx, sign.signTransaction(tx, BOB_KEY)), bob);
 });
 
-test("hash: tx เดิมได้ digest เดิม, เปลี่ยนอะไรก็ได้ digest ใหม่", () => {
+test("hash: the same tx gives the same digest, any change gives a new digest", () => {
   const base = sign.hashTypedData(transferTx());
   assert.equal(base, sign.hashTypedData(transferTx()));
   assert.match(base, /^0x[0-9a-f]{64}$/);
@@ -71,9 +71,9 @@ test("hash: tx เดิมได้ digest เดิม, เปลี่ยน�
   assert.equal(new Set([base, ...variants.map(sign.hashTypedData)]).size, variants.length + 1);
 });
 
-test("typed data: โครงสร้าง EIP-712 ที่ wallet จะแสดงให้ผู้ใช้ดู", () => {
+test("typed data: the EIP-712 structure the wallet shows the user", () => {
   const typed = sign.buildTypedData(transferTx(3));
-  // domain ไม่มี chainId → MetaMask เซ็นให้ได้ไม่ว่าจะเปิดเชนไหนอยู่ · chainId อยู่ใน message
+  // domain has no chainId → MetaMask signs whatever chain is active · chainId is in the message
   assert.deepEqual(typed.domain, { name: "Bluewolfchain", version: "2" });
   assert.deepEqual(typed.types.EIP712Domain.map((field) => field.name), ["name", "version"]);
   assert.equal(typed.primaryType, "Transaction");
@@ -85,41 +85,41 @@ test("typed data: โครงสร้าง EIP-712 ที่ wallet จะแ
   );
 });
 
-test("verify: ลายเซ็นปลอม / แก้ tx หลังเซ็น / from ไม่ตรง → ถูกปฏิเสธ", () => {
+test("verify: forged signature / tx changed after signing / from mismatch → rejected", () => {
   const tx = transferTx();
   const signature = sign.signTransaction(tx, ALICE_KEY);
 
-  assert.throws(() => sign.verifyTransaction({ tx: transferTx(0, { input: { to: bob, amount: 999 } }), signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, BOB_KEY) }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: "0x1234" }), /signature ต้องยาว 65 byte/);
-  assert.throws(() => sign.verifyTransaction({ tx, signature: `${signature.slice(0, -2)}05` }), /v ต้องเป็น 27 หรือ 28/);
+  assert.throws(() => sign.verifyTransaction({ tx: transferTx(0, { input: { to: bob, amount: 999 } }), signature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, BOB_KEY) }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: "0x1234" }), /signature must be 65 bytes/);
+  assert.throws(() => sign.verifyTransaction({ tx, signature: `${signature.slice(0, -2)}05` }), /v must be 27 or 28/);
 });
 
-test("verify: tx ที่เซ็นในอีก chain ใช้ที่นี่ไม่ได้", () => {
+test("verify: a tx signed for another chain cannot be used here", () => {
   const tx = transferTx(0, { chainId: 999 });
   const signature = sign.signTransaction(tx, ALICE_KEY);
-  assert.equal(sign.verifyTransaction({ tx, signature }).sender, alice);              // ถูกต้องใน chain ของมันเอง
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, chainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.equal(sign.verifyTransaction({ tx, signature }).chainId, 999);   // mempool เทียบกับ chainId ของเชน (เทสต์ 114)
+  assert.equal(sign.verifyTransaction({ tx, signature }).sender, alice);              // valid on its own chain
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, chainId: 1 }, signature }), /signature does not match from/);
+  assert.equal(sign.verifyTransaction({ tx, signature }).chainId, 999);   // the mempool compares it with the chain's chainId (test 114)
 });
 
-test("signedOnChainId: อยู่ในลายเซ็น (แก้ทีหลังไม่ได้) · ไม่ส่ง = chainId · ไม่ใช่ตัวเลข = ปฏิเสธ", () => {
+test("signedOnChainId: part of the signature (cannot be changed later) · omitted = chainId · non-numeric = rejected", () => {
   const onBsc = transferTx(0, { signedOnChainId: 56 });
   const signature = sign.signTransaction(onBsc, ALICE_KEY);
   const verified = sign.verifyTransaction({ tx: onBsc, signature });
   assert.equal(verified.sender, alice);
   assert.equal(verified.request.signedOnChainId, 56);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...onBsc, signedOnChainId: 1 }, signature }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...onBsc, signedOnChainId: 1 }, signature }), /signature does not match from/);
   assert.equal(sign.buildTypedData(transferTx(0)).message.signedOnChainId, 1);
   assert.throws(() => sign.buildTypedData(transferTx(0, { signedOnChainId: "bsc" })), /signedOnChainId/);
 });
 
 // ---------------------------------------------------------------------------
-//  ใช้งานจริงกับ VM
+//  real use with the VM
 // ---------------------------------------------------------------------------
 
-test("flow: tx ที่เซ็นถูกต้องทำงานได้ และ sender มาจากลายเซ็น", () => {
+test("flow: a correctly signed tx works, and sender comes from the signature", () => {
   const vm = setup();
   const tx = transferTx(0);
   const res = submit(vm, tx, sign.signTransaction(tx, ALICE_KEY));
@@ -129,33 +129,33 @@ test("flow: tx ที่เซ็นถูกต้องทำงานได�
   assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], "30n");
 });
 
-test("flow: ปลอม from ไม่ได้ — bob เซ็นแต่อ้างว่าเป็น alice", () => {
+test("flow: from cannot be forged — bob signs but claims to be alice", () => {
   const vm = setup();
   const tx = transferTx(0, { from: alice });
-  assert.throws(() => submit(vm, tx, sign.signTransaction(tx, BOB_KEY)), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => submit(vm, tx, sign.signTransaction(tx, BOB_KEY)), /signature does not match from/);
   assert.equal(vm.db.readKeys([`token:storage:balances:${bob}`])[0], undefined);
 });
 
-test("flow: ส่ง tx เดิมซ้ำไม่ได้ (nonce กันไว้)", () => {
+test("flow: the same tx cannot be resent (nonce prevents it)", () => {
   const vm = setup();
   const tx = transferTx(0);
   const signature = sign.signTransaction(tx, ALICE_KEY);
   assert.equal(submit(vm, tx, signature).status, "success");
-  assert.equal(submit(vm, tx, signature).error.code, "INVALID_REQUEST"); // nonce ใช้ไปแล้ว
+  assert.equal(submit(vm, tx, signature).error.code, "INVALID_REQUEST"); // nonce already used
 });
 
-test("flow: origin = sender เสมอ แม้ context ที่แนบมาจะมั่ว", () => {
+test("flow: origin = sender always, even if the attached context is bogus", () => {
   const vm = setup();
   const tx = transferTx(0);
   const { request } = sign.verifyTransaction({ tx, signature: sign.signTransaction(tx, ALICE_KEY) });
   assert.deepEqual(request.context, { sender: alice, origin: alice });
 
-  const tampered = { ...request, context: { sender: alice, origin: bob } }; // server เผลอส่ง origin ผิด
+  const tampered = { ...request, context: { sender: alice, origin: bob } }; // the server mistakenly sends a wrong origin
   const res = vm.call(tampered);
-  assert.equal(res.calls[0].origin, alice); // VM บังคับให้เท่ากับ sender
+  assert.equal(res.calls[0].origin, alice); // the VM forces it to equal sender
 });
 
-test("flow: deploy ที่เซ็นแล้ว — address ของโปรแกรมคำนวณจากผู้เซ็น", () => {
+test("flow: signed deploy — the program address is derived from the signer", () => {
   const vm = setup();
   const tx = { chainId: 1, action: "deploy", from: alice, to: "", method: "", input: { start: 5 }, code: COUNTER, value: 0, nonce: 0, gasLimit: 0 };
   const res = submit(vm, tx, sign.signTransaction(tx, ALICE_KEY));
@@ -165,17 +165,17 @@ test("flow: deploy ที่เซ็นแล้ว — address ของโป
   assert.equal(vm.init({ programUuid: res.result.programUuid }).status, "success");
 });
 
-test("flow: transfer native ที่เซ็นแล้ว", () => {
+test("flow: signed native transfer", () => {
   const vm = setup();
   vm.db.load({ [`${alice}:native:received`]: "1000n" });
   const tx = { chainId: 1, action: "transfer", from: alice, to: bob, method: "", input: {}, value: 250, nonce: 0, gasLimit: 0 };
   const res = submit(vm, tx, sign.signTransaction(tx, ALICE_KEY));
 
   assert.deepEqual(res.result, { from: alice, to: bob, amount: "250n" });
-  assert.equal(vm.nativeBalanceOf(bob).balance, 250n);   // nativeBalanceOf คืน BigInt
+  assert.equal(vm.nativeBalanceOf(bob).balance, 250n);   // nativeBalanceOf returns BigInt
 });
 
-/** ส่ง tx ผ่าน block (ลายเซ็นถูกเก็บใน blockbody) → hash ของระบบ */
+/** sends a tx through a block (the signature is stored in blockbody) → the system hash */
 function submitInBlock(vm, tx, signature) {
   const { method, request } = sign.verifyTransaction({ tx, signature });
   const block = vm.createBlock({ timestamp: 1_700_000_000_000, feeRecipient: "0xminer" });
@@ -184,7 +184,7 @@ function submitInBlock(vm, tx, signature) {
   return vm.getBlock(vm.latestBlockNumber()).txHashes[0];
 }
 
-test("flow: ลายเซ็นตรวจย้อนหลังได้ (เก็บใน blockbody ที่เดียว · txn ไม่เก็บซ้ำ)", () => {
+test("flow: signatures can be verified later (stored only in blockbody · txn does not duplicate it)", () => {
   const vm = setup({ recordBlocks: true });
   const tx = transferTx(0);
   const signature = sign.signTransaction(tx, ALICE_KEY);
@@ -192,14 +192,14 @@ test("flow: ลายเซ็นตรวจย้อนหลังได้ (
 
   const [record] = vm.listTransactionsOf(alice);
   assert.equal(record.signature, undefined);
-  assert.equal(record.digest, sign.hashTypedData(tx));               // digest เติมจากดัชนี tx
+  assert.equal(record.digest, sign.hashTypedData(tx));               // digest filled in from the tx index
   const found = vm.getTransaction(hash, { signature: true });
   assert.equal(found.record.signature, signature);
   assert.equal(found.record.status, "success");
-  assert.equal(sign.recoverSigner(tx, found.record.signature), alice); // พิสูจน์ย้อนหลังได้ว่า alice เซ็นจริง
+  assert.equal(sign.recoverSigner(tx, found.record.signature), alice); // proves after the fact that alice really signed
 });
 
-test("flow: tx ที่ล้มก็ตรวจลายเซ็นย้อนหลังได้", () => {
+test("flow: failed txs can also be signature-verified later", () => {
   const vm = setup({ recordBlocks: true });
   const tx = transferTx(0, { input: { to: bob, amount: 99999 } });
   const signature = sign.signTransaction(tx, ALICE_KEY);
@@ -210,7 +210,7 @@ test("flow: tx ที่ล้มก็ตรวจลายเซ็นย้�
   assert.equal(found.record.signature, signature);
 });
 
-test("flow: หลาย tx ใน block เดียว ทุกใบต้องผ่านการตรวจก่อน", () => {
+test("flow: several txs in one block, each must pass verification first", () => {
   const vm = setup();
   vm.db.load({ [`${alice}:native:received`]: "1000n" });
   const block = vm.createBlock({ timestamp: 1_700_000_000_000, number: 1, feeRecipient: "0xminer" });
@@ -227,7 +227,7 @@ test("flow: หลาย tx ใน block เดียว ทุกใบต้�
   assert.deepEqual(vm.listTransactionsOf(alice).map((r) => r.nonce), [1, 0]);
 });
 
-test("flow: metadata tx ที่เซ็นแล้ว — ตั้งชื่อให้ address ตัวเอง", () => {
+test("flow: signed metadata tx — names the sender's own address", () => {
   const vm = setup();
   const tx = { chainId: 1, action: "metadata", from: alice, to: "", method: "", input: { namespace: "Alice", icon: "👩" }, value: 0, nonce: 0, gasLimit: 0 };
   const res = submit(vm, tx, sign.signTransaction(tx, ALICE_KEY));
@@ -235,5 +235,5 @@ test("flow: metadata tx ที่เซ็นแล้ว — ตั้งชื
   assert.equal(res.status, "success");
   assert.equal(vm.resolveNamespace("alice"), alice);
   assert.deepEqual(vm.getMetadata(alice), { namespace: "alice", icon: "👩" });
-  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature: sign.signTransaction(tx, ALICE_KEY) }), /ลายเซ็นไม่ตรงกับ from/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...tx, from: bob }, signature: sign.signTransaction(tx, ALICE_KEY) }), /signature does not match from/);
 });

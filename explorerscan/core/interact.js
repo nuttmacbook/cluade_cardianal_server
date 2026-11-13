@@ -1,6 +1,6 @@
-/* explorerscan/core/interact.js [ระบบ · ไม่ต้องแก้]
-   อ่านโค้ดโปรแกรมเพื่อเดาช่องกรอก: ชื่อฟังก์ชันที่เรียกได้ (callableOf) และชนิดของ input แต่ละตัว (inferInputs)
-   ใช้โดยแท็บ Interact (ui/tabs/interact.js) · ไม่มี HTML */
+/* explorerscan/core/interact.js [system · no need to edit]
+   Reads program code to guess the input fields: callable function names (callableOf) and the type of each input (inferInputs)
+   Used by the Interact tab (ui/tabs/interact.js) · no HTML */
 
 /** callable function names, read from the final return { … } of the code */
 function callableOf(code) {

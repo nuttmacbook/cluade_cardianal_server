@@ -6,14 +6,14 @@ import os from "node:os";
 import path from "node:path";
 
 /*
- * dev/scenario-full.js --spawn --quick: เปิด server.js จริง (MemoryDB · BLOCK_MS 300 · UPGRADE_DELAY_BLOCKS 2)
- * แล้วไล่ทุกฟังก์ชันของเชน (token / NFT / multi-token / ERC-1271 / multicall / upgrade / clone / API / แก๊ส / /evm / REST / sync)
- * ต้องจบด้วย exit code 0 และรายงานไม่มีข้อที่ไม่ผ่าน
+ * dev/scenario-full.js --spawn --quick: starts a real server.js (MemoryDB · BLOCK_MS 300 · UPGRADE_DELAY_BLOCKS 2)
+ * then exercises every chain feature (token / NFT / multi-token / ERC-1271 / multicall / upgrade / clone / API / gas / /evm / REST / sync)
+ * must finish with exit code 0 and a report with no failed checks
  */
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 
-test("scenario-full --spawn --quick: ทุกข้อผ่าน (exit 0)", { timeout: 240_000 }, async () => {
+test("scenario-full --spawn --quick: every check passes (exit 0)", { timeout: 240_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scenario-full-"));
   const out = path.join(dir, "report.json");
   const env = { ...process.env };
@@ -24,12 +24,12 @@ test("scenario-full --spawn --quick: ทุกข้อผ่าน (exit 0)", {
   child.stderr.on("data", (chunk) => { output += chunk; });
   const code = await new Promise((resolve) => child.on("close", resolve));
   const failed = output.split("\n").filter((line) => line.includes("❌")).join("\n");
-  assert.equal(code, 0, `scenario-full ล้ม:\n${failed || output.slice(-3000)}`);
+  assert.equal(code, 0, `scenario-full failed:\n${failed || output.slice(-3000)}`);
   const report = JSON.parse(fs.readFileSync(out, "utf8"));
   assert.equal(report.summary.failed, 0);
-  assert.ok(report.summary.passed >= 250, `ตรวจได้แค่ ${report.summary.passed} ข้อ`);
+  assert.ok(report.summary.passed >= 250, `only ${report.summary.passed} checks ran`);
   for (const section of ["0 ", "1 ", "4 ", "5 ", "6 ", "11 ", "13 ", "15 ", "17 "]) {
-    assert.ok(report.checks.some((c) => c.section.startsWith(section) && c.ok && !c.skipped), `ไม่มีผลของหัวข้อ ${section}`);
+    assert.ok(report.checks.some((c) => c.section.startsWith(section) && c.ok && !c.skipped), `no results for section ${section}`);
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });

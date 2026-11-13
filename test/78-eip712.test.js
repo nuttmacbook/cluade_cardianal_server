@@ -11,16 +11,16 @@ import { permitTypedData, permitDigest, signPermit, signWalletHash, signTypedDat
   typedDataDigest } from "../src/crypto/program-signature.js";
 
 /*
- * EIP-712 จริง (eth_signTypedData_v4 / ethers TypedDataEncoder) ในโปรแกรม:
+ * real EIP-712 (eth_signTypedData_v4 / ethers TypedDataEncoder) in programs:
  *   keccak256Bytes(hex) · ecrecoverDigest(digest, sig) · eip712Digest(domain, types, primaryType, message) · eip712DomainSeparator(domain, types?)
- *   permit ของ TOKEN_PROGRAM = ERC-2612 (deadline วินาที) · ERC-1271 isValidSignature รับ digest 32 byte
+ *   TOKEN_PROGRAM permit = ERC-2612 (deadline in seconds) · ERC-1271 isValidSignature takes a 32-byte digest
  */
 
 const T0 = Date.parse("2025-06-01T00:00:00Z");
 const user = (name) => ({ sender: name.toLowerCase(), origin: name.toLowerCase() });
 
 // ---------------------------------------------------------------------------
-//  ชุด type หลายแบบ เทียบกับ ethers
+//  Various type sets, compared with ethers
 // ---------------------------------------------------------------------------
 
 const MAIL_TYPES = {
@@ -35,10 +35,10 @@ const MAIL = {
 const MAIL_DOMAIN = { name: "Ether Mail", version: "1", chainId: 1n, verifyingContract: "0xcccccccccccccccccccccccccccccccccccccccc" };
 
 const CASES = [
-  // ตัวอย่างใน EIP-712 เอง (digest ที่รู้ค่าแน่นอน)
+  // the example from EIP-712 itself (known digest)
   { label: "EIP-712 Mail", domain: MAIL_DOMAIN, types: MAIL_TYPES, primaryType: "Mail", message: MAIL,
     known: "0xbe609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2" },
-  { label: "atomic ทุกชนิด", domain: { name: "Atoms", chainId: 31337n },
+  { label: "every atomic type", domain: { name: "Atoms", chainId: 31337n },
     types: { Atoms: [
       { name: "a", type: "address" }, { name: "u8", type: "uint8" }, { name: "u256", type: "uint256" }, { name: "i8", type: "int8" },
       { name: "i256", type: "int256" }, { name: "flag", type: "bool" }, { name: "b1", type: "bytes1" }, { name: "b32", type: "bytes32" },
@@ -46,8 +46,8 @@ const CASES = [
     ] },
     primaryType: "Atoms",
     message: { a: "0x00000000000000000000000000000000000000aa", u8: 255n, u256: (1n << 256n) - 1n, i8: -128n, i256: -1n, flag: true,
-      b1: "0xff", b32: `0x${"ab".repeat(32)}`, data: "0xdeadbeef", text: "สวัสดี 🌏", empty: "0x", blank: "" } },
-  { label: "array (dynamic / fixed / ซ้อน) + struct ซ้อนหลายชั้น", domain: { name: "Nested", version: "2", chainId: 7777n,
+      b1: "0xff", b32: `0x${"ab".repeat(32)}`, data: "0xdeadbeef", text: "こんにちは 🌏", empty: "0x", blank: "" } },   // non-ASCII on purpose: tests UTF-8 string hashing
+  { label: "arrays (dynamic / fixed / nested) + multi-level nested structs", domain: { name: "Nested", version: "2", chainId: 7777n,
     verifyingContract: "0x00000000000000000000000000000000000000f1", salt: `0x${"01".repeat(32)}` },
     types: {
       Order: [{ name: "maker", type: "Party" }, { name: "items", type: "Item[]" }, { name: "grid", type: "uint16[2][]" }, { name: "tags", type: "string[3]" }],
@@ -60,16 +60,16 @@ const CASES = [
       maker: { who: "0x00000000000000000000000000000000000000b2", zone: { code: "0x01020304", open: false } },
       items: [{ id: 1n, amount: -5n, zone: { code: "0xaabbccdd", open: true } }, { id: 2n, amount: 9n, zone: { code: "0x00000000", open: false } }],
       grid: [[1n, 2n], [3n, 65535n]],
-      tags: ["a", "", "ค"],
+      tags: ["a", "", "中"],   // non-ASCII string on purpose
     } },
-  { label: "array ว่าง + domain มีแค่ chainId", domain: { chainId: 1n }, types: { Batch: [{ name: "ids", type: "uint256[]" }, { name: "who", type: "address[]" }] },
+  { label: "empty arrays + domain with only chainId", domain: { chainId: 1n }, types: { Batch: [{ name: "ids", type: "uint256[]" }, { name: "who", type: "address[]" }] },
     primaryType: "Batch", message: { ids: [], who: [] } },
 ];
 
-/** ค่าในโปรแกรม (bigint) → แบบที่ ethers รับ (bigint ก็รับ) — ส่งตรง ๆ ได้ */
+/** Program values (bigint) → the form ethers accepts (it accepts bigint), so pass them straight through */
 const ethersDigest = ({ domain, types, message }) => TypedDataEncoder.hash(domain, types, message);
 
-test("eip712Digest / eip712DomainSeparator / eip712EncodeType / eip712HashStruct (ฝั่ง host) = ethers TypedDataEncoder ทุกชุด", () => {
+test("eip712Digest / eip712DomainSeparator / eip712EncodeType / eip712HashStruct (host side) = ethers TypedDataEncoder for every set", () => {
   for (const c of CASES) {
     const digest = eip712Digest(c.domain, c.types, c.primaryType, c.message);
     assert.equal(digest, ethersDigest(c), c.label);
@@ -78,34 +78,34 @@ test("eip712Digest / eip712DomainSeparator / eip712EncodeType / eip712HashStruct
     const encoder = TypedDataEncoder.from(c.types);
     assert.equal(eip712EncodeType(c.primaryType, c.types), encoder.encodeType(c.primaryType), c.label);
     assert.equal(eip712HashStruct(c.primaryType, c.types, c.message), encoder.hashStruct(c.primaryType, c.message), c.label);
-    // types แบบ MetaMask (มี EIP712Domain) ได้ค่าเดียวกัน
+    // MetaMask-style types (with EIP712Domain) give the same value
     const withDomain = { EIP712Domain: TypedDataEncoder.getPayload(c.domain, c.types, c.message).types.EIP712Domain, ...c.types };
     assert.equal(eip712Digest(c.domain, withDomain, c.primaryType, c.message), digest, c.label);
   }
-  // primaryType = EIP712Domain → keccak256(0x1901 ‖ domainSeparator) แบบ MetaMask
+  // primaryType = EIP712Domain → keccak256(0x1901 ‖ domainSeparator) as MetaMask does
   assert.equal(eip712Digest(MAIL_DOMAIN, MAIL_TYPES, "EIP712Domain", {}),
     keccak256(`0x1901${eip712DomainSeparator(MAIL_DOMAIN).slice(2)}`));
   assert.equal(keccak256Bytes("0x"), keccak256("0x"));
   assert.equal(keccak256Bytes("0xDEADbeef"), keccak256("0xdeadbeef"));
 });
 
-test("eip712Digest: ข้อมูลผิดรูปแบบ → error ชัดเจน (ไม่เงียบ)", () => {
+test("eip712Digest: malformed data → clear error (never silent)", () => {
   const bad = [
     [MAIL_DOMAIN, MAIL_TYPES, "Nope", MAIL, /primaryType 'Nope'/],
-    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, contents: undefined }, /Mail.contents: ไม่มีค่า/],
-    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, from: { ...MAIL.from, wallet: "0x1234" } }, /ต้องเป็น address/],
-    [{ ...MAIL_DOMAIN, foo: 1 }, MAIL_TYPES, "Mail", MAIL, /ไม่รู้จัก field 'foo'/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint7" }] }, "A", { x: 1n }, /ไม่รู้จักชนิด/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }] }, "A", { x: 256n }, /เกินช่วง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "int8" }] }, "A", { x: -129n }, /เกินช่วง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "bytes2" }] }, "A", { x: "0x01" }, /ยาว 2 byte/],
+    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, contents: undefined }, /Mail.contents: missing value/],
+    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, from: { ...MAIL.from, wallet: "0x1234" } }, /must be an address/],
+    [{ ...MAIL_DOMAIN, foo: 1 }, MAIL_TYPES, "Mail", MAIL, /unknown field 'foo'/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint7" }] }, "A", { x: 1n }, /unknown type/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }] }, "A", { x: 256n }, /out of range/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "int8" }] }, "A", { x: -129n }, /out of range/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "bytes2" }] }, "A", { x: "0x01" }, /exactly 2 bytes/],
     [MAIL_DOMAIN, { A: [{ name: "x", type: "bool" }] }, "A", { x: 1n }, /true \/ false/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8[2]" }] }, "A", { x: [1n] }, /ต้องมี 2 ช่อง/],
-    [MAIL_DOMAIN, { A: [{ name: "b", type: "B" }], B: [{ name: "a", type: "A" }] }, "A", {}, /เป็นวง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }, { name: "x", type: "uint8" }] }, "A", { x: 1n }, /ซ้ำ/],
-    // เพดานกัน stack ของ host (ทุกเครื่องล้มที่จุดเดียวกัน)
-    [MAIL_DOMAIN, Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`T${i}`, [{ name: "x", type: "uint8" }]])), "T0", { x: 1n }, /ไม่เกิน 64 ชนิด/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: `uint8${"[]".repeat(40)}` }] }, "A", { x: [] }, /ซ้อนลึกเกิน 32/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8[2]" }] }, "A", { x: [1n] }, /must have 2 items/],
+    [MAIL_DOMAIN, { A: [{ name: "b", type: "B" }], B: [{ name: "a", type: "A" }] }, "A", {}, /cyclically/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }, { name: "x", type: "uint8" }] }, "A", { x: 1n }, /duplicate/],
+    // caps that protect the host stack (every machine fails at the same point)
+    [MAIL_DOMAIN, Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`T${i}`, [{ name: "x", type: "uint8" }]])), "T0", { x: 1n }, /at most 64 structs/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: `uint8${"[]".repeat(40)}` }] }, "A", { x: [] }, /nested deeper than 32/],
   ];
   for (const [domain, types, primaryType, message, pattern] of bad) {
     assert.throws(() => eip712Digest(domain, types, primaryType, message), pattern);
@@ -113,7 +113,7 @@ test("eip712Digest: ข้อมูลผิดรูปแบบ → error ช�
 });
 
 // ---------------------------------------------------------------------------
-//  ในโปรแกรม (VM จริง)
+//  in programs (real VM)
 // ---------------------------------------------------------------------------
 
 const PROBE = `function program() {
@@ -144,7 +144,7 @@ function probeChain(options = {}) {
   return { vm, call };
 }
 
-/** ค่าที่ส่งเข้า VM: bigint → "123n" (VM แปลงกลับเป็น BigInt ให้โปรแกรม) */
+/** Values sent into the VM: bigint → "123n" (the VM converts back to BigInt for the program) */
 const toInput = (value) => {
   if (typeof value === "bigint") return `${value}n`;
   if (Array.isArray(value)) return value.map(toInput);
@@ -152,7 +152,7 @@ const toInput = (value) => {
   return value;
 };
 
-test("API ใหม่ถูกต่อครบ: PROGRAM_API_NAMES / sandbox / autoreview · โปรแกรมที่ใช้ผ่าน autoreview", () => {
+test("new APIs are wired everywhere: PROGRAM_API_NAMES / sandbox / autoreview · programs using them pass autoreview", () => {
   for (const name of ["keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator"]) {
     assert.ok(PROGRAM_API.includes(name), name);
     assert.ok(API_OPS.some(([op]) => op === name), name);
@@ -161,7 +161,7 @@ test("API ใหม่ถูกต่อครบ: PROGRAM_API_NAMES / sandbox /
   assert.deepEqual(reviewProgram(TOKEN_PROGRAM).issues, []);
 });
 
-test("eip712Digest / eip712DomainSeparator ในโปรแกรม = ethers TypedDataEncoder ทุกชุด", () => {
+test("eip712Digest / eip712DomainSeparator in programs = ethers TypedDataEncoder for every set", () => {
   const { call } = probeChain();
   for (const c of CASES) {
     const res = call("digest", toInput({ domain: c.domain, types: c.types, primaryType: c.primaryType, message: c.message }));
@@ -169,59 +169,59 @@ test("eip712Digest / eip712DomainSeparator ในโปรแกรม = ethers 
     assert.equal(res.result, ethersDigest(c), c.label);
     assert.equal(call("separator", toInput({ domain: c.domain })).result, TypedDataEncoder.hashDomain(c.domain), c.label);
   }
-  // ข้อมูลผิด → INVALID_REQUEST ที่ catch ได้ · number ของ JS ใช้ไม่ได้ (ตัวเลขในโปรแกรมเป็น BigInt)
+  // bad data → catchable INVALID_REQUEST · JS numbers are not allowed (program numbers are BigInt)
   const bad = call("catchBad", toInput({ domain: MAIL_DOMAIN, types: MAIL_TYPES, message: { ...MAIL, to: null } }));
-  assert.match(bad.result, /^INVALID_REQUEST: EIP-712: Mail.to: ไม่มีค่า/);
+  assert.match(bad.result, /^INVALID_REQUEST: EIP-712: Mail.to: missing value/);
   const number = call("numberValue");
   assert.equal(number.status, "throw");
   assert.equal(number.error.code, "INVALID_REQUEST");
   assert.match(number.error.message, /BigInt/);
 });
 
-test("keccak256Bytes / ecrecoverDigest ในโปรแกรม · keccak256 / ecrecover แบบเดิมไม่เปลี่ยน", () => {
+test("keccak256Bytes / ecrecoverDigest in programs · existing keccak256 / ecrecover unchanged", () => {
   const { call } = probeChain();
   assert.equal(call("rawHash", { hex: "0x" }).result, keccak256("0x"));
   assert.equal(call("rawHash", { hex: "0x00ff10" }).result, keccak256("0x00ff10"));
   assert.equal(call("catchBytes", { hex: "0x123" }).result, "INVALID_REQUEST");
   assert.equal(call("catchBytes", { hex: "abcd" }).result, "INVALID_REQUEST");
-  // ข้อความ: keccak256(UTF-8) เหมือนเดิม (ไม่ใช่ byte ของ hex)
+  // text: keccak256(UTF-8) as before (not the hex bytes)
   assert.equal(call("textHash", { text: "0x00ff10" }).result, VM.keccak256Hex("0x00ff10"));
 
   const wallet = new Wallet(`0x${"44".repeat(32)}`);
   const digest = keccak256("0x1234");
   const signature = wallet.signingKey.sign(digest).serialized;
   assert.equal(call("recover", { digest, signature }).result, wallet.address.toLowerCase());
-  assert.equal(signTypedDataDigest(digest, wallet.privateKey), signature);   // ตัวช่วยฝั่ง JS = ethers ทุกไบต์
+  assert.equal(signTypedDataDigest(digest, wallet.privateKey), signature);   // JS-side helper = ethers, byte for byte
   assert.equal(recoverTypedDataDigest(digest, signature), wallet.address.toLowerCase());
-  // v ไม่ใช่ 27 / 28 → null · digest อื่น → address อื่น · รูปแบบผิด → INVALID_REQUEST (catch ได้)
+  // v not 27 / 28 → null · other digest → other address · bad format → INVALID_REQUEST (catchable)
   assert.equal(call("recover", { digest, signature: `${signature.slice(0, -2)}1d` }).result, null);
   assert.notEqual(call("recover", { digest: keccak256("0x99"), signature }).result, wallet.address.toLowerCase());
   assert.equal(call("catchRecover", { digest: "0x1234", signature }).result, "INVALID_REQUEST");
   assert.equal(call("catchRecover", { digest, signature: "0x1234" }).result, "INVALID_REQUEST");
-  // s สูง (ไม่ใช่ low-s): พฤติกรรมเดียวกับ ecrecover เดิม (ใช้ตัวกู้ตัวเดียวกัน)
+  // high s (not low-s): same behavior as the existing ecrecover (same recovery code)
   const sig = Signature.from(signature);
   const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
   const highS = `${sig.r}${(N - BigInt(sig.s)).toString(16).padStart(64, "0")}${sig.v === 27 ? "1c" : "1b"}`;
   assert.equal(call("recover", { digest, signature: highS }).result, recoverAddress(digest, highS));
-  // ecrecover(ข้อความ) แบบเดิม
+  // the existing ecrecover(message)
   const textDigest = VM.keccak256Hex("hello");
   assert.equal(call("textRecover", { text: "hello", signature: wallet.signingKey.sign(textDigest).serialized }).result, wallet.address.toLowerCase());
 });
 
-test("แก๊ส: keccak256Bytes = hash + byte × n · ecrecoverDigest = recover · eip712Digest ตามจำนวน hash + byte ที่ถูก hash · ของเดิมเท่าเดิม", () => {
+test("gas: keccak256Bytes = hash + byte × n · ecrecoverDigest = recover · eip712Digest by hash count + hashed bytes · existing APIs unchanged", () => {
   const { call } = probeChain({ gas: API_GAS_ONLY });
   const base = (fn, input) => call(fn, input).gasUsed;
   const g = VM.DEFAULT_GAS;
   const raw = (hex) => base("rawHash", { hex });
   assert.equal(raw("0x" + "00".repeat(64)) - raw("0x" + "00".repeat(32)), 32 * g.byte);
   assert.equal(raw("0x" + "00".repeat(32)) - raw("0x"), 32 * g.byte);
-  // keccak256(ข้อความ) เดิม: hash + byte × ความยาว (เท่ากับ keccak256Bytes ของ byte จำนวนเท่ากัน)
+  // existing keccak256(text): hash + byte × length (same as keccak256Bytes of the same byte count)
   assert.equal(base("textHash", { text: "a".repeat(32) }) - base("rawHash", { hex: "0x" + "61".repeat(32) }), 0);
 
   const wallet = new Wallet(`0x${"45".repeat(32)}`);
   const digest = keccak256("0x01");
   const recoverGas = base("recover", { digest, signature: wallet.signingKey.sign(digest).serialized });
-  const callOnly = base("textHash", { text: "" }) - g.hash;   // call + ค่าส่งข้อมูล (ไม่มี hash)
+  const callOnly = base("textHash", { text: "" }) - g.hash;   // call + data transfer cost (no hash)
   assert.equal(recoverGas - callOnly, g.recover);
 
   // eip712Digest: Mail = typeHash(Mail) + typeHash(Person) + 2 Person + 3 string + struct Mail + domain (typeHash + 2 string + struct) + digest
@@ -229,15 +229,15 @@ test("แก๊ส: keccak256Bytes = hash + byte × n · ecrecoverDigest = recov
   const encodeMail = "Mail(Person from,Person to,string contents)Person(string name,address wallet)";
   const encodePerson = "Person(string name,address wallet)";
   const encodeDomain = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
-  const hashes = 1 + 1 + 2 + 2 + 1 + 1 + 1 + 2 + 1 + 1;   // typeHash ×2, ชื่อ ×2, struct Person ×2, contents, Mail · domain: typeHash, name+version, struct · digest
+  const hashes = 1 + 1 + 2 + 2 + 1 + 1 + 1 + 2 + 1 + 1;   // typeHash ×2, names ×2, struct Person ×2, contents, Mail · domain: typeHash, name+version, struct · digest
   const bytes = encodeMail.length + encodePerson.length + "Cow".length + "Bob".length + 3 * 32 * 2 + "Hello, Bob!".length + 4 * 32
     + encodeDomain.length + "Ether Mail".length + 1 + 5 * 32 + 66;
-  const viaRaw = base("rawHash", { hex: "0x" });   // call + ค่า hash 1 ครั้ง
+  const viaRaw = base("rawHash", { hex: "0x" });   // call + one hash
   assert.equal(mail - (viaRaw - g.hash), hashes * g.hash + bytes * g.byte);
 });
 
 // ---------------------------------------------------------------------------
-//  permit (ERC-2612) ที่เซ็นด้วย ethers signTypedData + ERC-1271
+//  permit (ERC-2612) signed with ethers signTypedData + ERC-1271
 // ---------------------------------------------------------------------------
 
 const TOKEN = "0x00000000000000000000000000000000000000f1";
@@ -254,7 +254,7 @@ function tokenChain({ chainId = 7777 } = {}) {
   let number = 0;
   const block = (fn) => {
     number += 1;
-    const b = vm.createBlock({ number, timestamp: T0 + number * 1500, feeRecipient: RELAYER });   // 1.5 วิ ต่อ block → วินาทีปัดลง
+    const b = vm.createBlock({ number, timestamp: T0 + number * 1500, feeRecipient: RELAYER });   // 1.5 s per block → seconds rounded down
     const results = fn(b);
     b.commit();
     return results;
@@ -269,12 +269,12 @@ function tokenChain({ chainId = 7777 } = {}) {
   ]).forEach((r) => assert.equal(r.status, "success", JSON.stringify(r.error)));
   const call = (who, programUuid, functionName, input) => block((b) => [b.call({ programUuid, functionName, input, context: user(who) })])[0];
   const read = (programUuid, functionName, input = {}) => vm.query({ programUuid, functionName, input }).result;
-  /** วินาทีของ block ถัดไป (ที่ permit จะเทียบ) */
+  /** Seconds of the next block (what permit compares against) */
   const nextSecond = () => Math.floor((T0 + (number + 1) * 1500) / 1000);
   return { vm, call, read, nextSecond, chainId };
 }
 
-/** เซ็นด้วย ethers Wallet.signTypedData — ตัวเดียวกับที่ MetaMask eth_signTypedData_v4 ทำ */
+/** Sign with ethers Wallet.signTypedData, the same thing MetaMask eth_signTypedData_v4 does */
 async function ethersPermit(c, signer, { owner = signer.address, token = TOKEN, chainId = c.chainId, value = 500n, deadline, nonce } = {}) {
   const domain = { name: "Permit Coin", version: "1", chainId, verifyingContract: token };
   const message = {
@@ -286,14 +286,14 @@ async function ethersPermit(c, signer, { owner = signer.address, token = TOKEN, 
   return { input: { owner: owner.toLowerCase(), spender: SPENDER, value: `${value}n`, deadline: `${message.deadline}n`, signature }, domain, message };
 }
 
-test("permit: ลายเซ็นจาก ethers signTypedData (= MetaMask v4) ใช้ได้ · DOMAIN_SEPARATOR = hashDomain · ตัวช่วยฝั่ง JS ได้ลายเซ็นเดียวกัน", async () => {
+test("permit: signatures from ethers signTypedData (= MetaMask v4) work · DOMAIN_SEPARATOR = hashDomain · the JS-side helper gives the same signature", async () => {
   const c = tokenChain();
   const { input, domain, message } = await ethersPermit(c, ownerWallet);
   assert.equal(c.read(TOKEN, "DOMAIN_SEPARATOR"), TypedDataEncoder.hashDomain(domain));
   const fields = { name: "Permit Coin", chainId: c.chainId, verifyingContract: TOKEN, ...message };
   assert.equal(permitDigest(fields), TypedDataEncoder.hash(domain, PERMIT_TYPES, message));
   assert.equal(signPermit(fields, ownerWallet.privateKey), input.signature);
-  // typed data ของตัวช่วย = payload ที่ส่งให้ eth_signTypedData_v4 ได้ (มี EIP712Domain) และได้ digest เดียวกัน
+  // the helper's typed data = a payload eth_signTypedData_v4 accepts (with EIP712Domain), giving the same digest
   const typed = permitTypedData(fields);
   assert.equal(typedDataDigest(typed.domain, typed.types, typed.primaryType, typed.message), permitDigest(fields));
   assert.deepEqual(JSON.parse(JSON.stringify(typed)), typed);
@@ -302,21 +302,21 @@ test("permit: ลายเซ็นจาก ethers signTypedData (= MetaMask v4
   assert.equal(res.status, "success", JSON.stringify(res.error));
   assert.equal(c.read(TOKEN, "allowance", { owner: OWNER, spender: SPENDER }), "500n");
   assert.equal(c.read(TOKEN, "nonces", { owner: OWNER }), "1n");
-  // replay ไม่ได้
+  // replay is rejected
   assert.match(c.call(RELAYER, TOKEN, "permit", input).error.message, /invalid permit signature/);
-  // spender ใช้วงเงินได้ · approve / transfer เดิมยังทำงาน
+  // spender can use the allowance · existing approve / transfer still work
   assert.equal(c.call(SPENDER, TOKEN, "transferFrom", { from: OWNER, to: SPENDER, amount: "200n" }).status, "success");
   assert.equal(c.read(TOKEN, "balanceOf", { who: SPENDER }), "200n");
   assert.equal(c.call(OWNER, TOKEN, "approve", { spender: SPENDER, amount: "1n" }).status, "success");
   assert.equal(c.read(TOKEN, "allowance", { owner: OWNER, spender: SPENDER }), "1n");
 });
 
-test("permit: หมดเวลา (วินาที) · chain อื่น · verifyingContract อื่น · nonce ผิด · ผู้เซ็นอื่น → ปฏิเสธ", async () => {
+test("permit: expired (seconds) · other chain · other verifyingContract · wrong nonce · other signer → rejected", async () => {
   const c = tokenChain();
   const now = c.nextSecond();
   const expired = await ethersPermit(c, ownerWallet, { deadline: BigInt(now - 1) });
   assert.match(c.call(RELAYER, TOKEN, "permit", expired.input).error.message, /permit expired/);
-  // deadline เป็นมิลลิวินาทีโดยไม่ตั้งใจ = อนาคตไกลมาก (ไม่หมดอายุ) — ระบบใช้วินาทีแบบ EIP-2612
+  // a deadline accidentally in milliseconds = far future (never expires); the system uses seconds, as EIP-2612 does
   const rejected = [
     await ethersPermit(c, ownerWallet, { chainId: 1 }),
     await ethersPermit(c, ownerWallet, { token: OTHER_TOKEN }),
@@ -325,28 +325,28 @@ test("permit: หมดเวลา (วินาที) · chain อื่น �
   ];
   for (const { input } of rejected) assert.match(c.call(RELAYER, TOKEN, "permit", input).error.message, /invalid permit signature/);
   assert.equal(c.read(TOKEN, "nonces", { owner: OWNER }), "0n");
-  // deadline = วินาทีของ block พอดี → ยังใช้ได้
+  // deadline = exactly the block's second → still valid
   const exact = await ethersPermit(c, ownerWallet, { deadline: BigInt(c.nextSecond()) });
   assert.equal(c.call(RELAYER, TOKEN, "permit", exact.input).status, "success");
 });
 
-test("ERC-1271: isValidSignature รับ digest 32 byte · permit ของกระเป๋าโปรแกรมที่เจ้าของเซ็นด้วย signTypedData", async () => {
+test("ERC-1271: isValidSignature takes a 32-byte digest · permit for a program wallet signed by its owner with signTypedData", async () => {
   const c = tokenChain();
   const digest = keccak256("0xabcdef");
   assert.equal(c.read(WALLET, "isValidSignature", { hash: digest, signature: walletOwner.signingKey.sign(digest).serialized }), ERC1271_MAGIC_VALUE);
   assert.equal(c.read(WALLET, "isValidSignature", { hash: digest, signature: signWalletHash(digest, walletOwner.privateKey) }), ERC1271_MAGIC_VALUE);
   assert.equal(c.read(WALLET, "isValidSignature", { hash: digest, signature: ownerWallet.signingKey.sign(digest).serialized }), ERC1271_INVALID_VALUE);
-  // ไม่ใช่ digest 32 byte → ใช้ไม่ได้ (ไม่ hash ข้อความให้อีกแล้ว)
+  // not a 32-byte digest → invalid (text is no longer hashed for you)
   assert.equal(c.read(WALLET, "isValidSignature", { hash: "hello", signature: walletOwner.signingKey.sign(digest).serialized }), ERC1271_INVALID_VALUE);
 
-  // เจ้าของกระเป๋าเซ็น permit ที่ owner = กระเป๋าโปรแกรม ด้วย signTypedData (MetaMask) → token ถาม isValidSignature แบบ staticcall
+  // the wallet owner signs a permit with owner = the program wallet using signTypedData (MetaMask) → the token asks isValidSignature via staticcall
   const { input } = await ethersPermit(c, walletOwner, { owner: WALLET, value: 42n });
   const res = c.call(RELAYER, TOKEN, "permit", input);
   assert.equal(res.status, "success", JSON.stringify(res.error));
   const check = res.calls.find((entry) => entry.functionName === "isValidSignature");
   assert.equal(check.type, "staticcall");
   assert.equal(c.read(TOKEN, "allowance", { owner: WALLET, spender: SPENDER }), "42n");
-  // คนอื่นเซ็นแทนเจ้าของกระเป๋า → ปฏิเสธ
+  // someone else signing for the wallet owner → rejected
   const other = await ethersPermit(c, ownerWallet, { owner: WALLET });
   assert.match(c.call(RELAYER, TOKEN, "permit", other.input).error.message, /invalid permit signature/);
   assert.equal(getBytes(input.signature).length, 65);

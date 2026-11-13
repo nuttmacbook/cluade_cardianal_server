@@ -1,11 +1,11 @@
 /**
- * ข้อมูลที่ explorer ใช้แสดง storage ของโปรแกรม แยกตามจำนวนชั้นของ key
+ * Data the explorer uses to show a program's storage, grouped by the number of key parts
  *
- *   key 1 ชั้น   owner, price, supply          → แถบ program info (แสดงทุกตัวพร้อมค่า)
- *   key 2 ชั้น   balances:<address>, items:<id> → แถบ storage     (เลือก key แรกจาก dropdown แล้ว list key ที่ 2)
- *   key 3+ ชั้น  allow:<owner>:<spender>        → แถบ get storage (ไม่ list · กรอก key เองแล้วอ่านทีละตัว)
+ *   1-part key   owner, price, supply          → program info tab (shows all with values)
+ *   2-part key   balances:<address>, items:<id> → storage tab     (pick the first part from a dropdown, then list the 2nd parts)
+ *   3+-part key  allow:<owner>:<spender>        → get storage tab (not listed · type the key and read one at a time)
  *
- * แยกจาก server.js เพื่อให้เทสต์เรียกตรงกับ VM ได้โดยไม่ต้องเปิด server
+ * Separate from server.js so tests can call it directly against the VM without starting the server
  */
 import { storageKey, map, toEvmAbi } from "../core/virtualmachine.js";
 import { checkTokenStandard } from "../standards/token.js";
@@ -14,7 +14,7 @@ import { checkMultiTokenStandard } from "../standards/multitoken.js";
 import { resolveAbi } from "../standards/system-abi.js";
 
 const SEP = ":";
-export const SCAN_LIMIT = 20_000;   // ไล่ key ไม่เกินเท่านี้ต่อครั้ง (เกินแล้วตอบ truncated: true)
+export const SCAN_LIMIT = 20_000;   // scan at most this many keys per call (beyond that answers truncated: true)
 export const MAX_VARIABLES = 200;
 export const MAX_KEY_PARTS = 16;
 
@@ -22,7 +22,7 @@ const lower = (value) => String(value ?? "").toLowerCase();
 const baseOf = (address) => `${lower(address)}${SEP}storage${SEP}`;
 const decode = (parts) => parts.map(decodeURIComponent);
 
-/** โครงของ storage: variable (พร้อมค่า) + ชื่อกลุ่ม 2 ชั้น + ชื่อกลุ่ม 3 ชั้นขึ้นไป */
+/** storage layout: variables (with values) + 2-part group names + 3+-part group names */
 export function storageLayout(vm, address, { scanLimit = SCAN_LIMIT } = {}) {
   const base = baseOf(address);
   const keys = vm.listKeys(base, { limit: scanLimit + 1 });
@@ -51,15 +51,15 @@ export function storageLayout(vm, address, { scanLimit = SCAN_LIMIT } = {}) {
   };
 }
 
-/** รายการใน key 2 ชั้นของกลุ่ม name: [{ key: key ที่ 2, value }] + cursor หน้าถัดไป */
+/** entries of 2-part keys in group name: [{ key: the 2nd part, value }] + cursor for the next page */
 export function storageMap(vm, address, name, { limit = 50, start } = {}) {
   const prefix = `${baseOf(address)}${encodeURIComponent(name)}${SEP}`;
   const items = [];
   let cursor = start?.startsWith(prefix) ? start : undefined;
-  // key 3 ชั้นที่อยู่ในกลุ่มเดียวกันถูกข้าม จึงต้องอ่านเป็นช่วง ๆ · อ่านเกิน 1 ตัวเพื่อรู้ว่ามีหน้าถัดไปไหม
+  // 3-part keys in the same group are skipped, so read in chunks · read one extra to know whether there is a next page
   while (items.length <= limit) {
     const chunk = vm.listKeys(prefix, { start: cursor, limit: 200 });
-    const fresh = cursor && chunk[0] === cursor ? chunk.slice(1) : chunk;   // start รวมตัวมันเองด้วย
+    const fresh = cursor && chunk[0] === cursor ? chunk.slice(1) : chunk;   // start includes itself
     for (const dbKey of fresh) {
       const rest = dbKey.slice(prefix.length);
       if (!rest.includes(SEP)) items.push({ dbKey, key: decodeURIComponent(rest) });
@@ -76,7 +76,7 @@ export function storageMap(vm, address, name, { limit = 50, start } = {}) {
   };
 }
 
-/** อ่านค่าของ key เดียว (ใส่ครบทุกชั้น) */
+/** read the value of a single key (all parts given) */
 export function storageGet(vm, address, parts) {
   if (!parts.length || parts.length > MAX_KEY_PARTS || parts.some((part) => part === "")) {
     return { status: 400, body: { error: `Enter 1–${MAX_KEY_PARTS} key parts, none empty` } };
@@ -86,7 +86,7 @@ export function storageGet(vm, address, parts) {
   return { key: decode(dbKey.slice(baseOf(address).length).split(SEP)), exists: value !== undefined, value: value ?? null };
 }
 
-/** address ไหนเป็นโปรแกรม (มีโค้ดอยู่ หรือ deploy แล้วรอ init) → { "<address>": true | false } */
+/** which addresses are programs (have code, or deployed and awaiting init) → { "<address>": true | false } */
 export function programFlags(vm, addresses) {
   return Object.fromEntries(addresses.slice(0, 200).map((value) => {
     const address = lower(value);
@@ -96,7 +96,7 @@ export function programFlags(vm, addresses) {
 
 // ---------- token ----------
 
-/** ข้อมูล token ตามมาตรฐาน (src/standards/token.js) · ไม่ใช่ token → null */
+/** token info per the standard (src/standards/token.js) · not a token → null */
 export function tokenInfo(vm, program) {
   const address = lower(program);
   const code = vm.read(`${address}${SEP}code`);
@@ -109,8 +109,8 @@ export function tokenInfo(vm, program) {
 }
 
 /**
- * เหรียญที่ address นี้ถืออยู่: รายชื่อโปรแกรมมาจาก event Transfer ที่ส่งมาถึง address นี้ (ดัชนี holding:)
- * ยอดอ่านจาก balanceOf ของโปรแกรม · ยอด 0 ไม่แสดง
+ * Coins this address holds: the program list comes from Transfer events sent to this address (holding: index)
+ * balances read from the program's balanceOf · zero balances are hidden
  */
 export function tokenHoldings(vm, address) {
   const who = lower(address);
@@ -128,14 +128,14 @@ export function tokenHoldings(vm, address) {
 
 // ---------- NFT / multi-token ----------
 
-/** มาตรฐานของโค้ด: "ERC-721" (src/standards/nft.js) | "ERC-1155" (src/standards/multitoken.js) | null */
+/** code standard: "ERC-721" (src/standards/nft.js) | "ERC-1155" (src/standards/multitoken.js) | null */
 export function collectionStandard(code) {
   if (code === undefined || code === null) return null;
   if (checkNftStandard(code).ok) return "ERC-721";
   return checkMultiTokenStandard(code).ok ? "ERC-1155" : null;
 }
 
-/** ข้อมูล NFT / multi-token ตามมาตรฐาน → { address, standard, name, symbol, totalSupply? } · ไม่ใช่ → null */
+/** NFT / multi-token info per the standard → { address, standard, name, symbol, totalSupply? } · not one → null */
 export function collectionInfo(vm, program) {
   const address = lower(program);
   const standard = collectionStandard(vm.read(`${address}${SEP}code`));
@@ -148,8 +148,8 @@ export function collectionInfo(vm, program) {
 }
 
 /**
- * NFT / multi-token ที่ address นี้ถืออยู่: โปรแกรมมาจากดัชนี holding: (event Transfer / TransferSingle / TransferBatch)
- * ชิ้นที่ถือมาจาก storage ของโปรแกรม — ERC-721: owned:<address>:<tokenId> · ERC-1155: balances:<address>:<id> (ยอด 0 ไม่แสดง)
+ * NFTs / multi-tokens this address holds: programs come from the holding: index (events Transfer / TransferSingle / TransferBatch)
+ * held items come from the program's storage — ERC-721: owned:<address>:<tokenId> · ERC-1155: balances:<address>:<id> (zero balances hidden)
  * → [{ program, standard, name, symbol, tokenId, amount, uri }]
  */
 export function nftHoldings(vm, address, { limit = 200 } = {}) {
@@ -174,19 +174,19 @@ export function nftHoldings(vm, address, { limit = 200 } = {}) {
   return items;
 }
 
-// ---------- แบ่งหน้า (explorer กดเลขหน้า / ข้ามหน้าได้) ----------
+// ---------- pagination (the explorer can click page numbers / jump pages) ----------
 
-export const PAGE_SCAN = 50_000;   // นับ key ไม่เกินเท่านี้ต่อรายการ (เกินแล้วตอบ truncated: true)
+export const PAGE_SCAN = 50_000;   // count at most this many keys per list (beyond that answers truncated: true)
 export const MAX_PAGE_SIZE = 100;
 
-/** อ่าน page / limit จาก query string · page เริ่มที่ 1 */
+/** read page / limit from the query string · page starts at 1 */
 export function pageOf(query) {
   const limit = Math.min(Math.max(Number(query?.get?.("limit")) || 20, 1), MAX_PAGE_SIZE);
   const page = Math.max(Math.floor(Number(query?.get?.("page"))) || 1, 1);
   return { page, limit };
 }
 
-/** ตัดหน้า: items ของหน้านั้น + จำนวนทั้งหมด · page เกินหน้าสุดท้าย → หน้าสุดท้าย */
+/** slice a page: that page's items + total count · page past the last page → the last page */
 export function slicePage(list, { page = 1, limit = 20 } = {}, { truncated = false } = {}) {
   const total = list.length;
   const pages = Math.max(1, Math.ceil(total / limit));
@@ -194,7 +194,7 @@ export function slicePage(list, { page = 1, limit = 20 } = {}, { truncated = fal
   return { items: list.slice((current - 1) * limit, current * limit), total, page: current, pages, limit, truncated };
 }
 
-/** key ใต้ prefix แบบแบ่งหน้า (ใหม่ไปเก่า) → อ่านค่าเฉพาะ key ของหน้านั้น */
+/** keys under a prefix, paginated (newest to oldest) → reads values only for that page's keys */
 function pageEntries(vm, prefix, paging, { sort, read = (dbKey) => vm.read(dbKey) } = {}) {
   const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1, reverse: true });
   const truncated = keys.length > PAGE_SCAN;
@@ -204,7 +204,7 @@ function pageEntries(vm, prefix, paging, { sort, read = (dbKey) => vm.read(dbKey
   return { ...result, items: result.items.map(read) };
 }
 
-/** header ของ block ใหม่ไปเก่า · คำนวณจากเลข block จึงไม่ต้องไล่ key */
+/** block headers newest to oldest · computed from block numbers, so no key scan */
 export function pageBlocks(vm, { page = 1, limit = 20 } = {}) {
   const total = vm.latestBlockNumber() ?? 0;
   const pages = Math.max(1, Math.ceil(total / limit));
@@ -217,23 +217,23 @@ export function pageBlocks(vm, { page = 1, limit = 20 } = {}) {
   return { items, total, page: current, pages, limit, truncated: false };
 }
 
-/** tx ที่ address นี้ส่ง · nonce ใน key ไม่ได้เติม 0 ข้างหน้า จึงเรียงด้วยตัวเลขของ nonce (มากไปน้อย) */
+/** txs this address sent · the nonce in the key isn't zero-padded, so sort by nonce numerically (descending) */
 export function pageTransactionsOf(vm, address, paging) {
   const nonceOf = (dbKey) => Number(dbKey.split(SEP)[2]);
   return pageEntries(vm, `${lower(address)}${SEP}txn${SEP}`, paging, { sort: (a, b) => nonceOf(b) - nonceOf(a), read: (dbKey) => vm.readTransactionRecord(dbKey) });
 }
 
-/** tx ที่เข้ามาหา address นี้ (ได้รับเงิน / โปรแกรมถูกเรียก) */
+/** txs coming into this address (received funds / program was called) */
 export function pageTransactionsTo(vm, address, paging) {
   const headers = new Map();
   return pageEntries(vm, `txto${SEP}${lower(address)}${SEP}`, paging, { read: (dbKey) => vm.readTransactionTo(dbKey, headers) });
 }
 
-/** event ที่โปรแกรม emit · name = เฉพาะชื่อนั้น */
+/** events the program emitted · name = only that name */
 export const pageEvents = (vm, program, paging, name = "") =>
   pageEntries(vm, `event${SEP}${lower(program)}${SEP}${name ? `${name}${SEP}` : ""}`, paging);
 
-/** รายการใน key 2 ชั้นของกลุ่ม name แบบแบ่งหน้า (ข้าม key 3 ชั้นขึ้นไป) */
+/** entries of 2-part keys in group name, paginated (skipping 3+-part keys) */
 export function pageStorageMap(vm, address, name, paging) {
   const prefix = `${baseOf(address)}${encodeURIComponent(name)}${SEP}`;
   const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
@@ -245,7 +245,7 @@ export function pageStorageMap(vm, address, name, paging) {
 
 const bigOf = (value) => { try { return BigInt(String(value ?? 0).replace(/n$/, "")); } catch { return 0n; } };
 
-/** ผู้ถือ token: อ่านจาก balances:<address> ของโปรแกรม · ข้ามยอด 0 · ยอดมากไปน้อย */
+/** token holders: read from the program's balances:<address> · skips zero balances · largest first */
 export function pageHolders(vm, program, paging) {
   if (!tokenInfo(vm, program)) return { status: 404, body: { error: "Not a standard token" } };
   const prefix = `${baseOf(program)}balances${SEP}`;
@@ -258,12 +258,12 @@ export function pageHolders(vm, program, paging) {
   return slicePage(holders, paging, { truncated });
 }
 
-// ---------- โปรแกรม: อนุมัติแล้ว / รออนุมัติ ----------
+// ---------- programs: approved / pending approval ----------
 
 /**
- * address ของโปรแกรมที่อนุมัติแล้ว (มี <address>:this หลัง init) · ไม่มีดัชนีรวม จึงไล่ทีละ address:
- * อ่าน key แรกของ address แล้วกระโดดข้าม key ที่เหลือของ address นั้นทั้งหมด (";" อยู่ถัดจาก ":")
- * → อ่าน 1 key ต่อ address ไม่ใช่ทุก key ของทุกกระเป๋า
+ * addresses of approved programs (have <address>:this after init) · there's no combined index, so walk address by address:
+ * read an address's first key, then skip all of that address's remaining keys (";" sorts right after ":")
+ * → reads 1 key per address, not every key of every wallet
  */
 export function approvedProgramAddresses(vm) {
   const programs = [];
@@ -278,16 +278,16 @@ export function approvedProgramAddresses(vm) {
   return programs;
 }
 
-/** จำนวนโปรแกรม { approved, pending } */
+/** number of programs { approved, pending } */
 export function programCounts(vm) {
   return { approved: approvedProgramAddresses(vm).length, pending: vm.listKeys(`pending${SEP}`).length };
 }
 
 const codeSize = (code) => Buffer.byteLength(String(code ?? ""), "utf8");
-/** { collection: "ERC-721" | "ERC-1155" } เฉพาะโปรแกรม NFT / multi-token (อย่างอื่นไม่มีฟิลด์นี้) */
+/** { collection: "ERC-721" | "ERC-1155" } only for NFT / multi-token programs (others don't have this field) */
 const collectionField = (code) => { const standard = collectionStandard(code); return standard ? { collection: standard } : {}; };
 
-/** โปรแกรมที่ deploy แล้วรอทีมงานอนุมัติ (init) หรือปฏิเสธ (reject) · เรียงตาม address */
+/** programs deployed and awaiting team approval (init) or rejection (reject) · sorted by address */
 export function pagePendingPrograms(vm, paging) {
   const prefix = `pending${SEP}`;
   const keys = vm.listKeys(prefix, { limit: PAGE_SCAN + 1 });
@@ -300,7 +300,7 @@ export function pagePendingPrograms(vm, paging) {
   }) };
 }
 
-/** โปรแกรมที่อนุมัติแล้ว · ใหม่ไปเก่าตามเวลาที่อนุมัติ (createdAt) */
+/** approved programs · newest to oldest by approval time (createdAt) */
 export function pageApprovedPrograms(vm, paging) {
   const programs = approvedProgramAddresses(vm).map((address) => ({ address, metadata: vm.getMetadata(address) }))
     .sort((a, b) => (Number(b.metadata.createdAt) || 0) - (Number(a.metadata.createdAt) || 0) || a.address.localeCompare(b.address));
@@ -312,37 +312,37 @@ export function pageApprovedPrograms(vm, paging) {
   }) };
 }
 
-// ---------- แบบ cursor (เหมือนแถบ storage): อ่านแค่ limit + 1 key ต่อครั้ง ไม่ต้องนับทั้งรายการ ----------
+// ---------- cursor-based (like the storage tab): reads only limit + 1 keys per call, no need to count the whole list ----------
 
-/** อ่าน limit / cursor จาก query string */
+/** read limit / cursor from the query string */
 export function cursorOf(query) {
   const limit = Math.min(Math.max(Math.floor(Number(query?.get?.("limit"))) || 20, 1), MAX_PAGE_SIZE);
   return { limit, cursor: query?.get?.("cursor") || undefined };
 }
 
-/** ใหม่ไปเก่า → { items, next } · next = dbKey ของรายการแรกของหน้าถัดไป (ส่งกลับมาเป็น cursor) · null = หมดแล้ว */
+/** newest to oldest → { items, next } · next = dbKey of the next page's first item (pass back as cursor) · null = done */
 export function cursorEntries(vm, prefix, { limit = 20, cursor } = {}, map = (dbKey) => vm.read(dbKey)) {
-  const start = typeof cursor === "string" && cursor.startsWith(prefix) ? cursor : undefined;   // cursor ของรายการอื่น = เริ่มใหม่
+  const start = typeof cursor === "string" && cursor.startsWith(prefix) ? cursor : undefined;   // a cursor from another list = start over
   const keys = vm.listKeys(prefix, { limit: limit + 1, reverse: true, start });
   return { items: keys.slice(0, limit).map(map), next: keys.length > limit ? keys[limit] : null, limit };
 }
 
-/** tx ที่เข้ามาหา address / โปรแกรม (รวม call ซ้อน) แบบ cursor */
+/** txs coming into an address / program (including nested calls), cursor-based */
 export function cursorTransactionsTo(vm, address, options) {
   const headers = new Map();
   return cursorEntries(vm, `txto${SEP}${lower(address)}${SEP}`, options, (dbKey) => vm.readTransactionTo(dbKey, headers));
 }
 
-/** query string ที่ไม่ใช่ตัวควบคุมหน้า (name / page / limit / cursor) = กรองด้วย field ที่ indexed → [[field, ค่า], ...] · ไม่มี → null */
+/** query string params other than paging controls (name / page / limit / cursor) = filters on indexed fields → [[field, value], ...] · none → null */
 export function indexedFilterOf(query) {
   const filters = [...(query?.entries?.() ?? [])].filter(([key]) => !["name", "page", "limit", "cursor"].includes(key));
   return filters.length ? filters : null;
 }
 
 /**
- * event ที่ field ที่ indexed มีค่าตามที่ขอ (GET /program/:a/events?name=Transfer&to=0x…) แบบ cursor → { items, next }
- *   ใช้ดัชนีของ field แรก (ไม่ไล่ event ทั้งหมด) แล้วกรอง field ที่เหลือจากข้อมูลของ event
- *   ต้องระบุ name · field ที่ไม่ได้ emit แบบ indexed → ไม่พบ (ไม่มีดัชนี)
+ * events whose indexed fields have the requested values (GET /program/:a/events?name=Transfer&to=0x…), cursor-based → { items, next }
+ *   uses the index of the first field (doesn't scan all events), then filters the remaining fields from the event data
+ *   name is required · fields not emitted as indexed → not found (no index)
  */
 export function cursorIndexedEvents(vm, program, name, filters, { limit = 20, cursor } = {}) {
   if (!name) return { status: 400, body: { error: "Filtering by field needs ?name=<event>" } };
@@ -351,7 +351,7 @@ export function cursorIndexedEvents(vm, program, name, filters, { limit = 20, cu
     const actual = event?.data?.[key];
     return String(actual ?? "").toLowerCase() === String(wanted).toLowerCase() || String(actual) === `${wanted}n`;
   });
-  // อ่านทีละช่วงจนได้ครบ limit (field อื่นอาจกรองทิ้งบางรายการ)
+  // read chunk by chunk until limit is reached (other fields may filter some out)
   const items = [];
   let next = cursor;
   do {
@@ -366,26 +366,26 @@ export function cursorIndexedEvents(vm, program, name, filters, { limit = 20, cu
 }
 const eventKeyOf = (event) => `event${SEP}${event.program}${SEP}${event.name}${SEP}${String(event.blockNumber).padStart(12, "0")}${SEP}${String(event.txIndex).padStart(4, "0")}${SEP}${String(event.index).padStart(4, "0")}`;
 
-/** ABI ของโปรแกรม (metadata.abi) → { address, abi, evmAbi } · ไม่ได้ประกาศ → abi: null */
+/** a program's ABI (metadata.abi) → { address, abi, evmAbi } · not declared → abi: null */
 export function programAbi(vm, program) {
   const address = lower(program);
-  const abi = resolveAbi((dbKey) => vm.read(dbKey), address);   // ประกาศเอง ?? โปรแกรมแถม (src/standards/system-abi.js)
+  const abi = resolveAbi((dbKey) => vm.read(dbKey), address);   // declared ?? bundled program (src/standards/system-abi.js)
   return { address, abi, evmAbi: abi ? toEvmAbi(abi) : null };
 }
 
-/** event ของโปรแกรมแบบ cursor · name = เฉพาะชื่อนั้น */
+/** a program's events, cursor-based · name = only that name */
 export const cursorEvents = (vm, program, options, name = "") =>
   cursorEntries(vm, `event${SEP}${lower(program)}${SEP}${name ? `${name}${SEP}` : ""}`, options);
 
-// ---------- กลุ่มของ storage (นับครบทุก key แบบแบ่งช่วง) ----------
+// ---------- storage groups (counts every key, in chunks) ----------
 
-export const GROUP_SCAN = 20_000;      // key ต่อ request ตั้งต้น
-export const MAX_GROUP_SCAN = 50_000;  // เพดานต่อ request
+export const GROUP_SCAN = 20_000;      // keys per request by default
+export const MAX_GROUP_SCAN = 50_000;  // cap per request
 
 /**
- * นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (ไม่เกิน scan key ต่อ request → ต้นทุนต่อ request มีเพดาน)
+ * count storage keys by first key part, chunk by chunk (at most scan keys per request → bounded cost per request)
  *   → { total, groups: [{ name, count }], scanned, next, complete }
- * total / groups = เฉพาะช่วงนี้ · ยังไม่ครบ (next ไม่ใช่ null) → ส่ง cursor=next มาอีกครั้งแล้วบวกผลรวมกันเอง
+ * total / groups = this chunk only · not finished (next is not null) → send cursor=next again and add the totals yourself
  */
 export function storageGroups(vm, address, { cursor, scan = GROUP_SCAN } = {}) {
   const base = baseOf(address);
@@ -403,15 +403,15 @@ export function storageGroups(vm, address, { cursor, scan = GROUP_SCAN } = {}) {
     scanned, next, complete: next === null };
 }
 
-// ---------- tx ที่ถูกปฏิเสธ (บันทึกอยู่ใน block) ----------
+// ---------- rejected txs (recorded in blocks) ----------
 
-export const REJECTED_SCAN_BLOCKS = 1000;   // ไล่ไม่เกินเท่านี้ block ต่อ request (ไม่ระบุ address)
+export const REJECTED_SCAN_BLOCKS = 1000;   // scan at most this many blocks per request (no address given)
 
 /**
- * tx ที่ถูกปฏิเสธ ใหม่ไปเก่า → { items, next }
- *   address = เฉพาะผู้ส่งคนนี้ (ดัชนี rejfrom: · cursor = dbKey)
- *   ไม่ระบุ = ทั้งเชน ไล่ block จากใหม่ไปเก่า (cursor = "<block>:<index>") ไม่เกิน REJECTED_SCAN_BLOCKS block ต่อครั้ง
- *            ไล่ครบเพดานแล้วยังไม่ครบ limit → items น้อยกว่า limit และมี next ให้ไล่ต่อ
+ * rejected txs, newest to oldest → { items, next }
+ *   address = only this sender's (rejfrom: index · cursor = dbKey)
+ *   not given = the whole chain, walking blocks newest to oldest (cursor = "<block>:<index>"), at most REJECTED_SCAN_BLOCKS blocks per call
+ *            the cap was reached before limit was filled → fewer items than limit, with next to continue
  */
 export function pageRejected(vm, { address, limit = 20, cursor } = {}) {
   if (address) return cursorEntries(vm, `rejfrom${SEP}${lower(address)}${SEP}`, { limit, cursor });

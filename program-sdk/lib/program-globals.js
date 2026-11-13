@@ -1,18 +1,18 @@
 /**
- * API ปลอมสำหรับทดสอบโปรแกรมในเครื่องแบบเร็ว ๆ โดยไม่ต้องรัน VM
+ * Fake API for quickly testing programs locally without running the VM
  *   const api = createFakeApi({ balances: { "0xabc": 100n } });
  *   Object.assign(globalThis, api);
  *   const { transfer } = program();
  *
- * ตัวเลขเป็น BigInt เหมือนบน chain: ยอดเงิน / params.value / params.block.timestamp / BlockNumber()
- * (ต่างจาก chain ตรงที่ไม่ได้แปลง input / storage ให้ — ส่ง 10n เข้ามาเอง)
+ * Numbers are BigInt as on chain: balances / params.value / params.block.timestamp / BlockNumber()
+ * (unlike the chain, input / storage are not converted for you — pass 10n yourself)
  *
- * ถ้าอยากได้พฤติกรรมเหมือนบน chain ทุกอย่าง (ค่าแก๊ส, การย้อนข้อมูลเมื่อ throw, เวลาของ block)
- * ให้ใช้ createChain() จาก lib/testkit.js แทน ซึ่งรันบน VM ตัวจริง
+ * For behavior identical to the chain in every respect (gas fees, rollback on throw, block time)
+ * use createChain() from lib/testkit.js instead, which runs on the real VM
  */
 import { createHash } from "node:crypto";
 
-/** ข้อมูล → ข้อความแบบเดียวกับบน chain (key เรียงตามตัวอักษร · BigInt เป็น "123n") */
+/** Data → text the same way as on chain (keys sorted alphabetically · BigInt as "123n") */
 const canonical = (value) => {
   if (typeof value === "bigint") return JSON.stringify(`${value}n`);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -26,28 +26,28 @@ const digest = (algorithm) => (value) =>
 
 /**
  * @typedef {object} Params
- * @property {object} input                 ข้อมูลที่ผู้เรียกส่งมา
- * @property {{ sender: string, origin: string }} context  ผู้เรียกชั้นนี้ / ผู้เริ่ม tx
- * @property {bigint} value                 native ที่แนบมากับการเรียกนี้
- * @property {{ timestamp: bigint }} block  เวลาของ block
+ * @property {object} input                 data sent by the caller
+ * @property {{ sender: string, origin: string }} context  caller of this frame / tx originator
+ * @property {bigint} value                 native attached to this call
+ * @property {{ timestamp: bigint }} block  block time
  */
 
 /**
  * @param {object} [options]
- * @param {Record<string, any>} [options.storage]   ข้อมูลตั้งต้นของโปรแกรม
- * @param {Record<string, bigint>} [options.balances] ยอด native ของแต่ละ address
- * @param {Record<string, object>} [options.metadata] metadata ของแต่ละ address
- * @param {string[]} [options.programs]             address ที่ถือว่าเป็นโปรแกรม
- * @param {string} [options.self]                   address ของโปรแกรมที่กำลังทดสอบ
+ * @param {Record<string, any>} [options.storage]   initial program data
+ * @param {Record<string, bigint>} [options.balances] native balance of each address
+ * @param {Record<string, object>} [options.metadata] metadata of each address
+ * @param {string[]} [options.programs]             addresses treated as programs
+ * @param {string} [options.self]                   address of the program under test
  * @param {number} [options.blockNumber]
  * @param {number} [options.timestamp]
- * @param {Record<number, string>} [options.blockHashes] hash ของ block ก่อนหน้า (เลข block → hash) สำหรับ BlockHash()
- * @param {Record<string, string>} [options.code]      โค้ดของแต่ละ address สำหรับ CodeSizeOf()
+ * @param {Record<number, string>} [options.blockHashes] hashes of previous blocks (block number → hash) for BlockHash()
+ * @param {Record<string, string>} [options.code]      code of each address for CodeSizeOf()
  * @param {number} [options.chainId]
- * @param {string|null} [options.coinbase]           ผู้ปิด block
+ * @param {string|null} [options.coinbase]           block producer
  * @param {number|null} [options.blockGasLimit]
- * @param {bigint} [options.gasPrice]               ราคาจริงของ tx (GasPrice())
- * @param {bigint} [options.baseFee]                base fee ของ block (BaseFee() · EIP-1559)
+ * @param {bigint} [options.gasPrice]               actual tx price (GasPrice())
+ * @param {bigint} [options.baseFee]                block base fee (BaseFee() · EIP-1559)
  */
 export function createFakeApi({
   storage = {},
@@ -77,7 +77,7 @@ export function createFakeApi({
   const balanceOf = (address) => native.get(lower(address)) ?? 0n;
 
   return {
-    // ---------- ข้อมูลของโปรแกรม ----------
+    // ---------- program data ----------
     /** @param {string|object} key */
     readDB: (key) => store.get(toKey(key)),
     /** @param {string|object} key @param {any} value */
@@ -87,24 +87,24 @@ export function createFakeApi({
     /** @param {...(string|number|bigint)} parts */
     map: (...parts) => ({ parts: parts.map(String) }),
 
-    // ---------- เงิน ----------
-    /** ยอด native คงเหลือของโปรแกรมตัวเอง */
+    // ---------- money ----------
+    /** The program's own remaining native balance */
     ThisBalance: () => balanceOf(self),
     /** @param {string} address */
     BalanceOf: (address) => balanceOf(address),
     /** @param {string} to @param {bigint} amount */
     transferNative: (to, amount) => {
-      if (typeof amount !== "bigint") throw new Error("amount: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
-      if (amount <= 0n) throw new Error("amount ต้องเป็นจำนวนเต็มบวก");
-      if (balanceOf(self) < amount) throw new Error(`ยอด native ของ '${self}' ไม่พอ`);
+      if (typeof amount !== "bigint") throw new Error("amount: numbers in programs must be BigInt only (e.g. 10n)");
+      if (amount <= 0n) throw new Error("amount must be a positive integer");
+      if (balanceOf(self) < amount) throw new Error(`insufficient native balance of '${self}'`);
       native.set(lower(self), balanceOf(self) - amount);
       native.set(lower(to), balanceOf(to) + amount);
       transfers.push({ from: lower(self), to: lower(to), amount });
       return true;
     },
 
-    // ---------- ข้อมูลของ address ----------
-    /** address ของโปรแกรมตัวเอง */
+    // ---------- address data ----------
+    /** The program's own address */
     ThisAddress: () => self,
     /** @param {string} address */
     IsProgram: (address) => programSet.has(lower(address)),
@@ -120,19 +120,19 @@ export function createFakeApi({
     },
 
     // ---------- event / block ----------
-    /** @param {string} name @param {object} [data] @param {{ indexed?: string[] }} [options] field ที่ค้นด้วยค่าได้ (ไม่เกิน 3) */
+    /** @param {string} name @param {object} [data] @param {{ indexed?: string[] }} [options] fields searchable by value (max 3) */
     emit: (name, data = {}, options) => {
-      if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(name)) throw new Error("ชื่อ event ไม่ถูกต้อง");
+      if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(name)) throw new Error("invalid event name");
       const indexed = options?.indexed ?? [];
       if (!Array.isArray(indexed) || indexed.length > 3 || new Set(indexed).size !== indexed.length
-        || indexed.some((field) => !Object.hasOwn(data, field))) throw new Error("emit: indexed ไม่ถูกต้อง");
+        || indexed.some((field) => !Object.hasOwn(data, field))) throw new Error("emit: invalid indexed");
       events.push({ index: events.length, name, data, ...(indexed.length ? { indexed: [...indexed] } : {}) });
       return true;
     },
     BlockNumber: () => BigInt(blockNumber),
-    /** hash ของ block ก่อนหน้า (ย้อนได้ 256 block) · block ปัจจุบัน / อนาคต → null @param {bigint} n */
+    /** hash of a previous block (up to 256 blocks back) · current / future block → null @param {bigint} n */
     BlockHash: (n) => {
-      if (typeof n !== "bigint") throw new Error("BlockHash: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
+      if (typeof n !== "bigint") throw new Error("BlockHash: numbers in programs must be BigInt only (e.g. 10n)");
       if (n >= BigInt(blockNumber) || n < BigInt(blockNumber) - 256n) return null;
       return blockHashes[Number(n)] ?? null;
     },
@@ -141,16 +141,16 @@ export function createFakeApi({
     BlockGasLimit: () => (blockGasLimit === null ? null : BigInt(blockGasLimit)),
     GasPrice: () => BigInt(gasPrice),
     BaseFee: () => BigInt(baseFee),
-    /** โหมดนี้ไม่นับแก๊ส → null เสมอ (ใช้ createChain() ถ้าต้องการค่าจริง) */
+    /** This mode doesn't meter gas → always null (use createChain() for real values) */
     GasLeft: () => null,
 
-    // ---------- โค้ดของ address ----------
+    // ---------- address code ----------
     /** @param {string} address */
     CodeSizeOf: (address) => (code[lower(address)] === undefined ? 0n : BigInt(Buffer.byteLength(code[lower(address)], "utf8"))),
-    /** keccak256 ของโค้ดคำนวณไม่ได้ในโหมดนี้ (ไม่มี keccak ใน node:crypto) — ใช้ createChain() แทน */
+    /** keccak256 of code can't be computed in this mode (node:crypto has no keccak) — use createChain() instead */
     CodeHashOf: (address) => {
       if (code[lower(address)] === undefined) return null;
-      throw new Error("โหมดทดสอบเร็วคำนวณ CodeHashOf ไม่ได้ ใช้ createChain() แทน");
+      throw new Error("fast test mode can't compute CodeHashOf, use createChain() instead");
     },
 
     // ---------- precompile ----------
@@ -163,7 +163,7 @@ export function createFakeApi({
     /** (base ** exponent) % modulus · modulus = 0n → 0n @param {bigint} base @param {bigint} exponent @param {bigint} modulus */
     modexp: (base, exponent, modulus) => {
       for (const value of [base, exponent, modulus]) {
-        if (typeof value !== "bigint" || value < 0n) throw new Error("modexp: base / exponent / modulus ต้องเป็น BigInt ที่ไม่ติดลบ");
+        if (typeof value !== "bigint" || value < 0n) throw new Error("modexp: base / exponent / modulus must be non-negative BigInt");
       }
       if (modulus === 0n) return 0n;
       let result = 1n % modulus;
@@ -171,22 +171,22 @@ export function createFakeApi({
       return result;
     },
 
-    // ---------- byte ดิบ / EIP-712 (ต้องใช้ keccak256 ซึ่ง node:crypto ไม่มี → ใช้ createChain() แทน) ----------
-    /** keccak256 ของ byte ดิบ "0x…" @param {string} hex */
-    keccak256Bytes: () => { throw new Error("โหมดทดสอบเร็วคำนวณ keccak256Bytes ไม่ได้ ใช้ createChain() แทน"); },
-    /** กู้ address จาก digest 32 byte + ลายเซ็น @param {string} digest @param {string} signature */
-    ecrecoverDigest: () => { throw new Error("โหมดทดสอบเร็วคำนวณ ecrecoverDigest ไม่ได้ ใช้ createChain() แทน"); },
-    /** digest แบบ eth_signTypedData_v4 @param {object} domain @param {object} types @param {string} primaryType @param {object} message */
-    eip712Digest: () => { throw new Error("โหมดทดสอบเร็วคำนวณ eip712Digest ไม่ได้ ใช้ createChain() แทน"); },
-    /** domainSeparator ของ EIP-712 @param {object} domain @param {object} [types] */
-    eip712DomainSeparator: () => { throw new Error("โหมดทดสอบเร็วคำนวณ eip712DomainSeparator ไม่ได้ ใช้ createChain() แทน"); },
+    // ---------- raw bytes / EIP-712 (needs keccak256, which node:crypto lacks → use createChain() instead) ----------
+    /** keccak256 of raw bytes "0x…" @param {string} hex */
+    keccak256Bytes: () => { throw new Error("fast test mode can't compute keccak256Bytes, use createChain() instead"); },
+    /** Recover an address from a 32-byte digest + signature @param {string} digest @param {string} signature */
+    ecrecoverDigest: () => { throw new Error("fast test mode can't compute ecrecoverDigest, use createChain() instead"); },
+    /** eth_signTypedData_v4-style digest @param {object} domain @param {object} types @param {string} primaryType @param {object} message */
+    eip712Digest: () => { throw new Error("fast test mode can't compute eip712Digest, use createChain() instead"); },
+    /** EIP-712 domainSeparator @param {object} domain @param {object} [types] */
+    eip712DomainSeparator: () => { throw new Error("fast test mode can't compute eip712DomainSeparator, use createChain() instead"); },
 
-    /** เรียกโปรแกรมอื่นไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */
-    runProgram: () => { throw new Error("โหมดทดสอบเร็วเรียกโปรแกรมอื่นไม่ได้ ใช้ createChain() แทน"); },
-    /** สร้างโปรแกรมใหม่ไม่ได้ในโหมดนี้ — ใช้ createChain() จาก testkit แทน */
-    cloneProgram: () => { throw new Error("โหมดทดสอบเร็วสร้างโปรแกรมใหม่ไม่ได้ ใช้ createChain() แทน"); },
+    /** Can't call other programs in this mode — use createChain() from testkit instead */
+    runProgram: () => { throw new Error("fast test mode can't call other programs, use createChain() instead"); },
+    /** Can't create new programs in this mode — use createChain() from testkit instead */
+    cloneProgram: () => { throw new Error("fast test mode can't create new programs, use createChain() instead"); },
 
-    // ---------- ตรวจผลในเทสต์ ----------
+    // ---------- for checking results in tests ----------
     store, native, meta, events, transfers,
     params: (input = {}, { sender = "0xalice", value = 0n } = {}) =>
       ({ input, context: { sender, origin: sender }, value: BigInt(value), block: { timestamp: BigInt(timestamp) } }),

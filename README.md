@@ -1,82 +1,82 @@
 # Program VM
 
-VM สำหรับรันโปรแกรม JavaScript บน chain ของตัวเอง พร้อมระบบ block, ค่าแก๊ส, ลายเซ็น และการย้อนดูข้อมูล
+A VM for running JavaScript programs on its own chain, with blocks, gas fees, signatures, and historical state lookup
 
 ```bash
 npm install
-npm test          # 1045 เคส
-npm run demo      # สนามทดลอง
-npm run examples  # ตัวอย่าง request ทุกประเภท
+npm test          # 1045 cases
+npm run demo      # playground
+npm run examples  # sample requests of every type
 
-npm run dev       # server + explorer ที่ http://localhost:3000 (DEV=1 · เครือข่ายจริงใช้ npm start + ADMINS + PRODUCER_KEY ดู HANDOFF หัวข้อ 1)
-npm run seed      # สร้างข้อมูลตัวอย่างผ่าน HTTP (ต้องรัน server ไว้ก่อน)
-DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # โปรแกรมกลาง 14 ตัว: Multicall, WBWSC, Multisig, Factory + ต้นแบบ token / NFT, Multisender, Token lock, DEX, Staking, Limit order, NFT market (HANDOFF หัวข้อ 8)
+npm run dev       # server + explorer at http://localhost:3000 (DEV=1 · a real network uses npm start + ADMINS + PRODUCER_KEY, see HANDOFF section 1)
+npm run seed      # create sample data over HTTP (the server must already be running)
+DEPLOYER_KEY=0x… ADMIN_KEY=0x… npm run deploy:system   # 14 system programs: Multicall, WBWSC, Multisig, Factory + token / NFT templates, Multisender, Token lock, DEX, Staking, Limit order, NFT market (HANDOFF section 8)
 ```
 
-`server.js` รวมทุกอย่างเข้าด้วยกัน: VM + mempool + autoreview + simulate + ปิด block อัตโนมัติ
-และเสิร์ฟหน้า explorer จากโฟลเดอร์ `explorerscan/` (แต่งหน้าตาเองได้ ดู `explorerscan/README.md`) ตั้งค่าผ่าน env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (ส่วนใหญ่อยู่หัวไฟล์ `server.js` · ค่าที่ genesis ล็อกได้ เช่น `CHAIN_ID` `GAS_PRICE` `PRODUCERS` อยู่ใน `GENESIS_SETTINGS` ของ `src/node/genesis.js`)
-ยอดเงินตั้งต้นอ่านจาก `genesis.json`
-ค่าเริ่ม = Bluewolfchain (BWSC) · chainId 41234 · block 2 วิ · 5M แก๊ส · ขั้นต่ำ 10,000 gwei · `genesis.json` เปิด fork `bluewolf` ตั้งแต่ block 0
+`server.js` ties everything together: VM + mempool + autoreview + simulate + automatic block sealing
+and serves the explorer from the `explorerscan/` folder (customizable, see `explorerscan/README.md`). Configured via env: `PORT`, `HOST`, `DATA`, `GENESIS`, `PRODUCER_KEY`, `ADMINS`, `BLOCK_MS`, `CHAIN_ID`, `TRUST_PROXY`, `EVM_RATE_LIMIT` … (most are at the top of `server.js` · values genesis can lock, such as `CHAIN_ID` `GAS_PRICE` `PRODUCERS`, are in `GENESIS_SETTINGS` in `src/node/genesis.js`)
+Initial balances are read from `genesis.json`
+Defaults = Bluewolfchain (BWSC) · chainId 41234 · 2 s blocks · 5M gas · minimum 10,000 gwei · `genesis.json` enables the `bluewolf` fork from block 0
 
-## โครงสร้าง
+## Layout
 
-แบ่งเป็น 3 กลุ่ม: **ใช้กับเชนจริง** (ต้องมีบนเครื่องที่เปิดเชน) · **เครื่องมือของนักพัฒนา** (ไม่ต้องอยู่บนเครื่อง server) · **ทดสอบเท่านั้น** (ลบได้ เชนยังทำงาน)
+Split into 3 groups: **used by the live chain** (must be on the machine running the chain) · **developer tools** (not needed on the server machine) · **tests only** (can be deleted, the chain still runs)
 
-### 1. ใช้กับเชนจริง
+### 1. Used by the live chain
 
 ```
-server.js                  server จริง (node:http) — VM + mempool + autoreview + simulate + ปิด block + /evm + explorer
-src/                       ตัวเชนทั้งหมด (server.js import จากที่นี่)
-  core/                    virtualmachine.js (ตรรกะของเชน) · autoreview.js · sandbox.js · gasmeter.js · trie.js · encoding.js
+server.js                  the real server (node:http) — VM + mempool + autoreview + simulate + block sealing + /evm + explorer
+src/                       the whole chain (server.js imports from here)
+  core/                    virtualmachine.js (chain logic) · autoreview.js · sandbox.js · gasmeter.js · trie.js · encoding.js
   storage/db.js            LMDB / MemoryDB
-  crypto/                  ลายเซ็น EIP-712 บน secp256k1
+  crypto/                  EIP-712 signatures on secp256k1
   node/                    mempool · sync · snapshot · genesis · /evm (evm-rpc / evm-ws / evm-raw / evm-abi) · explorer-api · rate limit
-  standards/               โปรแกรมมาตรฐาน + โปรแกรมแถม 14 ตัว (system.js · dex · staking · …) · abi/ = ABI ของโปรแกรมแถม
-explorerscan/              หน้า explorer ที่ server เสิร์ฟ · README บอกว่าแก้ตรงไหน
-deploy/                    ไฟล์เปิดเชนจริง: genesis.mainnet.example.json · producer / follower env · nginx · systemd · cron · check.sh · README
-scripts/                   คำสั่งสำหรับดูแลเชนจริง
-  preflight.js             ตรวจ genesis + env ก่อนเปิด (ต้องผ่านทุกครั้ง)
-  deploy-system.js         deploy โปรแกรมแถม 14 ตัว (npm run deploy:system)
-  set-gas.js               admin ปรับขั้นต่ำของ gas price (npm run gas:set)
-  backup.js                สำรอง / ตรวจ / กู้ LMDB (npm run backup)
-  snapshot.js              export / import snapshot ของ state (npm run snapshot)
-  monitor.js               เฝ้า /health แล้วเตือน (npm run monitor)
-package.json · package-lock.json   dependency (เครื่องจริง: npm ci --omit=dev)
+  standards/               standard programs + 14 bundled programs (system.js · dex · staking · …) · abi/ = ABIs of the bundled programs
+explorerscan/              the explorer pages the server serves · its README says what to edit where
+deploy/                    files for launching a real chain: genesis.mainnet.example.json · producer / follower env · nginx · systemd · cron · check.sh · README
+scripts/                   commands for operating the live chain
+  preflight.js             checks genesis + env before launch (must pass every time)
+  deploy-system.js         deploys the 14 bundled programs (npm run deploy:system)
+  set-gas.js               admin adjusts the minimum gas price (npm run gas:set)
+  backup.js                back up / verify / restore LMDB (npm run backup)
+  snapshot.js              export / import a state snapshot (npm run snapshot)
+  monitor.js               watches /health and alerts (npm run monitor)
+package.json · package-lock.json   dependencies (real machine: npm ci --omit=dev)
 ```
 
-### 2. เครื่องมือของนักพัฒนา (ใช้กับเชนจริงได้ แต่ไม่ต้องอยู่บนเครื่อง server)
+### 2. Developer tools (work with the live chain, but not needed on the server machine)
 
 ```
-client-sdk/                SDK ฝั่ง client: เซ็น + ส่ง tx + รอผล (ใช้ใน browser ได้ · import "programvm/client")
-program-sdk/               ชุดแยกสำหรับคนที่จะเขียนโปรแกรมมารันบนเชน (deploy.js อ่าน chainId / ค่าแก๊สจากเชนเอง)
-index.js                   จุดเข้าเดียวของไลบรารี — import ทุกอย่างจากที่นี่ได้
-docs/                      Blockscout · checklist ลอง MetaMask จริง
-README.md · HANDOFF.md     เอกสาร (HANDOFF = รายละเอียดทุกส่วน อ่านก่อนแก้โค้ด)
-EXPLORER-SPEC.md           สเปกของ explorer
-CHECKPOINT.md              บันทึกเก่า ณ Checkpoint 5 (ค่าในนั้นเป็นของเดิม)
-.github/                   CI (test + e2e ทุก PR)
+client-sdk/                client-side SDK: sign + send tx + wait for result (works in the browser · import "programvm/client")
+program-sdk/               separate kit for people writing programs to run on the chain (deploy.js reads chainId / gas settings from the chain itself)
+index.js                   single entry point of the library — everything can be imported from here
+docs/                      Blockscout · checklist for testing with real MetaMask
+README.md · HANDOFF.md     docs (HANDOFF = details of every part, read before changing code)
+EXPLORER-SPEC.md           explorer spec
+CHECKPOINT.md              old notes as of Checkpoint 5 (values in it are outdated)
+.github/                   CI (test + e2e on every PR)
 ```
 
-### 3. ทดสอบเท่านั้น (ลบได้ · เชนจริงไม่ได้ใช้)
+### 3. Tests only (can be deleted · not used by the live chain)
 
 ```
-test/                      118 ไฟล์ · 1045 เคส + test/e2e (Playwright) — ลบแล้ว npm test / CI ใช้ไม่ได้
-dev/                       demo · seed · scenario · simulate · load test · bench แก๊ส · fuzz · evm-proxy (ดู dev/README.md)
-genesis.json               genesis ของช่วงพัฒนา (key ทดสอบของ Hardhat มีเงิน) · ห้ามใช้เปิดเชนจริง (preflight ไม่ผ่าน)
+test/                      118 files · 1045 cases + test/e2e (Playwright) — delete them and npm test / CI stop working
+dev/                       demo · seed · scenario · simulate · load test · gas bench · fuzz · evm-proxy (see dev/README.md)
+genesis.json               development genesis (Hardhat test keys are funded) · never use it to launch a real chain (preflight fails)
 ```
 
-## แต่ละส่วนทำอะไร
+## What each part does
 
-| ส่วน | รับผิดชอบ | ไม่รู้จัก |
+| Part | Responsible for | Knows nothing about |
 |---|---|---|
-| `core` | รันโปรแกรม, คิดค่าแก๊ส, ประกอบ block, hash, ย้อนดูข้อมูล | ลายเซ็น, HTTP, คิว |
-| `storage` | เก็บและอ่าน key ทั้งหมด | ความหมายของ key |
-| `crypto` | EIP-712 และ secp256k1 | DB, block |
-| `node` | สิ่งที่อยู่รอบ VM: คิว, การซิงก์, HTTP | ตรรกะภายในของโปรแกรม |
+| `core` | running programs, gas accounting, assembling blocks, hashing, historical lookup | signatures, HTTP, queues |
+| `storage` | storing and reading all keys | what keys mean |
+| `crypto` | EIP-712 and secp256k1 | DB, blocks |
+| `node` | everything around the VM: queue, sync, HTTP | program internals |
 
-ทิศทางการพึ่งพาเป็นทางเดียวเสมอ คือ `node` → `crypto` → `core` → `storage`
+Dependencies always go one way: `node` → `crypto` → `core` → `storage`
 
-## เริ่มใช้งาน
+## Getting started
 
 ```js
 import { VirtualMachine, DB, Mempool, signature } from "programvm";
@@ -94,6 +94,6 @@ mempool.take(block);
 block.commit();
 ```
 
-ค่าที่ server ใช้จริงอยู่หัวไฟล์ `server.js` + `src/node/genesis.js` (เปิดเชนจริง: `deploy/README.md`) และวิธีเขียนโปรแกรมใน `program-sdk/README.md`
+The values the server actually uses are at the top of `server.js` + `src/node/genesis.js` (launching a real chain: `deploy/README.md`), and how to write programs is in `program-sdk/README.md`
 
-ดูเชนผ่าน Blockscout (ต่อเข้า `/evm`): `docs/blockscout.md`
+View the chain through Blockscout (connected to `/evm`): `docs/blockscout.md`

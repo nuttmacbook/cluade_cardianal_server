@@ -1,6 +1,6 @@
-/* explorerscan/core/router.js [ระบบ · ไม่ต้องแก้]
-   เปลี่ยนหน้า: go() / render() อ่าน location.hash (#block/… #tx/… #address/… #programs #system #gas #deploy) แล้วเรียกหน้าใน ui/pages/
-   + ช่องค้นหา · เพิ่มหน้าใหม่ = เพิ่มไฟล์ใน ui/pages/ แล้วเพิ่มบรรทัดใน render() */
+/* explorerscan/core/router.js [system · no need to edit]
+   Page switching: go() / render() read location.hash (#block/… #tx/… #address/… #programs #system #gas #deploy) and call the page in ui/pages/
+   + search box · new page = add a file in ui/pages/ and add a line in render() */
 
 const go = (hash) => { location.hash = hash; render(); };
 async function search() {

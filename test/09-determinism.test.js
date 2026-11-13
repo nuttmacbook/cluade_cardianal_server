@@ -8,15 +8,15 @@ beforeEach(resetVM);
 const REPEAT = 5;
 
 /**
- * TIMEOUT หยุดตามเวลาจริง → แก๊สที่นับขั้นได้ก่อนหยุดต่างกันตามความเร็วเครื่อง
- * (tx ที่ TIMEOUT ไม่เข้า block จึงไม่กระทบเชน) ตัดเฉพาะตัวเลขแก๊สออกก่อนเทียบ
+ * TIMEOUT stops on wall-clock time → gas counted before the stop varies with machine speed
+ * (a TIMEOUT tx never enters a block, so the chain is unaffected) strip only the gas numbers before comparing
  */
 function withoutTimeoutGas(result) {
   if (result?.error?.code !== "TIMEOUT") return result;
   return JSON.parse(JSON.stringify(result, (key, value) => (key === "gasUsed" ? undefined : value)));
 }
 
-/** รันซ้ำบน DB สถานะเดิม แล้วเทียบผลลัพธ์ทั้งก้อน */
+/** re-run on the same DB state, then compare the whole result */
 function assertDeterministic(name, run) {
   const snapshot = new Map([...mockData].map(([k, v]) => [k, structuredClone(v)]));
   const results = [];
@@ -25,10 +25,10 @@ function assertDeterministic(name, run) {
     for (const [k, v] of snapshot) mockData.set(k, structuredClone(v));
     results.push(JSON.stringify(withoutTimeoutGas(run())));
   }
-  assert.equal(new Set(results).size, 1, `${name}: ผลลัพธ์ไม่เหมือนกันทุกครั้ง`);
+  assert.equal(new Set(results).size, 1, `${name}: results differ between runs`);
 }
 
-test("ผลลัพธ์ (รวม calls) เหมือนเดิมทุกครั้งในทุกกรณี", () => {
+test("results (including calls) are identical every run in every case", () => {
   activate("token", TOKEN, { initInput: { supply: 1000 } });
   activate("shop", SHOP, { initInput: { shopId: "shop", token: "token", price: 100 } });
   for (const id of ["A", "B", "C"]) activate(id, PROBE);
@@ -60,12 +60,12 @@ test("ผลลัพธ์ (รวม calls) เหมือนเดิมท�
   for (const [name, run] of Object.entries(cases)) assertDeterministic(name, run);
 });
 
-test("flow จริง: deploy → init → หลาย call ต่อเนื่อง ได้ DB สุดท้ายเหมือนเดิมทุกครั้ง", () => {
+test("real flow: deploy → init → many sequential calls give the same final DB every run", () => {
   const finals = [];
   for (let i = 0; i < REPEAT; i++) {
     resetVM();
     const log = [];
-    const at = { timestamp: 1_700_000_000_000 }; // เวลาคงที่ เพราะ init บันทึก metadata.createdAt
+    const at = { timestamp: 1_700_000_000_000 }; // fixed time, because init records metadata.createdAt
     const step = (res) => { log.push(res.status); save(res); };
     step(vm.deploy({ programUuid: "token", code: TOKEN, context: user("owner"), initInput: { supply: 500 } }, at));
     step(vm.init({ programUuid: "token" }, at));
@@ -88,6 +88,6 @@ test("flow จริง: deploy → init → หลาย call ต่อเน�
   assert.equal(data["token:storage:balances:alice"], "20n");
   assert.equal(data["token:storage:balances:shop"], "100n");
   assert.equal(data["shop:storage:sales"], "2n");
-  assert.equal(data["shop:storage:failed:alice"], "allowance ไม่พอ");
+  assert.equal(data["shop:storage:failed:alice"], "insufficient allowance");
   assert.equal(data["pending:counter"], undefined);
 });

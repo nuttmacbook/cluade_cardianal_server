@@ -4,8 +4,8 @@ import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
 /*
- * blockbody:<number> เก็บ tx ดิบของทุกใบใน block
- * → node อีกเครื่องดึง block ไป replay แล้วได้ state เดียวกันทุกตัวอักษร (รวมโค้ดของโปรแกรมที่ deploy)
+ * blockbody:<number> stores the raw tx of every tx in the block
+ * → another node fetches the blocks, replays them, and gets byte-identical state (including deployed program code)
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -14,7 +14,7 @@ const OPTIONS = { requireNonce: true, chargeGas: true, recordTransactions: true,
 
 const newVm = () => new VM.VirtualMachine(new MemoryDB(), OPTIONS);
 
-/** สร้างสาย block: block 1 deploy+init, block 2 โอนเงิน */
+/** builds a block chain: block 1 deploy+init, block 2 transfers */
 function buildChain(vm) {
   vm.db.load({ "alice:native:received": "1000000n" });
 
@@ -27,14 +27,14 @@ function buildChain(vm) {
 
   const second = vm.createBlock({ timestamp: T + 5000, number: 2, parentHash: vm.getBlock(1).hash, feeRecipient: "miner", burnPercent: 50 });
   second.call({ programUuid: token, functionName: "transfer", input: { to: "bob", amount: 300 }, context: user("alice"), nonce: 2 });
-  second.call({ programUuid: token, functionName: "transfer", input: { to: "bob", amount: 99999 }, context: user("alice"), nonce: 3 }); // ล้ม
+  second.call({ programUuid: token, functionName: "transfer", input: { to: "bob", amount: 99999 }, context: user("alice"), nonce: 3 }); // fails
   second.transfer({ from: "alice", to: "carol", amount: 250, nonce: 4 });
   second.commit();
 
   return token;
 }
 
-/** node อีกเครื่อง: รัน block ที่ดึงมาใหม่ทั้งหมด */
+/** another node: re-runs all fetched blocks */
 function replay(source, target) {
   for (let number = 1; number <= source.latestBlockNumber(); number += 1) {
     const header = source.getBlock(number);
@@ -49,30 +49,30 @@ function replay(source, target) {
     });
     for (const { method, request } of body) block[method](request);
 
-    assert.equal(block.header().hash, header.hash, `block ${number} hash ไม่ตรง`);
+    assert.equal(block.header().hash, header.hash, `block ${number} hash mismatch`);
     block.commit();
   }
 }
 
-test("body: ถูกเก็บลง blockbody:<number> พร้อมโค้ดของโปรแกรม", () => {
+test("body: stored in blockbody:<number> along with program code", () => {
   const vm = newVm();
   buildChain(vm);
 
   const body = vm.getBlockBody(1);
   assert.deepEqual(body.map((entry) => entry.action), ["deploy", "init", "metadata"]);
   assert.deepEqual(body.map((entry) => entry.method), ["deploy", "init", "setMetadata"]);
-  assert.equal(body[0].request.code, TOKEN);                   // โค้ดเต็มอยู่ใน block
+  assert.equal(body[0].request.code, TOKEN);                   // full code is in the block
   assert.deepEqual(body[0].request.metadata, { namespace: "coin" });
   assert.equal(vm.getBlockBody(2).length, 3);
   assert.equal(vm.getBlockBody(99), null);
 });
 
-test("replay: node ใหม่รัน block ที่ดึงมา แล้วได้ state เหมือนกันทั้งหมด", () => {
+test("replay: a new node runs the fetched blocks and gets identical state", () => {
   const source = newVm();
   const token = buildChain(source);
 
   const target = newVm();
-  target.db.load({ "alice:native:received": "1000000n" }); // ยอดตั้งต้น (genesis) ต้องเท่ากัน
+  target.db.load({ "alice:native:received": "1000000n" }); // initial (genesis) balances must match
   replay(source, target);
 
   assert.deepEqual(target.db.snapshot(), source.db.snapshot());
@@ -83,7 +83,7 @@ test("replay: node ใหม่รัน block ที่ดึงมา แล�
   assert.equal(target.resolveNamespace("alice"), "alice");
 });
 
-test("replay: address ของโปรแกรมที่ VM คำนวณเอง ออกมาเท่ากันทั้งสองเครื่อง", () => {
+test("replay: program addresses computed by the VM are the same on both nodes", () => {
   const source = newVm();
   const token = buildChain(source);
 
@@ -92,21 +92,21 @@ test("replay: address ของโปรแกรมที่ VM คำนวณ
   replay(source, target);
 
   assert.match(token, /^0x[0-9a-f]{40}$/);
-  assert.equal(target.getBlockBody(1)[1].request.programUuid, token); // init อ้าง address เดียวกัน
+  assert.equal(target.getBlockBody(1)[1].request.programUuid, token); // init references the same address
   assert.equal(target.db.readKeys([`${token}:this`])[0], token);
 });
 
-test("replay: ถ้าข้อมูลตั้งต้นต่างกัน → hash ไม่ตรงและหยุดทันที", () => {
+test("replay: different initial data → hash mismatch and stop immediately", () => {
   const source = newVm();
   buildChain(source);
 
   const target = newVm();
-  target.db.load({ "alice:native:received": "999n" }); // genesis ผิด
-  // stateRoot คิดจาก writes ของ block จึงจับได้ตอนที่ยอดเงินเริ่มทำให้ผลต่างกัน (block 2)
-  assert.throws(() => replay(source, target), /hash ไม่ตรง/);
+  target.db.load({ "alice:native:received": "999n" }); // wrong genesis
+  // stateRoot is derived from the block's writes, so it is caught when balances start to change the result (block 2)
+  assert.throws(() => replay(source, target), /hash mismatch/);
 });
 
-test("replay: block body พอสำหรับสร้าง explorer ใหม่ทั้งหมด", () => {
+test("replay: block bodies are enough to rebuild the explorer entirely", () => {
   const source = newVm();
   buildChain(source);
   const target = newVm();
@@ -120,15 +120,15 @@ test("replay: block body พอสำหรับสร้าง explorer ให
   );
 });
 
-test("deploy ที่รันนอก block จะไม่มีใน blockbody (ต้องเรียกผ่าน block เสมอ)", () => {
+test("a deploy run outside a block is absent from blockbody (always go through a block)", () => {
   const vm = newVm();
   vm.db.load({ "alice:native:received": "1000000n" });
 
-  vm.commit(vm.deploy({ code: COUNTER, context: user("alice"), nonce: 0 }, { timestamp: T }).writes); // นอก block
+  vm.commit(vm.deploy({ code: COUNTER, context: user("alice"), nonce: 0 }, { timestamp: T }).writes); // outside a block
   const block = vm.createBlock({ timestamp: T, number: 1, feeRecipient: "miner" });
   block.commit();
 
-  assert.deepEqual(vm.getBlockBody(1), []);      // block ว่าง
+  assert.deepEqual(vm.getBlockBody(1), []);      // empty block
   assert.equal(vm.latestBlockNumber(), 1);
-  assert.equal(vm.listTransactionsOf("alice").length, 1); // มีแต่ใน <addr>:txn เท่านั้น
+  assert.equal(vm.listTransactionsOf("alice").length, 1); // only present in <addr>:txn
 });

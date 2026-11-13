@@ -9,8 +9,8 @@ import { ERC721_RECEIVED, ERC1155_RECEIVED } from "../src/standards/wallet.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
 /*
- * multisender (src/standards/multisender.js): tx เดียวส่งเหรียญหลัก / token / NFT / multi-token ให้หลายคน
- *   all-or-nothing · ดึงจากผู้ส่งตรงถึงผู้รับ (โปรแกรมไม่ถือของ) · 1 event Sent ต่อ call · จำกัด MULTISENDER_MAX_ITEMS รายการ
+ * multisender (src/standards/multisender.js): one tx sends native coin / tokens / NFTs / multi-tokens to many recipients
+ *   all-or-nothing · pulled from the sender straight to recipients (the program holds nothing) · 1 Sent event per call · at most MULTISENDER_MAX_ITEMS items
  */
 
 const T = Date.parse("2026-11-11T00:00:00Z");
@@ -22,10 +22,10 @@ const TOKEN = "0x000000000000000000000000000000000000c0d1";
 const TOKEN2 = "0x000000000000000000000000000000000000c0d2";
 const NFT = "0x000000000000000000000000000000000000c0d3";
 const MT = "0x000000000000000000000000000000000000c0d4";
-const RECEIVER = "0x000000000000000000000000000000000000c0d5";   // รับ NFT / 1155 ได้
-const REJECTOR = "0x000000000000000000000000000000000000c0d6";   // ไม่รับ
-const REENTER = "0x000000000000000000000000000000000000c0d7";    // รับ แต่พยายามเรียก multisender ซ้อน
-const LIAR = "0x000000000000000000000000000000000000c0d8";       // token ที่ตอบ false
+const RECEIVER = "0x000000000000000000000000000000000000c0d5";   // accepts NFT / 1155
+const REJECTOR = "0x000000000000000000000000000000000000c0d6";   // rejects
+const REENTER = "0x000000000000000000000000000000000000c0d7";    // accepts, but tries to re-enter multisender
+const LIAR = "0x000000000000000000000000000000000000c0d8";       // token that returns false
 const COIN = 10n ** 18n;
 const addr = (i) => `0x${(0xe000 + i).toString(16).padStart(40, "0")}`;
 
@@ -105,14 +105,14 @@ const sentEvent = (res) => {
   assert.equal(sent.length, 1, "exactly one Sent event per call");
   return sent[0].data;
 };
-/** โปรแกรม multisender ต้องไม่ถือของอะไรหลัง call · ไม่มี state ค้าง */
+/** the multisender program must hold nothing after a call · no leftover state */
 function assertEmpty(t, tokens = [TOKEN, TOKEN2]) {
   assert.equal(t.balance(SENDER), 0n, "no native left in multisender");
   for (const token of tokens) assert.equal(t.tokenBalance(token, SENDER), 0n, "no token left in multisender");
   assert.equal(t.storage(SENDER, "lock"), undefined, "lock cleared");
 }
 
-test("multisender: metadata · ผ่าน autoreview · export ตรง MULTISENDER_FUNCTIONS", () => {
+test("multisender: metadata · passes autoreview · exports match MULTISENDER_FUNCTIONS", () => {
   const t = setup();
   assert.equal(t.vm.resolveNamespace("multisender"), SENDER);
   assert.equal(t.vm.getMetadata(SENDER).description, "send many assets in one tx");
@@ -123,7 +123,7 @@ test("multisender: metadata · ผ่าน autoreview · export ตรง MULTI
   assert.equal(t.send(ALICE, SENDER, "initialization", {}).status, "throw", "initialization cannot be called again");
 });
 
-test("sendNative: value = ผลรวมพอดี → ผู้รับได้ครบ · event Sent 1 ครั้ง · โปรแกรมไม่เหลือเงิน", () => {
+test("sendNative: value = exact sum → recipients get everything · Sent event once · program keeps no funds", () => {
   const t = setup();
   const [b0, c0, a0] = [t.balance(BOB), t.balance(CAROL), t.balance(ALICE)];
   const res = t.ok(t.send(ALICE, SENDER, "sendNative", { transfers: [{ to: BOB, amount: `${2n * COIN}n` }, { to: CAROL, amount: `${3n * COIN}n` }, { to: BOB, amount: "1n" }] },
@@ -134,13 +134,13 @@ test("sendNative: value = ผลรวมพอดี → ผู้รับไ�
   assert.equal(t.balance(CAROL), c0 + 3n * COIN);
   assert.equal(t.balance(ALICE), a0 - 5n * COIN - 1n);
   assertEmpty(t);
-  // ผู้รับเป็นโปรแกรมก็ได้ (transferNative ไม่เรียกโค้ดของผู้รับ)
+  // recipients may be programs (transferNative does not run the recipient's code)
   t.ok(t.send(ALICE, SENDER, "sendNative", { transfers: [{ to: RECEIVER, amount: "7n" }] }, { value: "7" }));
   assert.equal(t.balance(RECEIVER), 7n);
   assertEmpty(t);
 });
 
-test("sendNative: value ขาด / เกิน / ไม่แนบ → ล้มทั้ง call ไม่มีใครได้เงิน", () => {
+test("sendNative: value short / over / missing → the whole call fails, nobody gets funds", () => {
   const t = setup();
   const b0 = t.balance(BOB);
   const transfers = [{ to: BOB, amount: "10n" }, { to: CAROL, amount: "20n" }];
@@ -151,7 +151,7 @@ test("sendNative: value ขาด / เกิน / ไม่แนบ → ล้
   assertEmpty(t);
 });
 
-test("ตรวจ input: รายการ / ผู้รับ / จำนวน ผิด → ล้มพร้อมข้อความชัดเจน", () => {
+test("input validation: bad items / recipients / amounts → fails with a clear message", () => {
   const t = setup();
   const native = (transfers, value = "1") => t.send(ALICE, SENDER, "sendNative", { transfers }, { value });
   t.fail(native(undefined), /transfers must be an array/);
@@ -169,7 +169,7 @@ test("ตรวจ input: รายการ / ผู้รับ / จำนว
   const tooMany = Array.from({ length: MULTISENDER_MAX_ITEMS + 1 }, (_, i) => ({ to: addr(i), amount: "1n" }));
   t.fail(native(tooMany, String(MULTISENDER_MAX_ITEMS + 1)), new RegExp(`too many transfers \\(max ${MULTISENDER_MAX_ITEMS}\\)`));
 
-  // asset ต้องเป็นโปรแกรม
+  // asset must be a program
   t.fail(t.send(ALICE, SENDER, "sendToken", { token: BOB, transfers: [{ to: CAROL, amount: "1n" }] }), /token is not a program/);
   t.fail(t.send(ALICE, SENDER, "sendToken", { token: "x", transfers: [{ to: CAROL, amount: "1n" }] }), /token must be an address/);
   t.fail(t.send(ALICE, SENDER, "sendToken", { token: SENDER, transfers: [{ to: CAROL, amount: "1n" }] }), /token is not a valid program/);
@@ -180,7 +180,7 @@ test("ตรวจ input: รายการ / ผู้รับ / จำนว
   t.fail(t.send(ALICE, SENDER, "sendNft", { nft: NFT, data: 5, transfers: [{ to: CAROL, tokenId: "1n" }] }), /data must be a string/);
   t.fail(t.send(ALICE, SENDER, "sendMultiToken", { multiToken: MT, transfers: [{ to: CAROL, id: "x", amount: "1n" }] }), /id must be a non-negative bigint/);
 
-  // ฟังก์ชันอื่นห้ามแนบ value (เงินจะค้างในโปรแกรม)
+  // other functions must not attach value (funds would get stuck in the program)
   for (const [fn, input] of [["sendToken", { token: TOKEN, transfers: [{ to: BOB, amount: "1n" }] }],
     ["sendTokens", { transfers: [{ token: TOKEN, to: BOB, amount: "1n" }] }],
     ["sendNft", { nft: NFT, transfers: [{ to: BOB, tokenId: "1n" }] }],
@@ -190,7 +190,7 @@ test("ตรวจ input: รายการ / ผู้รับ / จำนว
   assertEmpty(t);
 });
 
-test("sendToken: transferFrom จากผู้ส่งตรงถึงผู้รับ · ต้อง approve ก่อน · วงเงินไม่พอ = ล้มทั้งหมด", () => {
+test("sendToken: transferFrom from the sender straight to recipients · approve first · insufficient allowance = everything fails", () => {
   const t = setup();
   const transfers = [{ to: BOB, amount: "100n" }, { to: CAROL, amount: "250n" }];
   t.fail(t.send(ALICE, SENDER, "sendToken", { token: TOKEN, transfers }), /insufficient allowance/);
@@ -208,20 +208,20 @@ test("sendToken: transferFrom จากผู้ส่งตรงถึงผ�
   assert.equal(t.tokenBalance(TOKEN, ALICE), a0 - 350n);
   assert.equal(t.query(TOKEN, "allowance", { owner: ALICE, spender: SENDER }), "0n");
   assertEmpty(t);
-  // วงเงินของ alice ใช้แทน bob ไม่ได้ (from = sender ของ call เสมอ)
+  // alice's allowance cannot be used for bob (from is always the call's sender)
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: SENDER, amount: "1000n" }));
   t.fail(t.send(BOB, SENDER, "sendToken", { token: TOKEN, from: ALICE, transfers: [{ to: CAROL, amount: "1n" }] }), /insufficient (allowance|balance)/);
-  // ยอดไม่พอ
+  // insufficient balance
   t.ok(t.send(BOB, TOKEN, "approve", { spender: SENDER, amount: "1000n" }));
   t.fail(t.send(BOB, SENDER, "sendToken", { token: TOKEN, transfers: [{ to: CAROL, amount: "101n" }] }), /insufficient balance/);
 });
 
-test("sendToken: token ที่ไม่ตอบ true → ล้ม", () => {
+test("sendToken: a token that does not return true → fails", () => {
   const t = setup();
   t.fail(t.send(ALICE, SENDER, "sendToken", { token: LIAR, transfers: [{ to: BOB, amount: "1n" }] }), /token transferFrom did not return true/);
 });
 
-test("sendTokens: หลาย token ใน call เดียว · ตัวไหนล้ม ทั้งหมดย้อน", () => {
+test("sendTokens: several tokens in one call · if any fails, everything reverts", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: SENDER, amount: "10n" }));
   t.ok(t.send(ALICE, TOKEN2, "approve", { spender: SENDER, amount: "5n" }));
@@ -239,7 +239,7 @@ test("sendTokens: หลาย token ใน call เดียว · ตัวไ
   t.fail(t.send(ALICE, SENDER, "sendTokens", { transfers: [{ token: LIAR, to: BOB, amount: "1n" }] }), /did not return true/);
 });
 
-test("sendNft: safeTransferFrom จากผู้ส่ง · ต้อง setApprovalForAll · ผู้รับโปรแกรมต้องตอบ magic · ชิ้นซ้ำ = ล้ม", () => {
+test("sendNft: safeTransferFrom from the sender · requires setApprovalForAll · program recipients must return the magic value · duplicate item = fails", () => {
   const t = setup();
   for (let i = 1; i <= 5; i += 1) t.ok(t.send(ALICE, NFT, "mint", { to: ALICE }));
   const transfers = [{ to: BOB, tokenId: "1n" }, { to: CAROL, tokenId: "2n" }, { to: RECEIVER, tokenId: "3n" }];
@@ -253,22 +253,22 @@ test("sendNft: safeTransferFrom จากผู้ส่ง · ต้อง setA
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "3n" }), RECEIVER);
   assert.equal(t.storage(RECEIVER, "got"), "3n", "receiver hook was called");
   assert.equal(t.query(NFT, "balanceOf", { owner: SENDER }), "0n");
-  // ผู้รับปฏิเสธ → ทั้ง call ย้อน (ชิ้นแรกไม่ย้าย)
+  // recipient rejects → the whole call reverts (the first item does not move)
   t.fail(t.send(ALICE, SENDER, "sendNft", { nft: NFT, transfers: [{ to: BOB, tokenId: "4n" }, { to: REJECTOR, tokenId: "5n" }] }), /receiver did not accept/);
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "4n" }), ALICE);
-  // safe: false = transferFrom ธรรมดา (ไม่ถามผู้รับ)
+  // safe: false = plain transferFrom (recipient not asked)
   t.ok(t.send(ALICE, SENDER, "sendNft", { nft: NFT, safe: false, transfers: [{ to: REJECTOR, tokenId: "5n" }] }));
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "5n" }), REJECTOR);
-  // ชิ้นที่ไม่ใช่ของผู้ส่ง / ส่งชิ้นเดิมซ้ำใน call เดียว
+  // an item the sender doesn't own / the same item twice in one call
   t.fail(t.send(ALICE, SENDER, "sendNft", { nft: NFT, transfers: [{ to: CAROL, tokenId: "1n" }] }), /from is not the owner/);
   t.fail(t.send(ALICE, SENDER, "sendNft", { nft: NFT, transfers: [{ to: BOB, tokenId: "4n" }, { to: CAROL, tokenId: "4n" }] }), /from is not the owner/);
   assert.equal(t.query(NFT, "ownerOf", { tokenId: "4n" }), ALICE);
-  // คนอื่นใช้ operator approval ของ alice ไม่ได้
+  // others cannot use alice's operator approval
   t.fail(t.send(BOB, SENDER, "sendNft", { nft: NFT, transfers: [{ to: CAROL, tokenId: "4n" }] }), /from is not the owner/);
   assertEmpty(t);
 });
 
-test("กันเรียกซ้อน: ผู้รับ NFT เรียก multisender กลับเข้ามาระหว่าง callback → reentrant call", () => {
+test("reentrancy guard: an NFT recipient calling back into multisender during the callback → reentrant call", () => {
   const t = setup();
   for (let i = 1; i <= 3; i += 1) t.ok(t.send(ALICE, NFT, "mint", { to: i === 3 ? REENTER : ALICE }));
   t.ok(t.send(ALICE, NFT, "setApprovalForAll", { operator: SENDER, approved: true }));
@@ -278,7 +278,7 @@ test("กันเรียกซ้อน: ผู้รับ NFT เรีย�
   assertEmpty(t);
 });
 
-test("sendMultiToken: safeTransferFrom ของ 1155 · ต้องเป็น operator · ยอดไม่พอ / ผู้รับปฏิเสธ = ล้มทั้งหมด", () => {
+test("sendMultiToken: 1155 safeTransferFrom · must be an operator · insufficient balance / recipient rejects = everything fails", () => {
   const t = setup();
   t.ok(t.send(ALICE, MT, "mint", { to: ALICE, id: "1n", amount: "100n" }));
   t.ok(t.send(ALICE, MT, "mint", { to: ALICE, id: "2n", amount: "10n" }));
@@ -298,7 +298,7 @@ test("sendMultiToken: safeTransferFrom ของ 1155 · ต้องเป็�
   assertEmpty(t);
 });
 
-test(`แก๊ส: ${MULTISENDER_MAX_ITEMS} รายการต่อ call ต่ำกว่าครึ่ง block 5M ทุกแบบ (fork bluewolf)`, () => {
+test(`gas: ${MULTISENDER_MAX_ITEMS} items per call stay under half a 5M block for every kind (fork bluewolf)`, () => {
   const t = setup();
   const n = MULTISENDER_MAX_ITEMS;
   const recipients = Array.from({ length: n }, (_, i) => addr(i));
@@ -323,7 +323,7 @@ test(`แก๊ส: ${MULTISENDER_MAX_ITEMS} รายการต่อ call �
   assert.equal(t.query(NFT, "ownerOf", { tokenId: `${n}n` }), recipients[n - 1]);
 });
 
-test("address ต้องเป็น hex 40 ตัว: 0x+'g'*40 → ล้ม ไม่มีอะไรย้าย", () => {
+test("addresses must be 40 hex chars: 0x+'g'*40 → fails, nothing moves", () => {
   const t = setup();
   const bad = `0x${"g".repeat(40)}`;
   const a0 = t.balance(ALICE);

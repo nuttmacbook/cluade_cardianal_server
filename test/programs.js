@@ -1,10 +1,10 @@
 /*
- * โปรแกรมตัวอย่างสำหรับทดสอบ VM
- * แต่ละตัวออกแบบให้ครอบคลุมพฤติกรรมที่อาจเกิดขึ้นในการใช้งานจริง
- * ตัวเลขในโปรแกรมเป็น BigInt เสมอ (10n) — ค่าที่ออกจากโปรแกรมเป็น "10n"
+ * Sample programs for testing the VM
+ * Each one is designed to cover behavior that can occur in real use
+ * Numbers in programs are always BigInt (10n); values returned from programs are "10n"
  */
 
-/** ตัวนับพื้นฐาน: init, read/write/delete, ฟังก์ชัน internal */
+/** Basic counter: init, read/write/delete, internal functions */
 export const COUNTER = `
 function program() {
   function initialization(params) {
@@ -39,7 +39,7 @@ function program() {
 }
 `;
 
-/** token: balances, approve / transferFrom สำหรับให้โปรแกรมอื่นหักเงิน user */
+/** token: balances, approve / transferFrom so other programs can debit a user */
 export const TOKEN = `
 function program() {
   function initialization(params) {
@@ -53,8 +53,8 @@ function program() {
   }
 
   function move(from, to, amount) {
-    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount ไม่ถูกต้อง")
-    if (balance(from) < amount) throw new Error("ยอดไม่พอ")
+    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("invalid amount")
+    if (balance(from) < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance(from) - amount)
     writeDB(map("balances", to), balance(to) + amount)
     return { from, to, amount }
@@ -77,13 +77,13 @@ function program() {
     const spender = params.context.sender
     const { from, to, amount } = params.input
     const allowed = readDB(map("allowance", from, spender)) || 0n
-    if (allowed < amount) throw new Error("allowance ไม่พอ")
+    if (allowed < amount) throw new Error("insufficient allowance")
     writeDB(map("allowance", from, spender), allowed - amount)
     return move(from, to, amount)
   }
 
   function mint(params) {
-    if (params.context.sender !== readDB("owner")) throw new Error("ไม่ใช่ owner")
+    if (params.context.sender !== readDB("owner")) throw new Error("not the owner")
     writeDB("totalSupply", readDB("totalSupply") + params.input.amount)
     writeDB(map("balances", params.input.to), balance(params.input.to) + params.input.amount)
     return readDB("totalSupply")
@@ -92,7 +92,7 @@ function program() {
 }
 `;
 
-/** ร้านค้า: เรียก token.transferFrom เพื่อหักเงินผู้ซื้อ (origin) แล้วบันทึกข้อมูลของตัวเอง */
+/** Shop: calls token.transferFrom to debit the buyer (origin), then saves its own data */
 export const SHOP = `
 function program() {
   function initialization(params) {
@@ -137,7 +137,7 @@ function program() {
 }
 `;
 
-/** เดินทางตาม path: D > E > F > A > B, ทำให้ล้ม / catch ที่โปรแกรมไหนก็ได้ */
+/** Walks a path: D > E > F > A > B, can fail / catch at any program */
 export const HOP = `
 function program() {
   function hop(params) {
@@ -163,7 +163,7 @@ function program() {
 }
 `;
 
-/** เครื่องมือทั่วไปสำหรับทดสอบการเรียกซ้อน */
+/** General tools for testing nested calls */
 export const PROBE = `
 function program() {
   function whoami(params) {
@@ -274,7 +274,7 @@ function program() {
 }
 `;
 
-/** ทะเบียน: เก็บว่าโปรแกรม (sender) ไหนลงทะเบียนในนามของ user (origin) คนไหน */
+/** Registry: records which program (sender) registered on behalf of which user (origin) */
 export const REGISTRY = `
 function program() {
   function register(params) {
@@ -289,7 +289,7 @@ function program() {
 }
 `;
 
-/** initialization ที่เรียกโปรแกรมอื่น */
+/** initialization that calls another program */
 export const INIT_CALLS_REGISTRY = `
 function program() {
   function initialization(params) {
@@ -303,7 +303,7 @@ function program() {
 }
 `;
 
-/** ค่า JSON / error / key ผิดรูปแบบ */
+/** Malformed JSON values / errors / keys */
 export const FAULTY = `
 function program() {
   function throwError() { throw new Error("error message") }
@@ -327,8 +327,8 @@ function program() {
 
   function returnUndefined() {}
   function returnNull() { return null }
-  function returnNumber() { return 1.5 }   // number → ถูกปฏิเสธ (ต้องเป็น BigInt)
-  function returnString() { return "สวัสดี 🎉" }
+  function returnNumber() { return 1.5 }   // number → rejected (must be a BigInt)
+  function returnString() { return "héllo wörld 🎉" }
   function returnNested() { return { a: [1n, { b: true }], c: null } }
   function returnDate() { return new Date(0) }
   function returnNaN() { return NaN }
@@ -368,7 +368,7 @@ function program() {
     writeDB("afterSpin", 1n)
     return "survived"
   }
-  // Date ในโปรแกรมเป็นเวลาของ block (คงที่) จึงใช้ performance.now() เพื่อเผาเวลาจริงสำหรับทดสอบ timeout
+  // Date inside a program is the block time (constant), so use performance.now() to burn real time for the timeout test
   function busy(params) {
     const end = performance.now() + Number(params.input.ms)
     while (performance.now() < end) {}
@@ -382,7 +382,7 @@ function program() {
 }
 `;
 
-/** ตัวแปรระดับบนสุดของโปรแกรมต้องไม่ค้างข้าม call */
+/** A program's top-level variables must not persist across calls */
 export const STATEFUL = `
 function program() {
   let hits = 0n
@@ -446,7 +446,7 @@ function program() {
 
 export const NO_EXPORTS = `function hidden() { return 1 }`;
 
-/** โค้ดที่ต้องถูกปฏิเสธตอน deploy */
+/** Code that must be rejected at deploy */
 export const INVALID_CODES = {
   importUsed: "function program() {\n  import fs from \"node:fs\"\n  function hello() {}\n  return { hello }\n}",
   exportDefault: "export default function program() { return {} }",
@@ -454,11 +454,11 @@ export const INVALID_CODES = {
   exportMissing: "function program() {\n  function a() {}\n  return { b }\n}",
   exportInitialization: "function program() {\n  function initialization() {}\n  function hello() { return 1 }\n  return { initialization, hello }\n}",
   exportArrow: "function program() {\n  const arrow = () => 1\n  return { arrow }\n}",
-  exportValue: "function program() {\n  const price = 100\n  return { price }\n}",   // ไม่ใช่ฟังก์ชัน
+  exportValue: "function program() {\n  const price = 100\n  return { price }\n}",   // not a function
   shadowApi: "function program() {\n  function readDB() {}\n  function a() {}\n  return { a }\n}",
 };
 
-/** เวลาในโปรแกรม */
+/** Time inside programs */
 export const CLOCK = `
 function program() {
   function initialization(params) {
@@ -498,7 +498,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ address ตัวพิมพ์เล็ก / ใหญ่ */
+/** For testing lower / upper case addresses */
 export const ADDRESS_BOOK = `
 function program() {
   function initialization(params) {
@@ -534,7 +534,7 @@ function program() {
 }
 `;
 
-/** ใช้ ThisAddress() แทนการรับ address ของตัวเองทาง input */
+/** Uses ThisAddress() instead of taking its own address as input */
 export const SELF_AWARE = `
 function program() {
   function initialization(params) {
@@ -547,7 +547,7 @@ function program() {
   }
 
   function collect(params) {
-    // ดึงเงินจากผู้เรียกเข้ากระเป๋าของโปรแกรมนี้เอง โดยไม่ต้องรู้ address ตัวเองล่วงหน้า
+    // pull funds from the caller into this program's own wallet without knowing its own address in advance
     runProgram(readDB("token"), "transferFrom", { from: params.context.origin, to: ThisAddress(), amount: params.input.amount })
     writeDB("collected", (readDB("collected") || 0n) + params.input.amount)
     return ThisAddress()
@@ -560,7 +560,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ native balance / transferNative */
+/** For testing native balance / transferNative */
 export const TREASURY = `
 function program() {
   function initialization(params) {
@@ -606,7 +606,7 @@ function program() {
 }
 `;
 
-/** รับเงินที่แนบมากับ call และส่งต่อไปโปรแกรมอื่น */
+/** Receives value attached to a call and forwards it to another program */
 export const WALLET = `
 function program() {
   function deposit(params) {
@@ -642,14 +642,14 @@ function program() {
   }
 
   function rejectMoney(params) {
-    if (params.value > 0n) throw new Error("ไม่รับเงิน")
+    if (params.value > 0n) throw new Error("does not accept funds")
     return "ok"
   }
   return { deposit, forward, forwardAll, forwardTooMuch, forwardSafe, seenValue, rejectMoney }
 }
 `;
 
-/** รับเงินตั้งแต่ตอน deploy (แบบ constructor payable) */
+/** Receives value at deploy (like a payable constructor) */
 export const FUNDED = `
 function program() {
   function initialization(params) {
@@ -669,7 +669,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบการสุ่ม */
+/** For testing randomness */
 export const DICE = `
 function program() {
   function roll() {
@@ -680,7 +680,7 @@ function program() {
 
   function rollMany(params) {
     const rolls = []
-    for (let i = 0n; i < params.input.times; i++) rolls.push(String(Math.random()))   // ทศนิยมส่งออกเป็น string
+    for (let i = 0n; i < params.input.times; i++) rolls.push(String(Math.random()))   // decimals are returned as strings
     return rolls
   }
 
@@ -695,12 +695,12 @@ function program() {
 }
 `;
 
-/** โปรแกรมที่ตั้ง metadata ของตัวเอง */
+/** A program that sets its own metadata */
 export const PROFILE = `
 function program() {
   function initialization(params) {
     setMetadata("namespace", params.input.name)
-    setMetadata("description", "โปรแกรมตัวอย่าง")
+    setMetadata("description", "Sample program")
   }
 
   function rename(params) {
@@ -718,13 +718,13 @@ function program() {
   }
 
   function tryReserved() {
-    setMetadata("creator", "0xแอบแก้")
+    setMetadata("creator", "0xspoofed")
   }
   return { rename, setField, clearField, tryReserved }
 }
 `;
 
-/** ใช้ทดสอบ API ที่โปรแกรมเรียกดูข้อมูลของ address อื่น */
+/** For testing APIs that let a program look up another address */
 export const INSPECTOR = `
 function program() {
   function initialization(params) {
@@ -746,7 +746,7 @@ function program() {
   }
 
   function payIfWallet(params) {
-    if (IsProgram(params.input.to)) throw new Error("ปลายทางเป็นโปรแกรม")
+    if (IsProgram(params.input.to)) throw new Error("recipient is a program")
     transferNative(params.input.to, params.input.amount)
     return ThisBalance()
   }
@@ -760,7 +760,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ emit */
+/** For testing emit */
 export const EVENTFUL = `
 function program() {
   function initialization(params) {
@@ -772,7 +772,7 @@ function program() {
 
   function transfer(params) {
     const from = params.context.sender
-    if (balanceOf(from) < params.input.amount) throw new Error("ยอดไม่พอ")
+    if (balanceOf(from) < params.input.amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balanceOf(from) - params.input.amount)
     writeDB(map("balances", params.input.to), balanceOf(params.input.to) + params.input.amount)
     emit("Transfer", { from, to: params.input.to, amount: params.input.amount })
@@ -796,14 +796,14 @@ function program() {
   }
 
   function badName() {
-    emit("ชื่อไทย", {})
+    emit("bad name!", {})
   }
 
   return { transfer, relay, relaySafe, badName }
 }
 `;
 
-/** ตู้ฝากที่มีช่องโหว่ reentrancy: โอนเงินออกก่อนแล้วค่อยอัปเดตยอด */
+/** Vault with a reentrancy bug: sends funds out before updating the balance */
 export const VULNERABLE_VAULT = `
 function program() {
   function initialization(params) { writeDB("hook", params.input.hook ?? null) }
@@ -816,23 +816,23 @@ function program() {
   function withdrawUnsafe(params) {
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
-    if (balance <= 0n) throw new Error("ไม่มีเงิน")
-    runProgram(who, "receive", {}, { value: balance })     // เรียกออกไปก่อน ← ช่องโหว่
-    writeDB(map("balances", who), 0n)                        // ค่อยอัปเดตทีหลัง
+    if (balance <= 0n) throw new Error("no funds")
+    runProgram(who, "receive", {}, { value: balance })     // call out first ← the vulnerability
+    writeDB(map("balances", who), 0n)                        // update afterwards
     return balance
   }
 
   function withdrawSafe(params) {
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
-    if (balance <= 0n) throw new Error("ไม่มีเงิน")
-    writeDB(map("balances", who), 0n)                        // อัปเดตก่อน
-    runProgram(who, "receive", {}, { value: balance })      // แล้วค่อยเรียกออก
+    if (balance <= 0n) throw new Error("no funds")
+    writeDB(map("balances", who), 0n)                        // update first
+    runProgram(who, "receive", {}, { value: balance })      // then call out
     return balance
   }
 
   function withdrawGuarded(params) {
-    if (readDB("locked")) throw new Error("กำลังทำงานอยู่")
+    if (readDB("locked")) throw new Error("already running")
     writeDB("locked", true)
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
@@ -850,7 +850,7 @@ function program() {
 }
 `;
 
-/** ผู้โจมตี: พอได้รับเงินก็เรียกถอนซ้ำทันที */
+/** Attacker: calls withdraw again as soon as it receives funds */
 export const ATTACKER = `
 function program() {
   function initialization(params) {
@@ -870,9 +870,9 @@ function program() {
     if (left > 0n) {
       writeDB("rounds", left - 1n)
       try {
-        runProgram(readDB("vault"), readDB("method"), {})   // เรียกซ้ำระหว่างที่ยังทำงานค้าง
+        runProgram(readDB("vault"), readDB("method"), {})   // re-enter while still running
       } catch (e) {
-        writeDB("lastError", e.message)                     // ถูกกันไว้ได้ → จำไว้เฉย ๆ
+        writeDB("lastError", e.message)                     // blocked → just record it
       }
     }
     return true

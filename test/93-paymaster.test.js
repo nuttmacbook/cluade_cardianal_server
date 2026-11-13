@@ -5,12 +5,12 @@ import * as sign from "../src/crypto/signature.js";
 import { createClient, keySigner, walletTypedData } from "../client-sdk/index.js";
 
 /*
- * ระยะ 3.4: ผู้จ่ายแก๊สแทน (paymaster / fee payer)
- *   tx.sponsor อยู่ในข้อมูลที่ผู้ส่งเซ็น · sponsor เซ็น digest เดียวกัน (sponsorSignature) · VM หักแก๊สจาก sponsor
- *   ผู้ส่งใช้ nonce ของตัวเองและจ่าย value เอง · tx ที่ไม่มี sponsor = digest เดิมทุกไบต์
+ * Phase 3.4: gas sponsorship (paymaster / fee payer)
+ *   tx.sponsor is part of the data the sender signs · the sponsor signs the same digest (sponsorSignature) · the VM charges gas to the sponsor
+ *   the sender uses its own nonce and pays the value itself · txs without a sponsor = byte-identical digest
  */
 
-const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // มียอดใน genesis.json
+const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // funded in genesis.json
 const USER_KEY = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba";
 const OTHER_KEY = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
 const BOB = "0x00000000000000000000000000000000000000b0";
@@ -18,7 +18,7 @@ const SPONSOR = sign.addressOf(FUNDER_KEY);
 const USER = sign.addressOf(USER_KEY);
 const base = { chainId: 1, action: "transfer", from: USER, to: BOB, value: "1n", nonce: 0, gasLimit: 21_000, maxFeePerGas: "2000000000", maxPriorityFeePerGas: "0" };
 
-test("ลายเซ็น: ไม่มี sponsor = ชนิดเดิม · มี sponsor = ต่อท้ายชนิด (ethers คิด digest ตรงกัน) · ผู้ส่งเปลี่ยน sponsor ไม่ได้", () => {
+test("signatures: no sponsor = the old type · sponsor = appended to the type (ethers computes the same digest) · the sponsor cannot be swapped", () => {
   assert.deepEqual(sign.buildTypedData(base).types.Transaction, sign.TRANSACTION_TYPE_1559);
   assert.deepEqual(sign.buildTypedData({ ...base, maxFeePerGas: undefined, maxPriorityFeePerGas: undefined, gasPrice: "1" }).types.Transaction, sign.TRANSACTION_TYPE);
 
@@ -38,16 +38,16 @@ test("ลายเซ็น: ไม่มี sponsor = ชนิดเดิม 
   assert.equal(verified.request.sponsorSignature, sponsorSignature);
   assert.equal(sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY) }).request.sponsor, undefined);
 
-  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature }), /ต้องมี sponsorSignature/);
-  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature, sponsorSignature: sign.signTransaction(sponsored, OTHER_KEY) }), /sponsorSignature ไม่ตรงกับ sponsor/);
-  assert.throws(() => sign.verifyTransaction({ tx: { ...sponsored, sponsor: sign.addressOf(OTHER_KEY) }, signature, sponsorSignature }), /ลายเซ็นไม่ตรงกับ from/);
-  assert.throws(() => sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY), sponsorSignature }), /ไม่ได้ระบุ sponsor/);
+  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature }), /needs a sponsorSignature/);
+  assert.throws(() => sign.verifyTransaction({ tx: sponsored, signature, sponsorSignature: sign.signTransaction(sponsored, OTHER_KEY) }), /sponsorSignature does not match sponsor/);
+  assert.throws(() => sign.verifyTransaction({ tx: { ...sponsored, sponsor: sign.addressOf(OTHER_KEY) }, signature, sponsorSignature }), /signature does not match from/);
+  assert.throws(() => sign.verifyTransaction({ tx: base, signature: sign.signTransaction(base, USER_KEY), sponsorSignature }), /the tx has no sponsor/);
   const self = { ...base, sponsor: USER };
-  assert.throws(() => sign.verifyTransaction({ tx: self, signature: sign.signTransaction(self, USER_KEY), sponsorSignature: sign.signTransaction(self, USER_KEY) }), /ไม่ใช่ผู้ส่งเอง/);
+  assert.throws(() => sign.verifyTransaction({ tx: self, signature: sign.signTransaction(self, USER_KEY), sponsorSignature: sign.signTransaction(self, USER_KEY) }), /must not be the sender/);
 });
 
-test("เชน: ผู้ใช้ไม่มีเหรียญส่ง tx ได้เมื่อมี sponsor · แก๊สหักจาก sponsor · nonce / value เป็นของผู้ส่ง", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("chain: a user with no coins can send a tx with a sponsor · gas charged to the sponsor · nonce / value belong to the sender", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -57,7 +57,7 @@ test("เชน: ผู้ใช้ไม่มีเหรียญส่ง tx
   const sponsor = keySigner(FUNDER_KEY);
   try {
     assert.equal(await client.balance(USER), 0n);
-    // ไม่มี sponsor + ไม่มีเหรียญ → ไม่ผ่าน
+    // no sponsor + no coins → fails
     const alone = await client.send({ action: "transfer", to: BOB, value: "0n", gasLimit: 21_000 }, user).catch((error) => error);
     assert.equal(alone.status, 400);
 
@@ -72,12 +72,12 @@ test("เชน: ผู้ใช้ไม่มีเหรียญส่ง tx
     assert.equal(receipt.sponsor, SPONSOR);
     const fee = BigInt(String(receipt.fee).replace(/n$/, ""));
     assert.ok(fee > 0n);
-    assert.equal(await client.balance(USER), 0n);                 // ผู้ใช้ไม่เสียอะไร
-    assert.equal(await client.balance(SPONSOR), before - fee);    // sponsor จ่ายแก๊ส
-    assert.equal(await client.nonce(USER), 1);                    // nonce ของผู้ส่งขยับ
-    assert.equal(await client.nonce(SPONSOR), 0);                 // nonce ของ sponsor ไม่ขยับ
+    assert.equal(await client.balance(USER), 0n);                 // the user pays nothing
+    assert.equal(await client.balance(SPONSOR), before - fee);    // the sponsor pays gas
+    assert.equal(await client.nonce(USER), 1);                    // the sender's nonce advances
+    assert.equal(await client.nonce(SPONSOR), 0);                 // the sponsor's nonce does not move
 
-    // value ต้องเป็นเงินของผู้ส่งเอง (sponsor จ่ายแค่แก๊ส)
+    // value must come from the sender (the sponsor pays only gas)
     const noValue = await client.send({ action: "transfer", to: BOB, value: "5n", gasLimit: 21_000 }, user, { sponsor }).catch((error) => error);
     assert.equal(noValue.status, 400);
   } finally {

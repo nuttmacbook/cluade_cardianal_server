@@ -4,8 +4,8 @@ import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN, SHOP, PROBE, COUNTER } from "./programs.js";
 
 /*
- * ทดสอบข้อมูลระดับ block: results / loadValues / afterValues / writes / timestamp
- * แต่ละเทสต์ใช้ VM + DB ของตัวเอง (endpoint ไม่ซ้ำ)
+ * tests block-level data: results / loadValues / afterValues / writes / timestamp
+ * each test uses its own VM + DB (unique endpoint)
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -14,7 +14,7 @@ const bal = (account) => `token:storage:balances:${account}`;
 
 let endpointCounter = 0;
 
-/** VM ใหม่ที่มี token (owner 1000, alice 100) และ shop (ราคา 30) พร้อมใช้ */
+/** a fresh VM with token (owner 1000, alice 100) and shop (price 30) ready */
 function setup({ aliceBalance = 100 } = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB());
   const block = vm.createBlock({ timestamp: T - 1000 });
@@ -37,10 +37,10 @@ const buy = (buyer, fn = "buy") => ({ programUuid: "shop", functionName: fn, con
 const readDb = (vm, keys) => Object.fromEntries(keys.map((key, i) => [key, vm.db.readKeys(keys)[i]]));
 
 // ---------------------------------------------------------------------------
-//  รูปแบบข้อมูลทั้งก้อน
+//  full data shape
 // ---------------------------------------------------------------------------
 
-test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม", () => {
+test("full summary: 2 successful txs + 1 failed tx", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 30));
@@ -53,21 +53,21 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
 
   const summary = block.summary();
   for (const result of summary.results) {
-    assert.equal(typeof result.gasUsed, "number");   // นับแก๊สเสมอ แม้ยังไม่เปิดเก็บค่าแก๊ส
+    assert.equal(typeof result.gasUsed, "number");   // gas is always counted, even with gas charging off
     assert.equal(result.fee, "0n");
     assert.equal(result.accepted, true);
     delete result.gasUsed;
     delete result.fee;
     delete result.accepted;
     delete result.gasPrice;
-    assert.deepEqual([result.baseFee, result.burnedFee, result.producerFee], ["1n", "0n", "0n"]);   // ไม่เก็บค่าแก๊ส → ไม่มีส่วนที่เผา
+    assert.deepEqual([result.baseFee, result.burnedFee, result.producerFee], ["1n", "0n", "0n"]);   // no gas charged → nothing burned
     delete result.baseFee;
     delete result.burnedFee;
     delete result.producerFee;
     assert.deepEqual(result.events, []);
     delete result.events;
     delete result.debug;
-    for (const call of result.calls) {   // input / value / result / gas ของแต่ละ call ทดสอบแยกใน 16-transfer-flow
+    for (const call of result.calls) {   // each call's input / value / result / gas is tested separately in 16-transfer-flow
       assert.equal(call.input.from ?? "alice", "alice");
       assert.equal(typeof call.gasUsed, "number");
       for (const field of ["input", "value", "gasStart", "result", "gasUsed"]) delete call[field];
@@ -97,8 +97,8 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
       {
         status: "throw",
         timestamp: T,
-        error: { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" },
-        calls: [record("throw", { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" })],
+        error: { code: "PROGRAM_ERROR", message: "insufficient balance" },
+        calls: [record("throw", { code: "PROGRAM_ERROR", message: "insufficient balance" })],
         writes: [],
       },
     ],
@@ -120,12 +120,12 @@ test("summary ทั้งก้อน: 2 tx สำเร็จ + 1 tx ล้ม
   });
 });
 
-test("block ว่าง", () => {
+test("empty block", () => {
   const vm = setup();
   assert.deepEqual(vm.createBlock({ timestamp: T }).summary(), { timestamp: T, results: [], loadValues: [], afterValues: [], writes: [] });
 });
 
-test("ทุก tx ล้ม → มีแค่ results", () => {
+test("every tx fails → only results", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("nobody", "bob", 1));
@@ -136,10 +136,10 @@ test("ทุก tx ล้ม → มีแค่ results", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  ความสัมพันธ์ระหว่างข้อมูล (ต้องจริงเสมอ)
+//  relations between the data (must always hold)
 // ---------------------------------------------------------------------------
 
-/** ตรวจ invariant ของ block กับ DB ก่อนและหลัง commit */
+/** checks block invariants against the DB before and after commit */
 function assertBlockInvariants(vm, block) {
   const summary = block.summary();
   const storageWrites = summary.writes.filter((w) => w.dbKey.includes(":storage:"));
@@ -147,57 +147,57 @@ function assertBlockInvariants(vm, block) {
   const allKeys = [...new Set([...summary.loadValues.map((v) => v.dbKey), ...touched, ...summary.writes.map((w) => w.dbKey)])];
   const dbBefore = readDb(vm, allKeys);
 
-  // 1) loadValue = ค่าใน DB ก่อน block
+  // 1) loadValue = the DB value before the block
   for (const { dbKey, loadValue } of summary.loadValues) assert.deepEqual(loadValue, dbBefore[dbKey], `loadValue ${dbKey}`);
 
-  // 2) key ที่ถูกอ่านต้องอยู่ใน afterValues ด้วย
+  // 2) every read key must also be in afterValues
   for (const { dbKey } of summary.loadValues) assert.ok(touched.has(dbKey), `loadValues ⊆ afterValues: ${dbKey}`);
 
-  // 3) changed = ค่าใน DB ก่อน block ≠ afterValue
+  // 3) changed = the DB value before the block ≠ afterValue
   for (const { dbKey, afterValue, changed } of summary.afterValues) {
     assert.equal(changed, JSON.stringify(dbBefore[dbKey]) !== JSON.stringify(afterValue), `changed ${dbKey}`);
   }
 
-  // 4) ทุก key ที่ changed ต้องมีใน writes, ทุก storage write ต้องอยู่ใน afterValues
+  // 4) every changed key must be in writes, every storage write must be in afterValues
   const writeKeys = new Set(summary.writes.map((w) => w.dbKey));
   for (const { dbKey, changed } of summary.afterValues) if (changed) assert.ok(writeKeys.has(dbKey), `changed → write: ${dbKey}`);
   for (const { dbKey } of storageWrites) assert.ok(touched.has(dbKey), `storage write → afterValues: ${dbKey}`);
 
-  // 5) writes มี 1 รายการต่อ key
+  // 5) writes have 1 entry per key
   assert.equal(writeKeys.size, summary.writes.length);
 
-  // 6) results ครบทุก tx และ timestamp ตรงกัน
+  // 6) results cover every tx and timestamps match
   assert.ok(summary.results.every((r) => r.timestamp === summary.timestamp));
 
-  // 7) หลัง commit: DB = afterValues ทุก key
+  // 7) after commit: DB = afterValues for every key
   block.commit();
   const dbAfter = readDb(vm, allKeys);
   for (const { dbKey, afterValue } of summary.afterValues) assert.deepEqual(dbAfter[dbKey], afterValue, `after commit ${dbKey}`);
   for (const write of summary.writes) assert.deepEqual(dbAfter[write.dbKey], write.type === "del" ? undefined : write.value, `write ${write.dbKey}`);
 }
 
-test("invariant: โอนหลายทอด", () => {
+test("invariant: multi-hop transfers", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 30));
   block.call(transfer("bob", "carol", 10));
   block.call(transfer("carol", "alice", 10));
-  block.call(transfer("dave", "alice", 5)); // ล้ม
+  block.call(transfer("dave", "alice", 5)); // fails
   assertBlockInvariants(vm, block);
 });
 
-test("invariant: ข้ามโปรแกรม (approve → shop.buy ผ่าน token.transferFrom)", () => {
+test("invariant: cross-program (approve → shop.buy via token.transferFrom)", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(approve("alice", "shop", 70));
   block.call(buy("alice"));
   block.call(buy("alice"));
-  block.call(buy("alice")); // allowance เหลือ 10 → ล้มทั้ง tx
-  block.call(buy("alice", "buySafe")); // ล้มแต่ catch → บันทึก failed ของ shop
+  block.call(buy("alice")); // allowance down to 10 → the whole tx fails
+  block.call(buy("alice", "buySafe")); // fails but caught → shop records failed
 
   const summary = block.summary();
   assert.deepEqual(summary.results.map((r) => r.status), ["success", "success", "success", "throw", "success"]);
-  // เรียงตามลำดับที่ key ถูกแตะครั้งแรก (shop อ่าน token / shopId / price ก่อนเรียก token)
+  // ordered by first touch (shop reads token / shopId / price before calling token)
   assert.deepEqual(summary.afterValues.map((v) => [v.dbKey, v.afterValue]), [
     ["token:storage:allowance:alice:shop", "10n"],
     ["shop:storage:token", "token"],
@@ -208,12 +208,12 @@ test("invariant: ข้ามโปรแกรม (approve → shop.buy ผ่�
     ["shop:storage:items:alice", "2n"],
     ["shop:storage:sales", "2n"],
     ["shop:storage:attempts:alice", "1n"],
-    ["shop:storage:failed:alice", "allowance ไม่พอ"],
+    ["shop:storage:failed:alice", "insufficient allowance"],
   ]);
   assertBlockInvariants(vm, block);
 });
 
-test("invariant: โปรแกรมซ้อนถูกย้อน → key ที่ถูกแตะอยู่ใน afterValues แต่ changed false และไม่มีใน writes", () => {
+test("invariant: nested program reverted → touched keys are in afterValues but changed false, and absent from writes", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call({ programUuid: "probe", functionName: "relayCatch", input: { target: "token", fn: "transfer", args: { to: "x", amount: 1 } }, context: user("alice") });
@@ -226,7 +226,7 @@ test("invariant: โปรแกรมซ้อนถูกย้อน → key 
   assertBlockInvariants(vm, block);
 });
 
-test("invariant: deploy + init + call ใน block เดียว — key ระบบอยู่ใน writes แต่ไม่อยู่ใน loadValues / afterValues", () => {
+test("invariant: deploy + init + call in one block — system keys are in writes but not in loadValues / afterValues", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.deploy({ programUuid: "counter", code: COUNTER, context: user("a"), initInput: { start: 5 } });
@@ -249,7 +249,7 @@ test("invariant: deploy + init + call ใน block เดียว — key ร�
   assertBlockInvariants(vm, block);
 });
 
-test("invariant: ลบแล้วสร้างใหม่ / สร้างแล้วลบ ภายใน block", () => {
+test("invariant: delete then recreate / create then delete within a block", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.deploy({ programUuid: "counter", code: COUNTER, context: user("a"), initInput: { start: 5 } });
@@ -257,8 +257,8 @@ test("invariant: ลบแล้วสร้างใหม่ / สร้าง
   block.commit();
 
   const next = vm.createBlock({ timestamp: T });
-  next.call({ programUuid: "counter", functionName: "reset", context: user("a") });   // ลบ
-  next.call({ programUuid: "counter", functionName: "add", input: { amount: 5 }, context: user("a") }); // สร้างใหม่เป็น 5 = ค่าเดิม
+  next.call({ programUuid: "counter", functionName: "reset", context: user("a") });   // delete
+  next.call({ programUuid: "counter", functionName: "add", input: { amount: 5 }, context: user("a") }); // recreate as 5 = the original value
   assert.deepEqual(next.afterValues(), [{ dbKey: "counter:storage:count", afterValue: "5n", changed: false }]);
   assert.deepEqual(next.writes(), [{ type: "put", dbKey: "counter:storage:count", value: "5n" }]);
   assertBlockInvariants(vm, next);
@@ -271,10 +271,10 @@ test("invariant: ลบแล้วสร้างใหม่ / สร้าง
   assertBlockInvariants(vm, last);
 });
 
-test("key ที่ถูกอ่านเฉพาะใน tx ที่ล้ม ไม่อยู่ในข้อมูลของ block", () => {
+test("keys read only in failed txs are absent from the block data", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
-  block.call(transfer("zed", "bob", 1)); // อ่าน zed แล้วล้ม
+  block.call(transfer("zed", "bob", 1)); // reads zed, then fails
   block.call(transfer("alice", "bob", 1));
   const keys = block.loadValues().map((v) => v.dbKey);
   assert.deepEqual(keys, [bal("alice"), bal("bob")]);
@@ -282,10 +282,10 @@ test("key ที่ถูกอ่านเฉพาะใน tx ที่ล้
 });
 
 // ---------------------------------------------------------------------------
-//  block = รันทีละ tx แล้ว commit ทันทีทีละอัน (ผลต้องเหมือนกันทุกประการ)
+//  block = running each tx and committing immediately one by one (results must be identical)
 // ---------------------------------------------------------------------------
 
-/** ตัวสุ่มที่กำหนด seed ได้ */
+/** seedable random generator */
 function random(seed) {
   return () => {
     seed = (seed + 0x6d2b79f5) | 0;
@@ -313,7 +313,7 @@ function randomTxs(seed, count) {
 }
 
 for (const seed of [1, 2, 3, 42, 2024]) {
-  test(`block เท่ากับรันทีละ tx + commit ทีละอัน (seed ${seed}, 60 tx)`, () => {
+  test(`block equals running each tx + committing one by one (seed ${seed}, 60 tx)`, () => {
     const txs = randomTxs(seed, 60);
 
     const blockVm = setup();
@@ -327,25 +327,25 @@ for (const seed of [1, 2, 3, 42, 2024]) {
       return res;
     });
 
-    // ผลของแต่ละ tx เหมือนกันทุก field
+    // every tx result matches in every field
     assert.deepEqual(block.results(), sequential);
 
-    // DB หลัง commit เหมือนกัน
+    // DB after commit is identical
     block.commit();
     assert.deepEqual(blockVm.db.snapshot(), sequentialVm.db.snapshot());
 
-    // ยอดรวมของ token คงที่เสมอ
+    // the token's total stays constant
     const total = Object.entries(blockVm.db.snapshot())
       .filter(([key]) => key.startsWith("token:storage:balances:"))
-      .reduce((sum, [, value]) => sum + BigInt(value.slice(0, -1)), 0n);   // เก็บเป็น "123n"
+      .reduce((sum, [, value]) => sum + BigInt(value.slice(0, -1)), 0n);   // stored as "123n"
     assert.equal(total, 1000n);
 
-    // มีทั้ง tx ที่สำเร็จและล้ม
+    // includes both successful and failed txs
     const statuses = new Set(block.results().map((r) => r.status));
     assert.deepEqual([...statuses].sort(), ["success", "throw"]);
   });
 
-  test(`invariant ของ block แบบสุ่ม (seed ${seed})`, () => {
+  test(`randomized block invariants (seed ${seed})`, () => {
     const vm = setup();
     const block = vm.createBlock({ timestamp: T });
     for (const tx of randomTxs(seed, 60)) block.call(tx);
@@ -354,10 +354,10 @@ for (const seed of [1, 2, 3, 42, 2024]) {
 }
 
 // ---------------------------------------------------------------------------
-//  คุณสมบัติอื่น ๆ ของข้อมูล
+//  other data properties
 // ---------------------------------------------------------------------------
 
-test("ข้อมูลที่คืนออกมาเป็น copy — แก้แล้วไม่กระทบ block", () => {
+test("returned data is a copy — modifying it does not affect the block", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 10));
@@ -372,7 +372,7 @@ test("ข้อมูลที่คืนออกมาเป็น copy — �
   assert.equal(block.results().length, 1);
 });
 
-test("แก้ผลของ tx (ทั้งที่ได้จาก call และจาก results()) ไม่กระทบข้อมูลของ block", () => {
+test("modifying tx results (from call or from results()) does not affect block data", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   const returned = block.call(transfer("alice", "bob", 10));
@@ -387,7 +387,7 @@ test("แก้ผลของ tx (ทั้งที่ได้จาก call 
   assert.equal(block.results()[0].loadValues.length, 2);
 });
 
-test("summary อ่านได้ทั้งก่อนและหลัง commit และเหมือนเดิม", () => {
+test("summary is readable before and after commit and stays the same", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 10));
@@ -396,7 +396,7 @@ test("summary อ่านได้ทั้งก่อนและหลัง
   assert.deepEqual(block.summary(), before);
 });
 
-test("summary แปลงเป็น JSON ได้ (loadValue undefined จะหายไปจาก JSON)", () => {
+test("summary converts to JSON (undefined loadValue disappears from the JSON)", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(transfer("alice", "bob", 10));
@@ -404,7 +404,7 @@ test("summary แปลงเป็น JSON ได้ (loadValue undefined จ�
   assert.deepEqual(json.loadValues, [{ dbKey: bal("alice"), loadValue: "100n" }, { dbKey: bal("bob") }]);
 });
 
-test("block ใหญ่ 500 tx: ข้อมูลถูกต้องและใช้เวลาไม่นาน", () => {
+test("large 500-tx block: data is correct and fast", () => {
   const vm = setup({ aliceBalance: 500 });
   const block = vm.createBlock({ timestamp: T });
   const started = Date.now();
@@ -416,6 +416,6 @@ test("block ใหญ่ 500 tx: ข้อมูลถูกต้องแล�
   assert.equal(block.writes().length, 51); // alice + user0..49
   assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("alice")), { dbKey: bal("alice"), afterValue: "0n", changed: true });
   assert.deepEqual(block.afterValues().find((v) => v.dbKey === bal("user7")), { dbKey: bal("user7"), afterValue: "10n", changed: true });
-  assert.ok(elapsed < 2000, `ใช้เวลา ${elapsed}ms`);
+  assert.ok(elapsed < 2000, `took ${elapsed}ms`);
   assertBlockInvariants(vm, block);
 });

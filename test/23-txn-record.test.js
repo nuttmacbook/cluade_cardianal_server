@@ -4,7 +4,7 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { VM, MemoryDB, num } from "./helpers.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
-/* keccak256 + รายการ tx ที่เขียนลง DB: <address>:txn:<nonce>:<txhash> */
+/* keccak256 + tx records written to the DB: <address>:txn:<nonce>:<txhash> */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -29,7 +29,7 @@ const txnWrites = (res) => res.writes.filter((w) => w.dbKey.includes(":txn:"));
 //  keccak256
 // ---------------------------------------------------------------------------
 
-test("hash: ใช้ keccak256 เป็นค่าเริ่มต้น (ตรงกับของ EVM)", () => {
+test("hash: keccak256 is the default (matches EVM)", () => {
   assert.equal(VM.keccak256Hex(""), "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
   assert.equal(VM.keccak256Hex("hello"), `0x${Buffer.from(keccak_256(new TextEncoder().encode("hello"))).toString("hex")}`);
 
@@ -39,10 +39,10 @@ test("hash: ใช้ keccak256 เป็นค่าเริ่มต้น (�
 });
 
 // ---------------------------------------------------------------------------
-//  รายการ tx
+//  tx records
 // ---------------------------------------------------------------------------
 
-test("txn: tx ที่สำเร็จเขียน <address>:txn:<nonce>:<hash>", () => {
+test("txn: a successful tx writes <address>:txn:<nonce>:<hash>", () => {
   const vm = setup();
   const request = callTx(0);
   const hash = vm.hashTransaction(request);
@@ -57,7 +57,7 @@ test("txn: tx ที่สำเร็จเขียน <address>:txn:<nonce>:<
   assert.equal(vm.db.readKeys([`alice:txn:0:${hash}`])[0].status, "success");
 });
 
-test("txn: tx ที่ล้มก็ถูกบันทึก พร้อมสาเหตุ", () => {
+test("txn: a failed tx is recorded too, with the reason", () => {
   const vm = setup();
   const request = callTx(0, 99999);
   const res = vm.call(request, { timestamp: T });
@@ -65,19 +65,19 @@ test("txn: tx ที่ล้มก็ถูกบันทึก พร้อ�
 
   assert.equal(res.status, "throw");
   assert.equal(record.status, "throw");
-  assert.deepEqual(record.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(record.error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.equal(record.hash, vm.hashTransaction(request));
   assert.ok(num(record.fee) > 0);
 });
 
-test("txn: nonce ผิด → ไม่บันทึกอะไรเลย", () => {
+test("txn: wrong nonce → nothing recorded", () => {
   const vm = setup();
   const res = vm.call(callTx(9), { timestamp: T });
   assert.equal(res.error.code, "INVALID_REQUEST");
   assert.deepEqual(res.writes, []);
 });
 
-test("txn: deploy / transfer ก็ถูกบันทึก ส่วน init / reject ไม่ถูกบันทึก (ไม่มี user address)", () => {
+test("txn: deploy / transfer are recorded too, but init / reject are not (no user address)", () => {
   const vm = setup();
   const deployed = vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 1 }, nonce: 0 }, { timestamp: T });
   assert.equal(txnWrites(deployed)[0].value.action, "deploy");
@@ -92,11 +92,11 @@ test("txn: deploy / transfer ก็ถูกบันทึก ส่วน init
   assert.equal(txnWrites(transferred)[0].dbKey, `alice:txn:1:${vm.hashTransaction({ from: "alice", to: "carol", amount: 10, nonce: 1 })}`);
 });
 
-test("txn: key เรียงตาม nonce — ไล่ tx ของ address ได้ด้วย prefix", () => {
+test("txn: keys sort by nonce — an address's txs can be walked by prefix", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.call(callTx(0, 1));
-  block.call(callTx(1, 99999)); // ล้ม
+  block.call(callTx(1, 99999)); // fails
   block.transfer({ from: "alice", to: "carol", amount: 5, nonce: 2 });
   block.commit();
 
@@ -106,27 +106,27 @@ test("txn: key เรียงตาม nonce — ไล่ tx ของ address
   assert.deepEqual(keys.map((key) => vm.db.readKeys([key])[0].action), ["call", "call", "transfer"]);
 });
 
-test("txn: decodeDbKey อ่าน key ของรายการ tx ออก", () => {
+test("txn: decodeDbKey parses tx record keys", () => {
   const hash = VM.keccak256Hex("x");
   assert.deepEqual(VM.decodeDbKey(`0xabc:txn:7:${hash}`), { kind: "txn", address: "0xabc", nonce: 7, hash });
 });
 
-test("txn: ปิด recordTransactions (ค่าเริ่มต้น) → ไม่มี key นี้", () => {
+test("txn: recordTransactions off (default) → no such key", () => {
   const vm = setup({ recordTransactions: false });
   const res = vm.call(callTx(0), { timestamp: T });
   assert.deepEqual(txnWrites(res), []);
 });
 
-test("txn: บันทึกได้แม้ปิด nonce และค่าแก๊ส (นับ nonce จาก DB)", () => {
+test("txn: records even with nonce and gas fees off (nonce counted from the DB)", () => {
   const vm = setup({ requireNonce: false, chargeGas: false });
   const request = { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice") };
   const res = vm.call(request, { timestamp: T });
 
   assert.deepEqual(txnWrites(res)[0].dbKey, `alice:txn:0:${vm.hashTransaction(request)}`);
-  assert.equal(res.writes.some((w) => w.dbKey === "alice:nonce"), false); // ไม่ได้เปิด requireNonce จึงไม่เขียน nonce
+  assert.equal(res.writes.some((w) => w.dbKey === "alice:nonce"), false); // requireNonce is off, so no nonce is written
 });
 
-test("txn: ใน block รวมอยู่ใน writes ของ block ด้วย", () => {
+test("txn: in a block, included in the block's writes", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.call(callTx(0, 1));
@@ -136,13 +136,13 @@ test("txn: ใน block รวมอยู่ใน writes ของ block ด�
   assert.equal(records.length, 2);
   assert.deepEqual(records.map((w) => w.value.nonce), [0, 1]);
 
-  // ไม่ปนกับ stateChanges / nativeChanges ของ receipt
+  // not mixed into the receipt's stateChanges / nativeChanges
   const receipt = block.receipt({ number: 3 });
   assert.equal(receipt.stateChanges.some((c) => c.program === "alice"), false);
   assert.deepEqual(receipt.transactions.map((tx) => tx.hash), records.map((w) => w.value.hash));
 });
 
-test("txn: hash ใน record ตรงกับ hash ใน receipt", () => {
+test("txn: the record's hash matches the receipt's hash", () => {
   const vm = setup();
   const request = callTx(0);
   const result = vm.call(request, { timestamp: T });

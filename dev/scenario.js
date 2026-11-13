@@ -1,30 +1,30 @@
 /**
- * ชุดทดสอบใหญ่บน server ที่รันอยู่: 1000 กระเป๋า · 10 tx ต่อ block · โปรแกรมเรียกกันซับซ้อน
+ * Large test suite against a running server: 1000 wallets · 10 txs per block · programs calling each other in complex ways
  *
- *   RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # server (ยิงจากเครื่องเดียว จึงต้องปิด rate limit ต่อ IP · ราคา / งบแก๊สอิง 1 gwei + DEFAULT_GAS · ดู HANDOFF.md ข้อ 10)
- *   npm run scenario                               # อีก terminal · http://localhost:3000
- *   GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn   # เปิด server ให้เอง (MemoryDB, PORT สุ่ม · env ส่งต่อให้ server)
+ *   RATE_LIMIT=0 GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run dev   # server (sends from one machine, so the per-IP rate limit must be off · prices / gas budget based on 1 gwei + DEFAULT_GAS · see HANDOFF.md item 10)
+ *   npm run scenario                               # in another terminal · http://localhost:3000
+ *   GAS_PRICE=1000000000 GENESIS=genesis-nofork.json npm run scenario -- --spawn   # starts the server itself (MemoryDB, random PORT · env is passed to the server)
  *
- * ขั้นตอน
- *   (ทุก block หยิบงานที่พร้อมให้ครบ 10 ใบ: งานตั้งต้นก่อน แล้วเติมด้วยงานของกระเป๋าที่ได้เหรียญแล้ว)
- *   1 deploy + init   token TEST (6 decimals) · multisend · chain A–F (เรียกต่อกัน 6 ทอด) · router 1–4 (ส่งต่อหลายทอด)
- *   2 แจกเหรียญ       multiSend native ให้ 1000 กระเป๋า (100 ต่อ tx) · multiTransfer token ให้ทั้ง 1000 กระเป๋า (100 ต่อ tx)
- *                     กระเป๋าเป้าหมาย (--target) ได้ทั้ง native สำหรับค่าแก๊ส และ token TEST
- *   3 ใช้งาน          ทุก block ส่ง 10 tx จากกระเป๋าคนละใบ: chain A→F (บางครั้งชั้น F ล้มแต่ D catch ไว้)
- *                     forward token + native ผ่าน router 4 ทอด · multiTransfer ย่อย · โอน token / native · ตั้งชื่อ
- *   4 ตรวจ            ทุก tx เข้า block ไหม สำเร็จ / ล้มตามที่ตั้งใจไหม · tx ต่อ block · จำนวนผู้ถือ token · ยอดของ --target
+ * Steps
+ *   (every block takes ready jobs until it has 10 txs: setup jobs first, then filled with jobs from wallets that already have coins)
+ *   1 deploy + init   token TEST (6 decimals) · multisend · chain A–F (6 chained hops) · router 1–4 (multi-hop forwarding)
+ *   2 distribute      multiSend native to 1000 wallets (100 per tx) · multiTransfer token to all 1000 wallets (100 per tx)
+ *                     the target wallet (--target) gets both native for gas and token TEST
+ *   3 usage           every block sends 10 txs from different wallets: chain A→F (sometimes level F fails but D catches it)
+ *                     forward token + native through 4 router hops · small multiTransfers · token / native transfers · naming
+ *   4 verify          did every tx land in a block · succeed / fail as intended · txs per block · token holder count · --target balance
  *
- * ตัวเลือก
+ * Options
  *   --url <url>         server (http://localhost:3000)
- *   --wallets <n>       จำนวนกระเป๋า (1000)
- *   --per-block <n>     tx ต่อ block (10)
- *   --blocks <n>        จำนวน block ของขั้นที่ 3 (60)
- *   --target <address>  กระเป๋าที่ได้ทั้ง native และ token (0xF10FF4d0f48b1fb63f7A0d2672Bfc18C765480Cf)
- *   --seed <text>       ชุดกระเป๋า / การสุ่ม (scenario)
- *   --spawn             เปิด server.js ให้เอง · --data <dir> ถ้าจะใช้ LMDB
- *   --out <file>        รายงาน JSON (scenario-report.json)
+ *   --wallets <n>       number of wallets (1000)
+ *   --per-block <n>     txs per block (10)
+ *   --blocks <n>        number of blocks in step 3 (60)
+ *   --target <address>  wallet that gets both native and token (0xF10FF4d0f48b1fb63f7A0d2672Bfc18C765480Cf)
+ *   --seed <text>       wallet set / randomness (scenario)
+ *   --spawn             start server.js itself · --data <dir> to use LMDB
+ *   --out <file>        JSON report (scenario-report.json)
  *
- * ⚠️ key ของกระเป๋าสร้างจาก --seed เพื่อทดสอบเท่านั้น ห้ามใช้กับเงินจริง
+ * ⚠️ wallet keys are derived from --seed for testing only · never use them with real funds
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -50,26 +50,26 @@ const OPTIONS = {
   out: option("out", "scenario-report.json"),
 };
 
-// ---------- งบเหรียญหลัก (genesis ให้ funder 10,000,000 เหรียญ) ----------
-// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → งบในสคริปต์นับเป็น gwei ตัวเลขจึงเท่ากับจำนวนแก๊สที่ซื้อได้
+// ---------- native coin budget (genesis gives the funder 10,000,000 coins) ----------
+// native has 18 decimals (wei) and the gas price is 1 gwei → budgets in this script are counted in gwei, so the numbers equal the gas they can buy
 const GWEI = 10n ** 9n;
-const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // ยอดที่ส่งใน tx (string เพราะเกิน 2^53 ได้)
+const gwei = (amount) => `${BigInt(amount) * GWEI}`;   // amount sent in a tx (string because it can exceed 2^53)
 const UNIT = 10n ** 6n;                 // TEST 6 decimals
-const POWER = 50;                       // กระเป๋าที่ทำ tx หนัก (chain / router / multiTransfer) ได้งบมากกว่า
-const NATIVE_EACH = 4_500;              // native ต่อกระเป๋าทั่วไป (โอน token ≈ 2,570 gas รวม indexed from / to · โอน native ≈ 1,300)
-const NATIVE_POWER = 60_000;            // native เพิ่มให้กระเป๋า power (forward 4 ทอด ≈ 21,500 gas · chain 6 ทอด ≈ 8,100 · multiTransfer ≈ 2,300 ต่อผู้รับ)
-const NATIVE_TARGET = 500_000;          // ให้ --target ไว้จ่ายค่าแก๊สเอง
-// ค่าใช้จ่ายโดยประมาณ (gas + value) ของงานแต่ละแบบ → ไม่ส่งงานที่กระเป๋าจ่ายไม่ไหว (ถูกปฏิเสธที่ /sendtx)
+const POWER = 50;                       // wallets doing heavy txs (chain / router / multiTransfer) get a bigger budget
+const NATIVE_EACH = 4_500;              // native per regular wallet (token transfer ≈ 2,570 gas incl. indexed from / to · native transfer ≈ 1,300)
+const NATIVE_POWER = 60_000;            // extra native for power wallets (4-hop forward ≈ 21,500 gas · 6-hop chain ≈ 8,100 · multiTransfer ≈ 2,300 per recipient)
+const NATIVE_TARGET = 500_000;          // for --target to pay its own gas
+// estimated cost (gas + value) of each kind of job → don't send jobs a wallet can't afford (rejected at /sendtx)
 const COST = { chainHop: 1_500, chainBase: 2_000, router: 24_000, approve: 2_000, multiPer: 2_500, multiBase: 2_000,
-  tokenTransfer: 2_700, nativeTransfer: 1_400, metadata: 2_500 };   // tokenTransfer รวม topic 375 × 2 (Transfer index from / to)
-const TOKEN_EACH = 1_000n * UNIT;       // TEST ต่อกระเป๋า
+  tokenTransfer: 2_700, nativeTransfer: 1_400, metadata: 2_500 };   // tokenTransfer includes topic 375 × 2 (Transfer indexes from / to)
+const TOKEN_EACH = 1_000n * UNIT;       // TEST per wallet
 const TOKEN_POWER = 50_000n * UNIT;
 const TOKEN_TARGET = 1_000_000n * UNIT;
-const BATCH = 100;                      // ผู้รับต่อ multiSend / multiTransfer
-// EIP-1559: จ่ายไม่เกิน 10 gwei ต่อแก๊ส (base fee ขึ้นได้ตอน block แน่น) · ไม่ให้ tip → จ่ายแค่ base fee
+const BATCH = 100;                      // recipients per multiSend / multiTransfer
+// EIP-1559: pay at most 10 gwei per gas (the base fee can rise when blocks are full) · no tip → pay only the base fee
 const GAS = { gasLimit: 1_000_000, maxFeePerGas: gwei(10), maxPriorityFeePerGas: "0" };
 
-// ---------- ตัวช่วย ----------
+// ---------- helpers ----------
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const keyOf = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 let rngState = parseInt(keyOf(`rng:${OPTIONS.seed}`).slice(2, 10), 16);
@@ -93,7 +93,7 @@ let API = OPTIONS.url.replace(/\/$/, "");
 const get = (path) => fetch(API + path).then((r) => r.json());
 const post = async (path, body) => {
   const response = await fetch(API + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (response.status === 429) throw new Error("server ตอบ 429 (rate limit ต่อ IP) — เปิด server ด้วย RATE_LIMIT=0 หรือใช้ --spawn");
+  if (response.status === 429) throw new Error("server returned 429 (per-IP rate limit) — start the server with RATE_LIMIT=0 or use --spawn");
   return response.json();
 };
 
@@ -128,7 +128,7 @@ async function send(wallet, fields, label, { expectThrow = false } = {}) {
   return null;
 }
 
-// ---------- จังหวะ block: ส่งไม่เกิน perBlock ใบ แล้วรอ block ถัดไป ----------
+// ---------- block pacing: send at most perBlock txs, then wait for the next block ----------
 let lastSeen = 0;
 async function nextBlock() {
   const deadline = Date.now() + 60_000;
@@ -137,15 +137,15 @@ async function nextBlock() {
     if ((latest ?? 0) > lastSeen) return (lastSeen = latest ?? 0);
     await wait(100);
   }
-  throw new Error("ไม่มี block ใหม่ใน 60 วินาที — server ปิด block อยู่หรือเปล่า");
+  throw new Error("no new block in 60 seconds — is the server closing blocks?");
 }
-// ---------- คิวงาน: ทุก block หยิบงานที่พร้อม (ของที่ต้องใช้เข้า block แล้ว) ให้ครบ perBlock ใบ ----------
-const done = new Set();     // เหตุการณ์ที่เข้า block สำเร็จแล้ว เช่น "init token"
+// ---------- job queue: every block takes ready jobs (whose prerequisites are already in a block) up to perBlock txs ----------
+const done = new Set();     // events already landed in a block, e.g. "init token"
 const queue = [];           // { label, ready(), run() → hash, onDone(found, hash) }
 const waiting = [];         // { hash, onDone }
 const task = (label, ready, run, onDone) => queue.push({ label, ready, run, onDone });
 
-/** tx ที่ส่งแล้วเข้า block หรือยัง → เรียก onDone */
+/** Has a sent tx landed in a block yet → calls onDone */
 async function settle() {
   for (const item of [...waiting]) {
     const found = await get(`/tx/${item.hash}`);
@@ -165,17 +165,17 @@ async function runSlot(stage, jobs) {
   await settle();
 }
 
-// ไอคอน TEST: สี่เหลี่ยมไล่สีน้ำเงิน-ม่วง ตัว T
+// TEST icon: a blue-purple gradient square with the letter T
 const ICON = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b5bdb"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><text x="32" y="43" font-size="30" font-family="sans-serif" font-weight="700" text-anchor="middle" fill="#fff">T</text></svg>');
 
 // ============================================================================
-//  1–2 deploy + init + แจกเหรียญ (งานตั้งต้น เข้าคิวตามลำดับ ส่งเมื่อพร้อม)
+//  1–2 deploy + init + distribute coins (setup jobs, queued in order, sent when ready)
 // ============================================================================
-const P = {};                 // ชื่อโปรแกรม → address
+const P = {};                 // program name → address
 const tokenFunded = new Set();
 const PROGRAM_NAMES = ["token", "multisend", "chain-a", "chain-b", "chain-c", "chain-d", "chain-e", "chain-f", "router-1", "router-2", "router-3", "router-4"];
 const allReady = () => PROGRAM_NAMES.every((name) => done.has(`init ${name}`));
-const mustSucceed = (label) => (found) => { if (found.status !== "success") throw new Error(`${label} ล้ม: ${JSON.stringify(found.error ?? found)}`); };
+const mustSucceed = (label) => (found) => { if (found.status !== "success") throw new Error(`${label} failed: ${JSON.stringify(found.error ?? found)}`); };
 
 function deployTask(name, code, input, ready = () => true) {
   task(`deploy ${name}`, ready, () => send(funder, { action: "deploy", code, input: typeof input === "function" ? input() : input }, `deploy ${name}`),
@@ -193,7 +193,7 @@ function planSetup() {
   deployTask("multisend", MULTISEND_PROGRAM, { name: `${OPTIONS.seed}-multisend` });
   for (const label of ["a", "b", "d", "f"]) deployTask(`chain-${label}`, CHAIN_PROGRAM, { label, name: `${OPTIONS.seed}-chain-${label}`, catch: label === "d" });
   for (const i of [1, 2, 3, 4]) deployTask(`router-${i}`, ROUTER_PROGRAM, { name: `${OPTIONS.seed}-router-${i}` });
-  // C / E แวะอ่าน balanceOf ของ TEST ระหว่างทาง → deploy หลังรู้ address ของ token
+  // C / E read TEST's balanceOf along the way → deploy after the token address is known
   for (const label of ["c", "e"]) deployTask(`chain-${label}`, CHAIN_PROGRAM, () => ({ label, name: `${OPTIONS.seed}-chain-${label}`, probe: P.token }), () => Boolean(P.token));
 
   task("transfer native → target", () => true, () => send(funder, { action: "transfer", to: OPTIONS.target, value: gwei(NATIVE_TARGET) }, "transfer native → target"), mustSucceed("native → target"));
@@ -218,13 +218,13 @@ function planSetup() {
 }
 
 // ============================================================================
-//  3 ใช้งาน: ทุก block 10 tx จากกระเป๋าคนละใบ
+//  3 usage: every block, 10 txs from different wallets
 // ============================================================================
 const approved = new Set();
 const named = new Set();
-const budget = new Map();   // address → native ที่เหลือโดยประมาณ (ตั้งเมื่อ multiSend เข้า block)
-// EIP-1559: งบนับเป็นแก๊สที่ราคา 1 gwei · base fee ขึ้นตอน block แน่น (เช่น multiSend 100 คน) → ค่าใช้จ่ายคูณ base fee / 1 gwei
-//   (+13% เผื่อ base fee ขึ้นอีกหนึ่ง block ก่อน tx เข้า) — ไม่ส่งงานที่กระเป๋าจ่ายไม่ไหว
+const budget = new Map();   // address → approximate remaining native (set when the multiSend lands in a block)
+// EIP-1559: budgets are counted as gas at 1 gwei · the base fee rises when blocks are full (e.g. multiSend to 100) → cost multiplied by base fee / 1 gwei
+//   (+13% in case the base fee rises one more block before the tx lands) — don't send jobs a wallet can't afford
 let feeFactor = 1;
 async function refreshFeeFactor() {
   const { baseFee } = await get("/genesis");
@@ -234,13 +234,13 @@ async function refreshFeeFactor() {
 const others = (wallet, n) => { const set = new Set(); while (set.size < n) { const w = pick(wallets); if (w !== wallet) set.add(w.address); } return [...set]; };
 const CHAIN_ORDER = ["chain-a", "chain-b", "chain-c", "chain-d", "chain-e", "chain-f"];
 
-/** งานของกระเป๋า power: chain / router / multiTransfer ย่อย → [ค่าใช้จ่าย, job] */
+/** Jobs for power wallets: chain / router / small multiTransfer → [cost, job] */
 function powerJob(wallet) {
   if (!allReady() || !tokenFunded.has(wallet.address)) return normalJob(wallet);
   const roll = random();
   if (roll < 0.4) {
-    // chain A→… ยาว 3–6 ทอด · 20% ของสาย 6 ทอดให้ F ล้ม แต่ D catch ไว้ (tx สำเร็จ, trace เห็นชั้นที่ล้ม)
-    // (tx ที่ล้มทั้งใบถูก simulate ที่ /sendtx ปฏิเสธก่อน จึงไม่เข้า block)
+    // chain A→… 3–6 hops long · 20% of 6-hop chains make F fail but D catches it (tx succeeds, trace shows the failed level)
+    // (txs that fail entirely are rejected by the simulation at /sendtx first, so they never land in a block)
     const length = randomInt(3, 6);
     const [head, ...path] = CHAIN_ORDER.slice(0, length).map((name) => P[name]);
     const failAt = length === 6 && random() < 0.2 ? "f" : "";
@@ -255,7 +255,7 @@ function powerJob(wallet) {
         return send(wallet, { action: "call", to: P.token, method: "approve", input: { spender: P["router-1"], amount: `${TOKEN_POWER}n` } }, "call token.approve router");
       }];
     }
-    // token + native ผ่าน router 1→2→3→4 ไปหาผู้รับ (บางครั้งเป็น --target)
+    // token + native through router 1→2→3→4 to the recipient (sometimes --target)
     const to = random() < 0.25 ? OPTIONS.target : pick(others(wallet, 1));
     const amount = BigInt(randomInt(10, 500)) * UNIT;
     const value = randomInt(5, 50);
@@ -268,7 +268,7 @@ function powerJob(wallet) {
     input: { transfers: recipients.map((to) => ({ to, amount: `${BigInt(randomInt(1, 20)) * UNIT}n` })) } }, "call token.multiTransfer")];
 }
 
-/** งานของกระเป๋าทั่วไป: โอน token / native · ตั้งชื่อ → [ค่าใช้จ่าย, job] */
+/** Jobs for regular wallets: token / native transfers · naming → [cost, job] */
 function normalJob(wallet) {
   const roll = random();
   if (roll < 0.5 && tokenFunded.has(wallet.address)) {
@@ -286,7 +286,7 @@ function normalJob(wallet) {
   }];
 }
 
-/** เลือกกระเป๋าที่ยังไม่ได้ใช้ใน block นี้และจ่ายงานไหว · ลองไม่เกิน 200 ครั้ง */
+/** Picks a wallet not yet used in this block that can afford the job · at most 200 tries */
 function assign(pool, makeJob, busy) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const wallet = pick(pool);
@@ -301,7 +301,7 @@ function assign(pool, makeJob, busy) {
   return null;
 }
 
-/** วนทีละ block: งานตั้งต้นที่พร้อมก่อน แล้วเติมด้วยงานของผู้ใช้ (กระเป๋าที่ได้เหรียญแล้ว) จนครบ perBlock ใบ */
+/** Loops block by block: ready setup jobs first, then filled with user jobs (wallets that already have coins) up to perBlock txs */
 async function runAll() {
   const started = Date.now();
   let activitySlots = 0;
@@ -311,7 +311,7 @@ async function runAll() {
       if (jobs.length >= OPTIONS.perBlock) break;
       if (!item.ready()) continue;
       queue.splice(queue.indexOf(item), 1);
-      jobs.push(async () => { const hash = await item.run(); if (hash) waiting.push({ hash, onDone: item.onDone }); else throw new Error(`${item.label} ไม่เข้าคิว: ${JSON.stringify(report.rejectedReasons)}`); });
+      jobs.push(async () => { const hash = await item.run(); if (hash) waiting.push({ hash, onDone: item.onDone }); else throw new Error(`${item.label} not queued: ${JSON.stringify(report.rejectedReasons)}`); });
     }
     const setup = jobs.length;
     if (activitySlots < OPTIONS.blocks) {
@@ -321,8 +321,8 @@ async function runAll() {
       while (jobs.length < OPTIONS.perBlock) { const job = assign(normal, normalJob, busy); if (!job) break; jobs.push(job); }
     }
     if (jobs.length > setup) activitySlots += 1;
-    if (!jobs.length) {   // รอ tx ตั้งต้นเข้า block ก่อน
-      if (!waiting.length) throw new Error("ไม่มีงานที่พร้อมและไม่มี tx ที่รอ — คิวค้าง");
+    if (!jobs.length) {   // wait for setup txs to land in a block first
+      if (!waiting.length) throw new Error("no ready jobs and no pending txs — queue is stuck");
       await wait(200);
       await settle();
       continue;
@@ -334,10 +334,10 @@ async function runAll() {
 }
 
 // ============================================================================
-//  4 ตรวจ
+//  4 verify
 // ============================================================================
 async function verify() {
-  process.stdout.write("\n\nตรวจทุก tx…\n");
+  process.stdout.write("\n\nverifying every tx…\n");
   await wait(4_000);
   const missing = [];
   for (const item of report.tracked) {

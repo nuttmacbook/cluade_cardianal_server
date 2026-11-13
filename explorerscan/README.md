@@ -1,70 +1,70 @@
-# explorerscan — หน้า explorer ของเชน
+# explorerscan — the chain's explorer page
 
-ไฟล์ HTML / CSS / JS ธรรมดา **ไม่ต้อง build ไม่มี dependency** · copy โฟลเดอร์นี้ไปแต่งเป็นหน้าตาของเชนตัวเองได้เลย
+Plain HTML / CSS / JS files, **no build step and no dependencies** · copy this folder and restyle it as your own chain's explorer
 
 ```
 explorerscan/
-├── index.html            🎨 โครงหน้า: ชื่อเว็บ, โลโก้, เมนูบน, เมนูข้าง, ลำดับโหลดไฟล์
-├── config.js             🎨 ตั้งค่า: ที่อยู่ node, Reown Project ID, สีจุดในเมนูข้าง, ความถี่ถามสถานะ, รายชื่อโปรแกรมกลาง
-├── theme/                🎨 ความสวยงาม
-│   ├── colors.css            สีทั้งหมดของธีม (ตัวแปร --bg --card --accent …) — เปลี่ยนธีมแก้ไฟล์นี้ก่อน
-│   └── style.css             พื้นหลัง, แถบบน, เมนูข้าง, ตาราง, การ์ด, ฟอร์ม, มือถือ (@media)
-├── ui/                   🎨 การแสดงผล (HTML ของแต่ละหน้า)
-│   ├── components.js         ชิ้นส่วนที่ใช้ทุกหน้า: panel, ตาราง, ลิงก์ address / tx, tag, กล่อง JSON, ตัวแบ่งหน้า, แท็บ
-│   ├── sidebar.js            เมนูข้าง: ไฮไลต์หน้าปัจจุบัน + โปรแกรมล่าสุด
-│   ├── pages/                หน้าเต็มหนึ่งหน้า ต่อหนึ่ง URL
-│   │   ├── home.js               #               ภาพรวม + block ล่าสุด
-│   │   ├── programs.js           #programs       โปรแกรมที่อนุมัติแล้ว / รออนุมัติ
-│   │   ├── block.js              #block/<เลข>
-│   │   ├── tx.js                 #tx/<hash>      รวมแผนภาพการเรียกโปรแกรม
-│   │   ├── address.js            #address/<addr> ข้อมูลหลัก + เลือกแท็บ
-│   │   ├── deploy.js             #deploy         ส่งโปรแกรมใหม่
-│   │   ├── gas.js                #gas            ค่าแก๊สของเชน (จาก /genesis) + admin ปรับขั้นต่ำ (setGasConfig)
-│   │   └── system.js             #system         โปรแกรมกลาง (Multicall, WBWSC, Factory …) จาก config.js
-│   └── tabs/                 แท็บในหน้า address / โปรแกรม
-│       ├── interact.js           เรียกฟังก์ชัน (ฟอร์ม / JSON) + ผลลัพธ์
-│       ├── storage.js            ข้อมูลที่โปรแกรมเก็บ
-│       ├── permit.js             Permit ของโทเคน (ERC-2612)
-│       ├── upgrade.js            อัปเกรดโปรแกรม / สิทธิ์อัปเกรด
-│       └── metadata.js           แก้ชื่อ / ไอคอน / ลิงก์ของ address ตัวเอง
-└── core/                 ⚙️ ระบบ — ทุกโปรเจกต์ต้องมี ไม่ต้องแก้
-    ├── chain.js              อ่านข้อมูลจากเชน: api() + การแบ่งหน้า (เลขหน้า / cursor)
-    ├── wallet.js             ต่อกระเป๋า (MetaMask ในเบราว์เซอร์ หรือ Reown / WalletConnect), Add network, เซ็น tx EIP-712, ส่ง /sendtx
-    ├── actions.js            เซ็น + ส่ง + รอผลจาก block แล้วรายงานสถานะ
-    ├── interact.js           อ่านโค้ดโปรแกรมเพื่อเดาช่องกรอกของแต่ละฟังก์ชัน
-    ├── format.js             แปลงค่า: เลข BigInt, หน่วยเหรียญ, เวลา, escape HTML
-    ├── router.js             เปลี่ยนหน้าตาม #hash + ช่องค้นหา
-    └── start.js              เริ่มทำงาน + ถามสถานะเชนเป็นระยะ (โหลดเป็นไฟล์สุดท้าย)
+├── index.html            🎨 Page layout: site name, logo, top menu, sidebar, file load order
+├── config.js             🎨 Settings: node address, Reown Project ID, sidebar dot colors, status poll interval, system program list
+├── theme/                🎨 Styling
+│   ├── colors.css            Every theme color (variables --bg --card --accent …) — to change the theme, edit this file first
+│   └── style.css             Background, top bar, sidebar, tables, cards, forms, mobile (@media)
+├── ui/                   🎨 Rendering (HTML for each page)
+│   ├── components.js         Pieces used on every page: panel, table, address / tx links, tags, JSON box, pager, tabs
+│   ├── sidebar.js            Sidebar: highlights the current page + latest programs
+│   ├── pages/                One full page per URL
+│   │   ├── home.js               #               Overview + latest blocks
+│   │   ├── programs.js           #programs       Approved / pending programs
+│   │   ├── block.js              #block/<number>
+│   │   ├── tx.js                 #tx/<hash>      Includes the program call diagram
+│   │   ├── address.js            #address/<addr> Main info + tab selection
+│   │   ├── deploy.js             #deploy         Submit a new program
+│   │   ├── gas.js                #gas            Chain gas fees (from /genesis) + admin sets the minimum (setGasConfig)
+│   │   └── system.js             #system         System programs (Multicall, WBWSC, Factory …) from config.js
+│   └── tabs/                 Tabs on the address / program page
+│       ├── interact.js           Call functions (form / JSON) + results
+│       ├── storage.js            Data the program stores
+│       ├── permit.js             Token Permit (ERC-2612)
+│       ├── upgrade.js            Upgrade the program / upgrade rights
+│       └── metadata.js           Edit the name / icon / links of your own address
+└── core/                 ⚙️ System — every project needs it, no need to edit
+    ├── chain.js              Reads chain data: api() + pagination (page number / cursor)
+    ├── wallet.js             Connects a wallet (MetaMask in the browser, or Reown / WalletConnect), Add network, signs EIP-712 txs, sends to /sendtx
+    ├── actions.js            Sign + send + wait for the block result, then report the status
+    ├── interact.js           Reads program code to guess each function's input fields
+    ├── format.js             Value formatting: BigInt numbers, coin units, time, HTML escaping
+    ├── router.js             Switches pages by #hash + search box
+    └── start.js              Startup + periodic chain status polling (loaded last)
 ```
 
-🎨 = แก้ได้ตามใจ · ⚙️ = ระบบ (แก้ผิด = อ่านข้อมูลผิด หรือลายเซ็นใช้ไม่ได้) · บรรทัดแรกของทุกไฟล์บอกว่าเป็นส่วนไหน
+🎨 = edit freely · ⚙️ = system (a mistake = wrong data or invalid signatures) · the first line of every file says which part it belongs to
 
-## อยากเปลี่ยนอะไร แก้ที่ไหน
+## What to edit for each change
 
-| อยากเปลี่ยน | ไฟล์ |
+| To change | File |
 |---|---|
-| ธีมสี (พื้น, การ์ด, ปุ่ม, ลิงก์) | `theme/colors.css` |
-| พื้นหลัง / กริด / ขนาด / ระยะห่าง / มือถือ | `theme/style.css` |
-| ชื่อเว็บ, โลโก้, ปุ่มบนสุด, เมนูข้าง | `index.html` |
-| ต่อกับ node ของเชนตัวเอง | `config.js` → `api: "https://chain.example.com"` |
-| เชื่อมกระเป๋ามือถือ / กระเป๋าอื่นผ่าน Reown (WalletConnect) | `config.js` → `reownProjectId: "<Project ID จาก cloud.reown.com>"` · ว่าง = ใช้กระเป๋าในเบราว์เซอร์อย่างเดียว |
-| คอลัมน์ / ข้อความในหน้า block, tx, address … | `ui/pages/<หน้า>.js` |
-| หน้าตาตาราง, ลิงก์ address, tag สถานะ ทุกหน้าพร้อมกัน | `ui/components.js` |
-| รูปแบบวันที่ / ตัวเลข | `core/format.js` (`when` `ago` `num`) |
-| เพิ่มหน้าใหม่ | ไฟล์ใหม่ใน `ui/pages/` + เพิ่ม `<script>` ใน `index.html` + เพิ่มบรรทัดใน `render()` ของ `core/router.js` |
+| Color theme (background, cards, buttons, links) | `theme/colors.css` |
+| Background / grid / sizes / spacing / mobile | `theme/style.css` |
+| Site name, logo, top buttons, sidebar | `index.html` |
+| Connect to your own chain's node | `config.js` → `api: "https://chain.example.com"` |
+| Connect mobile wallets / other wallets via Reown (WalletConnect) | `config.js` → `reownProjectId: "<Project ID from cloud.reown.com>"` · empty = browser wallet only |
+| Columns / text on the block, tx, address … pages | `ui/pages/<page>.js` |
+| Table look, address links, status tags on every page at once | `ui/components.js` |
+| Date / number format | `core/format.js` (`when` `ago` `num`) |
+| Add a new page | New file in `ui/pages/` + add a `<script>` in `index.html` + add a line in `render()` in `core/router.js` |
 
-## ใช้ยังไง
+## How to use it
 
-**กับ server ของ repo นี้** (ค่าเริ่ม): `npm run dev` (ของจริง `npm start` ต้องตั้ง `ADMINS` + `PRODUCER_KEY`) แล้วเปิด `http://localhost:3000/` · แก้ไฟล์แล้วกด refresh เห็นผลทันที ไม่ต้อง restart
+**With this repo's server** (default): `npm run dev` (for production, `npm start` needs `ADMINS` + `PRODUCER_KEY`), then open `http://localhost:3000/` · edit a file and refresh to see the change, no restart needed
 
-**fork ไปแต่งเอง** มี 2 แบบ
-1. copy โฟลเดอร์ไปที่อื่น แล้วเปิด server ด้วย `EXPLORER_DIR=/path/to/my-explorer npm run dev`
-2. โฮสต์แยกเป็นเว็บ static (nginx, GitHub Pages, Netlify ฯลฯ): ตั้ง `api` ใน `config.js` เป็นที่อยู่ node · server ตอบ CORS ให้แล้ว
+**Forking to customize** — two ways
+1. Copy the folder elsewhere, then start the server with `EXPLORER_DIR=/path/to/my-explorer npm run dev`
+2. Host it separately as a static site (nginx, GitHub Pages, Netlify, etc.): set `api` in `config.js` to the node address · the server already answers CORS
 
-## กติกาของระบบ (อย่าทำพัง)
+## System rules (don't break these)
 
-- ไฟล์ทั้งหมดเป็น `<script>` ธรรมดา ใช้ตัวแปรร่วมกัน (ไม่ใช่ module) · **ลำดับใน `index.html` สำคัญ**: `config.js` → `core/` → `ui/` → `core/router.js` → `core/start.js`
-- ปุ่มใน HTML เรียกฟังก์ชันด้วย `onclick="ชื่อฟังก์ชัน(...)"` เปลี่ยนชื่อฟังก์ชันต้องเปลี่ยนทุกที่ที่เรียก
-- `canonical()` / `signingInput()` ใน `core/wallet.js` ต้องตรงกับ VM ทุกไบต์ (เทสต์ `46-explorer-canonical` คุม)
-- ชื่อ class ใน `ui/` ผูกกับ `theme/style.css` เปลี่ยนชื่อ class ต้องแก้ทั้งสองฝั่ง
-- เทสต์หน้าเว็บ: `npm run test:e2e` (`test/e2e/explorer.e2e.js`) · ไฟล์ที่ server เสิร์ฟ: `test/104-explorerscan-static.test.js`
+- All files are plain `<script>`s sharing globals (not modules) · **the order in `index.html` matters**: `config.js` → `core/` → `ui/` → `core/router.js` → `core/start.js`
+- HTML buttons call functions with `onclick="functionName(...)"` · renaming a function means changing every caller
+- `canonical()` / `signingInput()` in `core/wallet.js` must match the VM byte for byte (guarded by test `46-explorer-canonical`)
+- Class names in `ui/` are tied to `theme/style.css` · renaming a class means editing both sides
+- Web page tests: `npm run test:e2e` (`test/e2e/explorer.e2e.js`) · files served by the server: `test/104-explorerscan-static.test.js`

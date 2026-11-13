@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 
 /*
- * สถานการณ์ซับซ้อน: ตลาดกลางที่ขายของด้วยเหรียญของโปรแกรมอื่น
- *   TOKEN   เหรียญ มี approve / transferFrom ให้โปรแกรมอื่นหักเงินแทนได้
- *   MARKET  ประกาศขาย ซื้อด้วย token หักค่าธรรมเนียมเข้าคลัง ฝาก/ถอน native เป็นมัดจำ
- * ผู้ใช้ 5 คน ทำหลายอย่างสลับกัน ทั้งสำเร็จและล้ม
+ * Complex scenario: a marketplace that sells items for another program's token
+ *   TOKEN   token with approve / transferFrom so other programs can debit on a user's behalf
+ *   MARKET  lists items, buys with the token, takes a fee into the treasury, native deposit/withdraw as collateral
+ * 5 users doing many interleaved actions, both successful and failing
  */
 
 const T = Date.parse("2025-03-01T09:00:00Z");
@@ -28,7 +28,7 @@ function program() {
 
   function move(from, to, amount) {
     const balance = readDB(map("balances", from)) || 0n
-    if (balance < amount) throw new Error("ยอดไม่พอ")
+    if (balance < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance - amount)
     writeDB(map("balances", to), (readDB(map("balances", to)) || 0n) + amount)
     emit("Transfer", { from: from, to: to, amount: amount })
@@ -45,7 +45,7 @@ function program() {
   function transferFrom(params) {
     const spender = params.context.sender
     const allowed = readDB(map("allow", params.input.from, spender)) || 0n
-    if (allowed < params.input.amount) throw new Error("วงเงินไม่พอ")
+    if (allowed < params.input.amount) throw new Error("insufficient allowance")
     writeDB(map("allow", params.input.from, spender), allowed - params.input.amount)
     move(params.input.from, params.input.to, params.input.amount)
     return true
@@ -66,7 +66,7 @@ function program() {
 
   function onlyOwner(fn) {
     return function (params) {
-      if (params.context.sender !== readDB(map("items", params.input.id, "seller"))) throw new Error("ไม่ใช่เจ้าของประกาศ")
+      if (params.context.sender !== readDB(map("items", params.input.id, "seller"))) throw new Error("not the listing owner")
       return fn(params)
     }
   }
@@ -92,8 +92,8 @@ function program() {
   function buy(params) {
     const id = params.input.id
     const price = readDB(map("items", id, "price"))
-    if (!price) throw new Error("ไม่พบประกาศนี้")
-    if (readDB(map("items", id, "sold"))) throw new Error("ขายไปแล้ว")
+    if (!price) throw new Error("listing not found")
+    if (readDB(map("items", id, "sold"))) throw new Error("already sold")
 
     const seller = readDB(map("items", id, "seller"))
     const fee = (price * readDB("feeBps")) / 10000n
@@ -112,7 +112,7 @@ function program() {
   }
 
   function deposit(params) {
-    if (params.value <= 0n) throw new Error("ต้องแนบเงินมาด้วย")
+    if (params.value <= 0n) throw new Error("value must be attached")
     writeDB(map("deposits", params.context.sender), (readDB(map("deposits", params.context.sender)) || 0n) + params.value)
     emit("Deposited", { who: params.context.sender, amount: params.value })
     return readDB(map("deposits", params.context.sender))
@@ -120,7 +120,7 @@ function program() {
 
   function withdraw(params) {
     const balance = readDB(map("deposits", params.context.sender)) || 0n
-    if (balance <= 0n) throw new Error("ไม่มีเงินฝาก")
+    if (balance <= 0n) throw new Error("no deposit")
     writeDB(map("deposits", params.context.sender), 0n)
     transferNative(params.context.sender, balance)
     emit("Withdrawn", { who: params.context.sender, amount: balance })
@@ -170,12 +170,12 @@ const value = (result) => { assert.equal(result.status, "success", JSON.stringif
 
 // ---------------------------------------------------------------------------
 
-test("ตลาด: ประกาศขาย → อนุมัติวงเงิน → ซื้อข้ามโปรแกรม → เงินถึงผู้ขายและคลัง", () => {
+test("market: list → approve allowance → cross-program buy → funds reach the seller and treasury", () => {
   const { call, read } = setup();
-  const id = value(call("market", "list", { price: 10_000, name: "ของชิ้นแรก" }, "bob"));
+  const id = value(call("market", "list", { price: 10_000, name: "first item" }, "bob"));
   assert.equal(id, "1n");
 
-  assert.match(call("market", "buy", { id }, "carol").error.message, /วงเงินไม่พอ/);   // ยังไม่ approve
+  assert.match(call("market", "buy", { id }, "carol").error.message, /insufficient allowance/);   // not approved yet
 
   value(call("coin", "approve", { spender: "market", amount: 10_000 }, "carol"));
   const sale = value(call("market", "buy", { id }, "carol"));
@@ -183,27 +183,27 @@ test("ตลาด: ประกาศขาย → อนุมัติวง�
 
   assert.equal(read("coin", "balanceOf", { who: "bob" }), "59750n");      // 50,000 + 9,750
   assert.equal(read("coin", "balanceOf", { who: "carol" }), "40000n");
-  assert.equal(read("coin", "balanceOf", { who: "treasury" }), "250n");   // ค่าธรรมเนียม 2.5%
+  assert.equal(read("coin", "balanceOf", { who: "treasury" }), "250n");   // 2.5% fee
   assert.equal(read("coin", "allowanceOf", { owner: "carol", spender: "market" }), "0n");
 });
 
-test("ตลาด: ซื้อซ้ำ / ไม่มีประกาศ / ยกเลิกโดยคนอื่น ถูกปฏิเสธและไม่เปลี่ยนข้อมูล", () => {
+test("market: repeat buy / missing listing / cancel by someone else are rejected and change nothing", () => {
   const { vm, call, read } = setup();
-  const id = value(call("market", "list", { price: 1_000, name: "ของ" }, "bob"));
+  const id = value(call("market", "list", { price: 1_000, name: "item" }, "bob"));
   value(call("coin", "approve", { spender: "market", amount: 5_000 }, "carol"));
   value(call("market", "buy", { id }, "carol"));
 
-  assert.match(call("market", "buy", { id }, "dave").error.message, /ขายไปแล้ว/);
-  assert.match(call("market", "buy", { id: "99n" }, "dave").error.message, /ไม่พบประกาศ/);
-  assert.match(call("market", "cancel", { id }, "dave").error.message, /ไม่ใช่เจ้าของประกาศ/);
+  assert.match(call("market", "buy", { id }, "dave").error.message, /already sold/);
+  assert.match(call("market", "buy", { id: "99n" }, "dave").error.message, /listing not found/);
+  assert.match(call("market", "cancel", { id }, "dave").error.message, /not the listing owner/);
 
   assert.equal(vm.read("market:storage:items:1:buyer"), "carol");
   assert.equal(read("market", "stats", {}).volume, "1000n");
 });
 
-test("ตลาด: ฝาก-ถอน native ของจริงผ่านโปรแกรม", () => {
+test("market: real native deposit and withdraw through the program", () => {
   const { vm, call, read } = setup();
-  assert.match(call("market", "deposit", {}, "dave", 0).error.message, /ต้องแนบเงิน/);
+  assert.match(call("market", "deposit", {}, "dave", 0).error.message, /value must be attached/);
 
   value(call("market", "deposit", {}, "dave", 3_000));
   value(call("market", "deposit", {}, "bob", 2_000));
@@ -212,10 +212,10 @@ test("ตลาด: ฝาก-ถอน native ของจริงผ่าน
 
   assert.equal(value(call("market", "withdraw", {}, "dave")), "3000n");
   assert.equal(vm.nativeBalanceOf("market").balance, 2_000n);
-  assert.match(call("market", "withdraw", {}, "carol").error.message, /ไม่มีเงินฝาก/);
+  assert.match(call("market", "withdraw", {}, "carol").error.message, /no deposit/);
 });
 
-test("ผู้ใช้หลายคน หลายรายการ: ยอดรวมทุกฝั่งตรงกัน", () => {
+test("many users, many actions: totals on every side match", () => {
   const { vm, call, read } = setup();
   const ids = [
     value(call("market", "list", { price: 2_000, name: "a" }, "bob")),
@@ -231,14 +231,14 @@ test("ผู้ใช้หลายคน หลายรายการ: ย�
   const stats = read("market", "stats", {});
   assert.deepEqual({ volume: stats.volume, fees: stats.fees, listings: stats.listings }, { volume: "10000n", fees: "250n", listings: "3n" });
 
-  // เหรียญทั้งหมดในระบบต้องเท่ากับ supply เสมอ
+  // all tokens in the system must always equal supply
   const holders = ["alice", "bob", "carol", "dave", "treasury"];
   const total = holders.reduce((sum, who) => sum + BigInt(read("coin", "balanceOf", { who }).slice(0, -1)), 0n);
   assert.equal(total, 1_000_000n);
-  assert.equal(vm.listProgramStorage("market").length > 20, true, "ตลาดต้องมี key หลายรายการ");
+  assert.equal(vm.listProgramStorage("market").length > 20, true, "market must have many keys");
 });
 
-test("event ครบทุกชั้นของการเรียกซ้อน และ trace ลึก 2 ชั้น", () => {
+test("events from every nested call level, and a 2-level-deep trace", () => {
   const { call, read } = setup();
   const id = value(call("market", "list", { price: 4_000, name: "x" }, "bob"));
   value(call("coin", "approve", { spender: "market", amount: 4_000 }, "carol"));
@@ -253,23 +253,23 @@ test("event ครบทุกชั้นของการเรียกซ�
   assert.equal(sale.events[2].data.fee, "100n");
 });
 
-test("ล้มกลางทาง: การเรียกซ้อนที่ล้มทำให้ทั้ง tx ถูกย้อนทั้งหมด", () => {
+test("failure midway: a failed nested call reverts the whole tx", () => {
   const { vm, call, read } = setup();
-  const id = value(call("market", "list", { price: 90_000, name: "แพง" }, "bob"));
-  value(call("coin", "approve", { spender: "market", amount: 90_000 }, "carol"));   // อนุมัติพอ แต่เหรียญไม่พอ
+  const id = value(call("market", "list", { price: 90_000, name: "pricey" }, "bob"));
+  value(call("coin", "approve", { spender: "market", amount: 90_000 }, "carol"));   // enough allowance, but not enough tokens
 
   const failed = call("market", "buy", { id }, "carol");
   assert.equal(failed.status, "throw");
-  assert.match(failed.error.message, /ยอดไม่พอ/);
+  assert.match(failed.error.message, /insufficient balance/);
   assert.deepEqual(failed.events, []);
 
-  assert.equal(vm.read("market:storage:items:1:sold"), "0n");          // ไม่ถูกทำเครื่องหมายว่าขายแล้ว
+  assert.equal(vm.read("market:storage:items:1:sold"), "0n");          // not marked as sold
   assert.equal(vm.read("market:storage:volume"), undefined);
   assert.equal(read("coin", "balanceOf", { who: "carol" }), "50000n");
-  assert.equal(read("coin", "allowanceOf", { owner: "carol", spender: "market" }), "90000n"); // วงเงินไม่ถูกหัก
+  assert.equal(read("coin", "allowanceOf", { owner: "carol", spender: "market" }), "90000n"); // allowance not deducted
 });
 
-test("ย้อนดูข้อมูลของตลาด ณ block เก่าได้", () => {
+test("market data can be read as of an old block", () => {
   const { vm, call, read } = setup();
   const before = vm.latestBlockNumber();
   const id = value(call("market", "list", { price: 1_500, name: "y" }, "bob"));
@@ -284,7 +284,7 @@ test("ย้อนดูข้อมูลของตลาด ณ block เก
   assert.equal(receipt.transactions[0].events.length, 3);
 });
 
-test("ค่าแก๊สและเงินในระบบ: ไม่มีเหรียญหลักหายไปไหน", () => {
+test("gas and funds in the system: no native coin goes missing", () => {
   const { vm, call, read } = setup();
   const id = value(call("market", "list", { price: 1_000, name: "z" }, "bob"));
   value(call("coin", "approve", { spender: "market", amount: 1_000 }, "carol"));

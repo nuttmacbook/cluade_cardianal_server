@@ -1,6 +1,6 @@
-/* explorerscan/core/format.js [ระบบ · ไม่ต้องแก้]
-   แปลงค่าจากเชนเป็นข้อความ: escape HTML, เลข BigInt "123n", หน่วยเหรียญ (wei ↔ CARD), เวลา, ตรวจ address / URL
-   ไม่มี HTML ของหน้าตาในไฟล์นี้ · ถ้าอยากเปลี่ยนรูปแบบวันที่ / ตัวเลข แก้ when / ago / num ได้ */
+/* explorerscan/core/format.js [system · no need to edit]
+   Converts chain values to text: HTML escaping, BigInt "123n", coin units (wei ↔ CARD), time, address / URL checks
+   No page HTML in this file · to change the date / number format, edit when / ago / num */
 
 const esc = (v) => String(v ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 const attr = (v) => esc(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");   // attribute values (storage keys come from programs)

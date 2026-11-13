@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN, COUNTER, DICE } from "./programs.js";
 
-/* 1) address ของโปรแกรมที่คำนวณจาก deployer + nonce
-   2) Math.random() ที่รันซ้ำได้ผลเดิม
-   3) การไล่ดูข้อมูลสำหรับ explorer ด้วย listKeys */
+/* 1) program addresses derived from deployer + nonce
+   2) Math.random() that gives the same result on re-run
+   3) browsing data for the explorer with listKeys */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -22,10 +22,10 @@ const save = (vm, res) => {
 };
 
 // ---------------------------------------------------------------------------
-//  address ของโปรแกรม
+//  program addresses
 // ---------------------------------------------------------------------------
 
-test("address: ไม่ส่ง programUuid → VM คำนวณจาก deployer + nonce", () => {
+test("address: no programUuid → the VM derives it from deployer + nonce", () => {
   const vm = setup();
   const res = save(vm, vm.deploy({ code: COUNTER, context: user("alice"), initInput: { start: 1 }, nonce: 0 }));
   const address = res.result.programUuid;
@@ -36,14 +36,14 @@ test("address: ไม่ส่ง programUuid → VM คำนวณจาก de
   assert.equal(vm.call({ programUuid: address, functionName: "get", context: user("bob"), nonce: 0 }).result, "1n");
 });
 
-test("address: nonce ต่างกัน / deployer ต่างกัน / chainId ต่างกัน → address ต่างกัน", () => {
+test("address: different nonce / deployer / chainId → different address", () => {
   const vm = setup();
   const a = vm.programAddressFor("alice", 0);
   const other = setup({ chainId: 99 });
   assert.equal(new Set([a, vm.programAddressFor("alice", 1), vm.programAddressFor("bob", 0), other.programAddressFor("alice", 0)]).size, 4);
 });
 
-test("address: deploy สองครั้งติดกันได้คนละ address", () => {
+test("address: two consecutive deploys get different addresses", () => {
   const vm = setup();
   const first = save(vm, vm.deploy({ code: COUNTER, context: user("alice"), nonce: 0 })).result.programUuid;
   const second = save(vm, vm.deploy({ code: COUNTER, context: user("alice"), nonce: 1 })).result.programUuid;
@@ -51,14 +51,14 @@ test("address: deploy สองครั้งติดกันได้คน�
   assert.deepEqual([first, second], [vm.programAddressFor("alice", 0), vm.programAddressFor("alice", 1)]);
 });
 
-test("address: เปิด deriveProgramAddress → ตั้ง address เองไม่ได้อีก", () => {
+test("address: deriveProgramAddress on → addresses can no longer be chosen", () => {
   const vm = setup({ deriveProgramAddress: true });
   const res = save(vm, vm.deploy({ programUuid: "alice", code: COUNTER, context: user("alice"), nonce: 0 }));
-  assert.notEqual(res.result.programUuid, "alice");          // ค่าที่ส่งมาถูกมองข้าม
+  assert.notEqual(res.result.programUuid, "alice");          // the given value is ignored
   assert.equal(res.result.programUuid, vm.programAddressFor("alice", 0));
 });
 
-test("address: ปิดไว้ (ค่าเริ่มต้น) → ยังตั้งเองได้เหมือนเดิม", () => {
+test("address: off (default) → addresses can still be chosen as before", () => {
   const vm = setup();
   assert.equal(save(vm, vm.deploy({ programUuid: "myToken", code: TOKEN, context: user("alice"), initInput: { supply: 1 }, nonce: 0 })).result.programUuid, "mytoken");
 });
@@ -79,25 +79,25 @@ function diceVm() {
 const roll = (vm, fn = "rollMany", input = { times: 3 }) =>
   vm.call({ programUuid: "dice", functionName: fn, input, context: user("alice") }, { timestamp: T });
 
-test("random: tx เดียวกันให้ผลเดิมทุกครั้ง แม้คนละ VM", () => {
+test("random: the same tx gives the same result every time, even on different VMs", () => {
   const first = roll(diceVm()).result;
   const second = roll(diceVm()).result;
   assert.deepEqual(first, second);
   assert.equal(first.length, 3);
   assert.ok(first.every((value) => value >= 0 && value < 1));
-  assert.equal(new Set(first).size, 3); // ค่าที่ได้ในแต่ละครั้งไม่ซ้ำกัน
+  assert.equal(new Set(first).size, 3); // each draw gives a distinct value
 });
 
-test("random: tx ที่ต่างกันได้ค่าต่างกัน", () => {
+test("random: different txs get different values", () => {
   const vm = diceVm();
   const a = roll(vm).result;
   const b = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 3 }, context: user("bob") }, { timestamp: T }).result;
   const c = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 3 }, context: user("alice") }, { timestamp: T + 1 }).result;
-  assert.notDeepEqual(a, b); // คนละ sender
-  assert.notDeepEqual(a, c); // tx เดียวกันแต่คนละ block (เวลาต่างกัน)
+  assert.notDeepEqual(a, b); // different sender
+  assert.notDeepEqual(a, c); // same tx but a different block (different time)
 });
 
-test("random: โปรแกรมที่เรียกซ้อนใช้ลำดับเดียวกันต่อกัน ไม่ซ้ำค่า", () => {
+test("random: nested programs continue the same sequence, no repeated values", () => {
   const vm = diceVm();
   const res = vm.call({ programUuid: "dice", functionName: "rollNested", input: { target: "dice2" }, context: user("alice") }, { timestamp: T });
   const [first, nested, last] = res.result;
@@ -106,22 +106,22 @@ test("random: โปรแกรมที่เรียกซ้อนใช้
   assert.equal(new Set(values).size, 4);
 });
 
-test("random: Math อย่างอื่นยังใช้ได้ปกติ", () => {
+test("random: the rest of Math still works normally", () => {
   const vm = diceVm();
   const res = vm.call({ programUuid: "dice", functionName: "mathStillWorks", context: user("alice") }, { timestamp: T });
   assert.deepEqual(res.result, ["2n", "5n", true, "number"]);
 });
 
-test("random: กระจายตัวพอใช้ (100 ค่า ไม่ซ้ำและกระจายทั้งช่วง)", () => {
+test("random: reasonably distributed (100 values, unique and spread over the whole range)", () => {
   const vm = diceVm();
-  const values = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 100 }, context: user("alice") }, { timestamp: T }).result.map(Number);   // ทศนิยมส่งออกเป็น string
+  const values = vm.call({ programUuid: "dice", functionName: "rollMany", input: { times: 100 }, context: user("alice") }, { timestamp: T }).result.map(Number);   // decimals are exported as strings
   assert.equal(new Set(values).size, 100);
   assert.ok(values.some((value) => value < 0.2) && values.some((value) => value > 0.8));
   const average = values.reduce((sum, value) => sum + value, 0) / values.length;
   assert.ok(average > 0.35 && average < 0.65, `average ${average}`);
 });
 
-test("random: Math.random ของระบบไม่ถูกแตะ", () => {
+test("random: the system Math.random is untouched", () => {
   const before = Math.random();
   diceVm();
   assert.notEqual(Math.random(), before);
@@ -154,13 +154,13 @@ test("explorer: latestBlockNumber / getBlock / getBlockByHash / listBlocks", () 
   assert.equal(block.number, 2);
   assert.deepEqual(vm.getBlockByHash(block.hash), block);
   assert.equal(vm.getBlock(99), null);
-  assert.equal(vm.getBlockByHash("0xไม่มี"), null);
+  assert.equal(vm.getBlockByHash("0xmissing"), null);
 
-  assert.deepEqual(vm.listBlocks({ limit: 2 }).map((b) => b.number), [3, 2]);          // ใหม่ไปเก่า
+  assert.deepEqual(vm.listBlocks({ limit: 2 }).map((b) => b.number), [3, 2]);          // newest first
   assert.deepEqual(vm.listBlocks({ reverse: false }).map((b) => b.number), [1, 2, 3]);
 });
 
-test("explorer: getTransaction จาก hash → รู้ block, index และ record ของผู้ส่ง", () => {
+test("explorer: getTransaction by hash → gives the block, index and the sender's record", () => {
   const vm = chainVm();
   const hash = vm.getBlock(2).txHashes[0];
   const found = vm.getTransaction(hash);
@@ -170,19 +170,19 @@ test("explorer: getTransaction จาก hash → รู้ block, index แล�
   assert.equal(found.from, "alice");
   assert.equal(found.record.status, "success");
   assert.equal(found.record.hash, hash);
-  assert.equal(vm.getTransaction("0xไม่มี"), null);
+  assert.equal(vm.getTransaction("0xmissing"), null);
 });
 
-test("explorer: listTransactionsOf — ไล่ tx ของ address", () => {
+test("explorer: listTransactionsOf — walks an address's txs", () => {
   const vm = chainVm();
   const all = vm.listTransactionsOf("alice");
-  assert.deepEqual(all.map((tx) => tx.nonce), [3, 2, 1, 0]);               // ใหม่ไปเก่า
+  assert.deepEqual(all.map((tx) => tx.nonce), [3, 2, 1, 0]);               // newest first
   assert.deepEqual(vm.listTransactionsOf("alice", { limit: 2 }).map((tx) => tx.nonce), [3, 2]);
   assert.deepEqual(vm.listTransactionsOf("alice", { reverse: false, limit: 2 }).map((tx) => tx.action), ["deploy", "call"]);
   assert.deepEqual(vm.listTransactionsOf("bob"), []);
 });
 
-test("explorer: listProgramStorage — ดู storage ทั้งหมดของโปรแกรม", () => {
+test("explorer: listProgramStorage — view all of a program's storage", () => {
   const vm = chainVm();
   assert.deepEqual(vm.listProgramStorage("token"), [
     { key: ["balances", "alice"], value: "994n" },
@@ -192,7 +192,7 @@ test("explorer: listProgramStorage — ดู storage ทั้งหมดข�
   ]);
 });
 
-test("explorer: listKeys / listEntries และแบ่งหน้าได้", () => {
+test("explorer: listKeys / listEntries with paging", () => {
   const vm = chainVm();
   assert.deepEqual(vm.listKeys("block:"), ["block:000000000001", "block:000000000002", "block:000000000003"]);
 
@@ -202,7 +202,7 @@ test("explorer: listKeys / listEntries และแบ่งหน้าได�
   assert.deepEqual(vm.listEntries("latestblock"), [{ dbKey: "latestblock", value: 3 }]);
 });
 
-test("explorer: DB ที่ไม่มี listKeys → INTERNAL", () => {
+test("explorer: a DB without listKeys → INTERNAL", () => {
   const vm = new VM.VirtualMachine({ readKeys: (keys) => keys.map(() => undefined), writeKeys: () => 0 });
   assert.throws(() => vm.listKeys("block:"), { code: "INTERNAL", message: /listKeys/ });
 });

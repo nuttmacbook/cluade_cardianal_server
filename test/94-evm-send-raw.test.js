@@ -6,12 +6,12 @@ import { createClient, keySigner } from "../client-sdk/index.js";
 import { decodeRawTransaction, rlpEncode } from "../src/node/evm-raw.js";
 
 /*
- * ระยะ 3.5: eth_sendRawTransaction — ethers (แบบเดียวกับ Hardhat / dApp) ส่ง tx ผ่าน /evm ได้จริง
- *   โอน native · ERC-20 transfer ของ token มาตรฐาน · ฟังก์ชันตาม metadata.abi · eth_estimateGas จำลองจริง
- *   hash = keccak(raw) · ไม่มี chainId / chainId ผิด / deploy bytecode / type 1 → ปฏิเสธ
+ * Phase 3.5: eth_sendRawTransaction, so ethers (as used by Hardhat / dApps) can really send txs via /evm
+ *   native transfers · ERC-20 transfer on a standard token · functions via metadata.abi · eth_estimateGas really simulates
+ *   hash = keccak(raw) · missing chainId / wrong chainId / bytecode deploy / type 1 → rejected
  */
 
-const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // มียอดใน genesis.json
+const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // funded in genesis.json
 const BOB = "0x00000000000000000000000000000000000000b0";
 const COUNTER = `function program() {
   function initialization() {
@@ -26,8 +26,8 @@ const COUNTER = `function program() {
   return { bump, count }
 }`;
 
-test("ethers ส่ง tx ผ่าน /evm: native / ERC-20 / metadata.abi · receipt หาได้ด้วย hash ของ ethers", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("ethers sends txs via /evm: native / ERC-20 / metadata.abi · receipts found by ethers' hash", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner, mempool } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -40,21 +40,21 @@ test("ethers ส่ง tx ผ่าน /evm: native / ERC-20 / metadata.abi · r
   const client = createClient({ url });
   const signer = keySigner(FUNDER_KEY);
   try {
-    // native (ethers เลือก type 2 เอง จาก eth_feeHistory / baseFee)
+    // native (ethers picks type 2 itself from eth_feeHistory / baseFee)
     const sent = await wallet.sendTransaction({ to: BOB, value: 5n });
     const receipt = await sent.wait();
     assert.equal(receipt.status, 1);
     assert.equal(receipt.hash, sent.hash);
     assert.equal(sent.type, 2);
     assert.equal(await provider.getBalance(BOB), 5n);
-    assert.equal((await client.transaction(sent.hash)).blockNumber, receipt.blockNumber);   // /tx/:hash ด้วย keccak(raw)
+    assert.equal((await client.transaction(sent.hash)).blockNumber, receipt.blockNumber);   // /tx/:hash by keccak(raw)
 
     // legacy EIP-155
     const legacy = await wallet.sendTransaction({ to: BOB, value: 1n, type: 0, gasPrice: (await provider.getFeeData()).gasPrice });
     assert.equal((await legacy.wait()).status, 1);
     assert.equal(await provider.getBalance(BOB), 6n);
 
-    // token มาตรฐาน + โปรแกรมที่มี ABI (deploy ผ่าน /sendtx ด้วย SDK)
+    // standard token + a program with an ABI (deployed via /sendtx with the SDK)
     const deployed = async (code, input) => {
       const tx = await client.send({ action: "deploy", code, input }, signer);
       await client.wait(tx.hash, { intervalMs: 20 });
@@ -82,21 +82,21 @@ test("ethers ส่ง tx ผ่าน /evm: native / ERC-20 / metadata.abi · r
   }
 });
 
-test("eth_sendRawTransaction ปฏิเสธ: ไม่มี chainId · chainId ผิด · deploy bytecode · type 1 · RLP เสีย", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("eth_sendRawTransaction rejects: missing chainId · wrong chainId · bytecode deploy · type 1 · broken RLP", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { evmRpc, vm } = await import("../server.js");
   const wallet = new Wallet(FUNDER_KEY);
   const send = async (raw) => evmRpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] }).error?.message;
   const base = { to: BOB, value: 1n, nonce: 999, gasLimit: 21_000n };
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 0, gasPrice: 1n })), /ไม่มี chainId/);
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /chainId ของ tx \(5\) ไม่ตรงกับเชน \(41234\)/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 0, gasPrice: 1n })), /has no chainId/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 2, chainId: 5n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /tx chainId \(5\) does not match the chain \(41234\)/);
   assert.match(await send(await wallet.signTransaction({ ...base, to: null, data: "0x6000", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /deploy bytecode/);
-  assert.match(await send(await wallet.signTransaction({ ...base, type: 1, chainId: BigInt(vm.chainId), gasPrice: 1n })), /ไม่รองรับ tx type 1/);
-  assert.match(await send(await wallet.signTransaction({ ...base, data: "0x1234", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /ไม่ใช่โปรแกรม/);
-  assert.match(await send("0x02c0"), /12 ฟิลด์/);
+  assert.match(await send(await wallet.signTransaction({ ...base, type: 1, chainId: BigInt(vm.chainId), gasPrice: 1n })), /unsupported tx type 1/);
+  assert.match(await send(await wallet.signTransaction({ ...base, data: "0x1234", type: 2, chainId: BigInt(vm.chainId), maxFeePerGas: 2n, maxPriorityFeePerGas: 1n })), /is not a program/);
+  assert.match(await send("0x02c0"), /12 fields/);
   assert.match(await send("0xzz"), /hex/);
 
-  // ถอดได้ตรงกับ ethers (ผู้ส่ง / hash / ค่า)
+  // decodes the same as ethers (sender / hash / value)
   const raw = await wallet.signTransaction({ ...base, type: 2, chainId: 1n, maxFeePerGas: 7n, maxPriorityFeePerGas: 3n, data: "0xabcdef" });
   const ours = decodeRawTransaction(raw);
   const theirs = Transaction.from(raw);

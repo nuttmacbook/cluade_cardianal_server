@@ -4,20 +4,20 @@ import { MemoryDB } from "../src/storage/db.js";
 
 export { MemoryDB };
 
-// โปรแกรมทดสอบ timeout (FAULTY.busy) ต้องเผาเวลาจริงด้วย performance.now() — sandbox ไม่มีนาฬิกาจริงเว้นแต่เปิด wallClock
+// the timeout test program (FAULTY.busy) must burn real time with performance.now(), and the sandbox has no real clock unless wallClock is on
 VM.DEFAULT_OPTIONS.wallClock = true;
 
-/** VM ตัวเดียวที่ทุกเทสต์ใช้ */
+/** The single VM shared by every test */
 export const vm = new VM.VirtualMachine(new MemoryDB());
 
-/** ข้อมูลภายใน DB (Map) ใช้ตรวจ / จัดเตรียมข้อมูลในเทสต์ */
+/** The DB's internal data (Map), used to inspect / prepare data in tests */
 export const mockData = vm.db.data;
 
 export { VM };
 
 export const TEST_TIMEOUT_MS = 300;
 
-/** ยอด native ("123n" / BigInt) → number ให้เทียบในเทสต์ได้ง่าย (ลงลึกทั้ง object / array) */
+/** Native balances ("123n" / BigInt) → number for easy comparison in tests (recurses into objects / arrays) */
 export function num(value) {
   if (typeof value === "bigint") return Number(value);
   if (typeof value === "string" && /^-?\d+n$/.test(value)) return Number(value.slice(0, -1));
@@ -26,50 +26,50 @@ export function num(value) {
   return value;
 }
 
-/** ตารางแก๊สที่ไม่นับขั้น (node / builtin = 0) ใช้ในเทสต์ที่ตรวจค่าแก๊สของ API แบบตัวเลขตรง ๆ */
+/** Gas table without step counting (node / builtin = 0), for tests that check exact API gas values */
 export const API_GAS_ONLY = { node: 0, builtin: 0 };
 
-/** ล้าง DB จำลองและคืนค่า config ก่อนทุกเทสต์ */
+/** Clear the mock DB and restore the config before every test */
 export function resetVM() {
   vm.db.clear();
   vm.timeoutMs = TEST_TIMEOUT_MS;
   vm.maxCallDepth = 8;
-  vm.maxTxGas = Infinity;   // เทสต์เดิมทดสอบ timeout ด้วยลูปไม่รู้จบ (แก๊สนับขั้นทดสอบแยกใน 53-gas-meter)
+  vm.maxTxGas = Infinity;   // older tests check timeout with an infinite loop (step-counted gas is tested separately in 53-gas-meter)
 }
 
 export const user = (name, origin = name) => ({ sender: name, origin });
 
-/** VM ตัวใหม่ที่มี DB ของตัวเอง (ใช้เมื่อต้องการ option ต่างจากค่าเริ่มต้นของเทสต์) */
+/** A new VM with its own DB (for when options must differ from the test defaults) */
 let extraVmCount = 0;
 export function createVm(options = {}) {
   extraVmCount += 1;
   return new VM.VirtualMachine(new MemoryDB(), { timeoutMs: TEST_TIMEOUT_MS, maxTxGas: Infinity, ...options });
 }
 
-/** บันทึก writes ลง DB ผ่าน vm.commit → db.writeKeys (ทำเฉพาะเมื่อ success) */
+/** Save writes to the DB via vm.commit → db.writeKeys (only on success) */
 export function save(res) {
   if (res.status === "success") vm.commit(res.writes);
   return res;
 }
 
 export function ok(res) {
-  assert.equal(res.status, "success", `คาดว่า success แต่ได้ ${JSON.stringify(res.error)}`);
+  assert.equal(res.status, "success", `expected success but got ${JSON.stringify(res.error)}`);
   return save(res);
 }
 
 export function fails(res, code, message) {
-  assert.equal(res.status, "throw", `คาดว่า throw แต่ได้ success: ${JSON.stringify(res.result)}`);
+  assert.equal(res.status, "throw", `expected throw but got success: ${JSON.stringify(res.result)}`);
   assert.equal(res.error.code, code, res.error.message);
   if (message instanceof RegExp) assert.match(res.error.message, message);
   else if (message !== undefined) assert.equal(res.error.message, message);
-  // ค่าแก๊สแยกส่วน (baseFee / burnedFee / producerFee และ maxFee / priority ของ tx แบบ EIP-1559) มีได้ทั้ง success และ throw
+  // the gas fee breakdown (baseFee / burnedFee / producerFee, plus maxFee / priority for EIP-1559 txs) can appear on both success and throw
   const feeKeys = ["baseFee", "burnedFee", "producerFee", "feeType", "maxFeePerGas", "maxPriorityFeePerGas"];
-  assert.deepEqual(Object.keys(res).filter((key) => !feeKeys.includes(key)).sort(), ["accepted", "calls", "debug", "error", "events", "fee", "gasPrice", "gasUsed", "status", "timestamp", "writes"], "throw ต้องไม่มี loadValues / afterValues");
-  assert.deepEqual(res.writes, [], "throw ต้องไม่มี writes ของโปรแกรม (ยกเว้น nonce / ค่าแก๊ส)");
+  assert.deepEqual(Object.keys(res).filter((key) => !feeKeys.includes(key)).sort(), ["accepted", "calls", "debug", "error", "events", "fee", "gasPrice", "gasUsed", "status", "timestamp", "writes"], "throw must not have loadValues / afterValues");
+  assert.deepEqual(res.writes, [], "throw must not have program writes (except nonce / gas fees)");
   return res;
 }
 
-/** deploy + init + บันทึก */
+/** deploy + init + save */
 export function activate(programUuid, code, { context = user("owner"), initInput } = {}) {
   ok(vm.deploy({ programUuid, code, context, initInput }));
   return ok(vm.init({ programUuid }));
@@ -79,12 +79,12 @@ export function callAs(sender, programUuid, functionName, input) {
   return vm.call({ programUuid, functionName, input, context: user(sender) });
 }
 
-/** สรุป calls ให้อ่านง่าย: "depth:program.fn:status[:code]" */
+/** Summarize calls in a readable form: "depth:program.fn:status[:code]" */
 export function trace(res) {
   return res.calls.map((c) => `${c.depth}:${c.programUuid}.${c.functionName}:${c.status}${c.error ? `:${c.error.code}` : ""}`);
 }
 
-/** อ่านค่าที่บันทึกแล้วของโปรแกรม: stored("token", "balances", "alice") */
+/** Read a program's saved value: stored("token", "balances", "alice") */
 export function stored(programUuid, ...parts) {
   const key = parts.length === 1 ? parts[0] : VM.map(...parts);
   return mockData.get(VM.storageKey(programUuid, key));

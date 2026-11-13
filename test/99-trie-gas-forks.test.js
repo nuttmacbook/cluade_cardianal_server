@@ -4,9 +4,9 @@ import { VM, MemoryDB, API_GAS_ONLY, user } from "./helpers.js";
 import { resolveSettings } from "../src/node/genesis.js";
 
 /*
- * แก๊สค่า trie (stateKey) + fork ตาม block height
- *   stateKey: คิดต่อ key ของ state ที่ tx เขียน / ลบครั้งแรก (ค่าอัปเดต Merkle trie + history ตอนปิด block) → block ที่อัด key ใหม่เต็มแก๊สมี key น้อยลง
- *   fork: genesis.json "forks" = { ชื่อ: block } · กติกาในโค้ด (FORKS) · block ก่อนหน้าใช้กติกาเดิม → replay ได้ผลเดิม · ไม่อยู่ใน genesis hash
+ * trie gas (stateKey) + forks by block height
+ *   stateKey: charged per state key a tx first writes / deletes (the cost of updating the Merkle trie + history at block close) → a block packed with new keys fits fewer keys
+ *   fork: genesis.json "forks" = { name: block } · rules live in code (FORKS) · earlier blocks use the old rules → replay gives the same result · not in the genesis hash
  */
 
 const T = 1_700_000_000_000;
@@ -33,17 +33,17 @@ function deployed(options = {}) {
   return vm;
 }
 
-test("stateKey: คิดต่อ key ครั้งแรกของ tx · เขียนซ้ำ / ลบ key เดิมไม่คิดซ้ำ", () => {
+test("stateKey: charged once per key per tx · rewriting / deleting the same key is not charged again", () => {
   const vm = deployed({ gas: GAS });
   const three = vm.call({ programUuid: "fill", functionName: "fill", input: { n: 3, tag: "x" }, context: user("alice") });
   assert.equal(three.status, "success");
   assert.equal(three.gasUsed, 3 * (GAS.write + GAS.stateKey));
   const same = vm.call({ programUuid: "fill", functionName: "twice", context: user("alice") });
-  assert.equal(same.gasUsed, 3 * GAS.write + GAS.stateKey);   // เขียน 2 ครั้ง + ลบ 1 ครั้ง ที่ key เดียว
+  assert.equal(same.gasUsed, 3 * GAS.write + GAS.stateKey);   // 2 writes + 1 delete on one key
   assert.equal(VM.DEFAULT_GAS.stateKey, 1000);
 });
 
-test("stateKey: block ที่อัด key ใหม่จนเต็มแก๊ส มี key ≤ แก๊ส / (write + stateKey)", () => {
+test("stateKey: a block packed with new keys up to its gas has keys ≤ gas / (write + stateKey)", () => {
   const maxBlockGas = 200_000;
   const vm = deployed({ maxBlockGas, maxTxGas: maxBlockGas });
   const block = vm.createBlock({ timestamp: T + 1000 });
@@ -58,16 +58,16 @@ test("stateKey: block ที่อัด key ใหม่จนเต็มแ�
   assert.ok(keys <= maxBlockGas / (write + stateKey), `${keys} key`);
 });
 
-const RULES = { cheapWrite: { description: "writeDB ถูกลง · stateKey แพงขึ้น", gas: { write: 5, stateKey: 300 } } };
+const RULES = { cheapWrite: { description: "cheaper writeDB · pricier stateKey", gas: { write: 5, stateKey: 300 } } };
 
-test("fork: ใช้กติกาใหม่ตั้งแต่ block ที่กำหนด · block ก่อนหน้าใช้ของเดิม · forkActive / forkSchedule / gasAt", () => {
+test("fork: new rules from the given block · earlier blocks keep the old ones · forkActive / forkSchedule / gasAt", () => {
   const vm = deployed({ gas: GAS, forks: { cheapWrite: 3 }, forkRules: RULES });
   assert.deepEqual(vm.forkSchedule(), [{ name: "cheapWrite", block: 3, active: false, description: RULES.cheapWrite.description }]);
-  assert.equal(vm.forkActive("cheapWrite"), false);   // block ถัดไป = 2
+  assert.equal(vm.forkActive("cheapWrite"), false);   // next block = 2
   assert.equal(vm.gasAt(2).write, 10);
   assert.equal(vm.gasAt(3).write, 5);
   assert.equal(vm.gasAt(3).stateKey, 300);
-  assert.equal(vm.gasAt(3), vm.gasAt(9));   // cache ตารางเดียวกัน
+  assert.equal(vm.gasAt(3), vm.gasAt(9));   // the same cached table
 
   const used = [];
   for (const number of [2, 3, 4]) {
@@ -80,33 +80,33 @@ test("fork: ใช้กติกาใหม่ตั้งแต่ block ท�
   assert.equal(vm.forkActive("cheapWrite", 2), false);
   assert.equal(vm.forkActive("other"), false);
 
-  // replay ได้ผลเดิมทั้งก่อนและหลัง fork (แต่ละ block ใช้กติกาของตัวเอง)
+  // replay gives the same results before and after the fork (each block uses its own rules)
   for (const number of [2, 3, 4]) assert.equal(vm.replayBlock(number).hash, vm.getBlock(number).hash);
-  // node ที่ไม่ได้ตั้ง fork → block 3 ไม่ตรง (เชนแยก ตรวจเจอ) · block 2 ยังตรง
+  // a node without the fork → block 3 mismatches (chain split detected) · block 2 still matches
   const old = new VM.VirtualMachine(vm.db, { gas: GAS, recordBlocks: true, recordHistory: true });
   assert.equal(old.replayBlock(2).hash, vm.getBlock(2).hash);
-  assert.throws(() => old.replayBlock(3), /hash ไม่ตรง/);
+  assert.throws(() => old.replayBlock(3), /hash that does not match/);
 });
 
-test("fork: ชื่อที่โค้ดไม่รู้จัก / block ผิด / เปลี่ยนค่าแก๊สที่ไม่มี = ไม่ยอมเริ่ม", () => {
+test("fork: a name unknown to the code / bad block / changing a nonexistent gas value = refuses to start", () => {
   const make = (options) => () => new VM.VirtualMachine(new MemoryDB(), options);
-  assert.throws(make({ forks: { future: 10 } }), /ไม่รู้จัก fork 'future'/);
-  assert.throws(make({ forks: { cheapWrite: -1 }, forkRules: RULES }), /block ต้องเป็นจำนวนเต็ม/);
-  assert.throws(make({ forks: { cheapWrite: 1.5 }, forkRules: RULES }), /block ต้องเป็นจำนวนเต็ม/);
-  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { price: 2 } } } }), /เปลี่ยนค่าแก๊ส 'price' ไม่ได้/);
-  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { nope: 2 } } } }), /เปลี่ยนค่าแก๊ส 'nope' ไม่ได้/);
-  assert.throws(make({ forks: [] }), /ต้องเป็น \{ ชื่อ: block \}/);
+  assert.throws(make({ forks: { future: 10 } }), /unknown fork 'future'/);
+  assert.throws(make({ forks: { cheapWrite: -1 }, forkRules: RULES }), /block must be an integer/);
+  assert.throws(make({ forks: { cheapWrite: 1.5 }, forkRules: RULES }), /block must be an integer/);
+  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { price: 2 } } } }), /gas cost 'price' cannot be changed/);
+  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { nope: 2 } } } }), /gas cost 'nope' cannot be changed/);
+  assert.throws(make({ forks: [] }), /must be \{ name: block \}/);
   assert.deepEqual(new VM.VirtualMachine(new MemoryDB()).forkSchedule(), []);
-  assert.deepEqual(Object.keys(VM.FORKS), ["bluewolf"]);   // fork ที่มีในโค้ด (genesis.json เปิดตั้งแต่ block 0)
+  assert.deepEqual(Object.keys(VM.FORKS), ["bluewolf"]);   // forks defined in code (genesis.json enables it from block 0)
 });
 
-test("fork: genesis hash ไม่รวม forks (เพิ่มตารางทีหลังได้) · resolveSettings อ่าน forks จาก genesis", () => {
+test("fork: the genesis hash excludes forks (the schedule can be extended later) · resolveSettings reads forks from genesis", () => {
   const genesis = { chainId: 1, balances: { alice: "10n" } };
   const vm = new VM.VirtualMachine(new MemoryDB());
   const { hash } = vm.applyGenesis(genesis);
   assert.equal(vm.checkGenesis({ ...genesis, forks: { cheapWrite: 100 } }), hash);
   assert.equal(vm.applyGenesis({ ...genesis, forks: { cheapWrite: 100 } }).applied, false);
-  assert.throws(() => vm.checkGenesis({ ...genesis, chainId: 2 }), /genesis ไม่ตรงกัน/);
+  assert.throws(() => vm.checkGenesis({ ...genesis, chainId: 2 }), /genesis mismatch/);
 
   assert.deepEqual(resolveSettings({ ...genesis, forks: { cheapWrite: 100 } }, {}).settings.forks, { cheapWrite: 100 });
   assert.deepEqual(resolveSettings(genesis, {}).settings.forks, {});

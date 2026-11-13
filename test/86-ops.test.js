@@ -10,16 +10,16 @@ import { backup, verifyBackup, restore, prune } from "../scripts/backup.js";
 import { check } from "../scripts/monitor.js";
 
 /*
- * ระยะ 1.5–1.6
- *   /health: problems (เชนหยุด / ปิด block ล้มเหลว / พื้นที่ใกล้เต็ม) · มีปัญหา = 503 · scripts/monitor.js อ่านค่านี้
- *   scripts/backup.js: สำรอง LMDB ขณะเปิดอยู่ · ตรวจสายของ block · กู้ลงโฟลเดอร์ว่าง · --force ย้ายของเดิมไปเก็บ
+ * Phase 1.5–1.6
+ *   /health: problems (chain stalled / block close failing / disk nearly full) · problems = 503 · scripts/monitor.js reads this
+ *   scripts/backup.js: backs up LMDB while it is open · verifies the block chain · restores into an empty folder · --force moves existing data aside
  */
 
-const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // มียอดใน genesis.json
+const FUNDER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";   // funded in genesis.json
 const T = Date.parse("2026-01-01T00:00:00Z");
 
-test("/health: ปกติ = 200 · มี tx รอแต่ไม่มี block ใหม่ = stalled · ปิด block ล้มเหลว = 503 · monitor อ่านได้", async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+test("/health: normal = 200 · txs waiting but no new block = stalled · block close failing = 503 · monitor can read it", async () => {
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   const { server, vm, miner, mempool, health, minerState, STALL_MS } = await import("../server.js");
   clearInterval(miner);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -32,25 +32,25 @@ test("/health: ปกติ = 200 · มี tx รอแต่ไม่มี bl
     assert.equal(ok.body.latest, null);
     assert.equal((await check(url)).ok, true);
 
-    // tx รอในคิว แต่ไม่มีใครปิด block (miner หยุด)
+    // a tx waits in the queue but nobody closes blocks (miner stopped)
     const tx = { chainId: vm.chainId, action: "transfer", from: sign.addressOf(FUNDER_KEY), to: "0x00000000000000000000000000000000000000b0",
       value: "1n", nonce: 0, gasLimit: 21_000, gasPrice: "1000000000" };
     assert.equal(mempool.add({ tx, signature: sign.signTransaction(tx, FUNDER_KEY) }).ok, true);
-    assert.deepEqual(health(Date.now()).problems, []);   // ยังไม่ถึง STALL_MS
+    assert.deepEqual(health(Date.now()).problems, []);   // STALL_MS not reached yet
     const stalled = health(Date.now() + STALL_MS + 1000);
     assert.equal(stalled.ok, false);
-    assert.match(stalled.problems[0], /^stalled: มี 1 tx รอ/);
+    assert.match(stalled.problems[0], /^stalled: 1 tx waiting/);
 
     Object.assign(minerState, { failures: 2, lastError: "disk full" });
     const failing = await get("/health");
     assert.equal(failing.status, 503);
-    assert.match(failing.body.problems.join("\n"), /ปิด block ล้มเหลว 2 ครั้งติดกัน \(disk full\)/);
+    assert.match(failing.body.problems.join("\n"), /block seal failed 2 times in a row \(disk full\)/);
     const watched = await check(url);
     assert.equal(watched.ok, false);
-    assert.match(watched.problems[0], /ปิด block ล้มเหลว/);
+    assert.match(watched.problems[0], /block seal failed/);
     minerState.failures = 0;
 
-    // ปิด block แล้ว → อายุ block ล่าสุด + ไม่มีปัญหา
+    // block closed → latest block age + no problems
     const block = vm.createBlock({ timestamp: Date.now() });
     mempool.take(block);
     block.commit();
@@ -79,7 +79,7 @@ function lmdbChain(dir, blocks = 5) {
   return { db, vm };
 }
 
-test("backup: สำรองขณะเปิด DB อยู่ · manifest + ตรวจสายของ block · เก็บ N ชุดล่าสุด", async () => {
+test("backup: backs up while the DB is open · manifest + block chain check · keeps the latest N backups", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "backup-"));
   const data = path.join(root, "data");
   const { db, vm } = lmdbChain(data);
@@ -94,7 +94,7 @@ test("backup: สำรองขณะเปิด DB อยู่ · manifest +
     assert.ok(fs.existsSync(path.join(first.dir, "replaced-tx.jsonl")));
     assert.equal(fs.existsSync(path.join(first.dir, "lock.mdb")), false);
 
-    // DB ต้นทางเขียนต่อได้ระหว่าง / หลังสำรอง · สำเนาเป็นของ ณ ตอนสำรอง
+    // the source DB stays writable during / after backup · the copy reflects the moment of backup
     const block = vm.createBlock({ timestamp: T + 9000 });
     block.commit();
     assert.equal(verifyBackup(first.dir).latest, 5);
@@ -103,14 +103,14 @@ test("backup: สำรองขณะเปิด DB อยู่ · manifest +
     await backup({ data, out, now: new Date(T + 120_000), keep: 2 });
     assert.equal(fs.readdirSync(out).length, 2);
     assert.deepEqual(prune(out, 1).length, 1);
-    await assert.rejects(() => db.backup(path.join(out, fs.readdirSync(out)[0])), /ไม่ว่าง/);
+    await assert.rejects(() => db.backup(path.join(out, fs.readdirSync(out)[0])), /is not empty/);
   } finally {
     db.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("verify / restore: ตรวจเจอ header หาย / manifest ไม่ตรง · กู้ลงโฟลเดอร์ว่าง · มีของเดิมต้อง --force", async () => {
+test("verify / restore: detects missing headers / manifest mismatch · restores into an empty folder · existing data needs --force", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "restore-"));
   const data = path.join(root, "data");
   const { db, vm } = lmdbChain(data, 4);
@@ -118,25 +118,25 @@ test("verify / restore: ตรวจเจอ header หาย / manifest ไม
   const { dir } = await backup({ data, out: path.join(root, "backups"), now: new Date(T) });
   db.close();
   try {
-    assert.throws(() => verifyBackup(dir, { expect: { latest: 4, latestHash: "0xdead" } }), /ไม่ตรงกับ manifest/);
-    assert.throws(() => verifyBackup(path.join(root, "nothing")), /ไม่มี data.mdb/);
+    assert.throws(() => verifyBackup(dir, { expect: { latest: 4, latestHash: "0xdead" } }), /does not match the manifest/);
+    assert.throws(() => verifyBackup(path.join(root, "nothing")), /has no data.mdb/);
 
     const target = path.join(root, "restored");
     assert.deepEqual(restore({ from: dir, data: target }).moved, null);
     const restored = new DB(target);
     assert.equal(new VM.VirtualMachine(restored, { recordBlocks: true }).getBlock(4).hash, latestHash);
     restored.close();
-    assert.equal(fs.existsSync(path.join(target, "replaced-tx.jsonl")), false);   // ต้นทางไม่มีไฟล์นี้
+    assert.equal(fs.existsSync(path.join(target, "replaced-tx.jsonl")), false);   // the source has no such file
 
-    assert.throws(() => restore({ from: dir, data }), /มีข้อมูลอยู่แล้ว/);
+    assert.throws(() => restore({ from: dir, data }), /already has data/);
     const forced = restore({ from: dir, data, force: true, now: new Date(T) });
     assert.ok(fs.existsSync(path.join(forced.moved, "data.mdb")));
 
-    // สำเนาที่ header ของ block กลางสายหาย → ตรวจไม่ผ่าน
+    // a copy missing a mid-chain block header → fails verification
     const broken = new DB(target);
     broken.writeKeys([{ type: "del", dbKey: VM.blockKey(2) }]);
     broken.close();
-    assert.throws(() => verifyBackup(target), /block 3 parentHash ไม่ตรงกับ block 2/);
+    assert.throws(() => verifyBackup(target), /block 3 parentHash does not match block 2/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

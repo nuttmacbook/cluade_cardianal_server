@@ -5,10 +5,10 @@ import * as sign from "../src/crypto/signature.js";
 import { simulate } from "../src/node/simulate.js";
 
 /*
- * simulate (ที่ /sendtx) จำลองเป็น block ถัดไปเสมอ
- * เดิมใช้ number: null → BlockNumber() ในโปรแกรมเป็น null ตอน simulate (แต่เป็น BigInt ตอนรันใน block)
- * → โปรแกรมที่คำนวณกับเลข block (เช่น BlockHash(BlockNumber() - 1n)) ถูกปฏิเสธที่ /sendtx ทั้งที่ใน block รันได้
- * (พบตอนทำ dev/scenario-full.js หัวข้อ "API ในโปรแกรม")
+ * simulate (at /sendtx) always simulates the next block
+ * it used to pass number: null → BlockNumber() was null during simulate (but a BigInt when run in a block)
+ * → programs computing with the block number (e.g. BlockHash(BlockNumber() - 1n)) were rejected at /sendtx even though they run fine in a block
+ * (found while writing dev/scenario-full.js, section "API in programs")
  */
 
 const CODE = `function program() {
@@ -19,7 +19,7 @@ const CODE = `function program() {
   return { look }
 }`;
 
-test("simulate: BlockNumber() = block ถัดไป และ BlockHash(n - 1) = hash ของ block ล่าสุด (เหมือนตอนเข้า block จริง)", () => {
+test("simulate: BlockNumber() = the next block and BlockHash(n - 1) = the latest block's hash (same as in a real block)", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true, recordBlocks: true, recordTransactions: true, deriveProgramAddress: false });
   const key = sign.randomPrivateKey();
   const alice = sign.addressOf(key);
@@ -36,10 +36,10 @@ test("simulate: BlockNumber() = block ถัดไป และ BlockHash(n - 1)
   const latest = vm.latestBlockNumber();
   assert.deepEqual(result.result, { number: `${latest + 1}n`, previous: vm.getBlock(latest).hash });
 
-  // simulate ไม่จองเลข block / ไม่บันทึกอะไร
+  // simulate reserves no block number / saves nothing
   assert.equal(vm.latestBlockNumber(), latest);
   assert.ok(!vm.getBlock(latest + 1));
-  // ผลตอนเข้า block จริงตรงกับที่ simulate บอก
+  // the result in a real block matches what simulate reported
   const real = mine((b) => b.call(verified.request));
   assert.deepEqual([real.status, real.result], ["success", result.result]);
 });

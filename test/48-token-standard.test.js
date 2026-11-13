@@ -5,11 +5,11 @@ import { TOKEN_PROGRAM, checkTokenStandard, unescapeCode, ZERO_ADDRESS } from ".
 import { tokenInfo, tokenHoldings } from "../src/node/explorer-api.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* มาตรฐาน token (name / ticker / decimals + event Transfer / Approval) และรายการเหรียญที่ address ถือ (นับจาก event Transfer) */
+/* token standard (name / ticker / decimals + Transfer / Approval events) and the list of tokens an address holds (counted from Transfer events) */
 
 const T = "0x00000000000000000000000000000000000000f1";
 const OWNER = "0x00000000000000000000000000000000000000a1";
-const BOB = "0x00000000000000000000000000000000000000B2";   // ตัวพิมพ์ใหญ่ปน
+const BOB = "0x00000000000000000000000000000000000000B2";   // mixed case
 const CAROL = "0x00000000000000000000000000000000000000c3";
 
 function chain() {
@@ -32,27 +32,27 @@ function chain() {
   return { vm, call };
 }
 
-test("TOKEN_PROGRAM ผ่านมาตรฐาน · โปรแกรมที่ขาดฟังก์ชัน / event ไม่ผ่าน และบอกว่าขาดอะไร", () => {
+test("TOKEN_PROGRAM meets the standard · programs missing functions / events fail and report what is missing", () => {
   assert.deepEqual(checkTokenStandard(TOKEN_PROGRAM), { ok: true, missing: [] });
-  assert.deepEqual(reviewProgram(TOKEN_PROGRAM).issues, []);   // deploy ผ่าน /sendtx ได้ (autoreview)
+  assert.deepEqual(reviewProgram(TOKEN_PROGRAM).issues, []);   // can be deployed via /sendtx (autoreview)
   const noEvents = TOKEN_PROGRAM.replace(/emit\("Approval"[^\n]*\n/, "");
   assert.deepEqual(checkTokenStandard(noEvents).missing, ["event Approval"]);
   const noTicker = TOKEN_PROGRAM.replace("name, ticker, decimals,", "name, decimals,");
   assert.deepEqual(checkTokenStandard(noTicker).missing, ["ticker"]);
-  // โค้ดที่ VM เก็บไว้เป็นแบบ escape (\\n) ก็ตรวจได้
+  // code stored escaped by the VM (\\n) can be checked too
   assert.equal(checkTokenStandard(JSON.stringify(TOKEN_PROGRAM).slice(1, -1)).ok, true);
   assert.equal(unescapeCode("a\\nb"), "a\nb");
 });
 
-test("token 6 decimals: name / ticker / decimals / totalSupply อ่านได้ และ mint emit Transfer จาก zero address", () => {
+test("token 6 decimals: name / ticker / decimals / totalSupply are readable, and mint emits Transfer from the zero address", () => {
   const { vm } = chain();
   assert.deepEqual(tokenInfo(vm, T), { address: T, name: "Thai Baht Coin", ticker: "THBC", decimals: "6n", totalSupply: "1000000000000n" });
   const [mint] = vm.listEvents({ program: T, name: "Transfer" });
   assert.deepEqual(mint.data, { from: ZERO_ADDRESS, to: OWNER, amount: "1000000000000n" });
-  assert.equal(tokenInfo(vm, OWNER), null);   // ไม่ใช่โปรแกรม
+  assert.equal(tokenInfo(vm, OWNER), null);   // not a program
 });
 
-test("token: icon / url / contact / description ที่ส่งมาตอน deploy กลายเป็น metadata ของโปรแกรม", () => {
+test("token: icon / url / contact / description sent at deploy become program metadata", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   const context = { sender: OWNER, origin: OWNER };
   for (const res of [
@@ -65,14 +65,14 @@ test("token: icon / url / contact / description ที่ส่งมาตอ�
     { icon: "https://a.test/a.png", url: "https://a.test", contact: "team@a.test", description: undefined });
 });
 
-test("transfer / approve / transferFrom emit Transfer + Approval และยอดถูกต้องตามหน่วยเล็กสุด", () => {
+test("transfer / approve / transferFrom emit Transfer + Approval, and balances are correct in the smallest unit", () => {
   const { vm, call } = chain();
   assert.equal(call(OWNER, "transfer", { to: BOB, amount: "1500000n" }).status, "success");          // 1.5 THBC
   assert.equal(call(BOB, "approve", { spender: CAROL, amount: "1000000n" }).status, "success");
   const moved = call(CAROL, "transferFrom", { from: BOB, to: CAROL, amount: "400000n" });
   assert.equal(moved.status, "success");
   assert.deepEqual(moved.events.map((e) => e.name), ["Transfer"]);
-  assert.equal(call(CAROL, "transferFrom", { from: BOB, to: CAROL, amount: "700000n" }).status, "throw");   // วงเงินเหลือ 600000
+  assert.equal(call(CAROL, "transferFrom", { from: BOB, to: CAROL, amount: "700000n" }).status, "throw");   // allowance left is 600000
   const read = (fn, input) => vm.query({ programUuid: T, functionName: fn, input }).result;
   assert.equal(read("balanceOf", { who: BOB }), "1100000n");
   assert.equal(read("balanceOf", { who: CAROL }), "400000n");
@@ -81,24 +81,24 @@ test("transfer / approve / transferFrom emit Transfer + Approval และยอ
     { owner: BOB.toLowerCase(), spender: CAROL, amount: "1000000n" });
 });
 
-test("เหรียญที่ถือ: มาจาก event Transfer ที่ส่งมาถึง address · ยอดเป็น 0 แล้วหายจากรายการ · tx ที่ล้มเหลวไม่นับ", () => {
+test("holdings: come from Transfer events to the address · drop off the list at 0 · failed txs are not counted", () => {
   const { vm, call } = chain();
   assert.deepEqual(tokenHoldings(vm, BOB), []);
-  assert.equal(call(BOB, "transfer", { to: CAROL, amount: "1n" }).status, "throw");   // ไม่มียอด → ไม่เกิด index
+  assert.equal(call(BOB, "transfer", { to: CAROL, amount: "1n" }).status, "throw");   // no balance → no index entry
   assert.deepEqual(vm.listHoldings(CAROL), []);
 
   call(OWNER, "transfer", { to: BOB, amount: "2500000n" });
   const [held] = tokenHoldings(vm, BOB);
   assert.deepEqual({ ticker: held.ticker, decimals: held.decimals, balance: held.balance }, { ticker: "THBC", decimals: "6n", balance: "2500000n" });
   assert.equal(tokenHoldings(vm, OWNER)[0].balance, "999997500000n");
-  assert.deepEqual(vm.listHoldings(ZERO_ADDRESS), []);                               // zero address ไม่ถูกนับ
+  assert.deepEqual(vm.listHoldings(ZERO_ADDRESS), []);                               // zero address is not counted
 
-  call(BOB, "transfer", { to: CAROL, amount: "2500000n" });                          // โอนออกหมด
+  call(BOB, "transfer", { to: CAROL, amount: "2500000n" });                          // transfer everything out
   assert.deepEqual(tokenHoldings(vm, BOB), []);
   assert.equal(tokenHoldings(vm, CAROL)[0].balance, "2500000n");
 });
 
-test("โปรแกรมที่ emit Transfer แต่ไม่ใช่ token ตามมาตรฐาน → ไม่แสดงในเหรียญที่ถือ", () => {
+test("a program that emits Transfer but is not a standard token → not shown in holdings", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   const fake = `function program() {
   function poke(params) { emit("Transfer", { from: params.context.sender, to: params.input.to, amount: 1n }) }

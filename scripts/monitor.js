@@ -1,16 +1,16 @@
 /**
- * เฝ้า node ผ่าน GET /health แล้วเตือนเมื่อมีปัญหา (เชนหยุด / ปิด block ล้มเหลว / พื้นที่ใกล้เต็ม / ติดต่อไม่ได้)
+ * Watch a node via GET /health and alert on problems (chain stalled / block seal failing / disk nearly full / unreachable)
  *
  *   npm run monitor -- --url http://localhost:3000
  *   npm run monitor -- --url http://localhost:3000 --interval 15 --webhook https://hooks.example.com/xyz
- *   npm run monitor -- --url http://localhost:3000 --once      # เช็คครั้งเดียว: exit 0 = ปกติ · 1 = มีปัญหา (ใช้กับ cron)
+ *   npm run monitor -- --url http://localhost:3000 --once      # check once: exit 0 = healthy · 1 = problems (for cron)
  *
- *   --url <url>          node ที่เฝ้า (ค่าเริ่ม http://localhost:3000)
- *   --interval <วินาที>   ความถี่ (ค่าเริ่ม 30)
- *   --webhook <url>      POST { text, url, problems, health } เมื่อสถานะเปลี่ยน (ปกติ → มีปัญหา / หายแล้ว) — Slack / Discord / LINE Notify ผ่านตัวกลาง
- *   --once               เช็คครั้งเดียวแล้วจบ
+ *   --url <url>          node to watch (default http://localhost:3000)
+ *   --interval <seconds>   how often (default 30)
+ *   --webhook <url>      POST { text, url, problems, health } when the status changes (healthy → problems / recovered) — Slack / Discord / LINE Notify via a relay
+ *   --once               check once and exit
  *
- * เตือนเฉพาะตอนสถานะเปลี่ยน (ไม่ยิงซ้ำทุกรอบ) · ข้อความปัญหามาจาก /health ของ server (ดู health() ใน server.js)
+ * Alerts only when the status changes (no repeat every round) · problem messages come from the server's /health (see health() in server.js)
  */
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -22,7 +22,7 @@ const INTERVAL_MS = Number(option("interval", 30)) * 1000;
 const WEBHOOK = option("webhook", null);
 const ONCE = args.includes("--once");
 
-/** ดึง /health → { ok, problems, health } (ติดต่อไม่ได้ = ปัญหา) */
+/** fetch /health → { ok, problems, health } (unreachable = a problem) */
 export async function check(url = URL_BASE, { timeoutMs = 10_000 } = {}) {
   try {
     const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(timeoutMs) });
@@ -30,7 +30,7 @@ export async function check(url = URL_BASE, { timeoutMs = 10_000 } = {}) {
     const problems = health.problems ?? (response.ok ? [] : [`HTTP ${response.status}`]);
     return { ok: response.ok && problems.length === 0, problems, health };
   } catch (error) {
-    return { ok: false, problems: [`unreachable: ติดต่อ ${url} ไม่ได้ (${error.message})`], health: null };
+    return { ok: false, problems: [`unreachable: cannot reach ${url} (${error.message})`], health: null };
   }
 }
 
@@ -41,19 +41,19 @@ async function notify(text, result) {
     await fetch(WEBHOOK, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, url: URL_BASE, problems: result.problems, health: result.health }) });
   } catch (error) {
-    console.error(`ส่ง webhook ไม่สำเร็จ: ${error.message}`);
+    console.error(`failed to send webhook: ${error.message}`);
   }
 }
 
 const summary = (result) => result.health
-  ? `block ${result.health.latest ?? "-"} · อายุ ${result.health.blockAgeMs === null ? "-" : Math.round(result.health.blockAgeMs / 1000)} วิ · รอ ${result.health.pending} tx`
+  ? `block ${result.health.latest ?? "-"} · age ${result.health.blockAgeMs === null ? "-" : Math.round(result.health.blockAgeMs / 1000)} s · ${result.health.pending} tx pending`
   + (result.health.db ? ` · LMDB ${result.health.db.usedPercent}%` : "")
   : "";
 
 if (process.argv[1]?.endsWith("monitor.js")) {
   if (ONCE) {
     const result = await check();
-    console.log(result.ok ? `ปกติ · ${summary(result)}` : `มีปัญหา:\n${result.problems.map((p) => `  - ${p}`).join("\n")}`);
+    console.log(result.ok ? `healthy · ${summary(result)}` : `problems:\n${result.problems.map((p) => `  - ${p}`).join("\n")}`);
     process.exit(result.ok ? 0 : 1);
   }
   let previous = null;
@@ -61,8 +61,8 @@ if (process.argv[1]?.endsWith("monitor.js")) {
     const result = await check();
     const key = result.ok ? "ok" : result.problems.join("|");
     if (key !== previous) {
-      if (result.ok) await notify(previous === null ? `เริ่มเฝ้า ${URL_BASE}: ปกติ · ${summary(result)}` : `${URL_BASE} กลับมาปกติ · ${summary(result)}`, result);
-      else await notify(`⚠️ ${URL_BASE} มีปัญหา:\n${result.problems.map((p) => `- ${p}`).join("\n")}`, result);
+      if (result.ok) await notify(previous === null ? `started watching ${URL_BASE}: healthy · ${summary(result)}` : `${URL_BASE} recovered · ${summary(result)}`, result);
+      else await notify(`⚠️ ${URL_BASE} has problems:\n${result.problems.map((p) => `- ${p}`).join("\n")}`, result);
       previous = key;
     }
   };

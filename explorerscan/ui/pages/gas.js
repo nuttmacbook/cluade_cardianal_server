@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/gas.js [แก้ได้ · หน้าตา]
-   หน้าค่าแก๊สของเชน (#gas): ขั้นต่ำของ gas price + ราคาต่อหน่วย (จาก /genesis) · admin ปรับขั้นต่ำได้ด้วย tx setGasConfig (มีผลตั้งแต่ block ถัดไป) · ราคาต่อหน่วยแสดงอย่างเดียว (fork เท่านั้น) */
+/* explorerscan/ui/pages/gas.js [editable · look]
+   Chain gas page (#gas): minimum gas price + unit prices (from /genesis) · admin can change the minimum with a setGasConfig tx (takes effect from the next block) · unit prices are display-only (fork only) */
 
 // ---------- chain gas settings: what a transaction costs now, and the admin form for the minimum gas price ----------
 const GAS_FIELDS = [
@@ -19,7 +19,7 @@ async function gasPage(draw = el) {
   const info = await api("/genesis");
   const prices = info.gas ?? {};
   const changed = info.gasConfig && info.gasConfig.minBaseFee !== null && info.gasConfig.minBaseFee !== undefined;
-  const transfer = toBig(prices.tx ?? 0) + toBig(prices.call) + 2n * toBig(prices.read) + 2n * toBig(prices.write);   // ค่าพื้นฐานต่อ tx + เรียก 1 + อ่าน / เขียนยอด 2 ฝั่ง
+  const transfer = toBig(prices.tx ?? 0) + toBig(prices.call) + 2n * toBig(prices.read) + 2n * toBig(prices.write);   // base cost per tx + 1 call + read / write balances on 2 sides
   const rows = GAS_FIELDS.map(([field, label]) => `<tr><td><b>${esc(label)}</b><div class="dim">${esc(field)}</div></td><td>${num(prices[field] ?? 0)}</td></tr>`);
   draw(panel("Gas settings", kv([
     ["Minimum gas price", `<b>${gwei(info.minBaseFee)} gwei</b>${changed ? ` <span class="tag">set by admin · genesis ${gwei(info.genesisMinBaseFee)} gwei</span>` : ' <span class="dim">(from genesis)</span>'}`],

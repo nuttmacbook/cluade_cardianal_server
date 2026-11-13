@@ -1,10 +1,10 @@
 /**
- * วัดความเร็วของ VM แบบไม่ผ่าน server
+ * Measures VM speed without going through the server
  *
- *   node dev/bench-vm.js            # 1,000 token transfer ผ่าน vm.call + โปรแกรมที่คำนวณหนัก
- *   node dev/bench-vm.js --n 5000   # จำนวน transfer
+ *   node dev/bench-vm.js            # 1,000 token transfers via vm.call + a compute-heavy program
+ *   node dev/bench-vm.js --n 5000   # number of transfers
  *
- * รายงาน: เวลาเฉลี่ยต่อ tx, แก๊สเฉลี่ยต่อ tx, จำนวน tx ที่ต้องใช้เติม block 3,000,000 gas และเวลาที่ใช้
+ * Reports: average time per tx, average gas per tx, number of txs needed to fill a 3,000,000 gas block, and the time taken
  */
 import { VirtualMachine } from "../src/core/virtualmachine.js";
 import { MemoryDB } from "../src/storage/db.js";
@@ -44,7 +44,7 @@ commit(vm.init({ programUuid: "heavy" }));
 
 const recipient = (i) => `0x${(i + 1).toString(16).padStart(40, "0")}`;
 
-// อุ่นเครื่อง
+// warm up
 for (let i = 0; i < 50; i++) commit(vm.call({ programUuid: "token", functionName: "transfer", input: { to: recipient(i), amount: "1n" }, context }));
 
 let gas = 0;
@@ -58,10 +58,10 @@ const perTx = ms / N;
 const gasPerTx = gas / N;
 const txPerBlock = Math.ceil(BLOCK_GAS / gasPerTx);
 console.log(`token transfer × ${N}: ${ms.toFixed(0)} ms · ${perTx.toFixed(3)} ms/tx · ${gasPerTx.toFixed(0)} gas/tx`);
-console.log(`  เติม block ${BLOCK_GAS.toLocaleString()} gas ด้วย transfer: ${txPerBlock} tx ≈ ${(txPerBlock * perTx).toFixed(0)} ms`);
+console.log(`  fill a ${BLOCK_GAS.toLocaleString()} gas block with transfers: ${txPerBlock} tx ≈ ${(txPerBlock * perTx).toFixed(0)} ms`);
 
 start = performance.now();
 const res = commit(vm.call({ programUuid: "heavy", functionName: "work", input: { n: "200000n" }, context }));
 ms = performance.now() - start;
-console.log(`heavy loop: ${res.gasUsed.toLocaleString()} gas ใน ${ms.toFixed(0)} ms · ${(res.gasUsed / ms / 1000).toFixed(2)} M gas/s`);
-console.log(`  เติม block ${BLOCK_GAS.toLocaleString()} gas ด้วยงานคำนวณ ≈ ${(BLOCK_GAS / (res.gasUsed / ms)).toFixed(0)} ms`);
+console.log(`heavy loop: ${res.gasUsed.toLocaleString()} gas in ${ms.toFixed(0)} ms · ${(res.gasUsed / ms / 1000).toFixed(2)} M gas/s`);
+console.log(`  fill a ${BLOCK_GAS.toLocaleString()} gas block with compute ≈ ${(BLOCK_GAS / (res.gasUsed / ms)).toFixed(0)} ms`);

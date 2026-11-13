@@ -1,4 +1,4 @@
-/** ทดสอบ pattern ปลอดภัย: node --test patterns/vault.test.js */
+/** Safe pattern tests: node --test patterns/vault.test.js */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createChain } from "../lib/testkit.js";
@@ -9,32 +9,32 @@ const setup = () => {
   return { chain, vault: chain.deploy(program, { as: "owner" }) };
 };
 
-test("deposit / withdraw ปกติ", () => {
+test("deposit / withdraw normally", () => {
   const { chain, vault } = setup();
-  assert.equal(vault.callRaw("deposit", {}, { as: "alice", value: 300 }).result, "300n");   // ค่าที่ return เป็น "123n"
+  assert.equal(vault.callRaw("deposit", {}, { as: "alice", value: 300 }).result, "300n");   // return values are "123n"
   assert.equal(vault.call("withdraw", { amount: 100 }, { as: "alice" }), "200n");
   assert.equal(chain.balanceOf("alice").balance, 800n);
 });
 
-test("modifier onlyOwner: คนอื่นสั่งหยุดไม่ได้", () => {
+test("modifier onlyOwner: others cannot pause", () => {
   const { vault } = setup();
-  assert.throws(() => vault.call("setPaused", { paused: true }, { as: "alice" }), /ไม่ใช่เจ้าของ/);
+  assert.throws(() => vault.call("setPaused", { paused: true }, { as: "alice" }), /not the owner/);
   assert.equal(vault.call("setPaused", { paused: true }, { as: "owner" }), true);
-  assert.throws(() => vault.call("deposit", {}, { as: "alice", value: 10 }), /ปิดรับฝาก/);
+  assert.throws(() => vault.call("deposit", {}, { as: "alice", value: 10 }), /deposits temporarily paused/);
 });
 
-test("ตรวจค่าที่รับมา", () => {
+test("validate inputs", () => {
   const { vault } = setup();
   vault.callRaw("deposit", {}, { as: "alice", value: 100 });
   for (const amount of [0, -5, "10"]) {
-    assert.throws(() => vault.call("withdraw", { amount }, { as: "alice" }), /amount ไม่ถูกต้อง/);
+    assert.throws(() => vault.call("withdraw", { amount }, { as: "alice" }), /invalid amount/);
   }
-  // ทศนิยมแปลงเป็น BigInt ไม่ได้ → VM ปฏิเสธก่อนถึงโปรแกรม
-  assert.throws(() => vault.call("withdraw", { amount: 1.5 }, { as: "alice" }), /ต้องเป็น BigInt/);
-  assert.throws(() => vault.call("withdraw", { amount: 999 }, { as: "alice" }), /ยอดไม่พอ/);
+  // decimals can't convert to BigInt → the VM rejects before reaching the program (VM message)
+  assert.throws(() => vault.call("withdraw", { amount: 1.5 }, { as: "alice" }), /must be BigInt/);
+  assert.throws(() => vault.call("withdraw", { amount: 999 }, { as: "alice" }), /insufficient balance/);
 });
 
-test("event ถูกบันทึก", () => {
+test("events are recorded", () => {
   const { vault } = setup();
   const res = vault.callRaw("deposit", {}, { as: "alice", value: 50 });
   assert.deepEqual(res.events.map((event) => event.name), ["Deposited"]);

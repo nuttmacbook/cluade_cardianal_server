@@ -4,7 +4,7 @@ import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 
-/* keccak256 / ecrecover ที่โปรแกรมเรียกได้ */
+/* keccak256 / ecrecover callable from programs */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -19,8 +19,8 @@ function program() {
 
   function claim(params) {
     const who = ecrecover(params.input.message, params.input.signature)
-    if (who !== readDB("admin")) throw new Error("ลายเซ็นไม่ใช่ของ admin")
-    if (readDB(map("used", params.input.message.nonce))) throw new Error("ใช้ไปแล้ว")
+    if (who !== readDB("admin")) throw new Error("signature is not from admin")
+    if (readDB(map("used", params.input.message.nonce))) throw new Error("already used")
     writeDB(map("used", params.input.message.nonce), true)
     emit("Claimed", { by: params.context.sender, amount: params.input.message.amount })
     return params.input.message.amount
@@ -42,10 +42,10 @@ function setup(options = {}) {
 const call = (vm, functionName, input, sender = "alice") =>
   vm.call({ programUuid: "crypto", functionName, input, context: user(sender) }, { timestamp: T + 1000 });
 
-/** ข้อความในรูปที่โปรแกรมเห็น: ตัวเลขใน input กลายเป็น BigInt ("123n" ตอน hash) */
+/** The message as the program sees it: numbers in input become BigInt ("123n" when hashed) */
 const asProgramSees = (message) => VM.canonicalJson(VM.decodeBigints(message));
 
-/** เซ็นข้อความแบบเดียวกับที่โปรแกรมจะ hash (canonical JSON → keccak256) */
+/** Sign the message the same way the program hashes it (canonical JSON → keccak256) */
 const signMessage = (message, key = KEY) => {
   const digest = VM.keccak256Hex(asProgramSees(message));
   const bytes = Buffer.from(digest.slice(2), "hex");
@@ -59,42 +59,42 @@ function signRaw(digest, key) {
 
 // ---------------------------------------------------------------------------
 
-test("keccak256: string และ object", () => {
+test("keccak256: string and object", () => {
   const vm = setup();
   assert.equal(call(vm, "hash", { value: "hello" }).result, VM.keccak256Hex("hello"));
   assert.equal(call(vm, "hash", { value: "" }).result, VM.keccak256Hex(""));
 
-  // object ถูกแปลงแบบ canonical ก่อน ลำดับ key จึงไม่มีผล
+  // objects are canonicalized first, so key order does not matter
   const first = call(vm, "hash", { value: { a: 1, b: 2 } }).result;
   const second = call(vm, "hash", { value: { b: 2, a: 1 } }).result;
   assert.equal(first, second);
-  assert.equal(first, VM.keccak256Hex(VM.canonicalJson({ a: 1n, b: 2n })));   // ตัวเลขเป็น BigInt → "1n"
+  assert.equal(first, VM.keccak256Hex(VM.canonicalJson({ a: 1n, b: 2n })));   // numbers are BigInt → "1n"
 });
 
-test("keccak256: ค่าต่างกัน → hash ต่างกัน", () => {
+test("keccak256: different values → different hashes", () => {
   const vm = setup();
   const values = ["a", "b", { x: 1 }, [1, 2], 123, true, null];
   const hashes = values.map((value) => call(vm, "hash", { value }).result);
   assert.equal(new Set(hashes).size, values.length);
 });
 
-test("ecrecover: กู้ address ของผู้เซ็นได้", () => {
+test("ecrecover: recovers the signer's address", () => {
   const vm = setup();
   const message = { to: "0xbob", amount: 100, nonce: 1 };
   const signature = signMessage(message);
 
   assert.equal(call(vm, "recover", { message, signature }).result, signer);
-  assert.notEqual(call(vm, "recover", { message: { ...message, amount: 999 }, signature }).result, signer); // แก้ข้อความ = คนละคน
+  assert.notEqual(call(vm, "recover", { message: { ...message, amount: 999 }, signature }).result, signer); // altered message = different signer
 });
 
-test("ecrecover: ลายเซ็นผิดรูปแบบ → INVALID_REQUEST, ลายเซ็นเสีย → null", () => {
+test("ecrecover: malformed signature → INVALID_REQUEST, corrupt signature → null", () => {
   const vm = setup();
   const message = { a: 1 };
   assert.equal(call(vm, "recover", { message, signature: "0x1234" }).error.code, "INVALID_REQUEST");
   assert.equal(call(vm, "recover", { message, signature: `0x${"0".repeat(130)}` }).result, null);
 });
 
-test("flow: คูปองที่ admin เซ็นไว้ล่วงหน้า ใช้ได้ครั้งเดียว", () => {
+test("flow: a coupon pre-signed by admin can be used only once", () => {
   const vm = setup();
   const message = { to: "alice", amount: 50, nonce: 7 };
   const signature = signMessage(message);
@@ -104,12 +104,12 @@ test("flow: คูปองที่ admin เซ็นไว้ล่วงห�
   assert.deepEqual(first.events[0].data, { by: "alice", amount: "50n" });
   vm.commit(first.writes);
 
-  assert.equal(call(vm, "claim", { message, signature }).error.message, "ใช้ไปแล้ว");
+  assert.equal(call(vm, "claim", { message, signature }).error.message, "already used");
   const forged = signMessage(message, sign.randomPrivateKey());
-  assert.equal(call(vm, "claim", { message: { ...message, nonce: 8 }, signature: forged }).error.message, "ลายเซ็นไม่ใช่ของ admin");
+  assert.equal(call(vm, "claim", { message: { ...message, nonce: 8 }, signature: forged }).error.message, "signature is not from admin");
 });
 
-test("ค่าแก๊ส: keccak256 และ ecrecover คิดตามที่ตั้งไว้", () => {
+test("gas: keccak256 and ecrecover are charged as configured", () => {
   const gas = { call: 0, read: 0, write: 0, byte: 1, event: 0, hash: 100, recover: 3000, code: 0, price: 1 };
   const vm = setup({ chargeGas: true, gas });
   vm.db.load({ "alice:native:received": "1000000n" });
@@ -122,7 +122,7 @@ test("ค่าแก๊ส: keccak256 และ ecrecover คิดตามท
   assert.equal(recovered.gasUsed, gas.recover + Buffer.byteLength(asProgramSees(message)));
 });
 
-test("ค่าเริ่มต้นของค่าแก๊ส", () => {
+test("default gas costs", () => {
   assert.equal(VM.DEFAULT_GAS.hash, 100);
   assert.equal(VM.DEFAULT_GAS.recover, 3000);
 });

@@ -4,7 +4,7 @@ import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { approvedProgramAddresses, programCounts, pagePendingPrograms, pageApprovedPrograms } from "../src/node/explorer-api.js";
 
-/* explorer: จำนวนโปรแกรมที่อนุมัติแล้ว / รออนุมัติ + รายการแบบแบ่งหน้า */
+/* explorer: counts of approved / pending programs + paged lists */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
 const program = (i) => `0x${"f".repeat(38)}${String(i).padStart(2, "0")}`;
@@ -24,7 +24,7 @@ function chain() {
   return { vm, block };
 }
 
-test("programCounts / รายการ: deploy = รออนุมัติ · init = อนุมัติแล้ว · reject = หายจากทั้งสองรายการ · กระเป๋าไม่นับ", () => {
+test("programCounts / lists: deploy = pending · init = approved · reject = removed from both lists · wallets not counted", () => {
   const { vm, block } = chain();
   assert.deepEqual(programCounts(vm), { approved: 0, pending: 0 });
 
@@ -39,7 +39,7 @@ test("programCounts / รายการ: deploy = รออนุมัติ �
   block((b) => [b.init({ programUuid: program(1) })]);
   block((b) => [b.init({ programUuid: program(2) }), b.reject({ programUuid: program(3) })]);
   assert.deepEqual(programCounts(vm), { approved: 2, pending: 1 });
-  assert.deepEqual(approvedProgramAddresses(vm), [program(1), program(2)]);   // OWNER มี key (native / nonce) แต่ไม่ใช่โปรแกรม
+  assert.deepEqual(approvedProgramAddresses(vm), [program(1), program(2)]);   // OWNER has keys (native / nonce) but is not a program
 
   const pending = pagePendingPrograms(vm, { page: 1, limit: 20 });
   assert.equal(pending.total, 1);
@@ -47,10 +47,10 @@ test("programCounts / รายการ: deploy = รออนุมัติ �
 
   const approved = pageApprovedPrograms(vm, { page: 1, limit: 20 });
   assert.deepEqual(approved.items.map((p) => [p.address, p.creator, p.createdAt, p.token]),
-    [[program(2), OWNER, 3000, false], [program(1), OWNER, 2000, true]]);   // อนุมัติล่าสุดก่อน
+    [[program(2), OWNER, 3000, false], [program(1), OWNER, 2000, true]]);   // most recently approved first
 });
 
-test("รายการโปรแกรมแบ่งหน้าได้", () => {
+test("program lists can be paged", () => {
   const { vm, block } = chain();
   block((b) => Array.from({ length: 25 }, (_, i) => b.deploy({ programUuid: program(i), code: PLAIN, context: as(OWNER) })));
   block((b) => Array.from({ length: 12 }, (_, i) => b.init({ programUuid: program(i) })));

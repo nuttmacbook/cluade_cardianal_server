@@ -5,12 +5,12 @@ import { VM, MemoryDB } from "./helpers.js";
 import { createEvmRpc } from "../src/node/evm-rpc.js";
 import { attachEvmWebSocket } from "../src/node/evm-ws.js";
 
-/* ws://host/evm: eth_subscribe newHeads / logs + method อื่นส่งต่อให้ตัวแปลงเดิม */
+/* ws://host/evm: eth_subscribe newHeads / logs + other methods go to the existing adapter */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
 const BOB = "0x00000000000000000000000000000000000000b2";
 
-test("evm ws: eth_subscribe newHeads ได้ header ของ block ใหม่ · method อื่นตอบเหมือน POST /evm · path อื่นถูกปฏิเสธ", async () => {
+test("evm ws: eth_subscribe newHeads delivers new block headers · other methods answer like POST /evm · other paths are rejected", async () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { chainId: 7777, recordBlocks: true, recordTransactions: true, recordHistory: true, requireNonce: true, chargeGas: true });
   vm.applyGenesis({ chainId: 7777, balances: { [OWNER]: 1_000_000 } });
   const server = http.createServer((request, response) => response.end());

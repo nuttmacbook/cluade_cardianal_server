@@ -1,61 +1,61 @@
 /**
- * Staking — โปรแกรมกลางสำหรับ stake token รับรางวัล (แบบ Synthetix StakingRewards / MasterChef) · หลาย pool ในโปรแกรมเดียว
- *   ฝาก / ถอนได้ทุกเมื่อ ไม่มี lock-up ไม่มีค่าปรับ · ไม่มี owner / admin · ไม่มี upgrader (แก้ไม่ได้)
- *   input ตอน deploy: { namespace?, icon?, url?, contact?, description? }
- *   เวลาทั้งหมดเป็น **วินาที** (unix seconds) = params.block.timestamp / 1000n · จำนวนเงินเป็น bigint หน่วยเล็กสุดของ token
- *   ก่อนเรียก createPool / addRewards / stake ต้อง approve ให้โปรแกรมนี้ใน token นั้นก่อน (โปรแกรมเรียก transferFrom)
+ * Staking — a system program to stake tokens and earn rewards (like Synthetix StakingRewards / MasterChef) · many pools in one program
+ *   deposit / withdraw any time, no lock-up, no penalty · no owner / admin · no upgrader (immutable)
+ *   input on deploy: { namespace?, icon?, url?, contact?, description? }
+ *   all times are in **seconds** (unix seconds) = params.block.timestamp / 1000n · amounts are bigint in the token's smallest unit
+ *   before calling createPool / addRewards / stake you must approve this program on that token (the program calls transferFrom)
  *
- * ฟังก์ชันที่เปลี่ยน state
+ * State-changing functions
  *   createPool({ stakeToken, rewardToken, rewardAmount, duration, startAt? }) → poolId (0n, 1n, …)
- *       ใครก็สร้างได้ · ผู้สร้างจ่ายรางวัลล่วงหน้า (transferFrom แล้ววัดยอดที่เข้าจริงจาก balanceOf ก่อน / หลัง)
- *       รางวัลไหลเท่ากันทุกวินาทีตั้งแต่ startAt (ไม่ส่ง = ตอนนี้ · ห้ามย้อนหลัง · ไม่เกินตอนนี้ + 365 วัน) นาน duration วินาที (1 … 10 ปี)
- *       stakeToken = rewardToken ได้: ต้นเงินที่ stake (totalStaked) กับกองรางวัล (funded - claimed - recovered) แยกบัญชีกันต่อ pool เสมอ
+ *       anyone can create one · the creator prefunds the rewards (transferFrom, then measures the amount actually received via balanceOf before / after)
+ *       rewards flow evenly every second from startAt (omitted = now · not in the past · at most now + 365 days) for duration seconds (1 … 10 years)
+ *       stakeToken = rewardToken is allowed: staked principal (totalStaked) and the reward pot (funded - claimed - recovered) are always accounted separately per pool
  *       event PoolCreated { poolId, creator, stakeToken, rewardToken, rewardAmount, startAt, endAt, rewardRate }
- *   stake({ poolId, amount }) → ยอดที่เข้าจริง     stake ก่อน startAt ได้ · หลัง endAt ไม่ได้ · event Staked { poolId, who, amount }
- *   unstake({ poolId, amount }) → true              ถอนต้นได้ทุกเมื่อ (รางวัลค้างเก็บไว้ claim ทีหลังได้) · event Unstaked
- *   claim({ poolId }) → ยอดรางวัล                   event Claimed { poolId, who, amount }
- *   exit({ poolId }) → { unstaked, claimed }        ถอนต้นทั้งหมด + claim (event Unstaked / Claimed ตามที่มี)
- *   emergencyWithdraw({ poolId }) → ยอดต้น          ถอนต้นอย่างเดียว **สละรางวัลที่ค้างทั้งหมด** (ใช้เมื่อ reward token เสีย / โอนไม่ได้)
- *       รางวัลที่สละกลับไปเป็น "ยังไม่ได้แจก" ของ pool → ผู้สร้างดึงคืนได้ด้วย recoverUnallocated (ไม่ค้างถาวร)
+ *   stake({ poolId, amount }) → amount actually received     can stake before startAt · not after endAt · event Staked { poolId, who, amount }
+ *   unstake({ poolId, amount }) → true              withdraw principal any time (pending rewards are kept to claim later) · event Unstaked
+ *   claim({ poolId }) → reward amount                   event Claimed { poolId, who, amount }
+ *   exit({ poolId }) → { unstaked, claimed }        withdraw all principal + claim (events Unstaked / Claimed as applicable)
+ *   emergencyWithdraw({ poolId }) → principal          withdraw principal only, **forfeiting all pending rewards** (use when the reward token is broken / can't transfer)
+ *       forfeited rewards go back to the pool's "unallocated" → the creator can reclaim them via recoverUnallocated (never stuck forever)
  *       event EmergencyWithdraw { poolId, who, amount, forfeited }
- *   addRewards({ poolId, amount, extendSeconds? }) → rewardRate ใหม่   เฉพาะผู้สร้าง pool
- *       pool ยังไม่จบ: รางวัลที่เหลือ + amount กระจายใหม่ตลอดช่วงที่เหลือ (ต่ออายุได้ด้วย extendSeconds)
- *       pool จบแล้ว: ต้องส่ง extendSeconds → เริ่มรอบใหม่ตั้งแต่ตอนนี้ ถึง ตอนนี้ + extendSeconds
+ *   addRewards({ poolId, amount, extendSeconds? }) → new rewardRate   pool creator only
+ *       pool still running: remaining rewards + amount are spread over the remaining period (extendable via extendSeconds)
+ *       pool ended: extendSeconds is required → starts a new period from now to now + extendSeconds
  *       event RewardsAdded { poolId, amount, endAt, rewardRate }
- *   recoverUnallocated({ poolId }) → ยอด          เฉพาะผู้สร้าง · ดึงรางวัลที่ "จะไม่มีใครได้แน่นอน" คืนได้ทุกเมื่อ:
- *       รางวัลของวินาทีที่ไม่มีคน stake (ไม่ถูกแจก) + เศษจากการปัดลง + รางวัลที่ถูกสละด้วย emergencyWithdraw
- *       ไม่แตะรางวัลที่แจกแล้ว (ค้างให้ผู้ stake) หรือรางวัลของเวลาที่ยังมาไม่ถึง · event RewardsRecovered { poolId, to, amount }
+ *   recoverUnallocated({ poolId }) → amount          creator only · reclaims rewards "nobody can ever get", any time:
+ *       rewards for seconds with no stakers (never distributed) + rounding dust + rewards forfeited via emergencyWithdraw
+ *       never touches rewards already distributed (owed to stakers) or rewards for time not yet elapsed · event RewardsRecovered { poolId, to, amount }
  *
- * ฟังก์ชันอ่าน
+ * Read functions
  *   getPool({ poolId }) → { poolId, creator, stakeToken, rewardToken, startAt, periodStart, endAt, lastUpdate, totalStaked, stakers,
- *       rewardRate (หน่วยต่อวินาที × 1e18), rewardPerSecond (ปัดลง), rewardPerYear (ตอนนี้ · 0n ถ้าไม่ active), active, accRewardPerShare,
- *       funded, claimed, recovered, rewardReserve, unallocated }   APR ≈ rewardPerYear × ราคา reward ÷ (totalStaked × ราคา stake)
+ *       rewardRate (units per second × 1e18), rewardPerSecond (rounded down), rewardPerYear (current · 0n if not active), active, accRewardPerShare,
+ *       funded, claimed, recovered, rewardReserve, unallocated }   APR ≈ rewardPerYear × reward price ÷ (totalStaked × stake price)
  *   poolCount() · pools({ start?, limit? ≤ 50 }) → [pool] · stakedOf({ poolId, who }) · pendingRewards({ poolId, who })
- *   poolsOf({ who, start?, limit? ≤ 100 }) → [poolId]  (pool ที่ who เคย stake) · poolsOfCount({ who })
+ *   poolsOf({ who, start?, limit? ≤ 100 }) → [poolId]  (pools who has staked in) · poolsOfCount({ who })
  *
- * คณิต: accRewardPerShare สะสมแบบ ×1e18 (bigint) · rewardRate ก็ ×1e18 · ปัดลงทุกจุดที่จ่าย
- *   ช่วง dt ที่มีคน stake: inc = rewardRate × dt / totalStaked (ปัดลง) · allocated += inc × totalStaked (ยอดที่ acc รองรับจริง)
- *   รางวัลของคน = stake × (acc − accที่จ่ายแล้ว) / 1e18 (ปัดลง) → ผลรวมทุกคน ≤ allocated / 1e18 ≤ funded
+ * Math: accRewardPerShare accumulates ×1e18 (bigint) · rewardRate is ×1e18 too · rounded down at every payout
+ *   an interval dt with stakers: inc = rewardRate × dt / totalStaked (rounded down) · allocated += inc × totalStaked (the amount acc actually covers)
+ *   a user's reward = stake × (acc − acc already paid) / 1e18 (rounded down) → sum over all users ≤ allocated / 1e18 ≤ funded
  *   unallocated = ((funded − recovered) × 1e18 − allocated − rewardRate × (endAt − lastUpdate)) / 1e18
- *   ทุกการจ่ายรางวัลเช็คว่าไม่เกิน rewardReserve ของ pool (ไม่มีทางกินต้นเงินหรือ pool อื่น)
- * ความปลอดภัย: lock กันเรียกซ้อน (token ที่เรียกกลับเข้ามาระหว่างโอนจะล้ม) · เขียน state ก่อนโอนออก · วัดยอดเข้าจาก balanceOf
- *   ไม่มีลูปที่ขึ้นกับจำนวนผู้ใช้ · ลูปเดียวคือ pools / poolsOf (สูงสุด 50 / 100 รายการ)
+ *   every reward payout checks it does not exceed the pool's rewardReserve (can never eat principal or another pool)
+ * Security: reentrancy lock (a token calling back in during a transfer fails) · state written before transfers out · deposits measured via balanceOf
+ *   no loops that depend on the number of users · the only loops are pools / poolsOf (at most 50 / 100 entries)
  *
- * storage: poolCount · pools:<id> (object ของ pool) · stakes:<id>:<who> · rewards:<id>:<who> (รางวัลที่บันทึกแล้ว)
- *   paid:<id>:<who> (acc ตอนบันทึกล่าสุด) · joined:<id>:<who> · userPools:<who>:<i> · userPoolCount:<who> · locked (ระหว่าง tx)
+ * storage: poolCount · pools:<id> (pool object) · stakes:<id>:<who> · rewards:<id>:<who> (recorded rewards)
+ *   paid:<id>:<who> (acc at the last checkpoint) · joined:<id>:<who> · userPools:<who>:<i> · userPoolCount:<who> · locked (during a tx)
  */
 import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 
-export const STAKING_PRECISION = 10n ** 36n;   // 1e36 (ไม่ใช่ 1e18 แบบ Synthetix) → stake token ซัพพลายสูง + reward token ทศนิยมน้อยก็ไม่ปัดรางวัลหาย
-export const STAKING_MAX_DURATION = 315_360_000n;   // 10 ปี (วินาที)
-export const STAKING_MAX_START_DELAY = 31_536_000n; // 365 วัน
+export const STAKING_PRECISION = 10n ** 36n;   // 1e36 (not 1e18 like Synthetix) → high-supply stake tokens + low-decimal reward tokens don't lose rewards to rounding
+export const STAKING_MAX_DURATION = 315_360_000n;   // 10 years (seconds)
+export const STAKING_MAX_START_DELAY = 31_536_000n; // 365 days
 export const STAKING_MAX_PAGE = 50;
 export const STAKING_MAX_USER_PAGE = 100;
 export const STAKING_FUNCTIONS = ["createPool", "stake", "unstake", "claim", "exit", "emergencyWithdraw", "addRewards", "recoverUnallocated"];
 export const STAKING_EVENTS = ["PoolCreated", "Staked", "Unstaked", "Claimed", "RewardsAdded", "EmergencyWithdraw", "RewardsRecovered"];
 
 export const STAKING_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const P = ${STAKING_PRECISION}n
   const MAX_DURATION = ${STAKING_MAX_DURATION}n
@@ -69,7 +69,7 @@ export const STAKING_PROGRAM = `function program() {
     setProgramMetadata(params.input)
   }
 
-  // ---------- ตัวช่วย ----------
+  // ---------- helpers ----------
   function nowOf(params) { return params.block.timestamp / 1000n }
   function lock() {
     if (readDB("locked") === true) throw new Error("reentrant call")
@@ -96,7 +96,7 @@ export const STAKING_PROGRAM = `function program() {
     return token
   }
   function balanceHere(token) { return runProgram(token, "balanceOf", { who: ThisAddress() }, { readonly: true }) }
-  // ดึงเงินเข้าแล้ววัดยอดที่เข้าจริง (token เก็บค่าธรรมเนียม / คืนค่าโกหก ก็ไม่หลอกบัญชีได้)
+  // pull funds in and measure what actually arrived (a fee-on-transfer or lying token cannot fool the accounting)
   function pullFrom(token, from, amount) {
     const before = balanceHere(token)
     runProgram(token, "transferFrom", { from: from, to: ThisAddress(), amount: amount })
@@ -106,12 +106,12 @@ export const STAKING_PROGRAM = `function program() {
   }
   function pushTo(token, to, amount) { runProgram(token, "transfer", { to: to, amount: amount }) }
 
-  // เดินเวลาของ pool ไปถึง now (ไม่เกิน endAt) — เปลี่ยน pool ในหน่วยความจำ
+  // advance the pool's clock to now (capped at endAt) — mutates pool in memory
   function accrue(pool, now) {
     const t = now < pool.endAt ? now : pool.endAt
     if (t <= pool.lastUpdate) return pool
     if (pool.totalStaked > 0n) {
-      // เศษที่หารไม่ลงตัวยกไปรอบถัดไป (carry) ไม่ทิ้ง → เรียกถี่ ๆ ก็ไม่ทำให้รางวัลหาย / ไม่กลายเป็นเงินที่ผู้สร้างดึงคืนได้
+      // the division remainder carries over to the next round (carry), not dropped → frequent calls neither lose rewards nor turn them into funds the creator can recover
       const scaled = pool.rewardRate * (t - pool.lastUpdate) + (pool.carry || 0n)
       const inc = scaled / pool.totalStaked
       pool.carry = scaled - inc * pool.totalStaked
@@ -123,7 +123,7 @@ export const STAKING_PROGRAM = `function program() {
   }
   function futureScaled(pool) { return pool.lastUpdate < pool.endAt ? pool.rewardRate * (pool.endAt - pool.lastUpdate) : 0n }
   function unallocatedOf(pool) {
-    const free = (pool.funded - pool.recovered) * P - pool.allocated - (pool.carry || 0n) - futureScaled(pool)   // carry = รางวัลที่ไหลแล้วแต่ยังไม่ถึงหน่วย
+    const free = (pool.funded - pool.recovered) * P - pool.allocated - (pool.carry || 0n) - futureScaled(pool)   // carry = rewards already streamed but not yet a whole unit
     return free > 0n ? free / P : 0n
   }
   function reserveOf(pool) { return pool.funded - pool.claimed - pool.recovered }
@@ -133,7 +133,7 @@ export const STAKING_PROGRAM = `function program() {
     const saved = readDB(map("rewards", poolId, who)) || 0n
     return { stake: stake, reward: saved + stake * (pool.acc - paid) / P, paid: paid, saved: saved }
   }
-  // บันทึกรางวัลของ who ถึงตอนนี้ (หลัง accrue) → { stake, reward }
+  // settle who's rewards up to now (after accrue) → { stake, reward }
   function settle(pool, poolId, who) {
     const user = earnedOf(pool, poolId, who)
     if (user.reward !== user.saved) writeDB(map("rewards", poolId, who), user.reward)
@@ -156,7 +156,7 @@ export const STAKING_PROGRAM = `function program() {
       funded: pool.funded, claimed: pool.claimed, recovered: pool.recovered, rewardReserve: reserveOf(pool), unallocated: unallocatedOf(pool) }
   }
 
-  // ---------- เปลี่ยน state ----------
+  // ---------- state changes ----------
   function createPool(params) { rejectValue(params);
     lock()
     const input = params.input
@@ -214,7 +214,7 @@ export const STAKING_PROGRAM = `function program() {
     return received
   }
 
-  // ลดต้นในบัญชี (ยังไม่โอน)
+  // reduce the account's principal (no transfer yet)
   function reduceStake(pool, poolId, who, stakeNow, amount) {
     const rest = stakeNow - amount
     if (rest === 0n) { deleteDB(map("stakes", poolId, who)); pool.stakers = pool.stakers - 1n }
@@ -278,7 +278,7 @@ export const STAKING_PROGRAM = `function program() {
     const pool = accrue(loadPool(poolId), nowOf(params))
     const user = earnedOf(pool, poolId, who)
     if (user.stake === 0n) throw new Error("nothing staked")
-    // รางวัลที่สละ → กลับเป็น "ยังไม่ได้แจก" (ปัดลงแล้ว จึงไม่กินส่วนของคนอื่น)
+    // forfeited rewards → back to "unallocated" (already rounded down, so it never eats into others' share)
     pool.allocated = pool.allocated - user.reward * P
     reduceStake(pool, poolId, who, user.stake, user.stake)
     if (user.saved !== 0n) deleteDB(map("rewards", poolId, who))
@@ -302,7 +302,7 @@ export const STAKING_PROGRAM = `function program() {
     const now = nowOf(params)
     const pool = accrue(loadPool(poolId), now)
     if (params.context.sender !== pool.creator) throw new Error("only pool creator")
-    let base = pool.lastUpdate      // = max(now, startAt) เมื่อ pool ยังไม่จบ
+    let base = pool.lastUpdate      // = max(now, startAt) while the pool has not ended
     let leftover = 0n
     if (now >= pool.endAt) {
       if (extend === 0n) throw new Error("pool has ended: give extendSeconds to start a new period")
@@ -341,7 +341,7 @@ export const STAKING_PROGRAM = `function program() {
     return amount
   }
 
-  // ---------- อ่าน ----------
+  // ---------- reads ----------
   function pageArgs(input, max) {
     const start = input.start === undefined || input.start === null ? 0n : input.start
     const limit = input.limit === undefined || input.limit === null ? BigInt(max) : input.limit

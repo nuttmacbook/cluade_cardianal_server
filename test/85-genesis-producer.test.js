@@ -11,11 +11,11 @@ import { resolveSettings, startupProblems } from "../src/node/genesis.js";
 import { applyBlock, syncOnce, verifyProducer } from "../src/node/sync.js";
 
 /*
- * ระยะ 1.1–1.4
- *   genesis.config ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน · env ตั้งต่าง = server ไม่ยอมเริ่ม
- *   ไม่ใช่ DEV → ต้องมี ADMINS + PRODUCER_KEY
- *   ผู้ผลิตเซ็น hash ของ block · producer อยู่ใน hash · sync ตรวจลายเซ็นกับรายชื่อใน genesis
- *   replay / rebuild / sync รัน tx ด้วย replayTimeoutMs (ไม่ใช่ timeout ของผู้ผลิต)
+ * Phase 1.1–1.4
+ *   genesis.config locks values every machine must share · a different env value = the server refuses to start
+ *   not DEV → ADMINS + PRODUCER_KEY are required
+ *   the producer signs the block hash · producer is part of the hash · sync checks the signature against the genesis list
+ *   replay / rebuild / sync run txs with replayTimeoutMs (not the producer's timeout)
  */
 
 const T = Date.parse("2026-01-01T00:00:00Z");
@@ -49,7 +49,7 @@ const follower = () => {
   return vm;
 };
 
-test("resolveSettings: genesis ก่อน env · env ที่ต่างจาก genesis = error · ไม่มี config = ใช้ env", () => {
+test("resolveSettings: genesis before env · env differing from genesis = error · no config = use env", () => {
   const genesis = { chainId: 7, config: { burnPercent: 50, minBaseFee: "2000000000", admins: ["0xAA", "0xbb"], producers: [PRODUCER] } };
   const ok = resolveSettings(genesis, { BURN_PERCENT: "50", ADMINS: "0xbb,0xaa", BLOCK_MS: "500" });
   assert.deepEqual(ok.errors, []);
@@ -57,12 +57,12 @@ test("resolveSettings: genesis ก่อน env · env ที่ต่างจ�
   assert.equal(ok.settings.burnPercent, 50);
   assert.equal(ok.settings.minBaseFee, 2_000_000_000n);
   assert.deepEqual(ok.settings.admins, ["0xaa", "0xbb"]);
-  assert.equal(ok.settings.blockMs, 500);            // ไม่อยู่ใน genesis → env
+  assert.equal(ok.settings.blockMs, 500);            // not in genesis → env
   assert.deepEqual(ok.locked.sort(), ["admins", "burnPercent", "chainId", "minBaseFee", "producers"]);
 
   const bad = resolveSettings(genesis, { BURN_PERCENT: "100", CHAIN_ID: "1", ADMINS: "0xaa" });
   assert.equal(bad.errors.length, 3);
-  assert.match(bad.errors.join("\n"), /BURN_PERCENT=100 ไม่ตรงกับ genesis/);
+  assert.match(bad.errors.join("\n"), /BURN_PERCENT=100 does not match genesis/);
   assert.match(bad.errors.join("\n"), /CHAIN_ID=1/);
 
   const dev = resolveSettings({ chainId: 1, balances: {} }, { BURN_PERCENT: "80", GAS_TARGET: "100" });
@@ -74,78 +74,78 @@ test("resolveSettings: genesis ก่อน env · env ที่ต่างจ�
   assert.match(resolveSettings({}, { BLOCK_MS: "abc" }).errors[0], /BLOCK_MS/);
 });
 
-test("startupProblems: ไม่ใช่ DEV ต้องมี ADMINS + PRODUCER_KEY · producer ต้องอยู่ในรายชื่อ genesis", () => {
+test("startupProblems: non-DEV needs ADMINS + PRODUCER_KEY · producer must be in the genesis list", () => {
   const empty = resolveSettings({}, {}).settings;
   assert.equal(startupProblems({ settings: empty }).length, 2);
   assert.deepEqual(startupProblems({ settings: empty, dev: true }), []);
   const settings = resolveSettings({ config: { admins: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], producers: [PRODUCER] } }, {}).settings;
   assert.deepEqual(startupProblems({ settings, producer: PRODUCER }), []);
-  assert.match(startupProblems({ settings, producer: sign.addressOf(OTHER_KEY) })[0], /ไม่อยู่ในรายชื่อผู้ผลิต/);
+  assert.match(startupProblems({ settings, producer: sign.addressOf(OTHER_KEY) })[0], /who is not in the producer list/);
   assert.deepEqual(startupProblems({ settings: empty, errors: ["x"], dev: true }), ["x"]);
-  // ลืมแก้ค่าตัวอย่างใน genesis → ไม่ยอมเริ่ม (address ผิดรูปแบบ = ไม่มีใครเป็น admin / ผู้ผลิตได้จริง)
+  // sample values left in genesis → refuses to start (a malformed address = nobody can actually be admin / producer)
   const placeholder = resolveSettings({ config: { admins: ["0xADDRESS_ADMIN_1"], producers: [PRODUCER, "0xaddress_spare"] } }, {}).settings;
   const problems = startupProblems({ settings: placeholder, producer: PRODUCER });
-  assert.deepEqual(problems, ["config.admins มีค่าที่ไม่ใช่ address: 0xaddress_admin_1", "config.producers มีค่าที่ไม่ใช่ address: 0xaddress_spare"]);
-  assert.deepEqual(startupProblems({ settings: placeholder, producer: PRODUCER, dev: true }), []);   // DEV ไม่ตรวจ
+  assert.deepEqual(problems, ["config.admins has values that are not addresses: 0xaddress_admin_1", "config.producers has values that are not addresses: 0xaddress_spare"]);
+  assert.deepEqual(startupProblems({ settings: placeholder, producer: PRODUCER, dev: true }), []);   // DEV skips the check
 });
 
-test("server.js: ไม่ตั้ง ADMINS / PRODUCER_KEY = ไม่ยอมเริ่ม · env ต่างจาก genesis = ไม่ยอมเริ่ม", () => {
+test("server.js: no ADMINS / PRODUCER_KEY = refuses to start · env differing from genesis = refuses to start", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "genesis-"));
   const run = (env) => spawnSync(process.execPath, [path.join(ROOT, "server.js")], {
     cwd: ROOT, env: { PATH: process.env.PATH, PORT: "0", ...env }, encoding: "utf8", timeout: 20_000,
   });
   const missing = run({});
   assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /ต้องตั้ง ADMINS/);
-  assert.match(missing.stderr, /ต้องตั้ง PRODUCER_KEY/);
+  assert.match(missing.stderr, /ADMINS must be set/);
+  assert.match(missing.stderr, /PRODUCER_KEY must be set/);
 
   const file = path.join(dir, "genesis.json");
   fs.writeFileSync(file, JSON.stringify({ chainId: 5, balances: {}, config: { burnPercent: 100, admins: ["0xaa"] } }));
   const mismatch = run({ GENESIS: file, BURN_PERCENT: "50", PRODUCER_KEY });
   assert.equal(mismatch.status, 1);
-  assert.match(mismatch.stderr, /BURN_PERCENT=50 ไม่ตรงกับ genesis/);
+  assert.match(mismatch.stderr, /BURN_PERCENT=50 does not match genesis/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("ผู้ผลิตเซ็น block: producer อยู่ใน header + hash · ลายเซ็นกู้ได้ address ผู้ผลิต", () => {
+test("the producer signs blocks: producer is in the header + hash · the signature recovers the producer address", () => {
   const vm = chain();
   const header = vm.getBlock(1);
   assert.equal(header.producer, PRODUCER);
   assert.equal(verifyProducer(header, [PRODUCER]), PRODUCER);
-  // producer อยู่ใน hash: chain เดียวกันแต่ไม่มีผู้ผลิต → hash ต่าง · ไม่มีผู้ผลิต = header แบบเดิม (ไม่มี field)
+  // producer is in the hash: same chain without a producer → different hash · no producer = the old header (no field)
   const plain = chain({ key: null });
   assert.notEqual(plain.getBlock(1).hash, header.hash);
   assert.equal("producer" in plain.getBlock(1), false);
   assert.equal("producerSignature" in plain.getBlock(1), false);
 });
 
-test("sync: ตรวจลายเซ็นผู้ผลิตกับรายชื่อ · block ปลอม / ผู้ผลิตนอกรายชื่อ / ไม่มีผู้ผลิต = หยุด", async () => {
+test("sync: checks the producer signature against the list · forged block / producer not listed / no producer = stop", async () => {
   const source = chain();
   const reader = follower();
   assert.equal(await syncOnce(reader, async (from) => itemsOf(source, from), { producers: [PRODUCER] }), 3);
   assert.equal(reader.getBlock(3).hash, source.getBlock(3).hash);
-  assert.equal(reader.getBlock(3).producerSignature, source.getBlock(3).producerSignature);   // node ผู้อ่านเก็บลายเซ็นเดิม
+  assert.equal(reader.getBlock(3).producerSignature, source.getBlock(3).producerSignature);   // the reader node keeps the original signature
 
-  // ผู้ผลิตอื่นที่ไม่อยู่ในรายชื่อ (ลายเซ็นถูกของ key ตัวเอง)
+  // another producer not on the list (valid signature from its own key)
   const stranger = chain({ key: OTHER_KEY, blocks: 1 });
-  assert.throws(() => applyBlock(follower(), itemsOf(stranger)[0], { producers: [PRODUCER] }), /ไม่อยู่ในรายชื่อผู้ผลิต/);
-  // แก้ producer ใน header ให้เป็นชื่อที่อยู่ในรายชื่อ → ลายเซ็นไม่ตรง
+  assert.throws(() => applyBlock(follower(), itemsOf(stranger)[0], { producers: [PRODUCER] }), /who is not in the producer list/);
+  // change the header's producer to a listed name → signature mismatch
   const forged = itemsOf(stranger)[0];
-  assert.throws(() => applyBlock(follower(), { ...forged, header: { ...forged.header, producer: PRODUCER } }, { producers: [PRODUCER] }), /ลายเซ็นผู้ผลิตไม่ถูกต้อง/);
-  // ลายเซ็นหาย
+  assert.throws(() => applyBlock(follower(), { ...forged, header: { ...forged.header, producer: PRODUCER } }, { producers: [PRODUCER] }), /has an invalid producer signature/);
+  // missing signature
   const [first] = itemsOf(source);
-  assert.throws(() => applyBlock(follower(), { ...first, header: { ...first.header, producerSignature: null } }), /ลายเซ็นผู้ผลิตไม่ถูกต้อง/);
-  // genesis กำหนดผู้ผลิต แต่ block ไม่มีผู้ผลิต
-  assert.throws(() => applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0], { producers: [PRODUCER] }), /ไม่มีผู้ผลิต/);
-  // ไม่ส่งรายชื่อ (ช่วงพัฒนา) → block ไม่มีผู้ผลิตซิงก์ได้เหมือนเดิม
+  assert.throws(() => applyBlock(follower(), { ...first, header: { ...first.header, producerSignature: null } }), /has an invalid producer signature/);
+  // genesis names producers, but the block has none
+  assert.throws(() => applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0], { producers: [PRODUCER] }), /has no producer/);
+  // no list passed (development) → blocks without a producer sync as before
   assert.equal(applyBlock(follower(), itemsOf(chain({ key: null, blocks: 1 }))[0]).number, 1);
 });
 
-test("replayBlock / rebuildFrom: block ที่มีผู้ผลิตได้ hash + ลายเซ็นเดิม แม้ node ไม่มี key", () => {
+test("replayBlock / rebuildFrom: blocks with a producer keep the same hash + signature even when the node has no key", () => {
   const vm = chain({ blocks: 4 });
   const before = [1, 2, 3, 4].map((n) => vm.getBlock(n));
   for (let n = 1; n <= 4; n += 1) assert.equal(vm.replayBlock(n).hash, before[n - 1].hash);
-  vm.producer = null;   // เปลี่ยนเครื่อง / ไม่มี key แล้ว
+  vm.producer = null;   // different machine / key no longer available
   vm.rebuildFrom(3);
   assert.equal(vm.latestBlockNumber(), 3);
   for (let n = 1; n <= 3; n += 1) {
@@ -154,8 +154,8 @@ test("replayBlock / rebuildFrom: block ที่มีผู้ผลิตไ�
   }
 });
 
-test("replay / sync ใช้ replayTimeoutMs: tx ที่ผู้ผลิตรันทันไม่ TIMEOUT บนเครื่องที่ตั้ง timeout สั้นกว่า", () => {
-  // โปรแกรมที่ใช้เวลาพอสมควร (ลูปหลายรอบ) · ผู้ผลิตตั้ง timeout ยาว · ผู้อ่านตั้ง timeoutMs 1 ms แต่ replayTimeoutMs ยาว
+test("replay / sync use replayTimeoutMs: a tx the producer finished in time does not TIMEOUT on a machine with a shorter timeout", () => {
+  // a program that takes a while (many loop iterations) · the producer uses a long timeout · the reader sets timeoutMs 1 ms but a long replayTimeoutMs
   const CODE = `function program() {
     function initialization() {}
     function spin(params) { let total = 0; for (let i = 0; i < params.input.n; i += 1) total += i; writeDB("total", BigInt(total)) }
@@ -179,15 +179,15 @@ test("replay / sync ใช้ replayTimeoutMs: tx ที่ผู้ผลิต
   for (const item of itemsOf(source)) applyBlock(reader, item, { producers: [PRODUCER] });
   assert.equal(reader.getBlock(2).hash, source.getBlock(2).hash);
   assert.equal(reader.replayBlock(2).hash, source.getBlock(2).hash);
-  // เทียบ: ถ้าใช้ timeout 1 ms ตอน sync (แบบเดิม) → tx TIMEOUT → hash ไม่ตรง
-  // block 1 (deploy + init) ซิงก์ด้วย timeout ยาว ไม่งั้นเครื่องที่ยุ่ง (เทสต์รันขนานกัน) ก็ TIMEOUT ได้ตั้งแต่ block นี้
+  // compare: with a 1 ms timeout during sync (old behavior) → tx TIMEOUT → hash mismatch
+  // block 1 (deploy + init) syncs with a long timeout, otherwise a busy machine (tests run in parallel) could TIMEOUT already at this block
   const old = slow(60_000);
   applyBlock(old, itemsOf(source)[0]);
   old.replayTimeoutMs = 1;
-  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 ไม่ตรงกับผู้ผลิต/);
+  assert.throws(() => applyBlock(old, itemsOf(source)[1]), /block 2 does not match the producer/);
 });
 
-test("ค่าเริ่มของ block (Bluewolfchain): 2 วิ · 5M แก๊ส (gasTarget = ครึ่งหนึ่ง) · chainId 41234 · genesis ล็อก maxBlockGas ได้", () => {
+test("block defaults (Bluewolfchain): 2 s · 5M gas (gasTarget = half) · chainId 41234 · genesis can lock maxBlockGas", () => {
   const { settings } = resolveSettings({}, {});
   assert.equal(settings.blockMs, 2000);
   assert.equal(settings.maxBlockGas, 5_000_000);
@@ -195,5 +195,5 @@ test("ค่าเริ่มของ block (Bluewolfchain): 2 วิ · 5M �
   assert.equal(new VM.VirtualMachine(new MemoryDB(), { maxBlockGas: settings.maxBlockGas }).gasTarget, 2_500_000);
   assert.equal(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, {}).settings.maxBlockGas, 1_500_000);
   assert.equal(resolveSettings({}, { MAX_BLOCK_GAS: "2000000" }).settings.maxBlockGas, 2_000_000);
-  assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 ไม่ตรงกับ genesis/);
+  assert.match(resolveSettings({ config: { maxBlockGas: 1_500_000 } }, { MAX_BLOCK_GAS: "3000000" }).errors.join(), /MAX_BLOCK_GAS=3000000 does not match genesis/);
 });

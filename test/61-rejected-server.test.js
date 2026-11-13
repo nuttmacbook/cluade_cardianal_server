@@ -9,7 +9,7 @@ import { TxLog } from "../src/node/txlog.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN } from "./programs.js";
 
-/* server: GET /tx ตอบ rejected · /rejected แบ่งหน้า · /evm เห็นเป็น tx ที่ล้ม · /groups นับครบ · cursor ของ interactions / events · replaced อยู่รอด restart */
+/* server: GET /tx returns rejected · /rejected is paged · /evm shows them as failed txs · /groups counts everything · cursors for interactions / events · replaced survives restart */
 
 const ALICE_KEY = sign.randomPrivateKey();
 const BOB_KEY = sign.randomPrivateKey();
@@ -22,9 +22,9 @@ let clock = Date.now();
 
 before(async () => {
   let miner;
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   ({ server, vm, mempool, miner } = await import("../server.js"));
-  clearInterval(miner);                                           // ปิด block เองในเทสต์
+  clearInterval(miner);                                           // the test closes blocks itself
   vm.db.load({ [`${alice}:native:received`]: "1000000000000000000n", [`${bob}:native:received`]: "1000000000000000000n" });
   chainId = vm.chainId;
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -45,7 +45,7 @@ const mine = () => {
 };
 const tx = (fields) => ({ chainId, from: alice, to: "", method: "", input: {}, value: 0, gasLimit: 500_000, gasPrice: "1000000000", ...fields });
 
-test("ตั้งต้น: deploy + init token ผ่าน /sendtx", async () => {
+test("setup: deploy + init token via /sendtx", async () => {
   const deploy = await post("/sendtx", signed(tx({ action: "deploy", code: TOKEN, input: { supply: 1_000_000 }, nonce: 0 })));
   assert.equal(deploy.queued, true, JSON.stringify(deploy));
   mine();
@@ -57,39 +57,39 @@ test("ตั้งต้น: deploy + init token ผ่าน /sendtx", async ()
 });
 
 let rejectedHash, header;
-test("/tx: ถูกปฏิเสธที่ /sendtx → rejected (block: null) ทันที → เข้า block ถัดไปแล้วตอบเลข block + เหตุผล", async () => {
+test("/tx: rejected at /sendtx → rejected (block: null) right away → after the next block, returns the block number + reason", async () => {
   const bad = await post("/sendtx", signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "1n" }, nonce: 9 })));
   assert.equal(bad.queued, false);
-  assert.equal(bad.reason, "nonce ต้องเป็น 2");
+  assert.equal(bad.reason, "nonce must be 2");
   rejectedHash = sign.verifyTransaction(signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "1n" }, nonce: 9 }))).hash;
   assert.equal(bad.hash, rejectedHash);
   const waiting = (await get(`/tx/${rejectedHash}`)).body;
-  assert.deepEqual([waiting.status, waiting.block, waiting.stage, waiting.reason, waiting.sender, waiting.nonce], ["rejected", null, "sendtx", "nonce ต้องเป็น 2", alice, 9]);
+  assert.deepEqual([waiting.status, waiting.block, waiting.stage, waiting.reason, waiting.sender, waiting.nonce], ["rejected", null, "sendtx", "nonce must be 2", alice, 9]);
   assert.equal((await get("/pending")).body.rejectedPending, 1);
 
-  // ใบลายเซ็นผิด → ไม่ถูกบันทึก
+  // bad signature → not recorded
   const forged = await post("/sendtx", { tx: tx({ action: "transfer", to: bob, value: 1, nonce: 2 }), signature: sign.signTransaction(tx({ action: "transfer", to: bob, value: 2, nonce: 2 }), BOB_KEY) });
   assert.equal(forged.queued, false);
   assert.equal((await get("/pending")).body.rejectedPending, 1);
 
-  // tx จริง 1 ใบ + ใบที่ถูกปฏิเสธ
+  // 1 real tx + the rejected one
   const good = await post("/sendtx", signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "5n" }, nonce: 2 })));
   assert.equal(good.queued, true);
   header = mine();
   assert.deepEqual([header.txCount, header.rejectedCount], [1, 1]);
   const found = (await get(`/tx/${rejectedHash}`)).body;
-  assert.deepEqual([found.status, found.block, found.blockNumber, found.index, found.reason, found.to], ["rejected", header.number, header.number, 0, "nonce ต้องเป็น 2", token]);
-  assert.equal((await get(`/tx/${rejectedHash}/receipt`)).status, 404);   // ไม่ได้รัน = ไม่มี receipt
-  assert.equal((await get(`/nonce/${alice}`)).body.nonce, 3);              // ไม่กิน nonce
+  assert.deepEqual([found.status, found.block, found.blockNumber, found.index, found.reason, found.to], ["rejected", header.number, header.number, 0, "nonce must be 2", token]);
+  assert.equal((await get(`/tx/${rejectedHash}/receipt`)).status, 404);   // not run = no receipt
+  assert.equal((await get(`/nonce/${alice}`)).body.nonce, 3);              // no nonce used
   const full = (await get(`/block/${header.number}?full=1`)).body;
-  assert.equal(full.hash, header.hash);                                     // replay ตรวจ hash รวมรายการที่ถูกปฏิเสธ
+  assert.equal(full.hash, header.hash);                                     // replay checks the hash including rejected entries
   assert.deepEqual(full.rejected.map((item) => item.hash), [rejectedHash]);
   const synced = (await get(`/sync?from=${header.number}`)).body[0];
   assert.deepEqual(synced.rejected.map((item) => item.hash), [rejectedHash]);
 });
 
-test("/rejected และ /address/:a/rejected: ใหม่ไปเก่า แบ่งหน้าด้วย cursor · กรองตามผู้ส่ง", async () => {
-  // bob ถูกปฏิเสธ 3 ใบ (nonce ผิด) + alice อีก 1 ใบ
+test("/rejected and /address/:a/rejected: newest first, paged by cursor · filtered by sender", async () => {
+  // bob has 3 rejected (wrong nonce) + alice 1 more
   const bobs = [];
   for (const nonce of [7, 8, 9]) bobs.push((await post("/sendtx", signed(tx({ from: bob, action: "transfer", to: alice, value: 1, nonce }), BOB_KEY))).hash);
   const aliceAgain = (await post("/sendtx", signed(tx({ action: "transfer", to: bob, value: 1, nonce: 50 })))).hash;
@@ -109,7 +109,7 @@ test("/rejected และ /address/:a/rejected: ใหม่ไปเก่า �
   assert.ok(rest.items.every((item) => Number.isInteger(item.blockNumber) && item.timestamp));
 });
 
-test("/evm: tx ที่ถูกปฏิเสธต่อท้าย tx จริงของ block เป็น tx ที่ล้ม (status 0x0, gasUsed 0) · index / log / gas สะสมสอดคล้อง · nonce ไม่เปลี่ยน", async () => {
+test("/evm: rejected txs follow the block's real txs as failed txs (status 0x0, gasUsed 0) · index / log / cumulative gas stay consistent · nonce unchanged", async () => {
   const number = `0x${header.number.toString(16)}`;
   const block = await rpc("eth_getBlockByNumber", [number, false]);
   assert.deepEqual(block.transactions, [...header.txHashes, rejectedHash]);
@@ -131,19 +131,19 @@ test("/evm: tx ที่ถูกปฏิเสธต่อท้าย tx จ�
   assert.deepEqual(await rpc("eth_getTransactionReceipt", [rejectedHash]), rejected);
   assert.ok(real.logs.every((log, i) => log.logIndex === `0x${i.toString(16)}`));
   const trace = await rpc("debug_traceTransaction", [rejectedHash, { tracer: "callTracer" }]);
-  assert.equal(trace.error, "nonce ต้องเป็น 2");
+  assert.equal(trace.error, "nonce must be 2");
   assert.equal((await rpc("debug_traceBlockByNumber", [number, { tracer: "callTracer" }])).length, 2);
   assert.equal(await rpc("eth_getTransactionCount", [alice, "latest"]), "0x3");
 });
 
-test("/evm: hash ที่ถูกปฏิเสธแล้วภายหลังเข้า block จริง → เห็นเป็น tx จริงอันเดียว (ไม่ซ้ำใน block เก่า)", async () => {
-  const later = signed(tx({ action: "transfer", to: bob, value: 0, nonce: 4 }));   // nonce ยังไม่ถึง → ถูกปฏิเสธ
+test("/evm: a hash rejected and later included in a real block → shows as one real tx (not repeated in the old block)", async () => {
+  const later = signed(tx({ action: "transfer", to: bob, value: 0, nonce: 4 }));   // nonce not reached yet → rejected
   const first = await post("/sendtx", later);
   assert.equal(first.queued, false);
   const oldBlock = mine();
   assert.equal(oldBlock.rejectedCount, 1);
   await post("/sendtx", signed(tx({ action: "transfer", to: bob, value: 0, nonce: 3 })));
-  assert.equal((await post("/sendtx", later)).queued, true);                    // ส่งใบเดิมอีกครั้ง ตอนนี้ nonce ถึงแล้ว
+  assert.equal((await post("/sendtx", later)).queued, true);                    // resend the same tx, now the nonce is reached
   const newBlock = mine();
   assert.equal(newBlock.txCount, 2);
   assert.equal((await get(`/tx/${first.hash}`)).body.blockNumber, newBlock.number);
@@ -152,7 +152,7 @@ test("/evm: hash ที่ถูกปฏิเสธแล้วภายหล
   assert.equal((await rpc("eth_getTransactionByHash", [first.hash])).blockNumber, `0x${newBlock.number.toString(16)}`);
 });
 
-test("/program/:a/groups: นับครบเกิน 5,000 key ทีละช่วง (scan ต่อ request มีเพดาน)", async () => {
+test("/program/:a/groups: counts all of more than 5,000 keys in chunks (scan per request is capped)", async () => {
   const program = "0x" + "77".repeat(20);
   const data = {};
   for (let i = 0; i < 7000; i += 1) data[`${program}:storage:balances:${String(i).padStart(5, "0")}`] = `${i}n`;
@@ -174,12 +174,12 @@ test("/program/:a/groups: นับครบเกิน 5,000 key ทีละ�
   assert.equal(requests, 3);
   assert.equal(scanned, 12_501);
   assert.deepEqual(Object.fromEntries(totals), { balances: 7000, items: 5500, owner: 1 });
-  const once = (await get(`/program/${program}/groups`)).body;                  // ค่าตั้งต้น 20,000 key → ครบในครั้งเดียว
+  const once = (await get(`/program/${program}/groups`)).body;                  // default 20,000 keys → done in one request
   assert.deepEqual([once.total, once.complete, once.groups[0]], [12_501, true, { name: "balances", count: 7000 }]);
-  assert.equal((await get(`/program/${program}/groups?scan=999999`)).body.scanned, 12_501);   // เพดาน 50,000
+  assert.equal((await get(`/program/${program}/groups?scan=999999`)).body.scanned, 12_501);   // cap 50,000
 });
 
-test("interactions / events แบบ cursor: ใหม่ไปเก่า ต่อหน้าได้จนครบ ตรงกับแบบเลขหน้า", async () => {
+test("cursor-based interactions / events: newest first, pageable to the end, matching the page-number version", async () => {
   for (let i = 0; i < 5; i += 1) {
     await post("/sendtx", signed(tx({ action: "call", to: token, method: "transfer", input: { to: bob, amount: "1n" }, nonce: 5 + i })));
   }
@@ -206,12 +206,12 @@ test("interactions / events แบบ cursor: ใหม่ไปเก่า ต
 });
 
 // ---------------------------------------------------------------------------
-//  replaced: off-chain มีเพดาน · มีไฟล์ = อยู่รอด restart
+//  replaced: off-chain and capped · with a file = survives restart
 // ---------------------------------------------------------------------------
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "txlog-"));
 
-test("replaced: เปิด Mempool ใหม่ (restart) ด้วยไฟล์เดิม → ยังตอบ replacedBy ได้ แม้พ้น ttlMs ของ mempool", () => {
+test("replaced: reopening Mempool (restart) with the same file → still returns replacedBy, even after the mempool's ttlMs", () => {
   const dir = tmp();
   const file = path.join(dir, "replaced-tx.jsonl");
   const chain = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true });
@@ -225,13 +225,13 @@ test("replaced: เปิด Mempool ใหม่ (restart) ด้วยไฟ�
 
   const restarted = new Mempool(chain, { ttlMs: 1000, replacedLog: new TxLog({ file }) });
   assert.equal(restarted.replacedBy(old.hash, { now: T + 60_000 }), next.hash);
-  assert.equal(new Mempool(chain).replacedBy(old.hash), null);                 // ไม่มี log = จำแค่ในหน่วยความจำ
+  assert.equal(new Mempool(chain).replacedBy(old.hash), null);                 // no log = memory only
   const saved = new TxLog({ file }).get(old.hash);
   assert.deepEqual([saved.replacedBy, saved.sender, saved.nonce, saved.action], [next.hash, alice, 0, "transfer"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("TxLog: เพดานจำนวน / อายุ · บรรทัดเสียถูกข้าม · ไฟล์ถูก compact ไม่โตไม่รู้จบ · list ตามผู้ส่งแบบ cursor", () => {
+test("TxLog: count / age caps · broken lines are skipped · the file is compacted, never grows without bound · cursor list by sender", () => {
   const dir = tmp();
   const file = path.join(dir, "log.jsonl");
   const h = (n) => `0x${n.toString(16).padStart(64, "0")}`;
@@ -239,10 +239,10 @@ test("TxLog: เพดานจำนวน / อายุ · บรรทัด
   const T = Date.now();
   for (let n = 0; n < 2000; n += 1) log.record({ hash: h(n), sender: n % 2 ? alice : bob, n }, { now: T });
   assert.equal(log.size, 600);
-  assert.equal(log.get(h(1399), { now: T }), null);                           // เก่าเกินเพดานจำนวน
+  assert.equal(log.get(h(1399), { now: T }), null);                           // older than the count cap
   assert.equal(log.get(h(1400), { now: T }).n, 1400);
-  assert.ok(fs.readFileSync(file, "utf8").trim().split("\n").length <= 1200);  // compact เมื่อเกิน 2 เท่า
-  assert.equal(log.get(h(1999), { now: T + 10_001 }), null);                   // พ้นอายุ
+  assert.ok(fs.readFileSync(file, "utf8").trim().split("\n").length <= 1200);  // compacted when over 2×
+  assert.equal(log.get(h(1999), { now: T + 10_001 }), null);                   // expired
 
   const page = log.list({ address: alice, limit: 100, now: T });
   assert.equal(page.items[0].n, 1999);
@@ -251,11 +251,11 @@ test("TxLog: เพดานจำนวน / อายุ · บรรทัด
   while (cursor) { const res = log.list({ address: alice, limit: 100, cursor, now: T }); total += res.items.length; cursor = res.next; }
   assert.equal(total, 300);
 
-  log.record({ hash: h(1999), sender: alice, n: "ใหม่" }, { now: T });         // hash เดิม = แทนที่
-  fs.appendFileSync(file, "{เสีย\n");
+  log.record({ hash: h(1999), sender: alice, n: "new" }, { now: T });         // same hash = replace
+  fs.appendFileSync(file, "{broken\n");
   const reopened = new TxLog({ file, maxEntries: 600, maxAgeMs: 10_000 });
   assert.equal(reopened.size, 600);
-  assert.equal(reopened.get(h(1999)).n, "ใหม่");
+  assert.equal(reopened.get(h(1999)).n, "new");
   assert.equal(reopened.list({ limit: 1 }).items[0].hash, h(1999));
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -1,6 +1,6 @@
-/* explorerscan/core/wallet.js [ระบบ · ไม่ต้องแก้]
-   กระเป๋า + ลายเซ็น: ต่อ MetaMask, เพิ่มเชนเข้า MetaMask, เซ็น tx แบบ EIP-712 แล้วส่ง /sendtx
-   ⚠️ canonical() / signingInput() ต้องตรงกับ VM ทุกไบต์ (เทสต์ 46 คุม) แก้ผิด = ลายเซ็นจากหน้าเว็บใช้ไม่ได้ทั้งหมด */
+/* explorerscan/core/wallet.js [system · no need to edit]
+   Wallet + signatures: connect MetaMask, add the chain to MetaMask, sign txs with EIP-712 and send to /sendtx
+   ⚠️ canonical() / signingInput() must match the VM byte for byte (guarded by test 46) · a mistake here = every signature from the web page is invalid */
 
 // ---------- wallet ----------
 // no chainId in the domain → the wallet signs whatever chain it has open (no need to add this chain) · chainId sits in the message

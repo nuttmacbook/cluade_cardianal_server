@@ -1,99 +1,99 @@
-# เขียนโปรแกรมสำหรับ Program VM
+# Writing programs for the Program VM
 
 ```bash
-npm install          # ดึง programvm จาก github
-npm test             # ทดสอบโปรแกรมในเครื่อง (รันบน VM ตัวจริง)
+npm install          # fetches programvm from GitHub
+npm test             # test programs locally (runs on the real VM)
 PRIVATE_KEY=0x… npm run deploy
 ```
 
-## โครงสร้างโปรแกรม
+## Program structure
 
-โปรแกรม 1 ตัว = ไฟล์ JavaScript 1 ไฟล์ ที่มีฟังก์ชันครอบตัวเดียว
+1 program = 1 JavaScript file containing a single wrapping function
 
 ```js
 export default function program() {
-  function initialization(params) {      // รันครั้งเดียวตอนติดตั้ง เรียกจากภายนอกไม่ได้
+  function initialization(params) {      // runs once at install · cannot be called from outside
     writeDB("owner", params.context.sender);
   }
 
-  function helper() {}                   // ไม่อยู่ใน return = ใช้ภายในเท่านั้น
+  function helper() {}                   // not in the return = internal only
 
   function greet(params) {
-    return "สวัสดี " + params.input.name;
+    return "Hello " + params.input.name;
   }
 
-  return { greet };                      // รายชื่อฟังก์ชันที่คนอื่นเรียกได้
+  return { greet };                      // the list of functions others may call
 }
 ```
 
-กติกา
-- **ทั้งไฟล์อยู่ใน scope เดียว** ห้ามมีอะไรอยู่นอกฟังก์ชันครอบ
-- **ห้าม import** โปรแกรมต้องอยู่ได้ด้วยตัวเอง
-- `export default` ข้างหน้าใช้เพื่อทดสอบในเครื่องเท่านั้น ตอนส่งขึ้น chain ใช้ `String(program)` ซึ่งไม่มีคำนี้ติดไป
+Rules
+- **The whole file is in a single scope** · nothing may live outside the wrapping function
+- **No imports** · the program must be self-contained
+- The leading `export default` is only for local testing · deploying to the chain uses `String(program)`, which doesn't include it
 
-## `params` ที่ทุกฟังก์ชันได้รับ
+## `params` every function receives
 
-| ฟิลด์ | ความหมาย |
+| Field | Meaning |
 |---|---|
-| `params.input` | ข้อมูลที่ผู้เรียกส่งมา |
-| `params.context.sender` | ผู้เรียกชั้นนี้ (เป็นโปรแกรมได้ถ้าถูกเรียกต่อ) |
-| `params.context.origin` | ผู้เริ่ม tx เสมอ |
-| `params.value` | native ที่แนบมากับการเรียกนี้ |
-| `params.block.timestamp` | เวลาของ block |
+| `params.input` | Data sent by the caller |
+| `params.context.sender` | Caller of this frame (can be a program if called from one) |
+| `params.context.origin` | Always the tx originator |
+| `params.value` | Native attached to this call |
+| `params.block.timestamp` | Block time |
 
-## API ที่ใช้ได้ในโปรแกรม
+## APIs available in programs
 
 ```js
-readDB(key)                  // อ่านข้อมูลของโปรแกรมตัวเอง
-writeDB(key, value)          // เขียน (ค่าต้องเป็น JSON)
+readDB(key)                  // read the program's own data
+writeDB(key, value)          // write (value must be JSON)
 deleteDB(key)
-map("balances", address)     // ประกอบ key หลายส่วน → "balances:0x…"
-runProgram(address, "method", input, { value })   // เรียกโปรแกรมอื่น
-runProgram(address, "method", input, { readonly: true })   // เรียกแบบอ่านอย่างเดียว (STATICCALL) — ดูด้านล่าง
-cloneProgram(template, initInput, { salt, value })   // สร้างโปรแกรมใหม่จากต้นแบบที่อนุมัติแล้ว → address ใหม่ (แบบ CREATE2)
-transferNative(to, amount)   // โอนเงินจากกระเป๋าของโปรแกรมเอง
-setMetadata(field, value)    // ตั้ง namespace / description / abi ของโปรแกรม
-emit("Transfer", { from, to, amount })   // บันทึก event ให้ explorer (ถูกย้อนถ้ากิ่งนั้นล้ม)
-emit("Transfer", { from, to, amount }, { indexed: ["from", "to"] })   // field ที่ค้นด้วยค่าได้ (ไม่เกิน 3) — ดูด้านล่าง
-ThisAddress()                // address ของโปรแกรมตัวเอง
-keccak256(value)             // hash ของ string หรือ object (object เรียง key ให้เอง)
-ecrecover(message, signature) // → address ผู้เซ็น หรือ null ถ้าลายเซ็นใช้ไม่ได้
-ThisBalance()                // ยอด native คงเหลือของโปรแกรมตัวเอง
-BalanceOf(address)           // ยอด native ของ address อื่น
-IsProgram(address)           // address นั้นเป็นโปรแกรมหรือ wallet
-MetadataOf(address, field)   // อ่าน metadata เช่น namespace / creator
-BlockNumber()                // เลข block ที่ tx นี้อยู่
-Date.now()                   // เวลาของ block (เท่ากันทุก tx ใน block เดียว)
-Math.random()                // สุ่มแบบ deterministic (รันซ้ำได้ค่าเดิม)
+map("balances", address)     // build a multi-part key → "balances:0x…"
+runProgram(address, "method", input, { value })   // call another program
+runProgram(address, "method", input, { readonly: true })   // read-only call (STATICCALL) — see below
+cloneProgram(template, initInput, { salt, value })   // create a new program from an approved template → new address (CREATE2-style)
+transferNative(to, amount)   // transfer from the program's own wallet
+setMetadata(field, value)    // set the program's namespace / description / abi
+emit("Transfer", { from, to, amount })   // record an event for the explorer (rolled back if that branch fails)
+emit("Transfer", { from, to, amount }, { indexed: ["from", "to"] })   // fields searchable by value (max 3) — see below
+ThisAddress()                // the program's own address
+keccak256(value)             // hash of a string or object (object keys are sorted for you)
+ecrecover(message, signature) // → signer address, or null if the signature is invalid
+ThisBalance()                // the program's own remaining native balance
+BalanceOf(address)           // native balance of another address
+IsProgram(address)           // whether that address is a program or a wallet
+MetadataOf(address, field)   // read metadata such as namespace / creator
+BlockNumber()                // the block number this tx is in
+Date.now()                   // block time (same for every tx in a block)
+Math.random()                // deterministic randomness (replays give the same value)
 
-// ---- ข้อมูลของ chain / block / tx (แบบเดียวกับ opcode ของ EVM) ----
-BlockHash(n)                 // hash ของ block n (BigInt) ย้อนได้ 256 block · block ปัจจุบัน / อนาคต / เก่ากว่านั้น → null   (BLOCKHASH)
-ChainId()                    // chainId ของระบบ (BigInt)                                       (CHAINID)
-Coinbase()                   // ผู้ปิด block (feeRecipient) หรือ null ถ้าไม่มี                     (COINBASE)
-BlockGasLimit()              // แก๊สสูงสุดต่อ block (BigInt) หรือ null ถ้าไม่จำกัด                (GASLIMIT)
-GasPrice()                   // ราคาจริงต่อ 1 gas ของ tx นี้ = min(maxFee, baseFee + tip) (BigInt wei)   (GASPRICE)
-BaseFee()                    // base fee ของ block นี้ (BigInt wei · EIP-1559)   (BASEFEE)
-GasLeft()                    // แก๊สที่เหลือของ tx (BigInt) หลังหักค่าของตัวเองแล้ว                (GAS)
-CodeHashOf(address)          // keccak256 ของโค้ดที่ address นั้นใช้อยู่ · ไม่ใช่โปรแกรม → null       (EXTCODEHASH)
-CodeSizeOf(address)          // ความยาวโค้ดเป็น byte (BigInt) · ไม่ใช่โปรแกรม → 0n                 (EXTCODESIZE)
+// ---- chain / block / tx data (same as EVM opcodes) ----
+BlockHash(n)                 // hash of block n (BigInt), up to 256 blocks back · current / future / older block → null   (BLOCKHASH)
+ChainId()                    // the system chainId (BigInt)                                     (CHAINID)
+Coinbase()                   // block producer (feeRecipient), or null if none                  (COINBASE)
+BlockGasLimit()              // max gas per block (BigInt), or null if unlimited                (GASLIMIT)
+GasPrice()                   // actual price per 1 gas of this tx = min(maxFee, baseFee + tip) (BigInt wei)   (GASPRICE)
+BaseFee()                    // base fee of this block (BigInt wei · EIP-1559)   (BASEFEE)
+GasLeft()                    // gas left in the tx (BigInt) after this call's own cost         (GAS)
+CodeHashOf(address)          // keccak256 of the code that address uses · not a program → null (EXTCODEHASH)
+CodeSizeOf(address)          // code length in bytes (BigInt) · not a program → 0n              (EXTCODESIZE)
 
-// ---- precompile (ข้อมูลเข้าแบบเดียวกับ keccak256: string หรือ object → hex "0x…") ----
-sha256(value)                // SHA-256 (32 byte)
-ripemd160(value)             // RIPEMD-160 (20 byte)
-blake2b(value)               // BLAKE2b-512 (64 byte)
-modexp(base, exponent, modulus)   // (base ** exponent) % modulus แบบ BigInt · modulus = 0n → 0n · แต่ละค่าไม่เกิน 1024 byte
+// ---- precompiles (same input as keccak256: string or object → hex "0x…") ----
+sha256(value)                // SHA-256 (32 bytes)
+ripemd160(value)             // RIPEMD-160 (20 bytes)
+blake2b(value)               // BLAKE2b-512 (64 bytes)
+modexp(base, exponent, modulus)   // (base ** exponent) % modulus in BigInt · modulus = 0n → 0n · each value at most 1024 bytes
 
-// ---- byte ดิบ + EIP-712 (ลายเซ็นแบบ MetaMask eth_signTypedData_v4) ----
-keccak256Bytes("0x…")        // keccak256 ของ byte ดิบ (hex) → "0x…" 32 byte (keccak256(value) ด้านบน hash ข้อความ UTF-8 เสมอ)
-ecrecoverDigest(digest, signature)   // ecrecover แบบ EVM จาก digest 32 byte ตรง ๆ → address หรือ null
-eip712Digest(domain, types, primaryType, message)   // digest ที่ eth_signTypedData_v4 / ethers signTypedData เซ็น
-eip712DomainSeparator(domain, types?)               // domainSeparator ของ EIP-712
+// ---- raw bytes + EIP-712 (MetaMask eth_signTypedData_v4 signatures) ----
+keccak256Bytes("0x…")        // keccak256 of raw bytes (hex) → "0x…" 32 bytes (keccak256(value) above always hashes UTF-8 text)
+ecrecoverDigest(digest, signature)   // EVM-style ecrecover straight from a 32-byte digest → address or null
+eip712Digest(domain, types, primaryType, message)   // the digest that eth_signTypedData_v4 / ethers signTypedData signs
+eip712DomainSeparator(domain, types?)               // EIP-712 domainSeparator
 ```
 
-### EIP-712 ในโปรแกรม (ลายเซ็นจาก MetaMask)
+### EIP-712 in programs (signatures from MetaMask)
 
-`eip712Digest` คำนวณแบบเดียวกับ ethers `TypedDataEncoder.hash` ทุกไบต์ — รับ `address` `bool` `uint8…uint256` `int8…int256` `bytes1…bytes32` `bytes` `string` struct ซ้อน และ array (`T[]` / `T[3]` ซ้อนกันได้)
-`types` ใส่หรือไม่ใส่ `EIP712Domain` ก็ได้ (ไม่ใส่ = ใช้ field ของ domain ที่มีค่า) · ตัวเลขต้องเป็น BigInt · `bytes` / `bytesN` เป็น `"0x…"` · ข้อมูลผิด → error code `INVALID_REQUEST` (catch ได้)
+`eip712Digest` computes byte for byte the same as ethers `TypedDataEncoder.hash` — supports `address` `bool` `uint8…uint256` `int8…int256` `bytes1…bytes32` `bytes` `string`, nested structs, and arrays (`T[]` / `T[3]`, nestable)
+`types` may include `EIP712Domain` or not (omitted = use the domain fields that have values) · numbers must be BigInt · `bytes` / `bytesN` are `"0x…"` · bad data → error code `INVALID_REQUEST` (catchable)
 
 ```js
 function claim(params) {
@@ -106,110 +106,110 @@ function claim(params) {
   …
 }
 ```
-ฝั่งผู้เซ็น: MetaMask `eth_signTypedData_v4` (payload `{ types: { EIP712Domain, Claim }, domain, primaryType, message }`) หรือ ethers `wallet.signTypedData(domain, { Claim }, message)`
-หรือตัวช่วยใน `programvm/program-signature.js`: `typedDataDigest(domain, types, primaryType, message)` + `signTypedDataDigest(digest, key)`
+Signer side: MetaMask `eth_signTypedData_v4` (payload `{ types: { EIP712Domain, Claim }, domain, primaryType, message }`) or ethers `wallet.signTypedData(domain, { Claim }, message)`
+or the helpers in `programvm/program-signature.js`: `typedDataDigest(domain, types, primaryType, message)` + `signTypedDataDigest(digest, key)`
 
-### เรียกแบบอ่านอย่างเดียว (`readonly`)
+### Read-only calls (`readonly`)
 
-`runProgram(target, fn, input, { readonly: true })` ทำงานแบบ `STATICCALL` ของ EVM: ปลายทาง **และทุกชั้นที่มันเรียกต่อ**
-อ่านได้ตามปกติ แต่ `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` จะ throw
-`"writeDB() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว …"` (code `FORBIDDEN`) ซึ่ง catch ได้เหมือน error ทั่วไป
-แนบ `value` ไปด้วยไม่ได้ · ใน trace / `debug_traceTransaction` แสดงเป็น `STATICCALL`
+`runProgram(target, fn, input, { readonly: true })` works like the EVM's `STATICCALL`: the target **and every level it calls further**
+can read as usual, but `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` throw
+`"writeDB() cannot be used in a read-only call …"` (code `FORBIDDEN`), which can be caught like any error
+`value` cannot be attached · shown as `STATICCALL` in traces / `debug_traceTransaction`
 
 ```js
-// อ่านราคาจาก oracle โดยมั่นใจว่า oracle แอบแก้ state หรือเรียกกลับมา (reentrancy) ไม่ได้
+// read a price from an oracle, certain the oracle can't secretly modify state or call back (reentrancy)
 const price = runProgram(oracle, "price", {}, { readonly: true });
 ```
 
-### ค่าแก๊สของ API เหล่านี้
+### Gas costs of these APIs
 
-ตัวเลขในหน้านี้ = ค่าเริ่ม (`DEFAULT_GAS`) · Bluewolfchain เปิด fork `bluewolf` ตั้งแต่ block 0 → call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 + 15,000 ต่อ tx (ค่าอื่นเท่าเดิม) · ค่าที่เชนใช้จริงดู `GET /genesis` → `gas`
+The numbers on this page = defaults (`DEFAULT_GAS`) · Bluewolfchain enables the `bluewolf` fork from block 0 → call 1750 · read 150 · write 125 · stateKey 1125 · byte 10 · event 1250 · topic 940 · code 33 · node 3 · builtin 3 + 15,000 per tx (other values unchanged) · for the values the chain actually uses, see `GET /genesis` → `gas`
 
-| API | แก๊ส |
+| API | Gas |
 |---|---|
 | `ChainId` / `Coinbase` / `BlockGasLimit` / `GasPrice` / `BaseFee` / `GasLeft` | 10 (`env`) |
-| `emit` | 200 (`event`) + 1 ต่อ byte ของ data + 375 (`topic`) ต่อ field ที่ indexed |
+| `emit` | 200 (`event`) + 1 per byte of data + 375 (`topic`) per indexed field |
 | `BlockHash` / `CodeSizeOf` | 100 (`read`) |
-| `CodeHashOf` | 100 (`read`) + 100 (`hash`) + 1 ต่อ byte ของโค้ด (ไม่ใช่โปรแกรม = 100) |
-| `sha256` / `blake2b` | 100 + 1 ต่อ byte ของข้อมูล |
-| `ripemd160` | 300 + 1 ต่อ byte ของข้อมูล |
-| `modexp` | 200 + ⌊word² × bit ของ exponent ÷ 3⌋ (word = 8 byte ของตัวที่ยาวสุดระหว่าง base / modulus) |
-| `runProgram` แบบ `readonly` | เท่าการเรียกปกติ |
-| `keccak256` / `keccak256Bytes` | 100 (`hash`) + 1 ต่อ byte ของข้อมูล (ข้อความ = byte ของ UTF-8 · hex = byte จริง) |
-| `ecrecover` | 3000 (`recover`) + 1 ต่อ byte ของข้อความ |
+| `CodeHashOf` | 100 (`read`) + 100 (`hash`) + 1 per byte of code (not a program = 100) |
+| `sha256` / `blake2b` | 100 + 1 per byte of data |
+| `ripemd160` | 300 + 1 per byte of data |
+| `modexp` | 200 + ⌊words² × exponent bits ÷ 3⌋ (word = 8 bytes of the longer of base / modulus) |
+| `runProgram` with `readonly` | Same as a normal call |
+| `keccak256` / `keccak256Bytes` | 100 (`hash`) + 1 per byte of data (text = UTF-8 bytes · hex = actual bytes) |
+| `ecrecover` | 3000 (`recover`) + 1 per byte of the message |
 | `ecrecoverDigest` | 3000 (`recover`) |
-| `eip712Digest` / `eip712DomainSeparator` | 100 (`hash`) ต่อการ keccak ภายใน 1 ครั้ง + 1 ต่อ byte ที่ถูก hash (typeHash ของแต่ละ struct · string / bytes · array · struct · digest) — digest ของ permit ≈ 1,300 |
-| `runProgram` / `cloneProgram` | 100 (`call`) + 1 ต่อ 32 byte (ปัดขึ้น) ของ input (JSON) และอีก 1 ต่อ 32 byte ของค่าที่ return |
+| `eip712Digest` / `eip712DomainSeparator` | 100 (`hash`) per internal keccak + 1 per hashed byte (each struct's typeHash · string / bytes · array · struct · digest) — a permit digest ≈ 1,300 |
+| `runProgram` / `cloneProgram` | 100 (`call`) + 1 per 32 bytes (rounded up) of input (JSON) and another 1 per 32 bytes of the return value |
 
-### แก๊สตามขนาดข้อมูลที่คัดลอก / สร้าง
+### Gas by size of data copied / created
 
-นอกจาก 1 gas ต่อ node ของโค้ดที่รันผ่าน ทุกงานที่คัดลอกหรือสร้างข้อมูลทั้งก้อนในคำสั่งเดียวคิด **1 gas ต่อหน่วย** (`builtin`)
+Besides 1 gas per node of code executed, every operation that copies or creates a whole block of data in one instruction costs **1 gas per unit** (`builtin`)
 
-- **1 หน่วย = 1 สมาชิก** (สมาชิกของ array / typed array · property ของ object · สมาชิกของ Set / Map · argument)
-- **หรือ 32 ตัวอักษร / 32 byte** (string / ArrayBuffer · ปัดขึ้น: 1–32 ตัวอักษร = 1 หน่วย)
-- ตัวเลข / BigInt / boolean / null / undefined / function = 1 หน่วย
+- **1 unit = 1 element** (array / typed array element · object property · Set / Map member · argument)
+- **or 32 characters / 32 bytes** (string / ArrayBuffer · rounded up: 1–32 characters = 1 unit)
+- number / BigInt / boolean / null / undefined / function = 1 unit
 
-| ทำอะไร | คิดเท่าไร |
+| Operation | Cost |
 |---|---|
-| `[...a]` · `f(...a)` · `new F(...a)` · `const [x, ...rest] = a` · `f.apply(t, a)` · `new Set(a)` / `new Map(a)` | 1 ต่อสมาชิกที่ถูกคัดลอก |
-| `{ ...o }` · `const { x, ...rest } = o` | 1 ต่อ property |
-| `a + b` / `a += b` ที่ได้ string | 1 ต่อ 32 ตัวอักษรของผลลัพธ์ (ตัวเลข / BigInt บวกกันไม่คิด) |
-| template `` `…${x}…` `` | เหมือน `"".concat(…)`: ข้อมูลเข้า + ผลลัพธ์ |
-| เมธอดในตัว (`join` `split` `slice` `concat` `map` `filter` `sort` `JSON.stringify` `JSON.parse` `Object.keys` `Object.assign` `repeat` `padStart` `replaceAll` …) | ขนาดของ `this` + ทุก argument (ก่อนทำ) + ขนาดผลลัพธ์ (หลังทำ) |
-| `repeat` / `padStart` / `padEnd` / `Array.from({ length: n })` | ขนาดผลลัพธ์คิด**ก่อน**สร้าง → `"x".repeat(1e9)` หมดแก๊สทันทีโดยไม่จองหน่วยความจำ |
-| แปลง array เป็น string โดยนัย (`a + ""` · `` `${a}` `` · `String(a)`) | เท่า `a.join()` (+ ส่วนที่ต่อ string) |
-| `new ArrayBuffer(n)` | 1 ต่อ 32 byte (คิดก่อนจอง) |
-| `new Uint8Array(n)` และ typed array อื่น | 1 ต่อสมาชิก (คิดก่อนจอง) |
-| `Array(n)` / `new Array(n)` | ไม่คิด (ยังไม่จองที่ให้สมาชิก) — `fill` / `map` / spread … คิดตาม `length` ตอนใช้ |
+| `[...a]` · `f(...a)` · `new F(...a)` · `const [x, ...rest] = a` · `f.apply(t, a)` · `new Set(a)` / `new Map(a)` | 1 per copied element |
+| `{ ...o }` · `const { x, ...rest } = o` | 1 per property |
+| `a + b` / `a += b` producing a string | 1 per 32 characters of the result (adding numbers / BigInts is free) |
+| template `` `…${x}…` `` | Same as `"".concat(…)`: inputs + result |
+| Built-in methods (`join` `split` `slice` `concat` `map` `filter` `sort` `JSON.stringify` `JSON.parse` `Object.keys` `Object.assign` `repeat` `padStart` `replaceAll` …) | Size of `this` + every argument (before) + result size (after) |
+| `repeat` / `padStart` / `padEnd` / `Array.from({ length: n })` | Result size charged **before** creation → `"x".repeat(1e9)` runs out of gas immediately without allocating memory |
+| Implicit array-to-string conversion (`a + ""` · `` `${a}` `` · `String(a)`) | Same as `a.join()` (+ the concatenated part) |
+| `new ArrayBuffer(n)` | 1 per 32 bytes (charged before allocation) |
+| `new Uint8Array(n)` and other typed arrays | 1 per element (charged before allocation) |
+| `Array(n)` / `new Array(n)` | Free (no element storage allocated yet) — `fill` / `map` / spread … are charged by `length` when used |
 
-เรียกทางไหนก็คิดเท่ากัน: `a.join()` · `Array.prototype.join.call(a)` · `Reflect.apply(…)` · เก็บเมธอดใส่ตัวแปรก่อน
-ตัวอย่าง: `[...a, ...a]` ของ a 1,000 สมาชิก = 2,000 gas · ลูป `a = [...a, ...a]` จึงหมดแก๊สก่อนถึงเพดานหน่วยความจำ (เดิมจอง 32 MB ได้ด้วย ~230 gas)
-หน่วยความจำ 32 MB ≈ 1,000,000 gas (string / ArrayBuffer) · หน่วยความจำเกินก็ยังเสียแก๊สของงานที่ทำไปจริง
+Every call path costs the same: `a.join()` · `Array.prototype.join.call(a)` · `Reflect.apply(…)` · storing the method in a variable first
+Example: `[...a, ...a]` for a 1,000-element a = 2,000 gas · so a loop `a = [...a, ...a]` runs out of gas before hitting the memory cap (previously 32 MB could be allocated for ~230 gas)
+32 MB of memory ≈ 1,000,000 gas (string / ArrayBuffer) · exceeding memory still pays for the work actually done
 
-ข้อจำกัดที่มากับการคิดแก๊สนี้:
-- `...rest` ใน pattern ใช้ได้เฉพาะ `const { a, ...rest } = ค่า` / `const [a, ...rest] = ค่า` (และ `({ a, ...rest } = ค่า)` / `([a, ...rest] = ค่า)`)
-  ใส่ในพารามิเตอร์ (`function f({ a, ...rest })`) · `for (const [a, ...rest] of …)` · catch · ซ้อนใน pattern อื่น → deploy ไม่ผ่าน (ไม่มีนิพจน์ให้คิดแก๊ส) · `function f(...args)` ใช้ได้ตามปกติ
-- iterator ในตัวของ array / string / Set / Map แก้ไม่ได้ (`Array.prototype[Symbol.iterator] = …` → TypeError)
-- ชื่อ `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` สงวนไว้
+Limitations that come with this gas metering:
+- `...rest` in patterns is only allowed as `const { a, ...rest } = value` / `const [a, ...rest] = value` (and `({ a, ...rest } = value)` / `([a, ...rest] = value)`)
+  in parameters (`function f({ a, ...rest })`) · `for (const [a, ...rest] of …)` · catch · nested in another pattern → deploy fails (no expression to charge gas on) · `function f(...args)` works as usual
+- Built-in iterators of array / string / Set / Map can't be modified (`Array.prototype[Symbol.iterator] = …` → TypeError)
+- The names `__gas` `__str` `__props` `__spread` `__call` `__add` `__sub` `__mul` `__div` `__mod` `__pow` `__shl` `__shr` `__lt` `__gt` `__le` `__ge` `__eq` `__ne` `__in` `__key` `__big` `__opm` `__k` `__r` are reserved
 
-### regex ใช้ไม่ได้ · BigInt คิดแก๊สตามขนาด
+### No regex · BigInt gas scales with size
 
-เวลาที่ CPU ใช้ต้องคิดเป็นแก๊สได้แน่นอนทุกเครื่อง จึงมีกติกาเพิ่ม 2 ข้อ
+CPU time must be chargeable as gas deterministically on every machine, so there are 2 extra rules
 
-**regex ปิดทั้งหมด** — regex แบบ backtrack ใช้เวลาโตแบบทวีคูณ (`/(a+)+$/` กับ `"a".repeat(30) + "b"`) และนับขั้นข้างใน engine ไม่ได้
-- regex literal (`/…/`) → deploy ไม่ผ่าน
-- `RegExp(…)` / `new RegExp(…)` · `str.match(…)` / `str.matchAll(…)` / `str.search(…)` · เมธอดของ `RegExp.prototype` → TypeError
-- ใช้แทนได้: `split(",")` · `replace("a", "b")` / `replaceAll("a", "b")` (pattern เป็น string) · `indexOf` · `includes` · `startsWith` · `endsWith`
+**All regex is disabled** — backtracking regex can take exponential time (`/(a+)+$/` on `"a".repeat(30) + "b"`) and steps inside the engine can't be counted
+- regex literals (`/…/`) → deploy fails
+- `RegExp(…)` / `new RegExp(…)` · `str.match(…)` / `str.matchAll(…)` / `str.search(…)` · `RegExp.prototype` methods → TypeError
+- Alternatives: `split(",")` · `replace("a", "b")` / `replaceAll("a", "b")` (string pattern) · `indexOf` · `includes` · `startsWith` · `endsWith`
 
-**BigInt คิดตามขนาด** — ค่าที่ ≤ 512 bit (รวม uint256 ทุกค่า) **ไม่คิดเพิ่ม** แก๊สเท่าเดิมทุกหน่วย · ค่าที่ใหญ่กว่านั้นคิดตามงานจริง
-(W = จำนวน word 64 bit ของตัวเลข · 1 หน่วย = 1 gas · ขั้นต่ำ 16 หน่วยต่อครั้ง)
+**BigInt is charged by size** — values ≤ 512 bits (including every uint256) **cost nothing extra**, same gas as before · larger values are charged by actual work
+(W = number of 64-bit words in the number · 1 unit = 1 gas · minimum 16 units per operation)
 
-| ทำอะไร | คิดเท่าไร |
+| Operation | Cost |
 |---|---|
-| `a + b` · `a - b` | 16 (≤ 1024 bit) · 64 (ใหญ่กว่า) |
+| `a + b` · `a - b` | 16 (≤ 1024 bits) · 64 (larger) |
 | `a * b` | ⌈Wa × Wb ÷ 4⌉ |
 | `a / b` · `a % b` | ⌈max(1, Wa − Wb + 1) × Wb ÷ 4⌉ |
-| `a ** b` | ⌈W² ÷ 4⌉ ของผลลัพธ์ — คิด**ก่อน**คำนวณ: `2n ** 1000000000n` หมดแก๊สทันที |
-| `a << b` · `a >> b` | ⌈W ÷ 2⌉ ของผลลัพธ์ (คิดก่อนคำนวณ) |
-| BigInt → string (`String(x)` · `x.toString()` · `` `${x}` `` · `"" + x` · ใช้เป็น key `o[x]` · `join` · `Error(x)` …) | W² (คิดก่อนแปลง) |
-| string → BigInt (`BigInt("…")` · `"…" == x` · `"…" < x` · input `"123n"`) | W² โดย W = ⌈จำนวนตัวอักษร ÷ 19⌉ (≤ 171 ตัวอักษรไม่คิด) |
-| เทียบ BigInt กับ BigInt (`<` `==` …) | ไม่คิดเพิ่ม |
+| `a ** b` | ⌈W² ÷ 4⌉ of the result — charged **before** computing: `2n ** 1000000000n` runs out of gas immediately |
+| `a << b` · `a >> b` | ⌈W ÷ 2⌉ of the result (charged before computing) |
+| BigInt → string (`String(x)` · `x.toString()` · `` `${x}` `` · `"" + x` · as key `o[x]` · `join` · `Error(x)` …) | W² (charged before converting) |
+| string → BigInt (`BigInt("…")` · `"…" == x` · `"…" < x` · input `"123n"`) | W² where W = ⌈number of characters ÷ 19⌉ (≤ 171 characters is free) |
+| Comparing BigInt with BigInt (`<` `==` …) | Nothing extra |
 
-- **BigInt ใหญ่สุด 8192 bit** (1024 ไบต์ เท่ากับ `modexp`) — ผลลัพธ์เกิน → `RangeError: BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` (catch ได้) · literal ที่ใหญ่เกิน → deploy ไม่ผ่าน
-- ตัวอย่าง: `x * x` ของ x 4096 bit = 1,024 gas · `x.toString()` ของ x 8192 bit = 16,384 gas
-- `BigInt64Array` / `BigUint64Array` ไม่มีให้ใช้
+- **BigInt max 8192 bits** (1024 bytes, same as `modexp`) — result too large → `RangeError: BigInt exceeds 8192 bits (1024 bytes)` (catchable) · a literal that's too large → deploy fails
+- Examples: `x * x` for a 4096-bit x = 1,024 gas · `x.toString()` for an 8192-bit x = 16,384 gas
+- `BigInt64Array` / `BigUint64Array` are not available
 
-### event แบบ indexed
+### Indexed events
 
-`emit(name, data, { indexed: ["from", "to"] })` สร้างดัชนีต่อ (โปรแกรม, ชื่อ event, field, ค่า) → ค้นได้โดยไม่ต้องไล่ทุก event
+`emit(name, data, { indexed: ["from", "to"] })` builds an index per (program, event name, field, value) → searchable without scanning every event
 
-- ไม่เกิน 3 field · ต้องมีใน `data` · ห้ามซ้ำ (ผิด = throw)
-- `GET /program/<address>/events?name=Transfer&to=0x…` (หลาย field = ต้องตรงทุกตัว) · เครื่องมือ EVM ค้นด้วย `eth_getLogs` ตาม topic ได้
-- log แบบ EVM: topic0 = `keccak256("Transfer(address,address,uint256)")` (ชนิดเดาจากค่า: address / uint256 / bool / string …) ตามด้วยค่าของ field ที่ indexed → token ที่ index `from` / `to` อ่านได้เหมือน ERC-20 จริง
+- At most 3 fields · each must exist in `data` · no duplicates (otherwise it throws)
+- `GET /program/<address>/events?name=Transfer&to=0x…` (multiple fields = all must match) · EVM tools can search by topic with `eth_getLogs`
+- EVM-style logs: topic0 = `keccak256("Transfer(address,address,uint256)")` (types guessed from values: address / uint256 / bool / string …) followed by the values of the indexed fields → a token that indexes `from` / `to` reads like a real ERC-20
 
-### ABI ของโปรแกรม (`metadata.abi` ไม่บังคับ)
+### Program ABI (`metadata.abi`, optional)
 
-ประกาศฟังก์ชัน / event ให้ explorer สร้างฟอร์มและอ่าน event ได้ถูกชนิด (และ `/evm` คืนเป็น JSON ABI ผ่าน `cardianal_getAbi`)
+Declares functions / events so the explorer can build forms and decode events with the right types (and `/evm` returns it as a JSON ABI via `cardianal_getAbi`)
 
 ```js
 function initialization() {
@@ -221,39 +221,39 @@ function initialization() {
 }
 ```
 
-ชนิด: `address` `uint` `int` `bool` `string` `bytes` `object` `array` `any` · ชื่อห้ามซ้ำ · `readonly` กับ `payable` ใช้คู่กันไม่ได้ · ไม่เกิน 64 ฟังก์ชัน / 32 event / 16 field / 16 KB
-ส่งพร้อม deploy (`metadata: { abi }`) ก็ได้ — ฟังก์ชันที่ประกาศต้อง export จริง
+Types: `address` `uint` `int` `bool` `string` `bytes` `object` `array` `any` · names must be unique · `readonly` and `payable` can't be combined · at most 64 functions / 32 events / 16 fields / 16 KB
+It can also be sent with the deploy (`metadata: { abi }`) — declared functions must actually be exported
 
-**ห้ามใช้** `process`, `fetch`, `globalThis`, `performance`, `async`/`await`, `setTimeout` และการ import ทุกชนิด โค้ดที่ใช้สิ่งเหล่านี้จะไม่ผ่านการรีวิว
+**Forbidden:** `process`, `fetch`, `globalThis`, `performance`, `async`/`await`, `setTimeout`, and imports of any kind · code using these will not pass review
 
-โปรแกรมรันใน sandbox (QuickJS) แยกจาก server: ไม่มี `eval` / `new Function` / `Intl` · `console.log` เรียกได้แต่ไม่พิมพ์
-หน่วยความจำรวมทั้ง tx ไม่เกิน 32 MB (เกิน = `OUT_OF_MEMORY` ทั้ง tx ล้มและเสียค่าแก๊ส) · เรียกฟังก์ชันซ้อนได้ราว 1,400 ชั้น (เกิน = RangeError)
+Programs run in a sandbox (QuickJS) separate from the server: no `eval` / `new Function` / `Intl` · `console.log` can be called but prints nothing
+Total memory for the whole tx is at most 32 MB (exceeded = `OUT_OF_MEMORY`, the whole tx fails and gas is charged) · function calls can nest about 1,400 levels deep (exceeded = RangeError)
 
-## ตัวเลขเป็น BigInt
+## Numbers are BigInt
 
-ตัวเลขทุกตัวในโปรแกรมต้องเป็น BigInt เสมอ (ไม่มีโหมด number)
+Every number in a program must always be BigInt (there is no number mode)
 
 ```js
-const balance = readDB(map("balances", who)) || 0n;   // ✅ 0n ไม่ใช่ 0
+const balance = readDB(map("balances", who)) || 0n;   // ✅ 0n, not 0
 writeDB(map("balances", who), balance - params.input.amount);
-if (balance < params.input.amount) throw new Error("ยอดไม่พอ");
+if (balance < params.input.amount) throw new Error("insufficient balance");
 ```
 
-- `params.input` ที่เป็นตัวเลขถูกแปลงเป็น BigInt ให้อัตโนมัติ ไม่ว่า client จะส่ง `30` หรือ `"30n"` มา
-- `params.value`, `params.block.timestamp`, `ThisBalance()`, `BalanceOf()`, `BlockNumber()`, `ChainId()`, `GasPrice()`, `GasLeft()`, `CodeSizeOf()`, `modexp()` เป็น BigInt ทั้งหมด (`BlockHash()` ก็รับเลข block เป็น BigInt)
-- ค่าที่ return ออกไปและ event จะกลายเป็น string ลงท้าย `n` เช่น `"970n"` เพราะ JSON ไม่มี BigInt
-- ใช้ `number` ที่ไหนก็ตามจะถูกปฏิเสธพร้อมข้อความบอกจุดที่ผิด
-- `Date.now()` / `Math.*` ในโปรแกรมยังคืน number ตามปกติ ห่อด้วย `BigInt(...)` ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งออกเป็น string)
-- ยอด native เป็นหน่วยย่อย 18 ทศนิยม (wei) — 1 เหรียญ = `10n ** 18n`
+- Numeric `params.input` values are converted to BigInt automatically, whether the client sends `30` or `"30n"`
+- `params.value`, `params.block.timestamp`, `ThisBalance()`, `BalanceOf()`, `BlockNumber()`, `ChainId()`, `GasPrice()`, `GasLeft()`, `CodeSizeOf()`, `modexp()` are all BigInt (`BlockHash()` also takes the block number as BigInt)
+- Returned values and events become strings ending in `n`, e.g. `"970n"`, because JSON has no BigInt
+- Using a `number` anywhere is rejected with a message pointing at the mistake
+- `Date.now()` / `Math.*` in programs still return numbers as usual · wrap them in `BigInt(...)` before storing or returning (round decimals first, or return them as strings)
+- Native balances are in the smallest unit with 18 decimals (wei) — 1 coin = `10n ** 18n`
 
 ## modifier
 
-ห่อฟังก์ชันด้วยฟังก์ชัน แล้ว return ตัวที่ห่อแล้ว
+Wrap a function in a function, then return the wrapped version
 
 ```js
 function onlyOwner(fn) {
   return function (params) {
-    if (params.context.sender !== readDB("owner")) throw new Error("ไม่ใช่เจ้าของ");
+    if (params.context.sender !== readDB("owner")) throw new Error("not the owner");
     return fn(params);
   };
 }
@@ -263,24 +263,24 @@ const setPrice = onlyOwner(function (params) { writeDB("price", params.input.pri
 return { setPrice };
 ```
 
-**อ่าน `patterns/SAFE-PATTERNS.md` ก่อนเขียนโปรแกรมที่เกี่ยวกับเงิน** โดยเฉพาะหัวข้อ reentrancy ซึ่งทำให้เงินของคนอื่นหายได้จริง และดูตัวอย่างที่ใช้ pattern ครบใน `patterns/vault.program.js`
+**Read `patterns/SAFE-PATTERNS.md` before writing programs that handle money**, especially the reentrancy section, which can actually lose other people's funds · see `patterns/vault.program.js` for an example using every pattern
 
-## ทดสอบในเครื่อง
+## Testing locally
 
 ```js
 import { createChain } from "../lib/testkit.js";
 import program from "./hello.program.js";
 
-const hello = createChain().deploy(program, { as: "owner", initInput: { greeting: "สวัสดี" } });
+const hello = createChain().deploy(program, { as: "owner", initInput: { greeting: "Hello" } });
 
-hello.call("greet", { name: "โลก" });              // → "สวัสดี โลก (ครั้งที่ 1)" (ตัวเลขที่ return ออกมาเป็น "123n")
-hello.call("greet", {}, { as: "alice" });          // เรียกในนามคนอื่น
-hello.callRaw("greet", { name: "โลก" });           // ดู gasUsed / writes / trace
-hello.state();                                      // ข้อมูลทั้งหมดที่โปรแกรมเก็บไว้ เช่น { count: "2n" }
-hello.address;                                      // address ของโปรแกรม
+hello.call("greet", { name: "world" });            // → "Hello world (visit 1)" (returned numbers come out as "123n")
+hello.call("greet", {}, { as: "alice" });          // call as someone else
+hello.callRaw("greet", { name: "world" });         // see gasUsed / writes / trace
+hello.state();                                      // all data the program stores, e.g. { count: "2n" }
+hello.address;                                      // the program's address
 ```
 
-### ทดสอบเร็ว ๆ โดยไม่รัน VM
+### Quick tests without running the VM
 
 ```js
 import { createFakeApi } from "../lib/program-globals.js";
@@ -288,62 +288,62 @@ const api = createFakeApi({ self: "0xhello", balances: { "0xhello": 500n }, prog
 Object.assign(globalThis, api);
 const { greet } = program();
 
-greet(api.params({ name: "โลก" }, { sender: "0xalice", value: 0n }));   // ตัวเลขใน input ส่งเป็น BigInt เอง (โหมดนี้ไม่แปลงให้)
-api.store / api.native / api.events / api.transfers   // ตรวจผลได้ตรง ๆ
+greet(api.params({ name: "world" }, { sender: "0xalice", value: 0n }));   // pass numbers in input as BigInt yourself (this mode doesn't convert them)
+api.store / api.native / api.events / api.transfers   // inspect results directly
 ```
 
-รองรับ API ครบทุกตัวยกเว้น `runProgram` และ `cloneProgram` ซึ่งต้องใช้ `createChain()`
-(`keccak256` / `ecrecover` / `keccak256Bytes` / `ecrecoverDigest` / `eip712Digest` / `eip712DomainSeparator` / `CodeHashOf` ของโปรแกรมที่มีโค้ดก็ต้องใช้ `createChain()` เพราะ `node:crypto` ไม่มี keccak · `GasLeft()` คืน `null` เพราะโหมดนี้ไม่นับแก๊ส)
+Supports every API except `runProgram` and `cloneProgram`, which need `createChain()`
+(`keccak256` / `ecrecover` / `keccak256Bytes` / `ecrecoverDigest` / `eip712Digest` / `eip712DomainSeparator` / `CodeHashOf` of a program with code also need `createChain()` because `node:crypto` has no keccak · `GasLeft()` returns `null` because this mode doesn't meter gas)
 
-ค่าของ block / chain ตั้งได้: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, baseFee: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
+Block / chain values can be set: `createFakeApi({ blockNumber: 10, blockHashes: { 9: "0x…" }, chainId: 1, coinbase: "0xminer", blockGasLimit: 30_000_000, gasPrice: 10n ** 9n, baseFee: 10n ** 9n, code: { "0xtoken": "function program() { … }" } })`
 
-`createChain()` รันบน VM ตัวจริง พฤติกรรมจึงเหมือนบน chain ทุกอย่าง ทั้งการย้อนข้อมูลเมื่อ throw, ค่าแก๊ส และเวลาของ block
+`createChain()` runs on the real VM, so it behaves exactly like the chain, including rollback on throw, gas costs, and block time
 
-ตัวเลือกเพิ่มเติม
+More options
 
 ```js
-createChain({ chargeGas: true, balances: { alice: 10n ** 18n } });   // ทดสอบเรื่องค่าแก๊ส (ยอด native เป็น wei)
+createChain({ chargeGas: true, balances: { alice: 10n ** 18n } });   // test gas costs (native balances in wei)
 chain.transfer("alice", "bob", 100);
-chain.balanceOf("alice");    // { received, sended, consumed, balance } เป็น BigInt
+chain.balanceOf("alice");    // { received, sended, consumed, balance } as BigInt
 chain.setTime(Date.parse("2025-01-01"));
 ```
 
-## โปรแกรมมาตรฐาน (ERC) ที่ใช้ได้ทันที
+## Ready-to-use standard programs (ERC)
 
-`import { … } from "programvm/standards/<ไฟล์>.js"` แล้ว deploy string ของโค้ดได้เลย (ผ่าน autoreview ทุกตัว)
+`import { … } from "programvm/standards/<file>.js"` and deploy the code string directly (all pass autoreview)
 
-| ไฟล์ | ใช้ทำ | input ตอน deploy |
+| File | Purpose | Deploy input |
 |---|---|---|
-| `token.js` → `TOKEN_PROGRAM` | เหรียญแบบ ERC-20 + `permit` (ERC-2612) | `{ name, ticker, decimals, supply }` |
-| `nft.js` → `NFT_PROGRAM` | NFT แบบ ERC-721 (`mint` / `transferFrom` / `safeTransferFrom` / `approve` / `setApprovalForAll` / `tokenURI`) | `{ name, symbol, baseURI? }` |
-| `multitoken.js` → `MULTITOKEN_PROGRAM` | หลาย id ในโปรแกรมเดียวแบบ ERC-1155 (`balanceOfBatch` / `safeBatchTransferFrom` / `mintBatch` / `uri`) | `{ name?, symbol?, uri }` |
-| `wallet.js` → `WALLET_PROGRAM` | กระเป๋าโปรแกรมแบบ ERC-1271 (`isValidSignature` / `execute`) | `{ owner? }` |
-| `multicall.js` → `MULTICALL_PROGRAM` | `aggregate` / `tryAggregate` หลาย call ใน tx / query เดียว (`readonly: true` = staticcall) | — |
+| `token.js` → `TOKEN_PROGRAM` | ERC-20 style coin + `permit` (ERC-2612) | `{ name, ticker, decimals, supply }` |
+| `nft.js` → `NFT_PROGRAM` | ERC-721 style NFT (`mint` / `transferFrom` / `safeTransferFrom` / `approve` / `setApprovalForAll` / `tokenURI`) | `{ name, symbol, baseURI? }` |
+| `multitoken.js` → `MULTITOKEN_PROGRAM` | Multiple ids in one program, ERC-1155 style (`balanceOfBatch` / `safeBatchTransferFrom` / `mintBatch` / `uri`) | `{ name?, symbol?, uri }` |
+| `wallet.js` → `WALLET_PROGRAM` | ERC-1271 style program wallet (`isValidSignature` / `execute`) | `{ owner? }` |
+| `multicall.js` → `MULTICALL_PROGRAM` | `aggregate` / `tryAggregate` many calls in one tx / query (`readonly: true` = staticcall) | — |
 
-ตัวเลขทุกตัว (tokenId, id, amount, deadline) เป็น BigInt · ข้อความ error เป็นภาษาอังกฤษ
+Every number (tokenId, id, amount, deadline) is BigInt · error messages are in English
 
-### permit (ERC-2612) — ให้คนอื่นส่ง tx ตั้งวงเงินแทน owner
+### permit (ERC-2612) — let someone else send the allowance tx for the owner
 
-permit เป็น EIP-712 มาตรฐาน: owner เซ็นด้วย MetaMask `eth_signTypedData_v4` ได้ตรง ๆ (explorer มีแถบ **Permit** ในหน้า token)
+permit is standard EIP-712: the owner can sign directly with MetaMask `eth_signTypedData_v4` (the explorer has a **Permit** tab on the token page)
 
 ```js
 import { TOKEN_PROGRAM, PERMIT_TYPES } from "programvm/standards/token.js";
 import { signPermit, permitTypedData } from "programvm/program-signature.js";
 
-// token ต้องอยู่ที่ address จริง (0x + 40 hex) เพราะเป็น verifyingContract ของ domain
-const fields = { name: "Thai Baht Coin", chainId: 41234 /* ChainId() ของเชน */, verifyingContract: tokenAddress, owner, spender,
-  value: 500n, nonce: 0n /* nonces({ owner }) */, deadline: BigInt(Math.floor(Date.now() / 1000) + 600) /* unix วินาที */ };
+// the token must be at a real address (0x + 40 hex) because it is the domain's verifyingContract
+const fields = { name: "Thai Baht Coin", chainId: 41234 /* the chain's ChainId() */, verifyingContract: tokenAddress, owner, spender,
+  value: 500n, nonce: 0n /* nonces({ owner }) */, deadline: BigInt(Math.floor(Date.now() / 1000) + 600) /* unix seconds */ };
 const signature = signPermit(fields, ownerKey);   // = ethers wallet.signTypedData(domain, PERMIT_TYPES, message) = MetaMask
 // MetaMask: ethereum.request({ method: "eth_signTypedData_v4", params: [owner, JSON.stringify(permitTypedData(fields))] })
-// owner เป็น WALLET_PROGRAM (ERC-1271): เจ้าของกระเป๋าเซ็น typed data เดียวกันโดยใส่ owner = address ของกระเป๋า
+// owner is a WALLET_PROGRAM (ERC-1271): the wallet's owner signs the same typed data with owner = the wallet's address
 send({ action: "call", to: tokenAddress, method: "permit", input: { owner, spender, value: "500n", deadline: `${fields.deadline}n`, signature } });
 ```
 
 domain = `{ name: name(), version: "1", chainId: ChainId(), verifyingContract: ThisAddress() }` · types = `Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)`
-`DOMAIN_SEPARATOR()` = domainSeparator ของ EIP-712 · หมดเวลาเมื่อ `params.block.timestamp / 1000n > deadline` (deadline เป็น**วินาที**) · ใช้แล้ว nonce + 1
-token ที่ deploy ก่อนรุ่นนี้ยังใช้แบบเดิม (digest = keccak256 ของ canonical JSON · deadline มิลลิวินาที) จนกว่าจะ deploy ใหม่
+`DOMAIN_SEPARATOR()` = the EIP-712 domainSeparator · expires when `params.block.timestamp / 1000n > deadline` (deadline is in **seconds**) · nonce + 1 after use
+Tokens deployed before this version keep the old scheme (digest = keccak256 of canonical JSON · deadline in milliseconds) until redeployed
 
-### รับลายเซ็นจากกระเป๋าโปรแกรม (ERC-1271) ในโปรแกรมของคุณ
+### Accepting program-wallet signatures (ERC-1271) in your program
 
 ```js
 import { SIGNATURE_CHECKER } from "programvm/standards/wallet.js";
@@ -358,21 +358,21 @@ const code = `function program() {
   return { claim }
 }`;
 ```
-`isValidSignatureNow(signer, hash, signature)` (hash = digest 32 byte เช่นจาก `eip712Digest`): กระเป๋าคน → `ecrecoverDigest(hash, signature) === signer` · โปรแกรม → `runProgram(signer, "isValidSignature", { hash, signature }, { readonly: true }) === "0x1626ba7e"`
-ฝั่งผู้เซ็น: MetaMask `eth_signTypedData_v4` ของ typed data เดียวกัน หรือ `signTypedDataDigest(digest, key)` · `WALLET_PROGRAM.isValidSignature` ตรวจว่าเจ้าของเซ็น digest นั้นตรง ๆ
+`isValidSignatureNow(signer, hash, signature)` (hash = a 32-byte digest, e.g. from `eip712Digest`): a personal wallet → `ecrecoverDigest(hash, signature) === signer` · a program → `runProgram(signer, "isValidSignature", { hash, signature }, { readonly: true }) === "0x1626ba7e"`
+Signer side: MetaMask `eth_signTypedData_v4` of the same typed data, or `signTypedDataDigest(digest, key)` · `WALLET_PROGRAM.isValidSignature` checks that the owner signed that digest directly
 
-## ส่งขึ้น chain
+## Deploying to the chain
 
 ```js
 import program from "./hello-world/hello.program.js";
-const code = String(program);    // ← สิ่งที่ส่งไปคือ string นี้
+const code = String(program);    // ← what gets sent is this string
 
 const tx = { chainId: 41234, action: "deploy", from: me, to: "", method: "",
-             input: { greeting: "สวัสดี" }, code, value: 0, nonce, gasLimit: 200000,
-             maxFeePerGas: "20000000000000", maxPriorityFeePerGas: "0" };   // EIP-1559: จ่ายไม่เกิน 20,000 gwei (2 เท่าของขั้นต่ำ 10,000 gwei) · ไม่ให้ tip (แบบเดิม gasPrice ก็ยังใช้ได้)
+             input: { greeting: "Hello" }, code, value: 0, nonce, gasLimit: 200000,
+             maxFeePerGas: "20000000000000", maxPriorityFeePerGas: "0" };   // EIP-1559: pay at most 20,000 gwei (2x the 10,000 gwei minimum) · no tip (legacy gasPrice still works)
 await fetch("/sendtx", { method: "POST", body: JSON.stringify({ tx, signature: signTransaction(tx, key) }) });
 ```
 
-เซ็นด้วย MetaMask ก็ได้ (`eth_signTypedData_v4`) โครงสร้างที่ต้องเซ็นสร้างได้จาก `buildTypedData(tx)` ใน `programvm/signature.js`
+You can also sign with MetaMask (`eth_signTypedData_v4`) · the structure to sign can be built with `buildTypedData(tx)` in `programvm/signature.js`
 
-หลัง deploy โปรแกรมจะอยู่ในสถานะรอรีวิว ใช้งานได้เมื่อทีมงานส่ง tx `init` ให้แล้ว
+After deploy, the program is pending review · it becomes usable once the team sends the `init` tx
