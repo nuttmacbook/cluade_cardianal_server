@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
-import { approvedProgramAddresses, programCounts, pagePendingPrograms, pageApprovedPrograms } from "../src/node/explorer-api.js";
+import { approvedProgramAddresses, programCounts, pagePendingPrograms, pendingProgram, pageApprovedPrograms } from "../src/node/explorer-api.js";
 
 /* explorer: counts of approved / pending programs + paged lists */
 
@@ -44,6 +44,9 @@ test("programCounts / lists: deploy = pending · init = approved · reject = rem
   const pending = pagePendingPrograms(vm, { page: 1, limit: 20 });
   assert.equal(pending.total, 1);
   assert.deepEqual(pending.items[0], { address: program(4), deployer: OWNER, name: "four", value: "0n", codeSize: PLAIN.length, token: false });
+  // one pending program with its source, for the review page · approved / rejected / unknown = null
+  assert.deepEqual(pendingProgram(vm, program(4).toUpperCase().replace("0X", "0x")), { address: program(4), deployer: OWNER, name: "four", value: "0n", code: PLAIN });
+  for (const n of [1, 3, 9]) assert.equal(pendingProgram(vm, program(n)), null);
 
   const approved = pageApprovedPrograms(vm, { page: 1, limit: 20 });
   assert.deepEqual(approved.items.map((p) => [p.address, p.creator, p.createdAt, p.token]),

@@ -158,6 +158,8 @@ test("search by name → program page with event / data / code tabs", async () =
 
   await tab("Code");
   assert.match(await view(), /function program\(\)/);
+  assert.ok(await page.locator("#view pre.code .c-str").count() > 0);   // colored source with CSS line numbers
+  assert.match(await page.locator("#view pre.code .line").first().evaluate((el) => getComputedStyle(el, "::before").content), /counter/);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -777,6 +779,15 @@ test("deploy form: set the upgrader to your own wallet (part of the signed data)
   await open("#programs");
   await tab("Awaiting approval");
   const row = page.locator("#view tbody tr", { has: page.locator(`a[title='${upgradable}']`) });
+  // Code: the admin reads the colored source (VS Code colors + line numbers) in a row under the program before approving
+  await row.locator("[data-code]").click();
+  const source = page.locator("#view tr.code-row pre.code");
+  await source.waitFor({ timeout: 20_000 });
+  assert.equal(await source.textContent(), V1);   // line numbers are CSS only: the text is exactly the source
+  assert.ok(await source.locator(".c-kw").count() > 0 && await source.locator(".c-fn").count() > 0);
+  assert.equal(await source.locator(".c-kw").first().evaluate((el) => getComputedStyle(el).color), "rgb(86, 156, 214)");
+  await row.locator("[data-code]").click();
+  assert.equal(await page.locator("#view tr.code-row").count(), 0);
   await row.locator("[data-review=init]").click();
   await outSays("#review-out", /Success[\s\S]*Approved/);
   assert.equal((await get(`/program/${upgradable}`)).metadata.upgrader, ME);
@@ -831,6 +842,7 @@ test("Upgrade tab: submit new code + migrate input → awaiting review → Appro
   await page.waitForSelector("#up-pending-code", { timeout: 20_000 });
   assert.match(await page.locator("#up-out").textContent(), /Success[\s\S]*Upgrade submitted for review/);
   assert.match(await page.locator("#up-pending-code").textContent(), /function pong/);
+  assert.ok(await page.locator("#up-pending-code .c-fn").count() > 0);   // colored like the Code tab
   assert.match(await page.locator("#view").textContent(), /Upgrade pending review/);
 
   await page.click("#up-approve");

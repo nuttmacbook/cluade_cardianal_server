@@ -2,7 +2,6 @@
    Upgrade tab: submit new code (upgrader), transfer / renounce upgrade rights, admin approve / reject */
 
 // ---------- upgrade tab of a program: new code (upgrader) · upgrade rights · admin review ----------
-const sourceOf = (code) => { try { return JSON.parse(`"${code}"`); } catch { return String(code ?? ""); } };
 let renounceArmed = null;   // program whose "Renounce" button was clicked once (a second click sends)
 
 function upgradePanel(program, meta) {
@@ -17,7 +16,7 @@ function upgradePanel(program, meta) {
       ${upgrader && wallet ? `<span class="tag ${mine ? "ok" : "bad"}">${mine ? "You are the upgrader" : "This wallet is not the upgrader"}</span>` : ""}</div>
     ${pending ? `${head("Pending upgrade · awaiting review")}
       <div class="dim">Submitted by ${addr(pending.context?.sender)} · migrate input</div>${json(pending.migrateInput ?? {})}
-      <pre id="up-pending-code">${esc(sourceOf(pending.code))}</pre>
+      ${codeView(sourceOf(pending.code), { id: "up-pending-code", max: "520px" })}
       <div class="row"><button class="btn solid" id="up-approve" onclick="reviewUpgrade('${program.address}','initUpgrade')">Approve upgrade</button>
         <button class="btn" id="up-reject" onclick="reviewUpgrade('${program.address}','rejectUpgrade')">Reject upgrade</button>
         <span class="dim">Admin only</span></div>` : ""}

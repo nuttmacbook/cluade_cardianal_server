@@ -81,7 +81,7 @@ async function address(value, draw = el) {
       `<span class="dim" title="${when(r.timestamp)}">${age(r.timestamp)}</span>`]))) + cursorPager(rejected, "rej") });
   }
   if (program) {
-    groups.push({ id: "code", label: "Code", pad: true, body: `<pre>${esc(JSON.parse('"' + program.code + '"'))}</pre>` });
+    groups.push({ id: "code", label: "Code", pad: true, body: codeView(sourceOf(program.code)) });
     const abi = data.metadata?.abi ?? null;
     groups.push({ id: "interact", label: "Interact", body: interactPanel(program, abi) });
     groups.push({ id: "event", label: "Events", count: countOf(eventCount),
