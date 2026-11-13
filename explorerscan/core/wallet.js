@@ -113,7 +113,8 @@ async function estimateCost(tx, info) {
   const fee = gas * base;
   const maxFee = limit * toBig(tx.maxFeePerGas ?? tx.gasPrice ?? base);
   const value = toBig(tx.value);
-  if (balance < value + fee) throw new Error(`Not enough ${info.symbol}: balance ${coin(balance)} · needs ≈ ${coin(value + fee)} (value + fee)`);
+  // no exact estimate → the limit is only a cap (the node lowers it to what the balance can pay · charges only the gas used) → check the value alone
+  if (balance < value + (exact ? fee : 0n)) throw new Error(`Not enough ${info.symbol}: balance ${coin(balance)} · needs ≈ ${coin(value + (exact ? fee : 0n))} (value${exact ? " + fee" : ""})`);
   return { balance, gas, fee, maxFee, exact };
 }
 let nativeSymbol = null;   // from GET /evm (EVM_SYMBOL of the node) · read once
@@ -130,14 +131,22 @@ async function sendTx(fields, { onCost } = {}) {
   const { nonce } = await api(`/nonce/${wallet}`);
   // EIP-1559: pay at most 2 × the next base fee (room for it to rise while waiting) · no tip — the price is base fee only
   const baseFee = toBig(info.baseFee ?? info.gasPrice ?? 1);
+  // gas limit: callers that set none get the per-tx cap (= block gas · e.g. a deploy of a big program needs ~1M) · only the gas used is charged
+  // and when the gas can be estimated (call / transfer) the limit drops to the estimate + 30 %
+  const maxGas = Number(info.maxBlockGas) > 0 ? Number(info.maxBlockGas) : 5_000_000;
+  const autoLimit = fields.gasLimit === undefined;
   const tx = { chainId: info.chainId, signedOnChainId: signedOn ?? info.chainId, action: "call", from: wallet, to: "", method: "", input: {},
-    value: "0", nonce, gasLimit: 500000,
+    value: "0", nonce, gasLimit: maxGas,
     ...(fields.gasPrice === undefined ? { maxFeePerGas: String(baseFee * 2n), maxPriorityFeePerGas: "0" } : {}), ...fields };   // wei per gas
 
   const legacy = tx.maxFeePerGas === undefined;   // a caller passing gasPrice signs the legacy type
   const symbol = await coinSymbol();
   const cost = await estimateCost(tx, { ...info, symbol });
-  const text = `Balance ${coin(cost.balance)} ${symbol} · fee ${cost.exact ? "≈" : "at most"} ${coin(cost.fee)} ${symbol} (max ${coin(cost.maxFee)})`
+  if (autoLimit && cost.exact) {
+    tx.gasLimit = Math.min(maxGas, Math.ceil(Number(cost.gas) * 1.3));
+    cost.maxFee = BigInt(tx.gasLimit) * toBig(tx.maxFeePerGas ?? tx.gasPrice ?? baseFee);
+  }
+  const text = `Balance ${coin(cost.balance)} ${symbol} · ${cost.exact ? `fee ≈ ${coin(cost.fee)} ${symbol} (max ${coin(cost.maxFee)})` : `fee = gas used × ${coin(baseFee)} ${symbol} (limit ${tx.gasLimit.toLocaleString()} gas)`}`
     + ` · signing on chain ${tx.signedOnChainId}${tx.signedOnChainId === info.chainId ? " (this chain)" : ""} — confirm in your wallet`;
   (onCost ?? (typeof busy === "function" ? busy : () => {}))(text);
 
