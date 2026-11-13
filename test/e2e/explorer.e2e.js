@@ -354,6 +354,22 @@ test("wallet: ผู้ใช้ตัดการเชื่อมต่อ / 
   assert.deepEqual(pageErrors, []);
 });
 
+test("wallet: สคริปต์อื่นในหน้า (ส่วนเสริมของเบราว์เซอร์ / Cloudflare) ประกาศตัวแปร global ชื่อทั่วไป → explorer ยังโหลดครบ (ไม่เจอ walletButton is not defined)", async () => {
+  const other = await browser.newPage();
+  const errors = [];
+  other.on("pageerror", (error) => errors.push(error.message));
+  const names = ["provider", "eth", "web3", "ethereumProvider", "signer", "accounts", "chainId", "kit", "modal", "appKit"];
+  await other.route(`${url}/`, async (route) => {
+    const response = await route.fetch();
+    route.fulfill({ response, body: (await response.text()).replace("<head>", `<head><script>${names.map((n) => `var ${n} = {};`).join("")}</script>`) });
+  });
+  await other.goto(`${url}/`);
+  await other.waitForFunction(() => document.getElementById("view").textContent.length > 0);
+  assert.deepEqual(errors, []);
+  assert.equal(await other.evaluate(() => typeof walletButton), "function");
+  await other.close();
+});
+
 test("Permit (ERC-2612): แถบ Permit ของ token เซ็น EIP-712 ด้วย eth_signTypedData_v4 (wallet ปลอม = ethers signTypedData) → ส่ง permit แล้วเชนรับ", async () => {
   const { address } = await get("/name/mytoken");
   const query = (functionName, input) => fetch(`${url}/query`, { method: "POST", headers: { "content-type": "application/json" },
