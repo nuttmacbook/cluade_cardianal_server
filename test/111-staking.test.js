@@ -6,18 +6,18 @@ import { TOKEN_PROGRAM, checkStandard } from "../src/standards/token.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
 /*
- * Staking (src/standards/staking.js): หลาย pool ในโปรแกรมเดียว · รางวัลไหลต่อวินาที · ฝาก / ถอนได้ทุกเมื่อ
- *   เวลาของ block ตั้งเอง (วินาที × 1000) เพื่อตรวจการสะสมรางวัล
+ * Staking (src/standards/staking.js): many pools in one program · rewards stream per second · deposit / withdraw any time
+ *   block times are set manually (seconds × 1000) to check reward accrual
  */
 
 const E = 10n ** 18n;
 const P = STAKING_PRECISION;
-const T0 = 1_800_000_000n;   // วินาที
+const T0 = 1_800_000_000n;   // seconds
 const STAKING = "0x00000000000000000000000000000000005a4e01";
 const TKA = "0x000000000000000000000000000000000000aaa1";   // stake token
 const TKB = "0x000000000000000000000000000000000000bbb1";   // reward token
-const FEE = "0x000000000000000000000000000000000000fee1";   // token หักค่าธรรมเนียม 10% ตอนโอน
-const EVIL = "0x000000000000000000000000000000000000e111";  // token ที่เรียกกลับเข้ามาตอนโอน
+const FEE = "0x000000000000000000000000000000000000fee1";   // token that takes a 10% fee on transfer
+const EVIL = "0x000000000000000000000000000000000000e111";  // token that calls back in during transfer
 const NOT_PROGRAM = "0x0000000000000000000000000000000000000123";
 const CREATOR = "0x00000000000000000000000000000000000000c1";
 const ALICE = "0x00000000000000000000000000000000000000a1";
@@ -25,7 +25,7 @@ const BOB = "0x00000000000000000000000000000000000000b1";
 const CAROL = "0x00000000000000000000000000000000000000c2";
 const USERS = [CREATOR, ALICE, BOB, CAROL];
 
-/** token ทดสอบ: fee% หักทิ้งตอนโอน · hook = เรียกโปรแกรมอื่นระหว่าง transfer (จับ error เก็บไว้ใน hookError) */
+/** test token: fee% burned on transfer · hook = calls another program during transfer (error caught into hookError) */
 const TEST_TOKEN = `function program() {
   function initialization(params) {
     for (const who of params.input.holders) writeDB(map("bal", who), params.input.supply)
@@ -60,7 +60,7 @@ const TEST_TOKEN = `function program() {
   return { balanceOf, approve, transferFrom, transfer, setHook, hookError }
 }`;
 
-/** "123n" → 123n (ลงลึก) */
+/** "123n" → 123n (deep) */
 function big(value) {
   if (typeof value === "string" && /^-?\d+n$/.test(value)) return BigInt(value.slice(0, -1));
   if (Array.isArray(value)) return value.map(big);
@@ -75,7 +75,7 @@ function setup() {
   let now = T0 - 10n;
   const block = (fn, at) => {
     if (at !== undefined) {
-      assert.ok(at >= now, "เวลาต้องเดินหน้า");
+      assert.ok(at >= now, "time must move forward");
       now = at;
     }
     const b = vm.createBlock({ timestamp: Number(now * 1000n) });
@@ -100,7 +100,7 @@ function setup() {
     return res;
   };
   const fail = (res, message) => {
-    assert.equal(res.status, "throw", `คาดว่า throw (${message})`);
+    assert.equal(res.status, "throw", `expected throw (${message})`);
     if (message) assert.match(res.error.message, message instanceof RegExp ? message : new RegExp(message));
     return res;
   };
@@ -110,24 +110,24 @@ function setup() {
     return big(res.result);
   };
   const bal = (token, who) => query(token, "balanceOf", { who });
-  // แจก token มาตรฐานให้ทุกคน + approve ไม่จำกัดให้ staking
+  // hand standard tokens to everyone + unlimited approve for staking
   for (const who of USERS.slice(1)) for (const token of [TKA, TKB]) ok(send(CREATOR, token, "transfer", { to: who, amount: 1_000_000n * E }));
   for (const who of USERS) for (const token of [TKA, TKB, FEE, EVIL]) ok(send(who, token, "approve", { spender: STAKING, amount: 10n ** 30n }));
   const time = () => now;
   return { vm, send, ok, fail, query, bal, time, deploy };
 }
 
-/** ยอด token ที่ staking ถืออยู่ ≥ ต้นเงิน + กองรางวัลของทุก pool ที่ใช้ token นี้ */
+/** tokens held by staking ≥ principal + reward funds of every pool using this token */
 function assertSolvent(t, token) {
   let owed = 0n;
   for (const pool of t.query(STAKING, "pools", { start: 0n, limit: 50n })) {
     if (pool.stakeToken === token) owed += pool.totalStaked;
     if (pool.rewardToken === token) owed += pool.rewardReserve;
   }
-  assert.ok(t.bal(token, STAKING) >= owed, `token ${token} ต้องพอจ่าย`);
+  assert.ok(t.bal(token, STAKING) >= owed, `token ${token} must cover what is owed`);
 }
 
-test("staking: autoreview ผ่าน · export ครบ · emit ครบทุก event", () => {
+test("staking: passes autoreview · all exports present · every event emitted", () => {
   const result = reviewProgram(STAKING_PROGRAM);
   assert.ok(result.ok, result.message);
   assert.ok(reviewProgram(TEST_TOKEN).ok);
@@ -135,7 +135,7 @@ test("staking: autoreview ผ่าน · export ครบ · emit ครบท�
     { ok: true, missing: [] });
 });
 
-test("staking: 1 คน · รางวัลไหลต่อวินาที · วินาทีที่ไม่มีคน stake ผู้สร้างดึงคืนได้", () => {
+test("staking: 1 staker · rewards stream per second · the creator can recover seconds with no stakers", () => {
   const t = setup();
   const start = t.time() + 10n;
   const created = t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKB, rewardAmount: 1000n * E, duration: 100n }, start));
@@ -160,58 +160,58 @@ test("staking: 1 คน · รางวัลไหลต่อวินาท�
   assert.equal(pool.rewardPerSecond, 10n * E);
   assert.equal(pool.rewardPerYear, 10n * E * 31_536_000n);
   assert.equal(pool.active, true);
-  assert.equal(pool.unallocated, 100n * E, "10 วินาทีแรกไม่มีคน stake");
+  assert.equal(pool.unallocated, 100n * E, "nobody staked for the first 10 seconds");
 
   const claim1 = t.ok(t.send(ALICE, STAKING, "claim", { poolId: 0n }, start + 60n));
   assert.equal(claim1.value, 500n * E);
   assert.deepEqual(big(claim1.events.find((e) => e.name === "Claimed").data), { poolId: 0n, who: ALICE, amount: 500n * E });
   t.fail(t.send(ALICE, STAKING, "claim", { poolId: 0n }, start + 60n), "nothing to claim");
 
-  // หลังจบ รางวัลไม่เพิ่ม
+  // after the end, rewards stop growing
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start + 500n), 400n * E);
   assert.equal(t.query(STAKING, "getPool", { poolId: 0n }, start + 500n).active, false);
   t.fail(t.send(BOB, STAKING, "stake", { poolId: 0n, amount: E }, start + 100n), "pool has ended");
   const out = t.ok(t.send(ALICE, STAKING, "exit", { poolId: 0n }, start + 500n));
   assert.deepEqual(out.value, { unstaked: 50n * E, claimed: 400n * E });
   assert.deepEqual(out.events.filter((e) => e.program === STAKING).map((e) => e.name), ["Unstaked", "Claimed"]);
-  assert.equal(t.bal(TKA, ALICE), before, "ต้นคืนครบ ไม่มีค่าปรับ");
+  assert.equal(t.bal(TKA, ALICE), before, "principal fully returned, no penalty");
 
   t.fail(t.send(ALICE, STAKING, "recoverUnallocated", { poolId: 0n }, start + 500n), "only pool creator");
   const rec = t.ok(t.send(CREATOR, STAKING, "recoverUnallocated", { poolId: 0n }, start + 500n));
   assert.equal(rec.value, 100n * E);
   t.fail(t.send(CREATOR, STAKING, "recoverUnallocated", { poolId: 0n }, start + 500n), "nothing to recover");
-  assert.equal(t.bal(TKB, STAKING), 0n, "แจกครบ 900 + คืน 100 · ไม่มีอะไรค้าง");
+  assert.equal(t.bal(TKB, STAKING), 0n, "900 distributed + 100 recovered · nothing left over");
   t.fail(t.send(ALICE, STAKING, "exit", { poolId: 0n }, start + 500n), "nothing to exit");
 });
 
-test("staking: 2 คนเข้าคนละเวลา · แบ่งตามสัดส่วน · pool เริ่มในอนาคต", () => {
+test("staking: 2 stakers joining at different times · split proportionally · pool starting in the future", () => {
   const t = setup();
   const start = t.time() + 100n;
   t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKB, rewardAmount: 1000n * E, duration: 100n, startAt: start }));
   t.ok(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: 100n * E }, start - 50n));
-  assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start), 0n, "ก่อนเริ่มยังไม่มีรางวัล");
+  assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start), 0n, "no rewards before the start");
   assert.equal(t.query(STAKING, "getPool", { poolId: 0n }, start - 1n).active, false);
   t.ok(t.send(BOB, STAKING, "stake", { poolId: 0n, amount: 300n * E }, start + 40n));
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start + 40n), 400n * E);
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: BOB }, start + 40n), 0n);
-  // 40 → 100: 600 แบ่ง 1:3
+  // 40 → 100: 600 split 1:3
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start + 100n), 550n * E);
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: BOB }, start + 100n), 450n * E);
-  // alice ถอนครึ่งหนึ่งกลางทาง → สัดส่วนเปลี่ยน (50:300)
+  // alice withdraws half midway → the ratio changes (50:300)
   t.ok(t.send(ALICE, STAKING, "unstake", { poolId: 0n, amount: 50n * E }, start + 65n));
-  // alice: 400 + 25×10×1/4 = 462.5 · ถึง 100: + 35×10×50/350 = 50 → 512.5
+  // alice: 400 + 25×10×1/4 = 462.5 · to 100: + 35×10×50/350 = 50 → 512.5
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, start + 100n), 5125n * E / 10n);
   const bob = t.query(STAKING, "pendingRewards", { poolId: 0n, who: BOB }, start + 100n);
   assert.equal(bob, 1875n * E / 10n + 300n * E);   // 25×10×3/4 + 35×10×300/350
   const a = t.ok(t.send(ALICE, STAKING, "exit", { poolId: 0n }, start + 120n)).value.claimed;
   const b = t.ok(t.send(BOB, STAKING, "exit", { poolId: 0n }, start + 120n)).value.claimed;
   assert.ok(a + b <= 1000n * E);
-  assert.ok(1000n * E - (a + b) < 10n, "เศษปัดลงไม่กี่ wei");
+  assert.ok(1000n * E - (a + b) < 10n, "rounding dust of only a few wei");
   assert.deepEqual(t.query(STAKING, "poolsOf", { who: BOB }), [0n]);
   assert.equal(t.query(STAKING, "getPool", { poolId: 0n }).stakers, 0n);
 });
 
-test("staking: stakeToken = rewardToken · ต้นกับรางวัลไม่ปนกัน · หลาย pool token เดียวกันแยกบัญชี", () => {
+test("staking: stakeToken = rewardToken · principal and rewards don't mix · several pools with the same token keep separate accounts", () => {
   const t = setup();
   const s = t.time() + 1n;
   t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKA, rewardAmount: 100n * E, duration: 100n }, s));
@@ -222,12 +222,12 @@ test("staking: stakeToken = rewardToken · ต้นกับรางวัล�
   const pool = t.query(STAKING, "getPool", { poolId: 0n });
   assert.equal(pool.totalStaked, 1000n * E);
   assert.equal(pool.rewardReserve, 100n * E);
-  // ถอนต้นเกินที่ฝากไม่ได้ (แม้โปรแกรมถือ TKA รวม 1,600)
+  // cannot withdraw more principal than deposited (even though the program holds 1,600 TKA in total)
   t.fail(t.send(ALICE, STAKING, "unstake", { poolId: 0n, amount: 1000n * E + 1n }, s + 10n), "exceeds staked");
   t.fail(t.send(BOB, STAKING, "unstake", { poolId: 0n, amount: 1n }, s + 10n), "exceeds staked");
   t.ok(t.send(ALICE, STAKING, "claim", { poolId: 0n }, s + 50n));
   assertSolvent(t, TKA);
-  // ผู้สร้างดึงคืนไม่ได้ (ทุกวินาทีมีคน stake)
+  // the creator cannot recover anything (someone was staked every second)
   t.fail(t.send(CREATOR, STAKING, "recoverUnallocated", { poolId: 0n }, s + 200n), "nothing to recover");
   const before = t.bal(TKA, ALICE);
   const out = t.ok(t.send(ALICE, STAKING, "exit", { poolId: 0n }, s + 200n)).value;
@@ -236,35 +236,35 @@ test("staking: stakeToken = rewardToken · ต้นกับรางวัล�
   const p0 = t.query(STAKING, "getPool", { poolId: 0n });
   assert.equal(p0.claimed, 100n * E);
   assert.equal(p0.rewardReserve, 0n);
-  // ที่เหลือใน TKA = ต้นของ bob ใน pool 1 พอดี
+  // remaining TKA = exactly bob's principal in pool 1
   assert.equal(t.bal(TKA, STAKING), 500n * E);
   assertSolvent(t, TKA);
   t.ok(t.send(BOB, STAKING, "exit", { poolId: 1n }, s + 200n));
   assert.equal(t.bal(TKA, STAKING), 0n);
 });
 
-test("staking: addRewards · เติมกลางทาง (กระจายใหม่ช่วงที่เหลือ) · ต่ออายุ · เริ่มรอบใหม่หลังจบ", () => {
+test("staking: addRewards · top up midway (redistributed over the remaining period) · extend · start a new round after the end", () => {
   const t = setup();
   const s = t.time() + 1n;
   t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKB, rewardAmount: 1000n * E, duration: 100n }, s));
   t.ok(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: 10n * E }, s));
   t.fail(t.send(ALICE, STAKING, "addRewards", { poolId: 0n, amount: E }, s + 50n), "only pool creator");
-  // ที่ 50 วิ: เหลือ 500 + เติม 500 → 1000 ใน 50 วิ = 20/วิ
+  // at 50 s: 500 left + 500 added → 1000 over 50 s = 20/s
   const add = t.ok(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: 500n * E }, s + 50n));
   assert.equal(add.value, 20n * E * P);
   assert.deepEqual(big(add.events.find((e) => e.name === "RewardsAdded").data), { poolId: 0n, amount: 500n * E, endAt: s + 100n, rewardRate: 20n * E * P });
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, s + 75n), 1000n * E);
-  // ต่ออายุ 50 วิ: เหลือ 500 (25 วิ) + 250 → 750 ใน 75 วิ = 10/วิ
+  // extend 50 s: 500 left (25 s) + 250 → 750 over 75 s = 10/s
   assert.equal(t.ok(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: 250n * E, extendSeconds: 50n }, s + 75n)).value, 10n * E * P);
   assert.equal(t.query(STAKING, "getPool", { poolId: 0n }).endAt, s + 150n);
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, s + 400n), 1750n * E);
-  // จบแล้ว: ต้องส่ง extendSeconds
+  // ended: extendSeconds is required
   t.fail(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: E }, s + 400n), "extendSeconds");
   t.fail(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: E, extendSeconds: 400_000_000n }, s + 400n), "duration too long");
   t.ok(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: 100n * E, extendSeconds: 10n }, s + 400n));
   const p = t.query(STAKING, "getPool", { poolId: 0n });
   assert.deepEqual([p.periodStart, p.endAt, p.rewardRate], [s + 400n, s + 410n, 10n * E * P]);
-  // ช่วง 150 → 400 ไม่ได้แจก (pool หยุด) · ไม่มีรางวัลเพิ่ม
+  // 150 → 400 not distributed (pool stopped) · no extra rewards
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, s + 400n), 1750n * E);
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, s + 999n), 1850n * E);
   const out = t.ok(t.send(ALICE, STAKING, "exit", { poolId: 0n }, s + 999n)).value;
@@ -273,7 +273,7 @@ test("staking: addRewards · เติมกลางทาง (กระจา�
   assert.equal(t.bal(TKB, STAKING), 0n);
 });
 
-test("staking: emergencyWithdraw คืนต้นอย่างเดียว · รางวัลที่สละผู้สร้างดึงคืนได้ · คนอื่นไม่เสียสิทธิ์", () => {
+test("staking: emergencyWithdraw returns principal only · the creator can recover forfeited rewards · others keep their rights", () => {
   const t = setup();
   const s = t.time() + 1n;
   t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: TKB, rewardAmount: 1000n * E, duration: 100n }, s));
@@ -286,17 +286,17 @@ test("staking: emergencyWithdraw คืนต้นอย่างเดีย�
   assert.deepEqual(big(res.events.find((e) => e.name === "EmergencyWithdraw").data), { poolId: 0n, who: ALICE, amount: 10n * E, forfeited: 250n * E });
   assert.equal(t.bal(TKA, ALICE), before + 10n * E);
   assert.equal(t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, s + 50n), 0n);
-  assert.equal(t.bal(TKB, ALICE), 1_000_000n * E, "ไม่ได้รางวัล");
-  // ผู้สร้างดึงส่วนที่สละคืนได้ทันที (ส่วนที่ยังไม่ถึงเวลา / ของ bob ไม่แตะ)
+  assert.equal(t.bal(TKB, ALICE), 1_000_000n * E, "no rewards received");
+  // the creator can recover the forfeited part immediately (the not-yet-due part / bob's share untouched)
   assert.equal(t.ok(t.send(CREATOR, STAKING, "recoverUnallocated", { poolId: 0n }, s + 50n)).value, 250n * E);
-  // bob ได้ 250 + 50 วิหลังอยู่คนเดียว 500
+  // bob gets 250 + 500 for the last 50 s alone
   assert.equal(t.ok(t.send(BOB, STAKING, "claim", { poolId: 0n }, s + 100n)).value, 750n * E);
   assert.equal(t.bal(TKB, STAKING), 0n);
-  // pool จบแล้ว stake ใหม่ไม่ได้
+  // pool ended, no new stakes
   t.fail(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: E }, s + 100n), "pool has ended");
 });
 
-test("staking: ตรวจ input และสิทธิ์ทุกทาง", () => {
+test("staking: every input and permission check", () => {
   const t = setup();
   const s = t.time() + 1n;
   const base = { stakeToken: TKA, rewardToken: TKB, rewardAmount: 100n * E, duration: 100n };
@@ -313,7 +313,7 @@ test("staking: ตรวจ input และสิทธิ์ทุกทาง"
     [{ ...base, rewardAmount: 10n ** 40n }, "insufficient"],
   ];
   for (const [input, message] of bad) t.fail(t.send(CREATOR, STAKING, "createPool", input, s), message);
-  // ไม่ได้ approve
+  // no approve
   t.ok(t.send(CAROL, TKB, "approve", { spender: STAKING, amount: 0n }));
   t.fail(t.send(CAROL, STAKING, "createPool", base, s), "insufficient allowance");
   assert.equal(t.query(STAKING, "poolCount"), 0n);
@@ -337,13 +337,13 @@ test("staking: ตรวจ input และสิทธิ์ทุกทาง"
   ]) t.fail(t.send(ALICE, STAKING, fn, input, s), message);
   t.fail(t.send(CREATOR, STAKING, "addRewards", { poolId: 0n, amount: E, extendSeconds: 315_360_000n }, s), "duration too long");
   t.fail(t.send(ALICE, STAKING, "initialization", {}, s));
-  // อ่าน: paging จำกัด
+  // reads: paging is capped
   t.fail({ status: t.vm.query({ programUuid: STAKING, functionName: "pools", input: { limit: "51n" } }).status }, undefined);
   t.fail({ status: t.vm.query({ programUuid: STAKING, functionName: "poolsOf", input: { who: ALICE, limit: "101n" } }).status }, undefined);
   t.fail({ status: t.vm.query({ programUuid: STAKING, functionName: "stakedOf", input: { poolId: "0n", who: "x" } }).status }, undefined);
 });
 
-test("staking: token หักค่าธรรมเนียม → บันทึกยอดที่เข้าจริง (ทั้งรางวัลและต้น)", () => {
+test("staking: fee-taking token → records the amount actually received (both rewards and principal)", () => {
   const t = setup();
   const s = t.time() + 1n;
   const created = t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: FEE, rewardToken: FEE, rewardAmount: 1000n * E, duration: 100n }, s));
@@ -356,12 +356,12 @@ test("staking: token หักค่าธรรมเนียม → บัน
   assert.equal(t.bal(FEE, STAKING), 0n);
 });
 
-test("staking: token เรียกกลับเข้ามาระหว่างโอน → ล้มด้วย reentrant call (จ่ายซ้ำไม่ได้)", () => {
+test("staking: token calling back in during transfer → fails with reentrant call (no double payout)", () => {
   const t = setup();
   const s = t.time() + 1n;
   t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: EVIL, rewardAmount: 1000n * E, duration: 100n }, s));
   t.ok(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: E }, s));
-  // ระหว่าง EVIL.transfer (จ่ายรางวัล) token พยายาม claim ซ้ำในนามตัวเอง / emergencyWithdraw
+  // during EVIL.transfer (reward payout) the token tries to claim again on its own behalf / emergencyWithdraw
   t.ok(t.send(CREATOR, EVIL, "setHook", { target: STAKING, fn: "claim", input: { poolId: "0n" } }));
   const res = t.ok(t.send(ALICE, STAKING, "claim", { poolId: 0n }, s + 50n));
   assert.equal(res.value, 500n * E);
@@ -370,7 +370,7 @@ test("staking: token เรียกกลับเข้ามาระหว�
   assert.equal(t.query(STAKING, "getPool", { poolId: 0n }).claimed, 500n * E);
 });
 
-test("staking: สุ่มหลายคนหลายเวลา → ผลรวม claim + recover ไม่เกินที่เติม · ต้นคืนครบ · เศษค้างแค่ไม่กี่ wei", () => {
+test("staking: random stakers at random times → total claim + recover never exceeds what was funded · principal fully returned · only a few wei of dust left", () => {
   const t = setup();
   let seed = 12345;
   const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor(seed / 65536) % n; };
@@ -413,13 +413,13 @@ test("staking: สุ่มหลายคนหลายเวลา → ผล
     const pool = t.query(STAKING, "getPool", { poolId: 0n }, now);
     assert.ok(pool.claimed + pool.recovered <= pool.funded);
   }
-  for (const action of [0, 2, 3, 4, 5]) assert.ok((done[action] || 0) + (action === 0 ? done[1] || 0 : 0) > 0, `action ${action} ถูกสุ่มถึง ${JSON.stringify(done)}`);
+  for (const action of [0, 2, 3, 4, 5]) assert.ok((done[action] || 0) + (action === 0 ? done[1] || 0 : 0) > 0, `action ${action} never drawn: ${JSON.stringify(done)}`);
   now = t.query(STAKING, "getPool", { poolId: 0n }).endAt + 1n;
   for (const who of people) {
     const res = t.send(who, STAKING, "exit", { poolId: 0n }, now);
     if (res.status === "success") {
       takeClaims(res);
-      assert.equal(res.value.unstaked, principal[who], "ต้นคืนครบ");
+      assert.equal(res.value.unstaked, principal[who], "principal fully returned");
     }
   }
   let recovered = 0n;
@@ -428,13 +428,13 @@ test("staking: สุ่มหลายคนหลายเวลา → ผล
   const pool = t.query(STAKING, "getPool", { poolId: 0n }, now);
   assert.equal(pool.funded, funded);
   assert.equal(pool.claimed, claimed);
-  assert.ok(claimed + recovered <= funded, "ไม่จ่ายเกินที่เติม");
+  assert.ok(claimed + recovered <= funded, "never pays out more than funded");
   assert.equal(pool.totalStaked, 0n);
-  assert.equal(t.bal(TKA, STAKING), funded - claimed - recovered, "ที่เหลือคือเศษปัดลง");
-  assert.ok(funded - claimed - recovered < 1000n, `เศษ ${funded - claimed - recovered} wei`);
+  assert.equal(t.bal(TKA, STAKING), funded - claimed - recovered, "the remainder is rounding dust");
+  assert.ok(funded - claimed - recovered < 1000n, `dust ${funded - claimed - recovered} wei`);
 });
 
-test("staking: pools / poolsOf / getPool · และค่าแก๊สของงานหลัก (fork bluewolf)", () => {
+test("staking: pools / poolsOf / getPool · and gas of the main operations (fork bluewolf)", () => {
   const t = setup();
   const s = t.time() + 1n;
   const gas = {};
@@ -462,12 +462,12 @@ test("staking: pools / poolsOf / getPool · และค่าแก๊สขอ
   const p = t.query(STAKING, "getPool", { poolId: 1n }, s + 30n);
   assert.equal(p.creator, CREATOR);
   assert.equal(p.unallocated, 0n);
-  assert.equal(p.recovered, 3n * E);   // 30 วิแรกไม่มีใคร stake = 3 เหรียญ
+  assert.equal(p.recovered, 3n * E);   // nobody staked for the first 30 s = 3 coins
   assert.equal(p.rewardReserve, 97n * E);
   assert.equal(t.vm.resolveNamespace("staking"), STAKING);
 });
 
-test("staking: ห้ามแนบ native value — stake / getPool ล้ม · โปรแกรมไม่ถือเหรียญหลัก", () => {
+test("staking: no native value allowed — stake / getPool fail · the program holds no native coin", () => {
   const t = setup();
   t.vm.db.load({ [VM.nativeKey(ALICE, "received")]: `${1000n * E}n` });
   const nat = (who) => BigInt(t.vm.nativeBalanceOf(who).balance);
@@ -481,8 +481,8 @@ test("staking: ห้ามแนบ native value — stake / getPool ล้ม 
   assert.equal(t.query(STAKING, "stakedOf", { poolId: 0n, who: ALICE }), 0n);
 });
 
-test("staking: reward 6 หลัก + stake ก้อนใหญ่ · มีคนกระทุ้งทุก 120 วิ ก็ไม่ทำให้รางวัลหาย (precision 1e36 + เก็บเศษ)", () => {
-  const USD = "0x000000000000000000000000000000000000bbb6";   // reward token 6 หลัก
+test("staking: 6-decimal reward + a large stake · poking every 120 s does not lose rewards (precision 1e36 + dust carry)", () => {
+  const USD = "0x000000000000000000000000000000000000bbb6";   // 6-decimal reward token
   const E6 = 10n ** 6n;
   const REWARD = 10_000n * E6;
   const DURATION = 30n * 86400n;
@@ -496,7 +496,7 @@ test("staking: reward 6 หลัก + stake ก้อนใหญ่ · มี�
     const start = t.time() + 10n;
     t.ok(t.send(CREATOR, STAKING, "createPool", { stakeToken: TKA, rewardToken: USD, rewardAmount: REWARD, duration: DURATION, startAt: start }, start));
     t.ok(t.send(ALICE, STAKING, "stake", { poolId: 0n, amount: 1_000_000n * E }, start));
-    // BOB กระทุ้ง accrue ด้วย stake 1 wei ทุก STEP วินาที
+    // BOB pokes accrue with a 1 wei stake every STEP seconds
     if (poke) for (let at = start + STEP; at <= start + WINDOW; at += STEP) t.ok(t.send(BOB, STAKING, "stake", { poolId: 0n, amount: 1n }, at));
     const end = start + WINDOW;
     const alice = t.query(STAKING, "pendingRewards", { poolId: 0n, who: ALICE }, end);

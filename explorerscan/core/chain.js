@@ -1,6 +1,6 @@
-/* explorerscan/core/chain.js [ระบบ · ไม่ต้องแก้]
-   อ่านข้อมูลจากเชน: api() เรียก HTTP API ของ node (ที่อยู่จาก EXPLORER.api ใน config.js)
-   + การแบ่งหน้า (เลขหน้า / cursor) ที่จำไว้ต่อหน้า · ทุกหน้าใน ui/ อ่านข้อมูลผ่านไฟล์นี้ */
+/* explorerscan/core/chain.js [system · no need to edit]
+   Reads chain data: api() calls the node's HTTP API (address from EXPLORER.api in config.js)
+   + pagination (page number / cursor) remembered per page · every page in ui/ reads data through this file */
 
 const api = (p, o) => fetch((EXPLORER.api || location.origin) + p, o).then((r) => r.json());
 

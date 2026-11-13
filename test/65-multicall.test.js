@@ -5,7 +5,7 @@ import { MULTICALL_PROGRAM } from "../src/standards/multicall.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* multicall: aggregate (ทำตามลำดับ ล้มตัวเดียวล้มหมด) / tryAggregate (ผลต่อ call) / readonly (ห้ามแก้ state ทุก call) */
+/* multicall: aggregate (in order, one failure fails all) / tryAggregate (result per call) / readonly (no state changes in any call) */
 
 const MC = "0x00000000000000000000000000000000000000e2";
 const T = "0x00000000000000000000000000000000000000f1";
@@ -51,11 +51,11 @@ function chain() {
 }
 const add = (by) => ({ target: C, fn: "add", input: { by } });
 
-test("MULTICALL_PROGRAM ผ่าน autoreview", () => {
+test("MULTICALL_PROGRAM passes autoreview", () => {
   assert.deepEqual(reviewProgram(MULTICALL_PROGRAM).issues, []);
 });
 
-test("aggregate: ทำตามลำดับ (call หลังเห็นผลของ call ก่อน) · คืนผลเป็น array · ปลายทางเห็น sender = multicall", () => {
+test("aggregate: runs in order (later calls see earlier results) · returns an array · targets see sender = multicall", () => {
   const { call, read } = chain();
   const res = call("aggregate", { calls: [add("2n"), add("3n"), { target: C, fn: "get" }, { target: T, fn: "balanceOf", input: { who: OWNER } }] });
   assert.equal(res.status, "success", JSON.stringify(res.error));
@@ -65,21 +65,21 @@ test("aggregate: ทำตามลำดับ (call หลังเห็น�
   assert.deepEqual(call("aggregate", { calls: [] }).result, []);
 });
 
-test("aggregate: call ไหนล้ม → ทั้ง tx ล้ม และการเขียนของ call ก่อนหน้าถูกย้อนหมด (all-or-nothing)", () => {
+test("aggregate: any call fails → the whole tx fails and earlier calls' writes are reverted (all-or-nothing)", () => {
   const { call, read } = chain();
   const res = call("aggregate", { calls: [add("2n"), { target: C, fn: "boom" }, add("3n")] });
   assert.equal(res.status, "throw");
   assert.match(res.error.message, /boom/);
   assert.deepEqual(res.writes, []);
   assert.equal(read(C, "get").result, "0n");
-  // ปลายทางที่ไม่มีฟังก์ชันนั้น / input ผิดรูปแบบ ก็ล้มทั้งชุดเหมือนกัน
+  // a target without that function / malformed input also fails the whole batch
   assert.equal(call("aggregate", { calls: [add("1n"), { target: C, fn: "nope" }] }).status, "throw");
   assert.match(call("aggregate", { calls: [{ target: C }] }).error.message, /each call needs target and fn/);
   assert.match(call("aggregate", { calls: "x" }).error.message, /calls must be an array/);
   assert.equal(read(C, "get").result, "0n");
 });
 
-test("tryAggregate: ผลต่อ call { success, result | error } · call ที่ล้มถูกย้อนเฉพาะตัวมัน · requireSuccess = ล้มหมด", () => {
+test("tryAggregate: result per call { success, result | error } · a failed call reverts only itself · requireSuccess = all fail", () => {
   const { call, read } = chain();
   const res = call("tryAggregate", { calls: [add("2n"), { target: C, fn: "boom" }, add("3n")] });
   assert.equal(res.status, "success", JSON.stringify(res.error));
@@ -93,7 +93,7 @@ test("tryAggregate: ผลต่อ call { success, result | error } · call ท
   assert.equal(read(C, "get").result, "5n");
 });
 
-test("readonly: ทุก call เป็น staticcall · call ที่เขียน state ล้ม (aggregate ล้มหมด / tryAggregate รายงานรายตัว) · ใช้กับ query อ่านหลายค่าได้", () => {
+test("readonly: every call is a staticcall · calls that write state fail (aggregate fails all / tryAggregate reports each) · usable with query to read many values", () => {
   const { call, read } = chain();
   const reads = read(MC, "aggregate", { readonly: true, calls: [
     { target: T, fn: "name" }, { target: T, fn: "balanceOf", input: { who: OWNER } }, { target: C, fn: "get" },
@@ -111,14 +111,14 @@ test("readonly: ทุก call เป็น staticcall · call ที่เข�
   assert.equal(loose.result[1].success, false);
   assert.match(loose.result[1].error, /writeDB\(\) ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว/);
   assert.equal(read(C, "get").result, "0n");
-  // ไม่ readonly → เขียนได้ตามปกติ
+  // not readonly → writes work normally
   assert.equal(call("tryAggregate", { calls: [add("1n")] }).result[0].success, true);
   assert.equal(read(C, "get").result, "1n");
 });
 
-test("ตัวช่วยของเชน: getBlockNumber / getChainId / getNativeBalance", () => {
+test("chain helpers: getBlockNumber / getChainId / getNativeBalance", () => {
   const { read, call } = chain();
   assert.equal(read(MC, "getChainId").result, "42n");
   assert.equal(read(MC, "getNativeBalance", { who: BOB }).result, "77n");
-  assert.equal(call("getBlockNumber", {}).result, "2n");   // block ที่ 2 (block 1 = deploy)
+  assert.equal(call("getBlockNumber", {}).result, "2n");   // block 2 (block 1 = deploy)
 });

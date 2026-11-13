@@ -1,22 +1,22 @@
 /**
- * ส่งโปรแกรมขึ้น chain:  node deploy.js hello-world/hello.program.js
+ * Sends a program to the chain:  node deploy.js hello-world/hello.program.js
  *
- *   PRIVATE_KEY=0x…  API=https://api.example.com  node deploy.js <ไฟล์โปรแกรม>
+ *   PRIVATE_KEY=0x…  API=https://api.example.com  node deploy.js <program file>
  *
- * ขั้นตอน: โปรแกรม → string → เซ็นด้วย EIP-712 → POST /sendtx
- * ของจริงควรเซ็นในเบราว์เซอร์ด้วย MetaMask (ดู README) ไฟล์นี้ไว้ใช้ตอนทดสอบ
+ * Steps: program → string → sign with EIP-712 → POST /sendtx
+ * In production, sign in the browser with MetaMask (see README) · this file is for testing
  */
 import { addressOf, signTransaction, hashTypedData } from "programvm/signature.js";
 
 const API = process.env.API ?? "http://localhost:3000";
 const API_KEY = process.env.API_KEY ?? "";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-// chainId / ราคาแก๊สอ่านจาก GET /genesis ของ node (ตั้ง CHAIN_ID / GAS_PRICE เองได้) · chainId ไม่ตรง = node ปฏิเสธ
+// chainId / gas price are read from the node's GET /genesis (or set CHAIN_ID / GAS_PRICE yourself) · wrong chainId = the node rejects it
 let CHAIN_ID = process.env.CHAIN_ID === undefined ? undefined : Number(process.env.CHAIN_ID);
 let GAS_PRICE = process.env.GAS_PRICE;
 
 if (!PRIVATE_KEY) {
-  console.error("ต้องตั้ง PRIVATE_KEY ก่อน เช่น  PRIVATE_KEY=0x… node deploy.js hello-world/hello.program.js");
+  console.error("Set PRIVATE_KEY first, e.g.  PRIVATE_KEY=0x… node deploy.js hello-world/hello.program.js");
   process.exit(1);
 }
 const me = addressOf(PRIVATE_KEY);
@@ -32,8 +32,8 @@ async function api(endpoint, body) {
   return data;
 }
 
-/** ทุกฟิลด์ต้องมีครบ เพราะลายเซ็นผูกกับทุกฟิลด์ */
-const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 1_500_000, gasPrice = GAS_PRICE }) =>   // จ่ายตามแก๊สที่ใช้จริง · gasLimit = เพดาน
+/** Every field is required because the signature covers every field */
+const buildTx = ({ action, to = "", method = "", input = {}, code, value = 0, nonce, gasLimit = 1_500_000, gasPrice = GAS_PRICE }) =>   // pay for gas actually used · gasLimit = cap
   ({ chainId: CHAIN_ID, action, from: me, to, method, input, ...(code === undefined ? {} : { code }), value, nonce, gasLimit, gasPrice });
 
 const send = (tx) => api("/sendtx", { tx, signature: signTransaction(tx, PRIVATE_KEY) });
@@ -41,22 +41,22 @@ const send = (tx) => api("/sendtx", { tx, signature: signTransaction(tx, PRIVATE
 async function main() {
   const file = process.argv[2] ?? "hello-world/hello.program.js";
   const program = (await import(new URL(file, import.meta.url))).default;
-  const code = String(program);     // ฟังก์ชัน → string (คำว่า export ไม่ติดไปด้วย)
+  const code = String(program);     // function → string (the export keyword is not included)
 
-  console.log(`deploy ${file} (${Buffer.byteLength(code)} ไบต์) โดย ${me}`);
+  console.log(`deploy ${file} (${Buffer.byteLength(code)} bytes) by ${me}`);
   const genesis = await api("/genesis");
   CHAIN_ID ??= genesis.chainId;
-  GAS_PRICE ??= String(BigInt(String(genesis.baseFee ?? genesis.gasPrice).replace(/n$/, "")) * 2n);   // 2 เท่าของ base fee ตอนนี้ เผื่อขึ้น
+  GAS_PRICE ??= String(BigInt(String(genesis.baseFee ?? genesis.gasPrice).replace(/n$/, "")) * 2n);   // 2x the current base fee, in case it rises
   const { nonce } = await api(`/nonce/${me}`);
 
-  const tx = buildTx({ action: "deploy", input: { greeting: "สวัสดี" }, code, nonce });
+  const tx = buildTx({ action: "deploy", input: { greeting: "Hello" }, code, nonce });
   console.log("  digest:", hashTypedData(tx));
   const queued = await send(tx);
-  console.log("  เข้าคิวแล้ว:", queued.hash, "| ประเมินผล:", queued.simulation?.status);
-  console.log("  รอให้ทีมงานอนุมัติ (init) แล้วโปรแกรมจะใช้งานได้");
+  console.log("  queued:", queued.hash, "| simulation:", queued.simulation?.status);
+  console.log("  waiting for the team to approve (init), then the program will be usable");
 }
 
 main().catch((error) => {
-  console.error("ล้มเหลว:", error.message);
+  console.error("failed:", error.message);
   process.exit(1);
 });

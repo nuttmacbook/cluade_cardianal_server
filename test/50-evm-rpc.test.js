@@ -4,7 +4,7 @@ import { VM, MemoryDB } from "./helpers.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { createEvmRpc, EVM_ERROR, toBig } from "../src/node/evm-rpc.js";
 
-/* ตัวแปลง JSON-RPC แบบ EVM (POST /evm): อ่านข้อมูลเชนเดิมแล้วตอบในรูปแบบ EVM · ไม่เขียนอะไรลงเชน */
+/* EVM-style JSON-RPC adapter (POST /evm): reads the existing chain data and answers in EVM format · writes nothing to the chain */
 
 const T = "0x00000000000000000000000000000000000000f1";
 const OWNER = "0x00000000000000000000000000000000000000a1";
@@ -33,7 +33,7 @@ function chain() {
   assert.equal(pay.status, "success", JSON.stringify(pay.error));
   const [send] = block((b) => [b.call({ programUuid: T, functionName: "transfer", input: { to: BOB, amount: "250n" }, context: as, nonce: 2 })]);
   assert.equal(send.status, "success", JSON.stringify(send.error));
-  return { vm, rpc: createEvmRpc({ vm, decimals: 18 }) };   // เทสต์นี้ใส่ยอดเป็นเหรียญ (ไม่มีทศนิยม) → ให้ตัวแปลงเติม 18 ทศนิยม
+  return { vm, rpc: createEvmRpc({ vm, decimals: 18 }) };   // this test sets balances in whole coins (no decimals) → the adapter adds 18 decimals
 }
 const ask = (rpc, method, ...params) => {
   const reply = rpc.handle({ jsonrpc: "2.0", id: 1, method, params });
@@ -43,7 +43,7 @@ const ask = (rpc, method, ...params) => {
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const abiWord = (hex) => BigInt(`0x${hex.replace(/^0x/, "").slice(-64)}`);
 
-test("evm: chainId / blockNumber / balance (×10^18) / nonce เป็น hex ตรงกับเชน", () => {
+test("evm: chainId / blockNumber / balance (×10^18) / nonce are hex and match the chain", () => {
   const { vm, rpc } = chain();
   assert.equal(ask(rpc, "eth_chainId"), "0x1e61");
   assert.equal(ask(rpc, "net_version"), "7777");
@@ -54,7 +54,7 @@ test("evm: chainId / blockNumber / balance (×10^18) / nonce เป็น hex �
   assert.equal(BigInt(createEvmRpc({ vm, decimals: 0 }).handle({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [BOB] }).result), BigInt(balance));
 });
 
-test("evm: block มีฟิลด์ครบแบบ EVM · timestamp เป็นวินาที · block 0 = genesis และ parentHash ต่อกัน", () => {
+test("evm: blocks have all EVM fields · timestamp in seconds · block 0 = genesis and parentHash links up", () => {
   const { vm, rpc } = chain();
   const latest = ask(rpc, "eth_getBlockByNumber", "latest", false);
   for (const field of ["number", "hash", "parentHash", "miner", "gasLimit", "gasUsed", "timestamp", "logsBloom", "transactionsRoot", "stateRoot", "transactions"]) {
@@ -72,7 +72,7 @@ test("evm: block มีฟิลด์ครบแบบ EVM · timestamp เป
   assert.equal(full.transactions[0].hash, vm.getBlock(2).txHashes[0]);
 });
 
-test("evm: tx + receipt ของการโอน native · status 0x1 · value ×10^18", () => {
+test("evm: tx + receipt of a native transfer · status 0x1 · value ×10^18", () => {
   const { vm, rpc } = chain();
   const [hash] = vm.getBlock(2).txHashes;
   const tx = ask(rpc, "eth_getTransactionByHash", hash);
@@ -82,7 +82,7 @@ test("evm: tx + receipt ของการโอน native · status 0x1 · valu
   assert.equal(ask(rpc, "eth_getTransactionReceipt", `0x${"ab".repeat(32)}`), null);
 });
 
-test("evm: deploy → contractAddress · event Transfer ของ token มาตรฐาน → log แบบ ERC-20", () => {
+test("evm: deploy → contractAddress · standard token Transfer event → ERC-20 log", () => {
   const { vm, rpc } = chain();
   const deploy = ask(rpc, "eth_getTransactionReceipt", vm.getBlock(1).txHashes[0]);
   assert.equal(deploy.contractAddress, T);
@@ -97,7 +97,7 @@ test("evm: deploy → contractAddress · event Transfer ของ token มา�
   assert.equal(ask(rpc, "eth_getTransactionByHash", hash).to, T);
 });
 
-test("evm: eth_call ฟังก์ชันอ่านของ ERC-20 บน token มาตรฐาน · getCode บอกว่าเป็นโปรแกรม", () => {
+test("evm: eth_call ERC-20 read functions on a standard token · getCode shows it is a program", () => {
   const { vm, rpc } = chain();
   const call = (data) => ask(rpc, "eth_call", { to: T, data }, "latest");
   const pad = (address) => address.slice(2).padStart(64, "0");
@@ -107,14 +107,14 @@ test("evm: eth_call ฟังก์ชันอ่านของ ERC-20 บน 
   assert.equal(abiWord(call(`0xdd62ed3e${pad(OWNER)}${pad(BOB)}`)), 0n);
   const symbol = call("0x95d89b41").slice(2);
   assert.equal(Buffer.from(symbol.slice(128, 128 + Number(abiWord(symbol.slice(64, 128))) * 2), "hex").toString(), "TST");
-  assert.equal(Buffer.from(ask(rpc, "eth_getCode", T, "latest").slice(2), "hex").toString(), TOKEN_PROGRAM);   // ซอร์ส JS เป็น UTF-8 hex
+  assert.equal(Buffer.from(ask(rpc, "eth_getCode", T, "latest").slice(2), "hex").toString(), TOKEN_PROGRAM);   // JS source as UTF-8 hex
   assert.equal(ask(rpc, "eth_getCode", BOB, "latest"), "0x");
   const other = rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: T, data: "0xa9059cbb" }] });
   assert.equal(other.error.code, EVM_ERROR.SERVER);
-  assert.equal(vm.nativeBalanceOf(BOB).balance, 500n);   // อ่านอย่างเดียว ไม่มีอะไรเปลี่ยน
+  assert.equal(vm.nativeBalanceOf(BOB).balance, 500n);   // read-only, nothing changes
 });
 
-test("evm: ไม่ได้ต่อ submit = ส่ง tx ไม่ได้ (error ชัดเจน · ส่งได้จริงดู test 94) · method ที่ไม่รองรับ / batch / params ผิด", () => {
+test("evm: no submit hooked up = cannot send txs (clear error · real sending in test 94) · unsupported methods / batch / bad params", () => {
   const { rpc } = chain();
   const send = rpc.handle({ jsonrpc: "2.0", id: 9, method: "eth_sendRawTransaction", params: ["0x02f8"] });
   assert.equal(send.id, 9);
@@ -128,7 +128,7 @@ test("evm: ไม่ได้ต่อ submit = ส่ง tx ไม่ได้ 
   assert.equal(rpc.handle([]).error.code, EVM_ERROR.REQUEST);
 });
 
-test("evm: chainParams สำหรับ wallet_addEthereumChain · toBig อ่านเลขทุกแบบของเชน", () => {
+test("evm: chainParams for wallet_addEthereumChain · toBig reads every number format of the chain", () => {
   const { rpc } = chain();
   assert.deepEqual(rpc.chainParams({ rpcUrl: "https://x/evm", explorerUrl: "https://x/evm/explorer", name: "Test", symbol: "TT" }), {
     chainId: "0x1e61", chainName: "Test", nativeCurrency: { name: "Test", symbol: "TT", decimals: 18 },
@@ -137,14 +137,14 @@ test("evm: chainParams สำหรับ wallet_addEthereumChain · toBig อ�
   assert.deepEqual([toBig("12n"), toBig(12), toBig("12"), toBig(12n), toBig(null)], [12n, 12n, 12n, 12n, 0n]);
 });
 
-test("evm: ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history (ไม่ใช่ยอดล่าสุดเสมอ)", () => {
+test("evm: balance / nonce / code / eth_call at a block number read from history (not always the latest)", () => {
   const { vm, rpc } = chain();
   const coins = (n) => BigInt(n) * 10n ** 18n;
   assert.equal(BigInt(ask(rpc, "eth_getBalance", OWNER, "0x0")), coins(1_000_000));
   assert.equal(BigInt(ask(rpc, "eth_getBalance", BOB, "0x1")), 0n);
   assert.equal(BigInt(ask(rpc, "eth_getBalance", BOB, "0x2")), coins(500));
   const owner = (n) => BigInt(ask(rpc, "eth_getBalance", OWNER, n));
-  assert.ok(owner("0x0") > owner("0x1") && owner("0x1") > owner("0x2") && owner("0x2") > owner("0x3"));   // ค่าแก๊ส + โอน ทีละ block
+  assert.ok(owner("0x0") > owner("0x1") && owner("0x1") > owner("0x2") && owner("0x2") > owner("0x3"));   // gas + transfer, one block at a time
   assert.equal(owner("latest"), coins(vm.nativeBalanceOf(OWNER).balance));
   assert.equal(owner({ blockNumber: "0x0" }), coins(1_000_000));
   assert.deepEqual(["0x0", "0x1", "0x2", "0x3"].map((n) => ask(rpc, "eth_getTransactionCount", OWNER, n)), ["0x0", "0x1", "0x2", "0x3"]);
@@ -153,11 +153,11 @@ test("evm: ยอด / nonce / code / eth_call ตามเลข block อ่�
   const pad = (address) => address.slice(2).padStart(64, "0");
   const balanceOf = (who, n) => abiWord(ask(rpc, "eth_call", { to: T, data: `0x70a08231${pad(who)}` }, n));
   assert.deepEqual([balanceOf(BOB, "0x2"), balanceOf(BOB, "0x3"), balanceOf(OWNER, "0x1"), balanceOf(OWNER, "0x3")], [0n, 250n, 1_000_000n, 999_750n]);
-  assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: T, data: "0x18160ddd" }, "0x0"] }).error.code, EVM_ERROR.SERVER);   // ยังไม่ deploy
+  assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: T, data: "0x18160ddd" }, "0x0"] }).error.code, EVM_ERROR.SERVER);   // not deployed yet
   assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [BOB, "0x99"] }).error.message, "header not found");
 });
 
-/* โปรแกรม R เรียก token ซ้อน 2 ครั้ง แล้วโอน native ต่อด้วย transferNative · block 2 มี 2 tx ที่ emit Transfer */
+/* program R calls the token twice in nested calls, then sends native via transferNative · block 2 has 2 txs that emit Transfer */
 const R = "0x00000000000000000000000000000000000000f2";
 const RELAY = `function program() {
   function pay(params) {
@@ -194,7 +194,7 @@ function nested({ maxBlockGas = null } = {}) {
   return { vm, rpc: createEvmRpc({ vm, decimals: 18 }) };
 }
 
-test("evm: logIndex นับต่อเนื่องทั้ง block · eth_getBlockReceipts · eth_getLogs · ByBlockHashAndIndex · bloom", () => {
+test("evm: logIndex counts across the whole block · eth_getBlockReceipts · eth_getLogs · ByBlockHashAndIndex · bloom", () => {
   const { vm, rpc } = nested();
   const block = vm.getBlock(2);
   const receipts = ask(rpc, "eth_getBlockReceipts", "0x2");
@@ -221,7 +221,7 @@ test("evm: logIndex นับต่อเนื่องทั้ง block · et
     `0x${[...a.slice(2)].map((c, i) => (Number.parseInt(c, 16) | Number.parseInt(b[i + 2], 16)).toString(16)).join("")}`));
 });
 
-test("evm: debug_traceTransaction / debug_traceBlockByNumber แบบ callTracer · เรียกซ้อน + transferNative + error", () => {
+test("evm: debug_traceTransaction / debug_traceBlockByNumber with callTracer · nested calls + transferNative + error", () => {
   const { vm, rpc } = nested();
   const [, payHash, boomHash, sendHash] = vm.getBlock(2).txHashes;
   const tracer = { tracer: "callTracer" };
@@ -237,7 +237,7 @@ test("evm: debug_traceTransaction / debug_traceBlockByNumber แบบ callTrace
   const boom = ask(rpc, "debug_traceTransaction", boomHash, tracer);
   assert.deepEqual([boom.error, boom.output, boom.calls], ["nope", "0x", undefined]);
   const send = ask(rpc, "debug_traceTransaction", sendHash, tracer);
-  assert.deepEqual([send.to, send.value, send.calls], [BOB, coins(3), undefined]);   // ค่าแก๊สไม่ถูกนับเป็น internal tx
+  assert.deepEqual([send.to, send.value, send.calls], [BOB, coins(3), undefined]);   // gas is not counted as an internal tx
 
   const deploy = ask(rpc, "debug_traceTransaction", vm.getBlock(1).txHashes[0], tracer);
   assert.deepEqual([deploy.type, deploy.to], ["CREATE", R]);
@@ -250,7 +250,7 @@ test("evm: debug_traceTransaction / debug_traceBlockByNumber แบบ callTrace
   assert.equal(rpc.handle({ jsonrpc: "2.0", id: 1, method: "debug_traceTransaction", params: [payHash] }).error.code, EVM_ERROR.SERVER);
 });
 
-test("evm: genesis ใช้เวลาของ block 1 · gasLimit = maxBlockGas ของเชน · txpool จาก mempool", () => {
+test("evm: genesis uses block 1's time · gasLimit = the chain's maxBlockGas · txpool from the mempool", () => {
   const { vm } = nested({ maxBlockGas: 3_000_000 });
   const item = { hash: `0x${"cd".repeat(32)}`, sender: BOB, action: "call", nonce: 4, gasPrice: null, receivedAt: 1 };
   const mempool = { list: () => [item], has: (hash) => hash === item.hash, nextNonce: () => 5 };

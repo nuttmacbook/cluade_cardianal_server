@@ -1,13 +1,13 @@
 /**
- * โปรแกรมที่ใช้ใน dev/scenario.js (แยกไฟล์เพื่อให้เทสต์ test/50-scenario-programs.test.js ตรวจได้โดยไม่ต้องเปิด server)
+ * Programs used by dev/scenario.js (a separate file so test/50-scenario-programs.test.js can check them without starting a server)
  *
- *   MULTISEND_PROGRAM  แจกเหรียญหลัก (native) หลายกระเป๋าใน tx เดียว: แนบ value = ผลรวม แล้ว transferNative ทีละรายการ
- *   CHAIN_PROGRAM      โปรแกรมต่อกันเป็นทอด ๆ: step() เรียก step() ของโปรแกรมถัดไปตาม path (deploy 6 ตัว → A→B→C→D→E→F)
- *                      บางตัวแวะเรียก balanceOf ของ token ข้างทาง (probe) · บางตัว catch ความผิดพลาดของชั้นล่าง (catch)
- *   ROUTER_PROGRAM     ส่งต่อ token + เหรียญหลักหลายทอด: ชั้นแรกดึง token จากผู้เรียก (transferFrom) แล้วทุกชั้นหัก 1%
- *                      โอน token ต่อให้ชั้นถัดไป พร้อมแนบ value ต่อไปด้วย ชั้นสุดท้ายโอนทั้งคู่ให้ผู้รับ
+ *   MULTISEND_PROGRAM  pays the native coin to many wallets in one tx: attach value = the total, then transferNative per entry
+ *   CHAIN_PROGRAM      programs chained hop by hop: step() calls step() on the next program along the path (deploy 6 → A→B→C→D→E→F)
+ *                      some call balanceOf on a token along the way (probe) · some catch errors from the level below (catch)
+ *   ROUTER_PROGRAM     forwards token + native over many hops: the first level pulls tokens from the caller (transferFrom), then every level takes 1%
+ *                      and forwards the token to the next level along with the value · the last level sends both to the recipient
  *
- * โปรแกรมห้ามใช้ obj[key] (autoreview) จึงแยกหัว / หางของ path ด้วย for…of
+ * Programs may not use obj[key] (autoreview), so the head / tail of the path are split with for…of
  */
 
 export const MULTISEND_PROGRAM = `function program() {

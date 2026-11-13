@@ -5,12 +5,12 @@ import { TOKEN, SHOP, REGISTRY, PROBE } from "./programs.js";
 
 beforeEach(() => {
   resetVM();
-  activate("token", TOKEN, { initInput: { supply: 1000 } }); // owner ได้ 1000
+  activate("token", TOKEN, { initInput: { supply: 1000 } }); // owner gets 1000
   activate("shop", SHOP, { initInput: { shopId: "shop", token: "token", price: 100 } });
   ok(callAs("owner", "token", "transfer", { to: "alice", amount: 300 }));
 });
 
-test("token: transfer / balanceOf / mint (สิทธิ์ owner)", () => {
+test("token: transfer / balanceOf / mint (owner only)", () => {
   assert.equal(stored("token", "balances", "owner"), "700n");
   assert.equal(stored("token", "balances", "alice"), "300n");
 
@@ -22,13 +22,13 @@ test("token: transfer / balanceOf / mint (สิทธิ์ owner)", () => {
   assert.equal(ok(callAs("x", "token", "balanceOf", { account: "bob" })).result, "50n");
 });
 
-test("token: transfer ให้ตัวเอง ยอดไม่เปลี่ยน", () => {
+test("token: transfer to self leaves the balance unchanged", () => {
   const res = ok(callAs("alice", "token", "transfer", { to: "alice", amount: 100 }));
   assert.equal(stored("token", "balances", "alice"), "300n");
   assert.deepEqual(res.afterValues, [{ dbKey: "token:storage:balances:alice", afterValue: "300n", changed: false }]);
 });
 
-test("shop.buy: หักเงิน user ผ่าน token (ข้ามโปรแกรม) และบันทึกข้อมูล shop ใน request เดียว", () => {
+test("shop.buy: charges the user through token (cross-program) and saves shop data in one request", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 250 }));
   const res = ok(callAs("alice", "shop", "buy"));
 
@@ -50,14 +50,14 @@ test("shop.buy: หักเงิน user ผ่าน token (ข้ามโ�
   assert.equal(stored("shop", "sales"), "1n");
 });
 
-test("shop.buy: ไม่ได้ approve → throw ทั้งหมด ไม่มีข้อมูลเปลี่ยน", () => {
+test("shop.buy: no approve → everything throws, no data changes", () => {
   const before = new Map(mockData);
   const res = fails(callAs("alice", "shop", "buy"), "PROGRAM_ERROR", "allowance ไม่พอ");
   assert.deepEqual(trace(res), ["0:shop.buy:throw:PROGRAM_ERROR", "1:token.transferFrom:throw:PROGRAM_ERROR"]);
   assert.deepEqual(new Map(mockData), before);
 });
 
-test("shop.buySafe: token ล้มแต่ shop catch → success, บันทึกเฉพาะ log ของ shop", () => {
+test("shop.buySafe: token fails but shop catches → success, only shop's log is saved", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 50 }));
   const res = ok(callAs("alice", "shop", "buySafe"));
 
@@ -68,7 +68,7 @@ test("shop.buySafe: token ล้มแต่ shop catch → success, บัน�
   assert.equal(stored("token", "allowance", "alice", "shop"), "50n");
 });
 
-test("shop.buyMany: ชิ้นที่ 3 เงินไม่พอ ไม่มี catch → ย้อนทั้ง 3 ชิ้น", () => {
+test("shop.buyMany: 3rd item runs out of funds, no catch → all 3 items revert", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 1000 }));
   const res = fails(callAs("alice", "shop", "buyMany", { qty: 4 }), "PROGRAM_ERROR", "ยอดไม่พอ");
   assert.deepEqual(trace(res), [
@@ -82,7 +82,7 @@ test("shop.buyMany: ชิ้นที่ 3 เงินไม่พอ ไม�
   assert.equal(stored("shop", "items", "alice"), undefined);
 });
 
-test("shop.buyMany: ซื้อได้หมด → ยอดและข้อมูลถูกต้องทุกโปรแกรม", () => {
+test("shop.buyMany: all purchases succeed → balances and data are correct in every program", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 1000 }));
   const res = ok(callAs("alice", "shop", "buyMany", { qty: 3 }));
   assert.deepEqual(res.result, ["1n", "2n", "3n"]);
@@ -91,14 +91,14 @@ test("shop.buyMany: ซื้อได้หมด → ยอดและข้�
   assert.equal(stored("shop", "sales"), "3n");
 });
 
-test("โปรแกรมกลางแก้ข้อมูลของ token แทน user ไม่ได้: sender เป็นโปรแกรม ไม่ใช่ user", () => {
+test("an intermediary program cannot change token data on the user's behalf: sender is the program, not the user", () => {
   activate("probe", PROBE);
   const res = fails(callAs("alice", "probe", "relay", { target: "token", fn: "transfer", args: { to: "probe", amount: 1 } }), "PROGRAM_ERROR", "ยอดไม่พอ");
   assert.equal(res.calls[1].sender, "probe");
   assert.equal(stored("token", "balances", "alice"), "300n");
 });
 
-test("registry: บันทึกข้อมูลลงโปรแกรมอื่นผ่านฟังก์ชันของโปรแกรมนั้นเท่านั้น", () => {
+test("registry: writes to another program only through that program's functions", () => {
   activate("registry", REGISTRY);
   activate("probe", PROBE);
   const res = ok(callAs("alice", "probe", "relay", { target: "registry", fn: "register" }));
@@ -107,7 +107,7 @@ test("registry: บันทึกข้อมูลลงโปรแกรม�
   assert.equal(stored("registry", "members", "probe"), "alice");
 });
 
-test("อ่านข้อมูลที่อีกโปรแกรมเพิ่งเขียนใน request เดียวกัน (ผ่านฟังก์ชันของโปรแกรมนั้น)", () => {
+test("reads data another program just wrote in the same request (through that program's functions)", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 100 }));
   activate("probe", PROBE);
   const res = ok(callAs("alice", "probe", "relaySequence", {

@@ -1,31 +1,31 @@
 /**
- * ตรวจโค้ดของโปรแกรมแบบอัตโนมัติ — ใช้แทนการรีวิวด้วยคน
- * ไฟล์นี้อยู่ได้ด้วยตัวเอง ไม่ต้องพึ่ง VM (ต้องการแค่ acorn) จึงเอาไปคั่นที่ /sendtx ได้เลย
+ * Automatic review of program code, used instead of human review.
+ * This file is self-contained and does not depend on the VM (it only needs acorn), so it can guard /sendtx directly.
  *
  *   import { reviewProgram } from "./autoreview.js";
  *
  *   const result = reviewProgram(tx.code);
- *   if (!result.ok) return reply.status(400).send({ error: "โค้ดไม่ผ่านการตรวจ", issues: result.issues });
+ *   if (!result.ok) return reply.status(400).send({ error: "code failed review", issues: result.issues });
  *
- * หลักการ: บัญชีขาว — อนุญาตเฉพาะสิ่งที่ระบุไว้ ที่เหลือปฏิเสธหมด
- * จึงไม่ต้องไล่ห้าม process / fetch / eval ทีละตัว
+ * Principle: allowlist. Only what is listed is allowed; everything else is rejected,
+ * so there is no need to ban process / fetch / eval one by one.
  */
 import { parse } from "acorn";
 
-/** API ที่ VM ใส่ให้โปรแกรมตอนรัน */
+/** APIs the VM injects into a program at run time */
 export const PROGRAM_API = [
   "readDB", "writeDB", "deleteDB", "map", "runProgram", "transferNative", "setMetadata", "emit",
   "keccak256", "ecrecover", "ThisAddress", "ThisBalance", "BalanceOf", "IsProgram", "MetadataOf", "BlockNumber",
-  "cloneProgram",   // สร้างโปรแกรมใหม่จากโปรแกรมต้นแบบที่อนุมัติแล้ว (แบบ CREATE2)
-  "sha256", "ripemd160", "blake2b", "modexp",   // precompile แบบ EVM
+  "cloneProgram",   // create a new program from an approved template program (CREATE2-style)
+  "sha256", "ripemd160", "blake2b", "modexp",   // EVM-style precompiles
   "BlockHash", "ChainId", "Coinbase", "BlockGasLimit", "GasPrice", "BaseFee", "GasLeft", "CodeHashOf", "CodeSizeOf",
-  "keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator",   // byte ดิบ + EIP-712 (eth_signTypedData_v4)
+  "keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator",   // raw bytes + EIP-712 (eth_signTypedData_v4)
   "params",
 ];
 
 /**
- * ตรวจโค้ดที่ผู้ใช้ส่งมา — ใช้ตัวนี้เป็นหลัก
- * @param {string} code โค้ดดิบจาก tx.code
+ * Review code submitted by a user. This is the main entry point.
+ * @param {string} code raw code from tx.code
  * @returns {{ ok: boolean, issues: Array<{line:number,column:number,message:string}>, message: string }}
  */
 export function reviewProgram(code, { apiNames = PROGRAM_API } = {}) {
@@ -33,7 +33,7 @@ export function reviewProgram(code, { apiNames = PROGRAM_API } = {}) {
   return { ...result, message: reviewMessage(result) };
 }
 
-/** ชนิดของโครงสร้างที่โปรแกรมใช้ได้ */
+/** node types a program may use */
 const ALLOWED_NODES = new Set([
   "Program", "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "BlockStatement",
   "VariableDeclaration", "VariableDeclarator", "ExpressionStatement", "ReturnStatement", "IfStatement",
@@ -43,13 +43,13 @@ const ALLOWED_NODES = new Set([
   "UpdateExpression", "AssignmentExpression", "ConditionalExpression", "SequenceExpression", "SpreadElement",
   "ArrayExpression", "ObjectExpression", "Property", "TemplateLiteral", "TemplateElement",
   "Identifier", "Literal", "RestElement", "ArrayPattern", "ObjectPattern", "AssignmentPattern",
-  "NewExpression",   // เฉพาะ new Error(...) — ตรวจเพิ่มด้านล่าง
+  "NewExpression",   // only new Error(...), checked further below
 ]);
 
 /**
- * global ที่อนุญาต พร้อม "เมธอดที่ใช้ได้" ของแต่ละตัว
- * ตัดสิ่งที่แตะ prototype ร่วม (Object.defineProperty ฯลฯ) และสิ่งที่ผลต่างกันข้ามเครื่อง
- * (Math.sin, toLocaleString) ออกทั้งหมด
+ * allowed globals, each with its "allowed methods"
+ * Anything that touches shared prototypes (Object.defineProperty etc.) and anything whose result differs across machines
+ * (Math.sin, toLocaleString) is removed entirely.
  */
 export const ALLOWED_MEMBERS = {
   Object: ["keys", "values", "entries", "fromEntries"],
@@ -58,7 +58,7 @@ export const ALLOWED_MEMBERS = {
   Math: ["abs", "floor", "ceil", "round", "trunc", "sign", "min", "max", "random", "PI", "E"],
   Number: ["isInteger", "isSafeInteger", "isFinite", "isNaN", "parseInt", "parseFloat", "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER"],
   String: ["fromCharCode"],
-  Date: ["now", "UTC", "parse"],   // now ถูก VM แทนด้วยเวลาของ block ส่วน UTC / parse เป็นการคำนวณล้วน
+  Date: ["now", "UTC", "parse"],   // now is replaced by the VM with the block time; UTC / parse are pure computation
   BigInt: [],
   Boolean: [],
   Error: [],
@@ -69,32 +69,32 @@ export const ALLOWED_GLOBALS = new Set([
 ]);
 
 /**
- * เมธอดของค่า (string / array / object) ที่ห้าม
- *   - ผลต่างกันตาม locale หรือ engine
- * (repeat / padStart / padEnd ใช้ได้แล้ว: sandbox คิดแก๊สตามขนาดผลลัพธ์ก่อนทำ + จำกัดหน่วยความจำ)
+ * forbidden methods on values (string / array / object)
+ *   - results differ by locale or engine
+ * (repeat / padStart / padEnd are now allowed: the sandbox charges gas by result size before running + caps memory)
  */
 const BANNED_METHODS = new Set([
-  "sort",                                                // ลำดับไม่แน่นอนถ้า comparator ขัดแย้งกันเอง
+  "sort",                                                // order is nondeterministic if the comparator is inconsistent
   "localeCompare", "toLocaleString", "toLocaleDateString", "toLocaleTimeString",
   "normalize", "toLocaleUpperCase", "toLocaleLowerCase",
-  "bind", "call", "apply",                               // เปลี่ยน this / หนีขอบเขต
+  "bind", "call", "apply",                               // changes this / escapes scope
 ]);
 
-/** ชื่อ property ที่เป็นประตูหนีออกจาก sandbox */
+/** property names that are escape hatches out of the sandbox */
 const BANNED_PROPERTIES = new Set([
   "constructor", "prototype", "__proto__", "__defineGetter__", "__defineSetter__",
   "caller", "callee", "arguments",
-  "stack",   // รูปแบบต่างกันตามเวอร์ชัน Node → เขียนลง DB แล้ว replay ไม่ตรง
+  "stack",   // format differs across Node versions → written to the DB, then replay does not match
 ]);
 
-/** constructor ที่ new ได้ */
-const ALLOWED_NEW = new Set(["Error", "Date"]);   // Date ถูก VM แทนด้วยเวลาของ block แล้ว
+/** constructors that may be used with new */
+const ALLOWED_NEW = new Set(["Error", "Date"]);   // Date is already replaced by the VM with the block time
 
 const at = (node) => ({ line: node.loc?.start.line ?? 0, column: node.loc?.start.column ?? 0 });
 
 /**
- * @param {string} code โค้ดดิบที่ผู้ใช้ส่งมา
- * @param {{ apiNames?: string[] }} [options] ชื่อ API ของ VM ที่โปรแกรมเรียกได้
+ * @param {string} code raw code submitted by the user
+ * @param {{ apiNames?: string[] }} [options] names of VM APIs the program may call
  */
 export function review(code, { apiNames = [] } = {}) {
   const issues = [];
@@ -110,7 +110,7 @@ export function review(code, { apiNames = [] } = {}) {
   const known = new Set([...ALLOWED_GLOBALS, ...apiNames]);
   const declared = new Set();
 
-  // รอบแรก: เก็บชื่อทั้งหมดที่โปรแกรมประกาศเอง (ทุก scope รวมกัน — เข้มกว่าจริงเล็กน้อยแต่ปลอดภัย)
+  // first pass: collect every name the program declares itself (all scopes merged; slightly stricter than reality but safe)
   walk(ast, (node) => {
     if (node.type === "FunctionDeclaration" && node.id) declared.add(node.id.name);
     if (node.type === "FunctionExpression" && node.id) declared.add(node.id.name);
@@ -119,7 +119,7 @@ export function review(code, { apiNames = [] } = {}) {
     for (const param of node.params ?? []) collectNames(param, declared);
   });
 
-  // รอบสอง: ตรวจกฎ
+  // second pass: check the rules
   walk(ast, (node, parent) => {
     if (!ALLOWED_NODES.has(node.type)) {
       add(node, `ใช้ ${describe(node.type)} ไม่ได้`);
@@ -135,7 +135,7 @@ export function review(code, { apiNames = [] } = {}) {
         const name = node.property.name;
         if (BANNED_PROPERTIES.has(name)) add(node, `เข้าถึง .${name} ไม่ได้`);
         else if (BANNED_METHODS.has(name)) add(node, `ใช้ .${name}() ไม่ได้ (ผลไม่แน่นอนหรือสร้างข้อมูลใหญ่เกินการนับค่าแก๊ส)`);
-        // global ที่อนุญาต: ใช้ได้เฉพาะเมธอดในบัญชีขาวของตัวนั้น
+        // allowed global: only the methods on its allowlist may be used
         else if (node.object.type === "Identifier" && ALLOWED_MEMBERS[node.object.name] && !declared.has(node.object.name)) {
           const allowed = ALLOWED_MEMBERS[node.object.name];
           if (!allowed.includes(name)) add(node, `${node.object.name}.${name} ใช้ไม่ได้ (ใช้ได้เฉพาะ ${allowed.join(", ") || "ไม่มี"})`);
@@ -160,7 +160,7 @@ export function review(code, { apiNames = [] } = {}) {
   return issues.length ? { ok: false, issues } : { ok: true, issues: [] };
 }
 
-/** ข้อความสรุปสำหรับแสดงให้ผู้ส่งโค้ด */
+/** summary message shown to whoever submitted the code */
 export function reviewMessage(result) {
   return result.ok ? "ผ่านการตรวจ" : result.issues.map((issue) => `บรรทัด ${issue.line}: ${issue.message}`).join("\n");
 }
@@ -187,7 +187,7 @@ function collectNames(pattern, set) {
   if (pattern.type === "RestElement") collectNames(pattern.argument, set);
 }
 
-/** identifier ที่เป็น "การอ้างถึงค่า" จริง ๆ (ไม่ใช่ชื่อ property หรือชื่อที่กำลังประกาศ) */
+/** identifiers that are real "value references" (not property names or names being declared) */
 function isReference(node, parent) {
   if (!parent) return true;
   if (parent.type === "MemberExpression" && parent.property === node && !parent.computed) return false;

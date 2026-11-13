@@ -13,208 +13,208 @@ import { StateTrie, buildTrie, trieKeyOf, trieValueOf, TRIE_PREFIX, trieNodeKey 
 export { keccak256Hex, normalizeAddress, normalizeHex, normalizeHexDeep, canonicalJson };
 
 /*
- *  const vm = new VirtualMachine(new DB("./data"), { timeoutMs: 1000, maxCallDepth: 8 })  // ดู db.js
+ *  const vm = new VirtualMachine(new DB("./data"), { timeoutMs: 1000, maxCallDepth: 8 })  // see db.js
  *
- *  โปรแกรมอยู่ใน scope เดียวทั้งไฟล์ และเป็น JavaScript ที่ถูกต้อง (ส่งผ่าน API เป็น string ได้ตรง ๆ):
+ *  A program is a single scope for the whole file and is valid JavaScript (can be passed through the API as a string as is):
  *    function program() {
- *      function initialization(params) {}   รันครั้งเดียวตอน init — เรียกจากภายนอกไม่ได้
- *      function helper() {}                 ไม่อยู่ใน return = ใช้ภายในโปรแกรมเท่านั้น
+ *      function initialization(params) {}   runs once at init; cannot be called from outside
+ *      function helper() {}                 not in return = internal to the program only
  *      function transfer(params) {}
- *      return { transfer }                  รายชื่อฟังก์ชันที่ให้เรียกจากภายนอก (บรรทัดสุดท้าย)
+ *      return { transfer }                  list of functions callable from outside (last line)
  *    }
- *    ชื่อฟังก์ชันครอบจะเป็นอะไรก็ได้ และใช้ `const program = () => { ... }` ก็ได้ ห้าม import / export
+ *    The wrapper function can have any name, and `const program = () => { ... }` also works; no import / export
  *
- *  vm.deploy({ programUuid, code, context, initInput })   user ส่งโค้ด → pending
- *  vm.init({ programUuid })                               ทีมงานอนุมัติ → รัน initialization ครั้งเดียว
- *  vm.reject({ programUuid })                             ทีมงานปฏิเสธ
- *  vm.call({ programUuid, functionName, input, context }) user เรียกฟังก์ชันที่ export
- *  vm.transfer({ from, to, amount })                      โอน native ระหว่าง address (ไม่เรียกโปรแกรม)
+ *  vm.deploy({ programUuid, code, context, initInput })   user submits code → pending
+ *  vm.init({ programUuid })                               team approves → runs initialization once
+ *  vm.reject({ programUuid })                             team rejects
+ *  vm.call({ programUuid, functionName, input, context }) user calls an exported function
+ *  vm.transfer({ from, to, amount })                      native transfer between addresses (no program call)
  *
- *  อัปเกรดโปรแกรม (เฉพาะโปรแกรมที่มี upgrader — ไม่มี = แก้ไม่ได้ตลอดไป):
- *    vm.deploy({ ..., upgrader })                            ตั้ง upgrader ตั้งแต่ deploy → เขียนเป็น metadata.upgrader ตอน init
- *    vm.setUpgrader({ programUuid, upgrader, context })      upgrader คนปัจจุบันโอนสิทธิ์ (null = สละสิทธิ์ → แก้ไม่ได้อีก)
- *    vm.upgrade({ programUuid, code, migrateInput, context }) upgrader ส่งโค้ดใหม่ → pending-upgrade:<id> รอรีวิว
- *    vm.initUpgrade({ programUuid }) / vm.rejectUpgrade(...) ทีมงานอนุมัติ / ปฏิเสธ (กติกาเดียวกับ init / reject)
- *       อนุมัติ → เปลี่ยน <id>:code, รัน migrate(params) ครั้งเดียว, metadata.version + 1, เก็บ <id>:codeversion:<n>
- *       upgradeDelayBlocks = N > 0 → โค้ดใหม่เริ่มใช้ตอนสร้าง block (ที่อนุมัติ + N) ดู Block.#activateUpgrades
- *  โคลนโปรแกรม (ในโปรแกรม): cloneProgram(template, initInput, { salt, value }) → address ใหม่ (แบบ CREATE2)
+ *  Program upgrades (only for programs with an upgrader; none = immutable forever):
+ *    vm.deploy({ ..., upgrader })                            set the upgrader at deploy → written as metadata.upgrader at init
+ *    vm.setUpgrader({ programUuid, upgrader, context })      the current upgrader transfers the right (null = renounce → immutable from then on)
+ *    vm.upgrade({ programUuid, code, migrateInput, context }) the upgrader submits new code → pending-upgrade:<id> awaiting review
+ *    vm.initUpgrade({ programUuid }) / vm.rejectUpgrade(...) team approves / rejects (same rules as init / reject)
+ *       approve → replace <id>:code, run migrate(params) once, metadata.version + 1, store <id>:codeversion:<n>
+ *       upgradeDelayBlocks = N > 0 → the new code takes effect when block (approval + N) is created; see Block.#activateUpgrades
+ *  Program cloning (inside a program): cloneProgram(template, initInput, { salt, value }) → new address (CREATE2-style)
  *
- *  ขั้นต่ำของ gas price ที่เจ้าของเชนปรับได้กลางทาง (ไม่ต้อง fork / ล้างเชน · ดู setGasConfig):
- *    vm.setGasConfig({ minBaseFee, context })   admin เซ็น → เขียน gasconfig ใน state · มีผลตั้งแต่ block ถัดไป
- *    ราคาต่อหน่วย (DEFAULT_GAS) เปลี่ยนผ่าน fork เท่านั้น (admin key หลุดก็ทำให้ tx ฟรีไม่ได้)
+ *  Gas price floor that the chain owner can adjust mid-chain (no fork / chain reset · see setGasConfig):
+ *    vm.setGasConfig({ minBaseFee, context })   admin signs → writes gasconfig to state · takes effect from the next block
+ *    per-unit prices (DEFAULT_GAS) change only via fork (a leaked admin key cannot make txs free)
  *
- *  คืนค่า { status: "success", result, calls, loadValues, afterValues, writes }
- *      หรือ { status: "throw", error: { code, message }, calls }
- *  เมื่อ success → vm.commit(res.writes) บันทึกลง DB ผ่าน db.writeKeys (หรือบันทึกเอง)
- *  runProgram error → ผู้เรียก catch ได้ (การเขียนของปลายทางถูกย้อน) ถ้าไม่ catch → throw ต่อขึ้นไปจนทั้ง request ล้ม
- *  timeout / แก๊สหมด / หน่วยความจำเกิน / อ่าน DB ไม่สำเร็จ → ทั้ง request ล้มเสมอ (catch ไม่ได้)
+ *  Returns { status: "success", result, calls, loadValues, afterValues, writes }
+ *      or { status: "throw", error: { code, message }, calls }
+ *  On success → vm.commit(res.writes) persists to the DB via db.writeKeys (or persist it yourself)
+ *  runProgram error → the caller can catch it (the callee's writes are rolled back); if not caught → it propagates until the whole request fails
+ *  timeout / out of gas / memory exceeded / DB read failure → the whole request always fails (cannot be caught)
  *
- *  sandbox: โค้ดของโปรแกรมรันใน QuickJS (WebAssembly) ไม่ใช่ใน process ของ server — ดู sandbox.js
- *    1 tx = 1 runtime (หน่วยความจำ memoryLimitBytes / stack maxStackBytes นับรวมทั้งสายการเรียก)
- *    1 โปรแกรม = 1 context (global แยกกัน) · ค่าข้ามเขตแดนเป็นสำเนาเสมอ โปรแกรมแตะ object ของ host ไม่ได้
- *    global ของโปรแกรม: built-in มาตรฐานของ JS + Date / Math ของ block · ไม่มี eval / new Function / process / require
+ *  sandbox: program code runs in QuickJS (WebAssembly), not in the server process; see sandbox.js
+ *    1 tx = 1 runtime (memory memoryLimitBytes / stack maxStackBytes counted across the whole call chain)
+ *    1 program = 1 context (separate globals) · values always cross the boundary as copies; programs cannot touch host objects
+ *    program globals: standard JS built-ins + the block's Date / Math · no eval / new Function / process / require
  *
- *  เวลา: ทุก call ใน block เห็นเวลาเดียวกัน (แบบ block.timestamp ของ EVM)
- *    vm.createBlock({ timestamp })  /  vm.call(request, { timestamp })   ไม่ส่ง → Date.now() ครั้งเดียว
- *    ในโปรแกรม: params.block.timestamp, Date.now(), new Date() ได้ค่านี้ทั้งหมด
+ *  Time: every call in a block sees the same time (like EVM block.timestamp)
+ *    vm.createBlock({ timestamp })  /  vm.call(request, { timestamp })   not given → Date.now() once
+ *    inside a program: params.block.timestamp, Date.now(), new Date() all return this value
  *
- *  receipt สำหรับ explorer: vm.buildReceipt(request, result, { index, action }) / block.receipt({ number })
- *    แต่ละ tx มี hash ที่คำนวณจาก request ของ user เท่านั้น (รู้ได้ตั้งแต่ก่อนส่ง, tx ที่ล้มก็มี)
- *    เปลี่ยนไปใช้ keccak256 ได้ด้วย option hashFunction ตอนสร้าง VM
+ *  Receipts for the explorer: vm.buildReceipt(request, result, { index, action }) / block.receipt({ number })
+ *    each tx has a hash computed from the user's request only (known before sending; failed txs have one too)
+ *    switch to keccak256 with the hashFunction option when creating the VM
  *
- *  หลาย call แล้ว commit ทีเดียว
+ *  Several calls, then commit once
  *    const block = vm.createBlock()
  *    block.call({ ... })      // tx1
- *    block.call({ ... })      // tx2 เห็นผลของ tx1
- *    block.loadValues()       // storage key ที่ทั้ง block อ่าน (ค่าก่อน block)
- *    block.afterValues()      // storage key ที่ทั้ง block แตะ (ค่าหลัง block, changed)
- *    block.writes()           // writes รวมของทุก tx ที่ success
- *    block.commit()           // บันทึกทีเดียวผ่าน db.writeKeys
+ *    block.call({ ... })      // tx2 sees tx1's results
+ *    block.loadValues()       // storage keys the whole block read (values before the block)
+ *    block.afterValues()      // storage keys the whole block touched (values after the block, changed)
+ *    block.writes()           // combined writes of every successful tx
+ *    block.commit()           // persist once via db.writeKeys
  *
- *  address ของโปรแกรม: ตั้งเองได้ หรือให้ VM คำนวณจาก keccak256(deployer + nonce) ด้วย deriveProgramAddress
- *  Math.random() ในโปรแกรมถูกแทนด้วยตัวสุ่มที่ผูกกับ tx (รันซ้ำได้ผลเดิม)
+ *  Program address: set it yourself, or let the VM derive it from keccak256(deployer + nonce) with deriveProgramAddress
+ *  Math.random() inside programs is replaced by a tx-bound RNG (re-running gives the same result)
  *
- *  API ในโปรแกรม: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
+ *  Program APIs: readDB / writeDB / deleteDB / map / runProgram / transferNative / setMetadata / emit
  *                 keccak256 / ecrecover / ThisAddress / ThisBalance / BalanceOf / IsProgram / MetadataOf / BlockNumber
  *                 sha256 / ripemd160 / blake2b / modexp / BlockHash / ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
- *                 keccak256Bytes / ecrecoverDigest / eip712Digest / eip712DomainSeparator (byte ดิบ + EIP-712 แบบ eth_signTypedData_v4)
- *                 CodeHashOf / CodeSizeOf · runProgram(..., { readonly: true }) = เรียกแบบอ่านอย่างเดียว (STATICCALL)
- *  ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น เช่น 10n (เก็บใน DB เป็น "123n" แปลงไปกลับให้อัตโนมัติ)
- *    ยอด native (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() เป็น BigInt
- *    Date.now() / Math ยังคืน number → ห่อ BigInt() ก่อนเก็บหรือ return (ทศนิยมต้องปัดก่อน หรือส่งเป็น string)
+ *                 keccak256Bytes / ecrecoverDigest / eip712Digest / eip712DomainSeparator (raw bytes + EIP-712 as in eth_signTypedData_v4)
+ *                 CodeHashOf / CodeSizeOf · runProgram(..., { readonly: true }) = read-only call (STATICCALL)
+ *  Numbers in programs must be BigInt only, e.g. 10n (stored in the DB as "123n", converted both ways automatically)
+ *    native balances (ThisBalance / BalanceOf) / params.value / params.block.timestamp / BlockNumber() are BigInt
+ *    Date.now() / Math still return number → wrap in BigInt() before storing or returning (round decimals first, or pass as a string)
  *
- *  key ใน DB: pending:<id> | <id>:code | <id>:context | <id>:this | <id>:storage:<a>:<b>...
- *    <id>:this          address ของโปรแกรมเอง (โปรแกรมอ่านได้ด้วย ThisAddress())
- *    <addr>:nonce       ลำดับ tx ของ wallet (กัน tx ซ้ำ) — เปิดด้วย requireNonce
- *    <addr>:native:received / :sended / :consumed   ยอดสะสม (เพิ่มได้อย่างเดียว)
- *       ยอดคงเหลือ = received - sended - consumed  (consumed = ค่าแก๊สที่จ่ายไป)
- *       ค่าแก๊สส่วนที่ "เผา" ถูกโอนไปที่ 0x000…000 ไม่ได้หายไปเฉย ๆ
- *    <addr>:metadata:<field>   ข้อมูลประกอบของ address (namespace, type, creator, ...)
- *    namespace:<name>          ชื่อ → address (ห้ามซ้ำทั้งระบบ)
- *    <addr>:txn:<nonce>:<txhash>  รายการ tx ของ address (สำหรับ explorer) — เปิดด้วย recordTransactions
+ *  DB keys: pending:<id> | <id>:code | <id>:context | <id>:this | <id>:storage:<a>:<b>...
+ *    <id>:this          the program's own address (programs read it with ThisAddress())
+ *    <addr>:nonce       wallet tx sequence (prevents duplicate txs); enabled with requireNonce
+ *    <addr>:native:received / :sended / :consumed   cumulative totals (only ever increase)
+ *       balance = received - sended - consumed  (consumed = gas fees paid)
+ *       the "burned" part of gas fees is transferred to 0x000…000, not just dropped
+ *    <addr>:metadata:<field>   address metadata (namespace, type, creator, ...)
+ *    namespace:<name>          name → address (unique across the whole system)
+ *    <addr>:txn:<nonce>:<txhash>  the address's tx list (for the explorer); enabled with recordTransactions
  *    block:<number> | blockbody:<number> | blockhash:<hash> | latestblock | tx:<txhash> | sigtx:<digest>
- *    history:<dbKey>:<number>   ค่าก่อนเปลี่ยน (ย้อนดู state ณ block ใดก็ได้ด้วยการ seek ครั้งเดียว)
- *    blockundo:<number>         รายชื่อ key ของ state ที่ block นั้นแตะ (ดัชนีไม่มี history — ดู isIndexKey)
- *       blockbody = tx ดิบของทุกใบใน block (ใช้ replay สร้าง state ใหม่ได้ทั้งหมด)
- *                          ข้อมูล block และดัชนีค้น tx จาก hash — เปิดด้วย recordBlocks + ส่ง number ตอน createBlock
+ *    history:<dbKey>:<number>   value before the change (look up state at any block with a single seek)
+ *    blockundo:<number>         list of state keys the block touched (indexes have no history; see isIndexKey)
+ *       blockbody = raw txs of every tx in the block (replay can rebuild the entire state)
+ *                          block data and tx-by-hash index; enabled with recordBlocks + passing number to createBlock
  *
- *  ค่าแก๊ส (เมื่อ chargeGas): call 100 + write 500 + read 100 + 1 ต่อ byte ที่อ่าน/เขียน
- *    + 1 ต่อ node ของโค้ดที่รันผ่าน (ฉีดตัวนับตอนคอมไพล์ ดู gasmeter.js) + builtin ต่อหน่วยข้อมูลที่คัดลอก / สร้าง
- *      (1 สมาชิก หรือ 32 ตัวอักษร / byte: เมธอดในตัว · spread · string ที่ต่อกัน · input / ผลของ runProgram — ดู sandbox.js)
- *    เพดานต่อ tx = maxTxGas ใช้แม้ไม่ได้หักค่าแก๊ส → ลูปไม่รู้จบจบด้วย OUT_OF_GAS
- *    ผู้จ่ายคือ sender ของ tx ชั้นนอกสุดเสมอ, หักจาก <sender>:nativebalance
- *    user ส่ง gasLimit มาเองได้ (เพดานสูงสุดคือยอด native ที่เหลือหลังหัก value)
- *    แก๊สไม่พอ → OUT_OF_GAS (โปรแกรม catch ไม่ได้), tx ที่ล้มก็ยังกิน nonce และค่าแก๊ส
- *    ค่าแก๊สแบบ EIP-1559 (ดู resolveFees / nextBaseFee):
- *      แต่ละ block มี baseFeePerGas (ใน header + hash) ปรับตามแก๊สที่ block ก่อนหน้าใช้เทียบกับ gasTarget (±12.5% ต่อ block, ไม่ต่ำกว่า minBaseFee)
- *      tx ส่ง maxFeePerGas + maxPriorityFeePerGas (หรือ gasPrice แบบเดิม = ทั้งสองค่า) → ราคาจริง = min(maxFee, baseFee + priority)
- *      ส่วน base fee (gas × baseFee) เผาทิ้ง burnPercent % (ค่าเริ่มต้น 100) ที่เหลือ + tip ทั้งหมด เข้าผู้ปิด block (feeRecipient)
+ *  Gas fees (when chargeGas): call 100 + write 500 + read 100 + 1 per byte read/written
+ *    + 1 per code node executed (counters injected at compile time; see gasmeter.js) + builtin per unit of data copied / created
+ *      (1 element or 32 characters / bytes: built-in methods · spread · concatenated strings · runProgram input / result; see sandbox.js)
+ *    per-tx ceiling = maxTxGas, applied even when gas is not charged → infinite loops end with OUT_OF_GAS
+ *    the payer is always the sender of the outermost tx, deducted from <sender>:nativebalance
+ *    users may supply their own gasLimit (the maximum is the native balance left after deducting value)
+ *    not enough gas → OUT_OF_GAS (programs cannot catch it); failed txs still consume the nonce and gas fee
+ *    EIP-1559-style gas fees (see resolveFees / nextBaseFee):
+ *      each block has a baseFeePerGas (in the header + hash) adjusted by the previous block's gas used vs gasTarget (±12.5% per block, never below minBaseFee)
+ *      a tx sends maxFeePerGas + maxPriorityFeePerGas (or legacy gasPrice = both values) → actual price = min(maxFee, baseFee + priority)
+ *      of the base fee portion (gas × baseFee), burnPercent % is burned (default 100); the rest + all tips go to the block closer (feeRecipient)
  *
- *  แนบเงินไปกับ tx: vm.call({ ..., value: 20 })  → โอน native จาก sender ไปยังโปรแกรม
- *    deploy ก็แนบได้: เงินย้ายไปที่โปรแกรมตั้งแต่ deploy, initialization เห็นที่ params.value, reject คืนเงิน
- *    ในโปรแกรม: params.value และแนบต่อได้ด้วย runProgram(target, fn, input, { value: 20 })
+ *  Attaching funds to a tx: vm.call({ ..., value: 20 })  → transfers native from the sender to the program
+ *    deploy can attach too: funds move to the program at deploy, initialization sees them in params.value, reject refunds them
+ *    inside a program: params.value, and funds can be forwarded with runProgram(target, fn, input, { value: 20 })
  *
- *  address (wallet / program): programUuid, sender, origin → ตัวพิมพ์เล็กเสมอ
- *    string รูปแบบ 0x… hex ใน input และใน key ของ storage → ตัวพิมพ์เล็ก (string อื่นไม่เปลี่ยน)
+ *  Addresses (wallet / program): programUuid, sender, origin → always lowercase
+ *    0x… hex strings in input and in storage keys → lowercase (other strings unchanged)
  */
 
 // ============================================================================
-//  ค่าที่ปรับบ่อย
+//  frequently tuned values
 // ============================================================================
 
 export const DEFAULT_OPTIONS = {
-  timeoutMs: 1000,     // เวลารวมต่อ 1 request (รวมโปรแกรมที่เรียกต่อกัน)
-  maxCallDepth: 8,     // runProgram ซ้อนได้กี่ชั้น
-  requireNonce: false, // บังคับให้ทุก tx ของ user ส่ง nonce มาด้วย
-  chargeGas: false,    // หักค่าแก๊สจาก <sender>:nativebalance
-  burnPercent: 100,    // ส่วนของ base fee ที่เผาทิ้ง (%) ที่เหลือเข้ากระเป๋า feeRecipient · tip (priority fee) เข้า feeRecipient เสมอ
-  minBaseFee: null,              // base fee ต่ำสุด (และของ block แรก) — null = gas.price
-  gasTarget: null,               // แก๊สเป้าหมายต่อ block (EIP-1559) — null = maxBlockGas / 2 · ไม่มีทั้งคู่ = base fee คงที่ที่ minBaseFee
-  baseFeeChangeDenominator: 8,   // base fee เปลี่ยนได้ไม่เกิน 1/8 (12.5%) ต่อ block
-  feeRecipient: null,  // ผู้ปิด block (ตั้งต่อ block ได้ที่ createBlock)
-  chainId: 1,          // กัน tx ของระบบหนึ่งถูกนำไปใช้ซ้ำในอีกระบบ
-  recordTransactions: false, // เขียน <address>:txn:<nonce>:<txhash> ลงไปกับ writes ของ tx ด้วย
-  recordBlocks: false,       // เขียน block:<number> / blockhash:<hash> / latestblock / tx:<hash>
-  deriveProgramAddress: false, // คำนวณ address ของโปรแกรมจาก keccak256(deployer + nonce) เสมอ
-  forceOriginFromSender: true, // tx ของ user: origin = sender เสมอ (กันการปลอม origin)
-  maxTransactions: null,          // จำนวน tx สูงสุดต่อ block (null = ไม่จำกัด)
-  maxTransactionsPerSender: null, // จำนวน tx สูงสุดต่อ address ใน 1 block
-  maxBlockGas: null,              // แก๊สรวมสูงสุดต่อ block
-  maxTxGas: 10_000_000,           // แก๊สสูงสุดต่อ tx / query (ลูปไม่รู้จบหยุดที่นี่ด้วย OUT_OF_GAS แม้ไม่ได้หักค่าแก๊ส)
-  admins: null,                   // address ที่เรียก init / reject ได้ (null = ใครก็ได้)
-  maxCodeSize: 64 * 1024,         // ขนาดโค้ดสูงสุดต่อโปรแกรม
-  maxKeySize: 1000,               // ความยาวสูงสุดของ key storage (เหลือที่ให้ history: ซ้อนทับ)
-  autoReview: false,              // true = ตรวจโค้ดด้วยบัญชีขาวตอน deploy (แทนการรีวิวด้วยคน)
-  maxValueSize: 64 * 1024,        // ขนาดสูงสุดของค่าที่เขียน / return / emit ต่อรายการ
-  recordHistory: false,           // เก็บ history:<key>:<block> + blockundo:<block> (ต้องเปิดถ้าจะย้อนดู / กู้ระบบ)
-  upgradeDelayBlocks: 0,          // timelock ของการอัปเกรด: 0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ, N = ใช้ตอน block (ที่อนุมัติ + N)
-  memoryLimitBytes: SANDBOX_DEFAULTS.memoryLimitBytes, // หน่วยความจำของ sandbox ต่อ tx (รวมทุกโปรแกรมในสายการเรียก) เกิน → OUT_OF_MEMORY
-  maxStackBytes: SANDBOX_DEFAULTS.maxStackBytes,       // stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน → RangeError ที่ catch ได้)
-  wallClock: false,               // ใส่ performance.now() (เวลาจริง) ให้โปรแกรม — ใช้ในเทสต์เท่านั้น ผลไม่แน่นอนข้ามเครื่อง
-  producer: null,                 // ผู้ผลิต block ของ node นี้ { address, sign(blockHash) → ลายเซ็น } · null = block ไม่มีผู้ผลิต (แบบเดิม)
-  replayTimeoutMs: 60_000,        // เวลาต่อ tx ตอน replay / rebuild / sync — ผู้ผลิตกรอง TIMEOUT ไปแล้ว จึงให้แก๊สหยุดก่อน (เครื่องช้ากว่าไม่ได้ผลต่าง)
-  forks: {},                      // ตาราง fork { ชื่อ: block ที่เริ่มใช้ } (genesis.json "forks") · ดู FORKS
-  forkRules: {},                  // กติกาของ fork เพิ่มจาก FORKS (ใช้ในเทสต์)
-  historyKeep: null,              // pruning: เก็บ history แค่ N block ล่าสุด (ย้อนดู state / replay ได้แค่ช่วงนั้น) · null = เก็บทั้งหมด (archive)
+  timeoutMs: 1000,     // total time per request (including chained program calls)
+  maxCallDepth: 8,     // how many levels runProgram can nest
+  requireNonce: false, // require every user tx to include a nonce
+  chargeGas: false,    // deduct gas fees from <sender>:nativebalance
+  burnPercent: 100,    // share of the base fee burned (%); the rest goes to feeRecipient · tips (priority fee) always go to feeRecipient
+  minBaseFee: null,              // minimum base fee (also the first block's); null = gas.price
+  gasTarget: null,               // target gas per block (EIP-1559); null = maxBlockGas / 2 · neither set = base fee fixed at minBaseFee
+  baseFeeChangeDenominator: 8,   // base fee may change by at most 1/8 (12.5%) per block
+  feeRecipient: null,  // block closer (can be set per block in createBlock)
+  chainId: 1,          // prevents a tx from one system being replayed on another
+  recordTransactions: false, // also write <address>:txn:<nonce>:<txhash> along with the tx's writes
+  recordBlocks: false,       // write block:<number> / blockhash:<hash> / latestblock / tx:<hash>
+  deriveProgramAddress: false, // always derive program addresses from keccak256(deployer + nonce)
+  forceOriginFromSender: true, // user txs: origin = sender always (prevents origin spoofing)
+  maxTransactions: null,          // maximum txs per block (null = unlimited)
+  maxTransactionsPerSender: null, // maximum txs per address in 1 block
+  maxBlockGas: null,              // maximum total gas per block
+  maxTxGas: 10_000_000,           // maximum gas per tx / query (infinite loops stop here with OUT_OF_GAS even when gas is not charged)
+  admins: null,                   // addresses allowed to call init / reject (null = anyone)
+  maxCodeSize: 64 * 1024,         // maximum code size per program
+  maxKeySize: 1000,               // maximum storage key length (leaves room for the history: prefix)
+  autoReview: false,              // true = review code against the allowlist at deploy (instead of human review)
+  maxValueSize: 64 * 1024,        // maximum size of each value written / returned / emitted
+  recordHistory: false,           // store history:<key>:<block> + blockundo:<block> (must be on to look back / recover the system)
+  upgradeDelayBlocks: 0,          // upgrade timelock: 0 = new code takes effect as soon as approved, N = takes effect at block (approval + N)
+  memoryLimitBytes: SANDBOX_DEFAULTS.memoryLimitBytes, // sandbox memory per tx (across all programs in the call chain); exceeded → OUT_OF_MEMORY
+  maxStackBytes: SANDBOX_DEFAULTS.maxStackBytes,       // sandbox stack per tx (nesting function calls too deep → a catchable RangeError)
+  wallClock: false,               // expose performance.now() (real time) to programs; for tests only, results differ across machines
+  producer: null,                 // this node's block producer { address, sign(blockHash) → signature } · null = blocks have no producer (legacy)
+  replayTimeoutMs: 60_000,        // per-tx time during replay / rebuild / sync; the producer already filtered TIMEOUTs, so gas stops first (slower machines produce no divergence)
+  forks: {},                      // fork table { name: activation block } (genesis.json "forks") · see FORKS
+  forkRules: {},                  // extra fork rules on top of FORKS (used in tests)
+  historyKeep: null,              // pruning: keep history for only the latest N blocks (state lookback / replay limited to that range) · null = keep everything (archive)
 };
 
-/** ความยาวของเลข block ใน key (เติมศูนย์ให้เรียงตามตัวอักษรได้ตรงกับเรียงตามตัวเลข) */
+/** length of block numbers in keys (zero-padded so lexical order matches numeric order) */
 export const BLOCK_NUMBER_WIDTH = 12;
 
-/** address ของโปรแกรม = 20 byte ท้ายของ hash (ไม่มี private key จึงเซ็น tx ในนามโปรแกรมไม่ได้) */
+/** program address = last 20 bytes of a hash (there is no private key, so nobody can sign txs as the program) */
 export const addressFromHash = (hash) => `0x${hash.slice(-40)}`;
 
-/** hash เริ่มต้น: keccak256 แบบเดียวกับ EVM (เปลี่ยนได้ด้วย option hashFunction) */
+/** default hash: keccak256, same as the EVM (changeable with the hashFunction option) */
 const hexToBytesStrict = (hex) => hexToBytes(String(hex).replace(/^0x/, ""));
-/** precompile hash ที่โปรแกรมเรียกได้ (ชื่อ = ชื่อ API = ชื่อในตารางแก๊ส) */
+/** hash precompiles programs can call (name = API name = name in the gas table) */
 const DIGESTS = { sha256, ripemd160, blake2b };
-/** จำนวน bit ของ BigInt ที่ไม่ติดลบ (0n → 0) */
+/** bit count of a non-negative BigInt (0n → 0) */
 const bitLength = (value) => {
   if (value === 0n) return 0;
   const hex = value.toString(16);
   return (hex.length - 1) * 4 + Number.parseInt(hex[0], 16).toString(2).length;
 };
 
-/** ตารางค่าแก๊ส */
+/** gas fee table */
 export const DEFAULT_GAS = {
-  call: 100,   // ต่อการเรียกโปรแกรม 1 ครั้ง (รวมชั้นนอกสุด)
-  read: 100,   // ต่อ readDB 1 ครั้ง
-  write: 500,  // ต่อ writeDB / deleteDB 1 ครั้ง
-  stateKey: 1000, // ต่อ key ของ state ที่ tx เขียน / ลบ ครั้งแรก (ค่าอัปเดต Merkle trie + history ตอนปิด block · เขียน key เดิมซ้ำใน tx เดียวกันไม่คิดซ้ำ)
-  byte: 1,     // ต่อ byte ของข้อมูลที่อ่าน / เขียน
-  event: 200,  // ต่อ event 1 รายการ (บวกค่า byte ของข้อมูลใน event)
-  hash: 100,   // ต่อการเรียก keccak256 (บวกค่า byte ของข้อมูล)
-  recover: 3000, // ต่อการเรียก ecrecover (คำนวณหนัก)
-  sha256: 100,    // ต่อการเรียก sha256 (บวกค่า byte ของข้อมูล)
-  ripemd160: 300, // ต่อการเรียก ripemd160 (บวกค่า byte ของข้อมูล — ช้ากว่า sha256 ราว 3 เท่า)
-  blake2b: 100,   // ต่อการเรียก blake2b (บวกค่า byte ของข้อมูล)
-  modexp: 200,    // ต่อการเรียก modexp ขั้นต่ำ บวก ⌊word² × bit ของ exponent / 3⌋ (word = 8 byte ของตัวที่ยาวสุดใน base / mod แบบ EIP-2565)
-  env: 10,        // ต่อการเรียก ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
-  topic: 375,     // ต่อ field ที่ emit แบบ indexed (เขียนดัชนีถาวร 1 key ต่อ field — แบบ LOG topic ของ EVM)
-  code: 10,    // ต่อ byte ของโค้ดตอน deploy (กินพื้นที่ DB ถาวร)
-  node: 1,     // ต่อ node ของ AST ที่โปรแกรมรันผ่าน (ตัวนับที่ฉีดตอนคอมไพล์ ดู gasmeter.js)
-  builtin: 1,  // ต่อหน่วยข้อมูลที่ถูกคัดลอก / สร้าง: 1 สมาชิก (array / property / Set / Map / argument) หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
-               //   เมธอดในตัว (join, split, slice, JSON.stringify …) · spread [...a] f(...a) { ...o } · a + b ที่ได้ string · template
-               //   ArrayBuffer / typed array / RegExp ตามขนาด · input / ผลของ runProgram (ดู sandbox.js "แก๊สตามขนาดข้อมูล")
-  tx: 0,       // ค่าพื้นฐานต่อ tx ของ user (หักตอนเริ่ม tx ทุกแบบ · ราว EIP intrinsic gas) · 0 = ไม่คิด · fork "bluewolf" ตั้ง 15,000
-  price: 1,    // native ต่อ 1 gas
+  call: 100,   // per program call (including the outermost)
+  read: 100,   // per readDB call
+  write: 500,  // per writeDB / deleteDB call
+  stateKey: 1000, // per state key a tx writes / deletes for the first time (cost of Merkle trie + history updates at block close · rewriting the same key in the same tx is not charged again)
+  byte: 1,     // per byte of data read / written
+  event: 200,  // per event (plus the byte cost of the event data)
+  hash: 100,   // per keccak256 call (plus the byte cost of the data)
+  recover: 3000, // per ecrecover call (computationally heavy)
+  sha256: 100,    // per sha256 call (plus the byte cost of the data)
+  ripemd160: 300, // per ripemd160 call (plus the byte cost of the data; about 3× slower than sha256)
+  blake2b: 100,   // per blake2b call (plus the byte cost of the data)
+  modexp: 200,    // minimum per modexp call, plus ⌊words² × exponent bits / 3⌋ (word = 8 bytes of the longest of base / mod, as in EIP-2565)
+  env: 10,        // per call of ChainId / Coinbase / BlockGasLimit / GasPrice / BaseFee / GasLeft
+  topic: 375,     // per field emitted as indexed (writes 1 permanent index key per field, like EVM LOG topics)
+  code: 10,    // per byte of code at deploy (occupies permanent DB space)
+  node: 1,     // per AST node the program executes (counter injected at compile time; see gasmeter.js)
+  builtin: 1,  // per unit of data copied / created: 1 element (array / property / Set / Map / argument) or 32 characters / bytes (rounded up)
+               //   built-in methods (join, split, slice, JSON.stringify …) · spread [...a] f(...a) { ...o } · a + b yielding a string · template
+               //   ArrayBuffer / typed array / RegExp by size · runProgram input / result (see sandbox.js "gas by data size")
+  tx: 0,       // base cost per user tx (charged at the start of every kind of tx · roughly EIP intrinsic gas) · 0 = not charged · the "bluewolf" fork sets 15,000
+  price: 1,    // native per 1 gas
 };
 
 /**
- * fork: เปลี่ยนกติกาของเชนตั้งแต่ block ที่กำหนด (แบบ hard fork ของ Ethereum) โดยไม่ต้องล้างเชน
- *   ตาราง (ว่าจะเปิดที่ block ไหน) อยู่ใน genesis.json `"forks": { "<ชื่อ>": <block> }` — ไม่อยู่ใน genesis hash จึงเพิ่มทีหลังได้
- *   กติกาของแต่ละ fork อยู่ในโค้ดตรงนี้ · node ที่โค้ดไม่รู้จักชื่อใน genesis = ไม่ยอมเริ่ม (ต้องอัปเดตโปรแกรมก่อน)
- *   block ก่อนเลขที่กำหนดใช้กติกาเดิม → replay / sync / rebuild block เก่าได้ผลเดิมทุกไบต์
- *   node ที่ตั้งตารางต่างกัน = hash ของ block ไม่ตรงตั้งแต่ block นั้น (sync หยุด) · ทุกเครื่องต้องอัปเดตก่อนถึง block
+ * fork: change chain rules from a given block on (like an Ethereum hard fork) without resetting the chain
+ *   the table (which block each fork activates at) lives in genesis.json `"forks": { "<name>": <block> }`; it is not part of the genesis hash, so it can be added later
+ *   each fork's rules live in the code here · a node whose code does not know a name in genesis refuses to start (the software must be updated first)
+ *   blocks before the given number use the old rules → replay / sync / rebuild of old blocks gives byte-identical results
+ *   nodes with different tables = block hashes diverge from that block on (sync stops) · every machine must update before reaching that block
  *
- *   ชื่อ → { description, gas?: { ชื่อค่าแก๊ส: ค่าใหม่ } }
- *     gas: แทนค่าใน DEFAULT_GAS ตั้งแต่ block นั้น (ยกเว้น price — ราคาขั้นต่ำอยู่ใน genesis.config.minBaseFee)
- *     กติกาแบบอื่น (field ใหม่ใน header, คำสั่งใหม่) → เช็ค vm.forkActive("<ชื่อ>", blockNumber) ในจุดที่เปลี่ยน
+ *   name → { description, gas?: { gas field name: new value } }
+ *     gas: replaces values in DEFAULT_GAS from that block on (except price; the minimum price is in genesis.config.minBaseFee)
+ *     other kinds of rules (new header fields, new instructions) → check vm.forkActive("<name>", blockNumber) where the behaviour changes
  */
 export const FORKS = {
-  // Bluewolfchain: ราคาต่อหน่วย = 2.5 เท่าของภาระเครื่องจริง (วัด 11 พ.ย. 2026 · CPU 1 ms = 2,000 แก๊ส · DB 1 byte = 2 แก๊ส)
-  //   ใช้คู่กับ block 5M แก๊ส · block ทุก 2 วินาที · min gas price 10,000 gwei → โอนเหรียญหลัก ~17,300 แก๊ส
-  //   genesis.json: "forks": { "bluewolf": 0 } = ใช้ตั้งแต่ block แรก · ค่าที่ไม่ได้วัด (hash, recover, env …) ใช้ค่าเดิม
+  // Bluewolfchain: per-unit price = 2.5× the measured machine load (measured 11 Nov 2026 · 1 ms CPU = 2,000 gas · 1 DB byte = 2 gas)
+  //   used with 5M-gas blocks · a block every 2 seconds · min gas price 10,000 gwei → a native coin transfer costs ~17,300 gas
+  //   genesis.json: "forks": { "bluewolf": 0 } = active from the first block · values not measured (hash, recover, env …) keep their old values
   bluewolf: {
     description: "Bluewolfchain gas: unit prices at 2.5x the measured machine load + 15,000 base gas per transaction",
     gas: { call: 1750, read: 150, write: 125, stateKey: 1125, byte: 10, event: 1250, topic: 940, code: 33, node: 3, builtin: 3, tx: 15000 },
@@ -235,7 +235,7 @@ export const ERROR_CODE = {
 
 const { INVALID_REQUEST, NOT_FOUND, FORBIDDEN, LIMIT_EXCEEDED, TIMEOUT, OUT_OF_GAS, OUT_OF_MEMORY, PROGRAM_ERROR, INTERNAL } = ERROR_CODE;
 
-/** error ทั้งหมด: code + message (message เป็นฟังก์ชันได้) */
+/** all errors: code + message (message may be a function) */
 export const ERRORS = {
   invalidProgramUuid: [INVALID_REQUEST, "programUuid ต้องเป็น string ที่ไม่ว่างและไม่มี ':'"],
   invalidContext: [INVALID_REQUEST, "context ต้องมี sender และ origin"],
@@ -264,7 +264,7 @@ export const ERRORS = {
   invalidTimestamp: [INVALID_REQUEST, "timestamp ต้องเป็นจำนวนเต็มมิลลิวินาทีที่ไม่ติดลบ"],
   invalidNonce: [INVALID_REQUEST, (expected, got) => `nonce ไม่ถูกต้อง: ต้องเป็น ${expected} แต่ได้ ${got}`],
   invalidAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มบวก"],
-  invalidTransferAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ"],   // โอน native (tx) โอน 0 ได้แบบ EVM
+  invalidTransferAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ"],   // native transfer (tx); transferring 0 is allowed, as in the EVM
   invalidRejected: [INVALID_REQUEST, (field) => `tx ที่ถูกปฏิเสธ: ${field} ไม่ถูกต้อง`],
   invalidAddress: [INVALID_REQUEST, "address ต้องเป็น string ที่ไม่ว่าง"],
   invalidValue: [INVALID_REQUEST, "value ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
@@ -330,11 +330,11 @@ export const ERRORS = {
 };
 
 // ============================================================================
-//  ค่าคงที่
+//  constants
 // ============================================================================
 
 const INIT_FUNCTION = "initialization";
-const MIGRATE_FUNCTION = "migrate";   // รันครั้งเดียวตอนอัปเกรด — เหมือน initialization คือเรียกจากภายนอกไม่ได้
+const MIGRATE_FUNCTION = "migrate";   // runs once at upgrade time; like initialization, it cannot be called from outside
 const KEY = { SEPARATOR: ":", PENDING: "pending", CODE: "code", CONTEXT: "context", STORAGE: "storage", THIS: "this", NONCE: "nonce", NATIVE: "native", TXN: "txn",
   METADATA: "metadata", NAMESPACE: "namespace", EVENT: "event", EVENT_INDEX: "eventidx", EVENT_SIG: "eventsig", TX_TO: "txto",
   BLOCK: "block", BLOCK_BODY: "blockbody", BLOCK_HASH: "blockhash", LATEST_BLOCK: "latestblock", TX: "tx", GENESIS: "genesis",
@@ -350,25 +350,25 @@ const PROGRAM_API_NAMES = [
   "keccak256Bytes", "ecrecoverDigest", "eip712Digest", "eip712DomainSeparator",
 ];
 
-/** BlockHash ย้อนได้กี่ block (เหมือน BLOCKHASH ของ EVM) */
+/** how many blocks back BlockHash can reach (like the EVM's BLOCKHASH) */
 export const BLOCK_HASH_WINDOW = 256;
-/** ขนาดสูงสุดของแต่ละค่าใน modexp (เหมือน EIP-7823) */
+/** maximum size of each modexp value (like EIP-7823) */
 export const MODEXP_MAX_BYTES = 1024;
 
 /**
- * โปรแกรมอยู่ใน scope เดียวทั้งไฟล์ และเป็น JavaScript ที่ถูกต้อง (editor / prettier ใช้ได้)
+ * A program is a single scope for the whole file and is valid JavaScript (editors / prettier work on it)
  *   function program() {
  *     function initialization(params) {}
  *     function transfer(params) {}
- *     return { transfer }        ← รายชื่อฟังก์ชันที่ให้เรียกจากภายนอก (บรรทัดสุดท้าย)
+ *     return { transfer }        ← list of functions callable from outside (last line)
  *   }
- * เขียนเป็น string ส่งผ่าน API ได้ตรง ๆ หรือใช้ String(program) จากไฟล์จริงก็ได้
+ * Write it as a string and pass it through the API as is, or use String(program) from a real file
  */
 const PROGRAM_WRAPPER_PATTERN = /^\s*(?:const|let|var)?\s*(?:program\s*=\s*)?(?:async\s+)?(?:function\s*[A-Za-z_$][\w$]*?\s*\(\s*\)|\(\s*\)\s*=>)\s*\{([\s\S]*)\}\s*;?\s*$/;
 const RETURN_EXPORT_PATTERN = /return\s*\{([^}]*)\}\s*;?\s*$/;
 const MODULE_KEYWORD_PATTERN = /^[ \t]*(import|export)\b/m;
 const FUNCTION_PATTERN = /^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
-// รองรับ modifier: const ชื่อ = onlyOwner(function () {...})  — ค่าต้องเป็นฟังก์ชันตอนรัน
+// supports modifiers: const name = onlyOwner(function () {...}); the value must be a function at run time
 const BINDING_PATTERN = /^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=/gm;
 
 const STATUS = { SUCCESS: "success", THROW: "throw", RUNNING: "running" };
@@ -376,7 +376,7 @@ const STATE = { PENDING: "pending_review", ACTIVE: "active", REJECTED: "rejected
 const WRITE = { PUT: "put", DEL: "del" };
 
 const METADATA_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
-const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";   // โปรแกรม throw { code: ค่านี้ } = TIMEOUT (แบบเดิมของ node:vm)
+const NODE_VM_TIMEOUT_CODE = "ERR_SCRIPT_EXECUTION_TIMEOUT";   // a program throwing { code: this value } = TIMEOUT (legacy node:vm behaviour)
 const MAP_PARTS = Symbol("map parts");
 
 // ============================================================================
@@ -394,22 +394,22 @@ export class VMError extends Error {
     return new VMError(code, typeof message === "function" ? message(...args) : message);
   }
 
-  /** แปลง error ใด ๆ ที่เกิดระหว่างรันโปรแกรม */
+  /** convert any error raised while running a program */
   static fromProgram(err) {
     if (err instanceof VMError) return err;
     if (err?.code === NODE_VM_TIMEOUT_CODE) return VMError.from(ERRORS.timeout);
-    // ข้อความจาก V8 (TypeError ฯลฯ) ต่างกันได้ตามเวอร์ชัน Node → แทนด้วยข้อความคงที่
+    // V8 messages (TypeError etc.) can differ across Node versions → replaced with fixed messages
     if (err instanceof Error) {
       const name = err.constructor?.name ?? "Error";
       const error = new VMError(PROGRAM_ERROR, name === "Error" ? err.message : `โปรแกรมทำงานผิดพลาด (${name})`);
-      // รายละเอียดจริงไว้ดีบักเท่านั้น — ไม่ถูกบันทึกลง DB และไม่เข้า hash
+      // the real details are for debugging only; not stored in the DB and not part of any hash
       error.detail = { name, message: err.message, at: locateInProgram(err) };
       return error;
     }
     return new VMError(PROGRAM_ERROR, String(err));
   }
 
-  /** error ที่โปรแกรม throw ใน sandbox (ได้มาเป็นชื่อ + ข้อความ) — กติกาเดียวกับ fromProgram */
+  /** error a program throws inside the sandbox (received as name + message); same rules as fromProgram */
   static fromGuest({ name, message, stack }) {
     const error = new VMError(PROGRAM_ERROR, name === "Error" ? message : `โปรแกรมทำงานผิดพลาด (${name})`);
     error.detail = { name, message, at: locateInGuest(stack) };
@@ -417,13 +417,13 @@ export class VMError extends Error {
   }
 }
 
-/** ตำแหน่งจาก stack ของ QuickJS: "at f (program:12:5)" */
+/** position from a QuickJS stack: "at f (program:12:5)" */
 function locateInGuest(stack) {
   const match = /\(program:(\d+):(\d+)\)/.exec(stack ?? "");
   return match ? `line ${match[1]}, col ${match[2]}` : null;
 }
 
-/** ตำแหน่งคร่าว ๆ ในโค้ดที่คอมไพล์แล้ว (โค้ดถูกเก็บเป็นบรรทัดเดียว ตัวเลขจึงเป็นแค่ตัวช่วย) */
+/** rough position in the compiled code (code is stored as a single line, so the numbers are only a hint) */
 function locateInProgram(err) {
   const match = /<anonymous>:(\d+):(\d+)/.exec(err.stack ?? "");
   return match ? `line ${match[1]}, col ${match[2]}` : null;
@@ -434,7 +434,7 @@ export function fail(definition, ...args) {
 }
 
 // ============================================================================
-//  ฟังก์ชันช่วย (ไม่มีสถานะ)
+//  helper functions (stateless)
 // ============================================================================
 
 export const copyValue = (value) => (value === undefined ? undefined : structuredClone(value));
@@ -444,24 +444,24 @@ export const pickContext = ({ sender, origin }) => ({ sender, origin });
 
 // ---------- address ----------
 
-/** address ของ wallet / program เป็นตัวพิมพ์เล็กเสมอ */
+/** wallet / program addresses are always lowercase */
 const isWalletAddress = (value) => typeof value === "string" && /^0x[0-9a-f]{40}$/i.test(value);
 
 export const normalizeContext = ({ sender, origin }) => ({ sender: normalizeAddress(sender), origin: normalizeAddress(origin) });
 
-/** input ของโปรแกรม: copy แบบ JSON แล้ว normalize address */
+/** program input: JSON copy, then normalize addresses */
 export const toInputValue = (value, label) => normalizeHexDeep(toJsonValue(value, label));
 
-/** ขนาดข้อมูลเป็น byte สำหรับคิดค่าแก๊ส (แก๊สตามขนาดข้อมูลภายในโปรแกรมคิดใน sandbox ดู sandbox.js) */
+/** data size in bytes for gas charging (gas by data size inside programs is charged in the sandbox; see sandbox.js) */
 export const valueSize = (value) => (value === undefined ? 0 : Buffer.byteLength(JSON.stringify(encodeBigints(value)) ?? "", "utf8"));
 
-/** หน่วยข้อมูลของค่าที่คัดลอกข้ามเขตแดนระหว่างโปรแกรม: 1 หน่วยต่อ 32 byte ของ JSON (ปัดขึ้น) — หน่วยเดียวกับ sandbox */
+/** data units of values copied across the boundary between programs: 1 unit per 32 bytes of JSON (rounded up); same unit as the sandbox */
 export const copyUnits = (value) => Math.ceil(valueSize(value) / 32);
 
-/** ตัวเลขถูกเก็บเป็น string ลงท้ายด้วย n เช่น "1000n" เพราะ JSON ไม่มี BigInt */
+/** numbers are stored as strings ending in n, e.g. "1000n", because JSON has no BigInt */
 const BIGINT_TEXT = /^-?\d+n$/;
 
-/** BigInt → "123n" (ทั้ง object) สำหรับเก็บลง DB หรือส่งออกเป็น JSON */
+/** BigInt → "123n" (whole object) for storing in the DB or exporting as JSON */
 export function encodeBigints(value) {
   if (typeof value === "bigint") return `${value}n`;
   if (Array.isArray(value)) return value.map(encodeBigints);
@@ -471,7 +471,7 @@ export function encodeBigints(value) {
   return value;
 }
 
-/** "123n" → BigInt และตัวเลขจำนวนเต็มจาก JSON → BigInt (ใช้ตอนส่งค่าเข้าโปรแกรม) */
+/** "123n" → BigInt, and integers from JSON → BigInt (used when passing values into a program) */
 export function decodeBigints(value, label = "ค่า") {
   if (typeof value === "string") return BIGINT_TEXT.test(value) ? BigInt(value.slice(0, -1)) : value;
   if (typeof value === "number") {
@@ -485,14 +485,14 @@ export function decodeBigints(value, label = "ค่า") {
   return value;
 }
 
-/** จำนวนเงินที่โปรแกรมส่งมาต้องเป็น BigInt (number → numberNotAllowed) */
+/** amounts sent by a program must be BigInt (number → numberNotAllowed) */
 export function fromProgramAmount(amount, label = "amount") {
   if (typeof amount === "number") fail(ERRORS.numberNotAllowed, label);
   if (typeof amount !== "bigint") fail(ERRORS.invalidAmount);
   return amount;
 }
 
-/** options ของ runProgram: { value } เป็น BigInt · { readonly: true } = เรียกแบบอ่านอย่างเดียว (STATICCALL) */
+/** runProgram options: { value } as BigInt · { readonly: true } = read-only call (STATICCALL) */
 export function fromProgramOptions(options) {
   if (options === undefined || options === null) return undefined;
   const { value, readonly } = options;
@@ -503,7 +503,7 @@ export function fromProgramOptions(options) {
   };
 }
 
-/** ค่าเข้า / ออกจากโปรแกรม: "123n" ↔ BigInt แปลงไปกลับให้อัตโนมัติ */
+/** values into / out of programs: "123n" ↔ BigInt converted both ways automatically */
 export const toProgram = (value, label) => decodeBigints(value, label);
 export const fromProgram = (value, label) => encodeBigints(toProgramValue(value, label));
 
@@ -530,7 +530,7 @@ export function toJsonValue(value, label) {
   }
 }
 
-/** แปลงโค้ดเป็นบรรทัดเดียว: ขึ้นบรรทัดใหม่ถูกเก็บเป็น "\n" แบบ escape จึงแปลงกลับได้ครบ */
+/** convert code to a single line: newlines are stored as escaped "\\n", so they convert back exactly */
 export function toOneLine(code) {
   const normalized = code.replace(/\r\n?/g, "\n").trim();
   return JSON.stringify(normalized).slice(1, -1).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
@@ -546,36 +546,36 @@ export const codeKey = (programUuid) => joinKey(programUuid, KEY.CODE);
 export const contextKey = (programUuid) => joinKey(programUuid, KEY.CONTEXT);
 export const thisKey = (programUuid) => joinKey(programUuid, KEY.THIS);
 export const nonceKey = (address) => joinKey(address, KEY.NONCE);
-/** ยอดสะสมของ address (เพิ่มได้อย่างเดียว) */
+/** cumulative totals of an address (only ever increase) */
 export const NATIVE_FIELD = { RECEIVED: "received", SENDED: "sended", CONSUMED: "consumed" };
 export const nativeKey = (address, field) => joinKey(address, KEY.NATIVE, field);
 export const metadataKey = (address, field) => joinKey(address, KEY.METADATA, field);
 export const namespaceKey = (name) => joinKey(KEY.NAMESPACE, name);
-/** การอัปเกรดที่รอรีวิว / อนุมัติแล้วแต่รอ timelock / ดัชนี "block ไหนต้องเปิดใช้โค้ดของใคร" / โค้ดทุกเวอร์ชัน */
+/** upgrades awaiting review / approved but waiting on the timelock / index of "which block activates whose code" / every code version */
 export const pendingUpgradeKey = (programUuid) => joinKey(KEY.PENDING_UPGRADE, programUuid);
 export const scheduledUpgradeKey = (programUuid) => joinKey(KEY.SCHEDULED_UPGRADE, programUuid);
-/** ขั้นต่ำของ gas price ที่ admin ตั้งบนเชน (state key เดียว · อยู่ใน stateRoot / history เหมือน state อื่น) */
+/** gas price floor set on-chain by the admin (a single state key · in stateRoot / history like other state) */
 export const GAS_CONFIG_KEY = KEY.GAS_CONFIG;
 export const upgradeAtKey = (number) => joinKey(KEY.UPGRADE_AT, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 export const codeVersionKey = (programUuid, version) => joinKey(programUuid, KEY.CODE_VERSION, String(version));
 
-/** address ปลายทางของเงินที่ถูกเผา (ตรวจยอดที่เผาไปทั้งหมดได้) */
+/** destination address for burned funds (lets anyone audit the total burned) */
 export const BURN_ADDRESS = `0x${"0".repeat(40)}`;
 
-/** ฟิลด์ metadata ที่ระบบใช้เอง ผู้ใช้เขียนทับไม่ได้ */
+/** metadata fields the system uses itself; users cannot overwrite them */
 export const METADATA_FIELD = {
-  NAMESPACE: "namespace",   // ชื่อที่อ่านง่าย (ห้ามซ้ำทั้งระบบ)
-  TYPE: "type",             // "program" — VM ใส่ให้ตอน init
-  CREATOR: "creator",       // ผู้ deploy
-  CREATED_AT: "createdAt",  // timestamp ของ block ที่ init
+  NAMESPACE: "namespace",   // human-readable name (unique across the whole system)
+  TYPE: "type",             // "program"; set by the VM at init
+  CREATOR: "creator",       // deployer
+  CREATED_AT: "createdAt",  // timestamp of the block at init
   DESCRIPTION: "description",
   URL: "url",
   ICON: "icon",
   TAGS: "tags",
-  UPGRADER: "upgrader",     // ผู้มีสิทธิ์ส่งโค้ดใหม่ (ไม่มี = โปรแกรมแก้ไม่ได้ตลอดไป)
-  VERSION: "version",       // เวอร์ชันของโค้ด (ไม่มี = 1) — เพิ่มทีละ 1 ทุกครั้งที่อัปเกรด
-  TEMPLATE: "template",     // โปรแกรมต้นแบบ (เฉพาะโปรแกรมที่สร้างด้วย cloneProgram)
-  ABI: "abi",               // คำอธิบายฟังก์ชัน / event (ไม่บังคับ · ตรวจด้วย checkAbi) — explorer ใช้สร้างฟอร์มและอ่าน event
+  UPGRADER: "upgrader",     // who may submit new code (none = the program is immutable forever)
+  VERSION: "version",       // code version (none = 1); incremented by 1 on every upgrade
+  TEMPLATE: "template",     // template program (only for programs created with cloneProgram)
+  ABI: "abi",               // function / event descriptions (optional · validated by checkAbi); the explorer uses them to build forms and decode events
 };
 export const RESERVED_METADATA = [METADATA_FIELD.TYPE, METADATA_FIELD.CREATOR, METADATA_FIELD.CREATED_AT,
   METADATA_FIELD.UPGRADER, METADATA_FIELD.VERSION, METADATA_FIELD.TEMPLATE];
@@ -586,47 +586,47 @@ export const blockHashKey = (hash) => joinKey(KEY.BLOCK_HASH, hash);
 export const txIndexKey = (hash) => joinKey(KEY.TX, hash);
 export const sigTxKey = (digest) => joinKey(KEY.SIG_TX, digest);
 
-/** ดัชนี "ใครมา interact กับ address นี้": txto:<address>:<block>:<index> */
+/** index of "who interacted with this address": txto:<address>:<block>:<index> */
 export const txToKey = (address, number, index, callIndex = 0) =>
   joinKey(KEY.TX_TO, address, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"),
     String(index).padStart(4, "0"), String(callIndex).padStart(4, "0"));
 
-/** ดัชนี event: event:<program>:<name>:<block>:<txIndex>:<eventIndex> */
+/** event index: event:<program>:<name>:<block>:<txIndex>:<eventIndex> */
 export const eventKey = (program, name, number, txIndex, eventIndex) =>
   joinKey(KEY.EVENT, program, name,
     String(number).padStart(BLOCK_NUMBER_WIDTH, "0"),
     String(txIndex).padStart(4, "0"),
     String(eventIndex).padStart(4, "0"));
 /**
- * ดัชนีของ field ที่ emit แบบ indexed (เขียนตอนปิด block · 1 key ต่อ field ต่อ event · ค่า = dbKey ของ event:)
- *   eventidx:<program>:<name>:<field>:<topic>:<block>:<txIndex>:<eventIndex>   topic = topicOf(ค่า) (0x + 64 hex)
- *   eventsig:<topic0>:<program>:<name>  → { program, name, indexed }  (topic0 ของ log แบบ EVM → ชื่อ event / field ที่ indexed · ใช้กับ eth_getLogs)
+ * Index of fields emitted as indexed (written at block close · 1 key per field per event · value = the event: dbKey)
+ *   eventidx:<program>:<name>:<field>:<topic>:<block>:<txIndex>:<eventIndex>   topic = topicOf(value) (0x + 64 hex)
+ *   eventsig:<topic0>:<program>:<name>  → { program, name, indexed }  (EVM-style log topic0 → event name / indexed fields · used by eth_getLogs)
  */
 export const eventIndexPrefix = (program, name, field, topic) => `${joinKey(KEY.EVENT_INDEX, program, name, field, String(topic).toLowerCase())}${KEY.SEPARATOR}`;
 export const eventIndexKey = (program, name, field, topic, number, txIndex, eventIndex) =>
   `${eventIndexPrefix(program, name, field, topic)}${joinKey(String(number).padStart(BLOCK_NUMBER_WIDTH, "0"), String(txIndex).padStart(4, "0"), String(eventIndex).padStart(4, "0"))}`;
 export const eventSigKey = (topic0, program, name) => joinKey(KEY.EVENT_SIG, String(topic0).toLowerCase(), program, name);
-/** ดัชนี "address นี้เคยได้รับเหรียญจากโปรแกรมนี้" (จาก event Transfer) — ยอดจริงอ่านจาก balanceOf ของโปรแกรม */
+/** index of "this address has received tokens from this program" (from Transfer events); the real balance is read from the program's balanceOf */
 export const holdingKey = (address, program) => joinKey(KEY.HOLDING, address, program);
-/** event ที่ทำดัชนี holding: (มี data.from / data.to) — Transfer ของ token / NFT, TransferSingle / TransferBatch ของ multi-token */
+/** events that feed the holding index (with data.from / data.to): Transfer of token / NFT, TransferSingle / TransferBatch of multi-token */
 export const HOLDING_EVENTS = new Set(["Transfer", "TransferSingle", "TransferBatch"]);
 export const blockUndoKey = (number) => joinKey(KEY.BLOCK_UNDO, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 
 /**
- * tx ที่ถูกปฏิเสธ (ผ่านการตรวจลายเซ็นแล้วแต่ไม่ได้รัน) ที่ผู้ผลิตบันทึกไว้ใน block — ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส
- *   blockrejected:<block>             รายการทั้ง block (ตามลำดับที่ถูกปฏิเสธ) · header มี rejectedCount + rejectedRoot (อยู่ใน hash ของ block)
- *   rejtx:<hash>                      ดัชนีค้นจาก hash (ถูกปฏิเสธซ้ำใน block หลัง = ชี้ไปอันล่าสุด)
- *   rejfrom:<sender>:<block>:<index>  ดัชนีตามผู้ส่ง (explorer แบ่งหน้า)
+ * Rejected txs (passed signature checks but were not executed) that the producer recorded in a block: not executed, no state touched, no nonce consumed, no gas fee
+ *   blockrejected:<block>             list for the whole block (in rejection order) · the header has rejectedCount + rejectedRoot (part of the block hash)
+ *   rejtx:<hash>                      lookup index by hash (rejected again in a later block = points to the latest)
+ *   rejfrom:<sender>:<block>:<index>  index by sender (explorer paging)
  */
 export const REJECTED_KEY = { BLOCK: "blockrejected", TX: "rejtx", FROM: "rejfrom" };
 /**
- * ดัชนี: เขียนตอนปิด block อย่างเดียว ตอนรัน tx ไม่มีใครอ่าน และสร้างใหม่ได้จาก blockbody
- *   → ไม่เก็บ history / ไม่อยู่ใน blockundo · rebuildFrom ลบทิ้งแล้วให้ replay สร้างใหม่
+ * Indexes: written only at block close, never read while running txs, and rebuildable from blockbody
+ *   → no history / not in blockundo · rebuildFrom deletes them and lets replay rebuild them
  */
 const INDEX_KINDS = new Set([KEY.TX, KEY.TXN, KEY.SIG_TX, KEY.TX_TO, KEY.EVENT, KEY.EVENT_INDEX, KEY.EVENT_SIG, KEY.HOLDING]);
 const REJECTED_HEADS = new Set(Object.values(REJECTED_KEY));
 export const isIndexKey = (dbKey) => INDEX_KINDS.has(decodeDbKey(dbKey).kind) || REJECTED_HEADS.has(dbKey.split(KEY.SEPARATOR, 1)[0]);
-/** prefix ของดัชนีที่ขึ้นต้นด้วยชนิด (txn ขึ้นต้นด้วย address จึงลบผ่านดัชนี tx) · blockrejected ลบทีละ block */
+/** prefixes of indexes that start with a type (txn starts with an address, so it is deleted via the tx index) · blockrejected is deleted per block */
 const INDEX_PREFIXES = [KEY.TX, KEY.SIG_TX, KEY.TX_TO, KEY.EVENT, KEY.EVENT_INDEX, KEY.EVENT_SIG, KEY.HOLDING, REJECTED_KEY.TX, REJECTED_KEY.FROM]
   .map((head) => `${head}${KEY.SEPARATOR}`);
 export const REJECTED_STAGES = ["sendtx", "block", "expired"];
@@ -636,23 +636,23 @@ export const rejectedTxKey = (hash) => joinKey(REJECTED_KEY.TX, hash);
 export const rejectedFromKey = (sender, number, index) =>
   joinKey(REJECTED_KEY.FROM, sender, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"), String(index).padStart(6, "0"));
 
-/** ค่าก่อนเปลี่ยนของ key หนึ่ง ณ block หนึ่ง — เรียงตาม key จึงค้นย้อนหลังได้ด้วยการ seek ครั้งเดียว */
+/** the value of a key before it changed at a given block; sorted by key, so a backwards lookup takes a single seek */
 export const historyKey = (dbKey, number) => joinKey(KEY.HISTORY, dbKey, String(number).padStart(BLOCK_NUMBER_WIDTH, "0"));
 export const historyPrefix = (dbKey) => `${joinKey(KEY.HISTORY, dbKey)}${KEY.SEPARATOR}`;
 export const LATEST_BLOCK_KEY = KEY.LATEST_BLOCK;
-/** block แรกที่ history ครบต่อเนื่องถึงล่าสุด (replayBlock / snapshotAt เช็คครั้งเดียว ไม่ต้องไล่ blockundo ทุก block) */
+/** first block from which history is continuous up to the latest (replayBlock / snapshotAt check once instead of walking blockundo for every block) */
 export const HISTORY_FROM_KEY = KEY.HISTORY_FROM;
-/** ข้อมูลของ chain เอง (block / history) — ไม่ใช่ state: สร้างใหม่ได้จาก body */
+/** the chain's own data (blocks / history); not state: rebuildable from the bodies */
 const CHAIN_KINDS = new Set([KEY.HISTORY, KEY.BLOCK, KEY.BLOCK_BODY, KEY.BLOCK_UNDO, KEY.BLOCK_HASH, KEY.LATEST_BLOCK]);
 /**
- * key ของ state (ที่ tx อ่าน / เขียน) = อยู่ใน trie (stateRoot) · มี history · อยู่ใน snapshot
- * ไม่ใช่ state: block / history / ดัชนี / historyfrom / genesis (hash ของ genesis) / node ของ trie เอง
+ * State keys (read / written by txs) = in the trie (stateRoot) · have history · included in snapshots
+ * Not state: blocks / history / indexes / historyfrom / genesis (the genesis hash) / the trie's own nodes
  */
 export const isStateKey = (dbKey) => !dbKey.startsWith(TRIE_PREFIX) && dbKey !== HISTORY_FROM_KEY && dbKey !== KEY.GENESIS
   && !CHAIN_KINDS.has(decodeDbKey(dbKey).kind) && !isIndexKey(dbKey);
 const KEY_END = "\uffff";
 
-/** key ซ้อน: map("balances", "alice") */
+/** nested key: map("balances", "alice") */
 export const map = (...parts) => ({ [MAP_PARTS]: parts });
 
 export function getKeyParts(key) {
@@ -662,13 +662,13 @@ export function getKeyParts(key) {
   return parts.map((part) => normalizeHex(typeof part === "bigint" ? `${part}` : part));
 }
 
-/** encode ทุกส่วน: "a:b" กับ map("a", "b") จึงเป็นคนละ key */
+/** encodes every part: "a:b" and map("a", "b") are therefore different keys */
 export function storageKey(programUuid, key) {
   const encoded = getKeyParts(key).map((part) => encodeURIComponent(String(part)));
   return joinKey(programUuid, KEY.STORAGE, ...encoded);
 }
 
-/** เดา action จากหน้าตาของ request (ใช้เมื่อไม่ได้ระบุมา) */
+/** infer the action from the shape of the request (used when none is given) */
 export function guessAction(request = {}) {
   if (request.from !== undefined && request.to !== undefined) return "transfer";
   if (request.code !== undefined) return "deploy";
@@ -676,7 +676,7 @@ export function guessAction(request = {}) {
   return "unknown";
 }
 
-/** key เดียวกันถูกเขียนหลายครั้งใน tx เดียวได้ → เหลือค่าสุดท้ายค่าเดียว (เรียงตามครั้งแรกที่ถูกเขียน) */
+/** the same key can be written several times in one tx → keep only the last value (ordered by first write) */
 export function collapseWrites(writes) {
   const latest = new Map();
   for (const write of writes) {
@@ -685,7 +685,7 @@ export function collapseWrites(writes) {
   return [...latest.values()];
 }
 
-/** แปลง dbKey เป็นรูปแบบที่อ่านง่าย (ใช้ทำ receipt / explorer) */
+/** convert a dbKey to a readable form (for receipts / explorer) */
 export function decodeDbKey(dbKey) {
   const [head, ...rest] = dbKey.split(KEY.SEPARATOR);
   if (head === KEY.PENDING) return { kind: KEY.PENDING, address: rest.join(KEY.SEPARATOR) };
@@ -725,16 +725,16 @@ export function decodeDbKey(dbKey) {
   return { kind, address: head };
 }
 
-// ---------- ตรวจ request ----------
+// ---------- request validation ----------
 
 export function checkProgramUuid(programUuid) {
   if (!isNonEmptyString(programUuid) || programUuid.includes(KEY.SEPARATOR)) fail(ERRORS.invalidProgramUuid);
 }
 
 /**
- * ตรวจคำขอของ admin → { minBaseFee: "wei" | null }
- *   minBaseFee: null = กลับไปใช้ค่าใน genesis · ค่า = wei ต่อแก๊ส ≥ 1
- *   ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ (ตั้งเป็น 0 แล้ว tx ฟรี = เครื่องล่ม) → ใช้ fork
+ * Validate an admin request → { minBaseFee: "wei" | null }
+ *   minBaseFee: null = revert to the genesis value · value = wei per gas ≥ 1
+ *   per-unit prices (gas) cannot be adjusted on-chain (setting 0 would make txs free = machines overwhelmed) → use a fork
  */
 export function checkGasConfigChange({ minBaseFee, gas } = {}) {
   if (gas !== undefined) fail(ERRORS.invalidGasConfig, "ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ · เปลี่ยนผ่าน fork (FORKS ใน virtualmachine.js)");
@@ -750,8 +750,8 @@ export function checkContext(context) {
 }
 
 /**
- * ยอด native (หน่วยย่อย 18 ทศนิยม) → BigInt
- * รับ BigInt, number ที่เป็นจำนวนเต็มปลอดภัย, "123" หรือ "123n" · อย่างอื่นคืน null
+ * native amount (smallest unit, 18 decimals) → BigInt
+ * accepts BigInt, a safe-integer number, "123" or "123n" · anything else returns null
  */
 export function parseNative(value) {
   if (typeof value === "bigint") return value;
@@ -761,10 +761,10 @@ export function parseNative(value) {
 }
 const NATIVE_TEXT = /^-?\d+n?$/;
 
-/** BigInt → "123n" (รูปแบบที่เก็บลง DB / ส่งออกใน response, receipt, header) */
+/** BigInt → "123n" (the format stored in the DB / exported in responses, receipts, headers) */
 export const encodeNative = (amount) => `${amount}n`;
 
-/** ค่าที่อ่านจาก DB / response กลับเป็น BigInt (ไม่มีค่า = 0) */
+/** value read from the DB / a response back to BigInt (missing = 0) */
 export const readNative = (value) => (value === undefined || value === null ? 0n : parseNative(value) ?? 0n);
 
 export function checkValue(value) {
@@ -773,7 +773,7 @@ export function checkValue(value) {
   return amount;
 }
 
-/** gasPrice ที่ผู้ส่งเสนอ ต้องไม่ต่ำกว่าราคาขั้นต่ำของระบบ (คืน BigInt) */
+/** the gasPrice the sender offers must not be below the system minimum (returns BigInt) */
 export function checkGasPrice(gasPrice, minimum) {
   const floor = parseNative(minimum);
   if (gasPrice === undefined || gasPrice === null) return floor;
@@ -782,19 +782,19 @@ export function checkGasPrice(gasPrice, minimum) {
   return price;
 }
 
-/** ฟิลด์ค่าแก๊สแบบ EIP-1559 ของ request (ไม่ส่ง = undefined) */
-// sponsor = ผู้จ่ายแก๊สแทน (paymaster) · ไม่ส่ง = ไม่อยู่ใน hash ของ tx (tx เดิมไม่เปลี่ยน)
+/** EIP-1559 gas fee fields of a request (not sent = undefined) */
+// sponsor = the party paying gas on the sender's behalf (paymaster) · not sent = not part of the tx hash (existing txs unchanged)
 export const feeFields = (request) => ({ maxFeePerGas: request?.maxFeePerGas ?? undefined, maxPriorityFeePerGas: request?.maxPriorityFeePerGas ?? undefined,
   sponsor: request?.sponsor ? normalizeAddress(request.sponsor) : undefined });
 
-/** request นี้ใช้ค่าแก๊สแบบ EIP-1559 (type 2) ไหม */
+/** whether this request uses EIP-1559 (type 2) gas fees */
 export const isFeeMarketRequest = (request) => (request?.maxFeePerGas ?? null) !== null || (request?.maxPriorityFeePerGas ?? null) !== null;
 
 /**
- * ราคาแก๊สของ tx ใน block ที่มี baseFee (BigInt ทั้งหมด)
- *   แบบเดิม: gasPrice = maxFee = priority (ต้อง ≥ baseFee) · ไม่ส่งอะไรเลย = จ่ายเท่า baseFee ไม่มี tip
- *   EIP-1559: maxFeePerGas (ไม่ส่ง = baseFee + priority) + maxPriorityFeePerGas (ไม่ส่ง = 0) · maxFee ต้อง ≥ baseFee และ ≥ priority
- *   ราคาจริง price = min(maxFee, baseFee + priority) · tip = price - baseFee (ต่อแก๊ส)
+ * gas price of a tx in a block with a baseFee (all BigInt)
+ *   legacy: gasPrice = maxFee = priority (must be ≥ baseFee) · nothing sent = pay exactly baseFee, no tip
+ *   EIP-1559: maxFeePerGas (not sent = baseFee + priority) + maxPriorityFeePerGas (not sent = 0) · maxFee must be ≥ baseFee and ≥ priority
+ *   actual price = min(maxFee, baseFee + priority) · tip = price - baseFee (per gas)
  * @returns {{ type: 0 | 2, maxFee: bigint, maxPriority: bigint, price: bigint, tip: bigint }}
  */
 export function resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas } = {}, baseFee) {
@@ -817,8 +817,8 @@ export function resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas } = {
 }
 
 /**
- * tip ต่อแก๊สที่ผู้ผลิตได้ถ้าใส่ request นี้ใน block ที่มี baseFee (ใช้เรียงคิว) · maxFee < baseFee → null (ยังใส่ไม่ได้)
- * ไม่ระบุราคาเลย = จ่ายเท่า baseFee (tip 0) · แบบเดิม gasPrice = ทั้ง maxFee และ priority
+ * tip per gas the producer earns if this request is included in a block with a baseFee (used for queue ordering) · maxFee < baseFee → null (cannot be included yet)
+ * no price given = pay exactly baseFee (tip 0) · legacy gasPrice = both maxFee and priority
  */
 export function effectiveTip(request = {}, baseFee = 0n, { defaultGasPrice = null } = {}) {
   let maxFee;
@@ -827,7 +827,7 @@ export function effectiveTip(request = {}, baseFee = 0n, { defaultGasPrice = nul
     priority = parseNative(request.maxPriorityFeePerGas ?? 0) ?? 0n;
     maxFee = (request.maxFeePerGas ?? null) === null ? baseFee + priority : parseNative(request.maxFeePerGas) ?? 0n;
   } else if ((request.gasPrice ?? null) === null) {
-    // ไม่ระบุราคา = จ่ายเท่า baseFee เสมอ (ใส่ได้ทุก block) · นับ tip เท่าราคาตั้งต้นที่เกิน baseFee
+    // no price given = always pays exactly baseFee (includable in any block) · the tip counts as the base price above baseFee
     const fallback = parseNative(defaultGasPrice ?? 0) ?? 0n;
     return fallback > baseFee ? fallback - baseFee : 0n;
   } else {
@@ -840,9 +840,9 @@ export function effectiveTip(request = {}, baseFee = 0n, { defaultGasPrice = nul
 }
 
 /**
- * base fee ของ block ถัดไปจาก block ก่อนหน้า (สูตร EIP-1559)
- *   ใช้แก๊สเท่า target → เท่าเดิม · มากกว่า → เพิ่ม base × (used - target) / target / denominator (อย่างน้อย 1)
- *   น้อยกว่า → ลด base × (target - used) / target / denominator · ไม่ต่ำกว่า minimum · ไม่มี target = minimum เสมอ
+ * next block's base fee from the previous block (EIP-1559 formula)
+ *   gas used equals target → unchanged · more → increase by base × (used - target) / target / denominator (at least 1)
+ *   less → decrease by base × (target - used) / target / denominator · never below minimum · no target = always minimum
  */
 export function nextBaseFee({ parentBaseFee, parentGasUsed = 0, gasTarget, denominator = 8, minimum = 0n }) {
   if (!gasTarget) return minimum;
@@ -860,11 +860,11 @@ export function nextBaseFee({ parentBaseFee, parentGasUsed = 0, gasTarget, denom
   return next < minimum ? minimum : next;
 }
 
-// ---------- log แบบ EVM (ใช้ทำ logsBloom / receiptsRoot ใน header และ /evm) ----------
+// ---------- EVM-style logs (used for logsBloom / receiptsRoot in the header and /evm) ----------
 
 const ADDRESS_TEXT = /^0x[0-9a-f]{40}$/i;
 const UINT256 = 2n ** 256n;
-/** ชนิดแบบ ABI ของค่าใน event (ค่าที่เก็บแล้ว: BigInt = "123n") — ใช้ทำ topic0 = keccak(ชื่อ(ชนิด,...)) */
+/** ABI type of an event value (stored values: BigInt = "123n"); used for topic0 = keccak(name(type,...)) */
 export function eventValueType(value) {
   if (typeof value === "string" && BIGINT_TEXT.test(value)) return "uint256";
   if (typeof value === "string" && ADDRESS_TEXT.test(value)) return "address";
@@ -875,10 +875,10 @@ export function eventValueType(value) {
   return "bytes";
 }
 const word64 = (big) => (((big % UINT256) + UINT256) % UINT256).toString(16).padStart(64, "0");
-/** ค่าเดี่ยว (uint256 / address / bool) → 1 word (64 hex) */
+/** single value (uint256 / address / bool) → 1 word (64 hex) */
 const staticWord = (type, value) => (type === "uint256" ? word64(BigInt(value.slice(0, -1)))
   : type === "address" ? value.slice(2).toLowerCase().padStart(64, "0") : word64(value ? 1n : 0n));
-/** ABI encode ของ tuple (uint256 / address / bool / string / uint256[] / address[]) แบบ head + tail → hex ไม่มี 0x */
+/** head + tail ABI encoding of a tuple (uint256 / address / bool / string / uint256[] / address[]) → hex without 0x */
 function abiEncode(types, values) {
   const dynamic = (type) => type === "string" || type.endsWith("[]");
   let head = "";
@@ -898,9 +898,9 @@ function abiEncode(types, values) {
   return head + tail;
 }
 /**
- * ค่า 1 ค่า → topic 32 byte (0x + 64 hex) แบบ indexed ของ EVM
- *   BigInt → uint256 (ติดลบ = two's complement) · address → เติม 0 ซ้าย · bool → 0/1
- *   string → keccak256(ข้อความ) · อย่างอื่น (object / null) → keccak256(canonical JSON)
+ * 1 value → 32-byte topic (0x + 64 hex), EVM indexed style
+ *   BigInt → uint256 (negative = two's complement) · address → left-padded with 0 · bool → 0/1
+ *   string → keccak256(text) · anything else (object / null) → keccak256(canonical JSON)
  */
 export function topicOf(value) {
   const type = eventValueType(value);
@@ -913,11 +913,11 @@ export function topicOf(value) {
 const jsonHex = (value) => `0x${bytesToHex(utf8ToBytes(JSON.stringify(value ?? null)))}`;
 
 /**
- * event ของเชน → log แบบ EVM { address, topics, data } (ขึ้นกับข้อมูลของ event อย่างเดียว จึงรันซ้ำได้ผลเดิม)
- *   มี indexed: topic0 = keccak("ชื่อ(ชนิดของทุก field ตามลำดับ)") เช่น Transfer(address,address,uint256)
- *               topic1..3 = ค่าของ field ที่ indexed · data = field ที่เหลือ ABI encode (uint256 / address / bool / string / uint256[] / address[])
- *               มี field ชนิดอื่น (object ฯลฯ) → data = JSON ของ field ที่เหลือ
- *   ไม่มี indexed: topic0 = keccak(ชื่อ) · data = JSON ของข้อมูลทั้งก้อน
+ * chain event → EVM-style log { address, topics, data } (depends only on the event data, so re-running gives the same result)
+ *   with indexed: topic0 = keccak("name(types of all fields in order)"), e.g. Transfer(address,address,uint256)
+ *               topic1..3 = values of the indexed fields · data = remaining fields ABI-encoded (uint256 / address / bool / string / uint256[] / address[])
+ *               fields of other types present (object etc.) → data = JSON of the remaining fields
+ *   without indexed: topic0 = keccak(name) · data = JSON of the whole data
  */
 export function eventLog(event) {
   const data = event?.data && typeof event.data === "object" && !Array.isArray(event.data) ? event.data : {};
@@ -936,13 +936,13 @@ export function eventLog(event) {
   };
 }
 
-/** byte ของ address / topic ที่ใส่ bloom (address ที่ไม่ใช่ hex เช่นชื่อโปรแกรมในเทสต์ = byte ของข้อความ) */
+/** bytes of an address / topic put into the bloom (non-hex addresses, such as program names in tests = bytes of the text) */
 const bloomBytes = (item) => {
   const text = String(item ?? "");
   return /^0x(?:[0-9a-f]{2})+$/i.test(text) ? hexToBytesStrict(text.toLowerCase()) : utf8ToBytes(text);
 };
 
-/** logsBloom แบบ EVM (2048 bit): address + ทุก topic ของทุก log */
+/** EVM-style logsBloom (2048 bits): address + every topic of every log */
 export function logsBloom(logs) {
   const bits = new Uint8Array(256);
   for (const log of logs) {
@@ -957,7 +957,7 @@ export function logsBloom(logs) {
   return `0x${bytesToHex(bits)}`;
 }
 
-/** bloom นี้อาจมี item (address / topic) อยู่ไหม (false = ไม่มีแน่นอน) */
+/** whether this bloom may contain an item (address / topic) (false = definitely not) */
 export function bloomContains(bloom, item) {
   if (typeof bloom !== "string" || bloom.length !== 514) return true;
   const bits = hexToBytesStrict(bloom);
@@ -969,18 +969,18 @@ export function bloomContains(bloom, item) {
   return true;
 }
 
-// ---------- ABI ของโปรแกรม (metadata.abi) ----------
+// ---------- program ABI (metadata.abi) ----------
 
-/** ชนิดที่ใช้ใน metadata.abi */
+/** types used in metadata.abi */
 export const ABI_TYPES = ["address", "uint", "int", "bool", "string", "bytes", "object", "array", "any"];
 export const ABI_LIMITS = { functions: 64, events: 32, fields: 16, size: 16 * 1024, description: 200 };
 const ABI_NAME = /^[A-Za-z_$][\w$]{0,31}$/;
 
 /**
- * ตรวจ metadata.abi (คำอธิบายฟังก์ชัน / event ให้ explorer สร้างฟอร์มและอ่าน event)
+ * Validate metadata.abi (function / event descriptions so the explorer can build forms and decode events)
  *   { functions: [{ name, inputs: [{ name, type }], outputs: [{ name?, type }], readonly?, payable?, description? }],
  *     events: [{ name, fields: [{ name, type, indexed? }], description? }] }
- * type ∈ ABI_TYPES · ชื่อห้ามซ้ำ · event มี indexed ได้ไม่เกิน 3 field
+ * type ∈ ABI_TYPES · names must be unique · an event may have at most 3 indexed fields
  */
 export function checkAbi(abi) {
   const bad = (detail) => fail(ERRORS.invalidAbi, detail);
@@ -1045,7 +1045,7 @@ export function checkAbi(abi) {
   return abi;
 }
 
-/** ABI ของเชน → JSON ABI แบบ Ethereum (ให้เครื่องมือ EVM อ่าน) */
+/** chain ABI → Ethereum-style JSON ABI (for EVM tools to read) */
 export function toEvmAbi(abi) {
   const solidity = { address: "address", uint: "uint256", int: "int256", bool: "bool", string: "string", bytes: "bytes", object: "string", array: "string", any: "string" };
   const param = (field) => ({ name: field.name ?? "", type: solidity[field.type] ?? "string" });
@@ -1057,7 +1057,7 @@ export function toEvmAbi(abi) {
   ];
 }
 
-/** ค่าจาก query string (หรือค่าจริง) → topic ทุกแบบที่เป็นไปได้: "0x…40" = address · ตัวเลข = BigInt หรือ string · true/false = bool หรือ string */
+/** a value from a query string (or a real value) → every possible topic: "0x…40" = address · number = BigInt or string · true/false = bool or string */
 export function indexedTopicCandidates(value) {
   if (typeof value === "bigint") return [topicOf(`${value}n`)];
   if (typeof value === "boolean") return [topicOf(value)];
@@ -1068,10 +1068,10 @@ export function indexedTopicCandidates(value) {
   return [...topics];
 }
 
-/** emit แบบ indexed ได้ไม่เกินกี่ field (เท่า LOG4 ของ EVM: topic0 + 3) */
+/** maximum number of indexed fields in an emit (same as EVM LOG4: topic0 + 3) */
 export const MAX_INDEXED = 3;
 
-/** options ของ emit: { indexed: ["field", ...] } — ชื่อต้องไม่ซ้ำ มีอยู่ใน data และไม่เกิน MAX_INDEXED → รายชื่อ (ไม่ส่ง = []) */
+/** emit options: { indexed: ["field", ...] }; names must be unique, present in data, and at most MAX_INDEXED → the list (not sent = []) */
 export function checkIndexed(options, data) {
   if (options === undefined || options === null) return [];
   if (typeof options !== "object" || Array.isArray(options)) fail(ERRORS.invalidIndexed, "options ต้องเป็น { indexed: [...] }");
@@ -1089,7 +1089,7 @@ export function checkIndexed(options, data) {
   return [...indexed];
 }
 
-/** จำนวนแก๊สที่ซื้อได้ (BigInt) → number ไม่เกินเพดานที่ number แทนได้ */
+/** amount of gas purchasable (BigInt) → number, capped at what a number can represent */
 const gasUnits = (units) => Number(units > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : units);
 
 export function checkGasLimit(gasLimit) {
@@ -1107,18 +1107,18 @@ export function checkCode(code) {
   if (typeof code !== "string") fail(ERRORS.invalidCode);
 }
 
-/** upgrader: address (string ที่ไม่ว่าง ไม่มี ':') · null / undefined = ไม่มี → คืน address ตัวพิมพ์เล็ก หรือ null */
+/** upgrader: an address (non-empty string without ':') · null / undefined = none → returns the lowercase address or null */
 export function checkUpgrader(upgrader) {
   if (upgrader === undefined || upgrader === null) return null;
   if (!isNonEmptyString(upgrader) || upgrader.includes(":")) fail(ERRORS.invalidUpgrader);
   return normalizeAddress(upgrader);
 }
 
-// ---------- เวลา ----------
+// ---------- time ----------
 
 const RealDate = Date;
 
-/** ตัวสุ่มที่ผูกกับ seed: ลำดับค่าที่ได้เหมือนเดิมทุกครั้งเมื่อ seed และลำดับการเรียกเหมือนกัน */
+/** seeded RNG: yields the same sequence every time when the seed and call order are the same */
 export function createSeededRandom(hashFunction, seed) {
   let counter = 0;
   return () => {
@@ -1127,7 +1127,7 @@ export function createSeededRandom(hashFunction, seed) {
   };
 }
 
-/** Math ที่โปรแกรมเห็น: เหมือนของเดิมทุกอย่าง ยกเว้น random() */
+/** the Math programs see: identical to the original except random() */
 export function createSeededMath(random) {
   return new Proxy(Math, { get: (target, prop, receiver) => (prop === "random" ? random : Reflect.get(target, prop, receiver)) });
 }
@@ -1137,9 +1137,9 @@ export function checkTimestamp(timestamp) {
 }
 
 /**
- * Date ที่โปรแกรมเห็น: เวลาปัจจุบันเป็น timestamp ของ block เสมอ
- *   Date.now() / new Date() / Date()  → เวลาของ block
- *   new Date(x), Date.UTC, Date.parse, instanceof Date → ทำงานปกติ
+ * The Date programs see: the current time is always the block timestamp
+ *   Date.now() / new Date() / Date()  → block time
+ *   new Date(x), Date.UTC, Date.parse, instanceof Date → work normally
  */
 export function createBlockDate(timestamp) {
   return new Proxy(RealDate, {
@@ -1150,13 +1150,13 @@ export function createBlockDate(timestamp) {
 }
 
 // ============================================================================
-//  Compiler: ตรวจโค้ด + ฉีดตัวนับแก๊ส → ซอร์สที่พร้อมรันใน sandbox (มี cache ตามเนื้อโค้ด)
+//  Compiler: validate code + inject gas counters → source ready to run in the sandbox (cached by code content)
 // ============================================================================
 
 export class Compiler {
   #cache = new Map(); // oneLineCode → program
 
-  /** โค้ดบรรทัดเดียว → { exports, hasInit, hasMigrate, source } (source = ฟังก์ชัน factory(api) ที่ฉีดตัวนับแก๊สแล้ว) */
+  /** single-line code → { exports, hasInit, hasMigrate, source } (source = factory(api) function with gas counters injected) */
   compile(oneLineCode) {
     if (!this.#cache.has(oneLineCode)) {
       const { body, exports, candidateNames } = Compiler.parse(fromOneLine(oneLineCode));
@@ -1164,7 +1164,7 @@ export class Compiler {
       const functionNames = candidateNames.filter((name) => Compiler.isTopLevelDeclaration(body, name));
       const callable = Compiler.validateExports(exports, functionNames);
       const source = Compiler.buildFactory(Compiler.meter(body), functionNames);
-      const guestError = checkGuestSyntax(source);   // QuickJS รับ syntax ไม่ตรงกับ V8 ทุกข้อ → ตรวจกับตัวที่ใช้รันจริงด้วย
+      const guestError = checkGuestSyntax(source);   // QuickJS does not accept exactly the same syntax as V8 → also check against the engine that actually runs it
       if (guestError) fail(ERRORS.syntaxError, guestError);
       this.#cache.set(oneLineCode, {
         exports: callable,
@@ -1176,12 +1176,12 @@ export class Compiler {
     return this.#cache.get(oneLineCode);
   }
 
-  /** ลืมโค้ดที่คอมไพล์ไว้ (เรียกตอนโค้ดของโปรแกรมถูกแทนที่ด้วยการอัปเกรด — ใช้อีกเมื่อไรก็คอมไพล์ใหม่ได้) */
+  /** forget compiled code (called when a program's code is replaced by an upgrade; it can be recompiled whenever needed again) */
   forget(oneLineCode) {
     this.#cache.delete(oneLineCode);
   }
 
-  /** แยกโค้ดเป็น body ภายใน scope, รายชื่อที่ return, ชื่อที่ "อาจ" เป็นฟังก์ชัน */
+  /** split code into the body inside the scope, the returned names, and names that "may" be functions */
   static parse(code) {
     if (MODULE_KEYWORD_PATTERN.test(code)) fail(ERRORS.importNotAllowed);
 
@@ -1191,7 +1191,7 @@ export class Compiler {
     const inner = wrapper[1];
     const returned = inner.match(RETURN_EXPORT_PATTERN);
     const exports = (returned?.[1] ?? "").split(",").map((name) => name.trim()).filter(Boolean);
-    const body = returned ? inner.slice(0, returned.index) : inner; // ตัด return ท้ายสุดออก
+    const body = returned ? inner.slice(0, returned.index) : inner; // strip the final return
 
     const candidateNames = [...new Set([
       ...[...body.matchAll(FUNCTION_PATTERN)].map((m) => m[1]),
@@ -1204,7 +1204,7 @@ export class Compiler {
     return `"use strict";\nconst { ${[...PROGRAM_API_NAMES, ...METER_FNS].join(", ")} } = api;\n${body}\n;${tail}`;
   }
 
-  /** ฉีดตัวนับแก๊สเข้าโค้ด (ดู gasmeter.js) */
+  /** inject gas counters into the code (see gasmeter.js) */
   static meter(body) {
     try {
       return instrument(body);
@@ -1213,7 +1213,7 @@ export class Compiler {
     }
   }
 
-  /** คอมไพล์เพื่อตรวจ syntax ด้วย V8 (ไม่รันโค้ด — แค่สร้างฟังก์ชันโดยไม่เรียก ข้อความ error คงเดิม) */
+  /** compile with V8 to check syntax (does not run code; only creates the function without calling it, error messages unchanged) */
   static checkSyntax(body) {
     try {
       new Function("api", Compiler.source(body));
@@ -1223,8 +1223,8 @@ export class Compiler {
   }
 
   /**
-   * name ถูกประกาศในระดับบนสุดของโปรแกรมหรือไม่ (ไม่รันโค้ด)
-   * ประกาศ `let name` ต่อท้าย ถ้าชื่อนี้มีอยู่แล้วใน scope เดียวกัน V8 จะแจ้ง SyntaxError ตอนคอมไพล์
+   * whether name is declared at the top level of the program (does not run code)
+   * appends a `let name` declaration; if the name already exists in the same scope, V8 reports a SyntaxError at compile time
    */
   static isTopLevelDeclaration(body, name) {
     try {
@@ -1235,14 +1235,14 @@ export class Compiler {
     }
   }
 
-  /** initialization / migrate ถูกตัดออกจากรายการ export เสมอ (VM เรียกเองตอน init / อัปเกรดเท่านั้น) */
+  /** initialization / migrate are always removed from the export list (the VM calls them itself, only at init / upgrade) */
   static validateExports(exports, functionNames) {
     const missing = exports.find((name) => !functionNames.includes(name));
     if (missing) fail(ERRORS.exportMissing, missing);
     return exports.filter((name) => name !== INIT_FUNCTION && name !== MIGRATE_FUNCTION);
   }
 
-  /** ซอร์สของ factory(api) → { ชื่อฟังก์ชัน: function } (รันใน sandbox ทุก call จึงไม่มีตัวแปรค้างข้าม call) */
+  /** source of factory(api) → { function name: function } (runs in the sandbox on every call, so no variables persist across calls) */
   static buildFactory(body, functionNames) {
     const returns = functionNames.map((name) => `${name}: typeof ${name} === "function" ? ${name} : undefined`);
     return `(function (api) {\n${Compiler.source(body, `return { ${returns.join(", ")} };`)}\n})`;
@@ -1250,12 +1250,12 @@ export class Compiler {
 }
 
 // ============================================================================
-//  Transaction: สถานะของ 1 request
+//  Transaction: state of 1 request
 // ============================================================================
 
 export class Transaction {
   #read;
-  #readCache = new Map(); // dbKey → ค่าที่อ่านจาก DB แล้ว (อ่านแต่ละ key จาก DB ครั้งเดียวต่อ request)
+  #readCache = new Map(); // dbKey → value already read from the DB (each key is read from the DB once per request)
 
   #sandbox = null;
   #sandboxOptions;
@@ -1265,38 +1265,38 @@ export class Transaction {
     checkTimestamp(timestamp);
     this.#read = read;
     this.#sandboxOptions = { memoryLimitBytes, maxStackBytes, wallClock };
-    this.blockNumber = blockNumber;           // เลข block ที่ tx นี้อยู่ (null = รันนอก block)
-    this.seed = null;                         // seed ของตัวสุ่ม (ตั้งจาก hash ของ tx)
-    this.Math = Math;                         // แทนด้วยตัวสุ่มที่ผูกกับ tx เมื่อรู้ seed
-    this.gas = gas;                           // ตารางค่าแก๊ส
-    this.baseFee = baseFee === undefined || baseFee === null ? readNative(gas.price) : readNative(baseFee);   // base fee ของ block (BigInt)
-    this.gasPrice = this.baseFee;             // ราคาจริงต่อ 1 gas ของ tx นี้ = min(maxFee, baseFee + priority) — ตั้งใน preparePayer
-    this.fees = null;                         // ผลของ resolveFees (ราคาที่ผู้ส่งเสนอ) — ตั้งใน preparePayer
-    this.feeBurned = 0n;                      // ค่าแก๊สส่วนที่เผา (ส่วนของ base fee × burnPercent)
-    this.feeReward = 0n;                      // ค่าแก๊สที่เข้าผู้ปิด block (tip + ส่วนของ base fee ที่ไม่ได้เผา)
+    this.blockNumber = blockNumber;           // block number this tx is in (null = run outside a block)
+    this.seed = null;                         // RNG seed (set from the tx hash)
+    this.Math = Math;                         // replaced by the tx-bound RNG once the seed is known
+    this.gas = gas;                           // gas fee table
+    this.baseFee = baseFee === undefined || baseFee === null ? readNative(gas.price) : readNative(baseFee);   // block base fee (BigInt)
+    this.gasPrice = this.baseFee;             // actual price per 1 gas for this tx = min(maxFee, baseFee + priority); set in preparePayer
+    this.fees = null;                         // result of resolveFees (the price the sender offered); set in preparePayer
+    this.feeBurned = 0n;                      // burned part of the gas fee (base fee portion × burnPercent)
+    this.feeReward = 0n;                      // gas fee going to the block closer (tip + unburned base fee portion)
     this.chargeGas = chargeGas;
     this.gasUsed = 0;
-    this.maxTxGas = maxTxGas;                 // เพดานแก๊สต่อ tx ไม่ว่าผู้จ่ายจะมีเงินเท่าไร
-    this.gasLimit = maxTxGas;                 // ตั้งตามยอด native ของผู้จ่ายเมื่อรู้ตัวผู้จ่าย
-    this.payer = null;                        // { address, nonce } ของ tx ชั้นนอกสุด
-    this.transaction = null;                  // ข้อมูลของ tx สำหรับเขียน <addr>:txn:<nonce>:<hash>
-    this.feeCharged = 0n;                     // ค่าแก๊สที่เก็บจริง (native BigInt)
-    this.feeRecipient = feeRecipient;         // ผู้ปิด block ที่ได้ส่วนแบ่งค่าแก๊ส
+    this.maxTxGas = maxTxGas;                 // per-tx gas ceiling regardless of how much the payer has
+    this.gasLimit = maxTxGas;                 // set from the payer's native balance once the payer is known
+    this.payer = null;                        // { address, nonce } of the outermost tx
+    this.transaction = null;                  // tx data for writing <addr>:txn:<nonce>:<hash>
+    this.feeCharged = 0n;                     // gas fee actually collected (native BigInt)
+    this.feeRecipient = feeRecipient;         // block closer receiving a share of the gas fee
     this.burnPercent = burnPercent;
-    this.timestamp = timestamp;               // เวลาของ request / block ที่โปรแกรมเห็น
+    this.timestamp = timestamp;               // request / block time that programs see
     this.Date = createBlockDate(timestamp);
     this.maxCallDepth = maxCallDepth;
     this.deadline = Date.now() + timeoutMs;
-    this.fatal = null;       // error ที่ทั้ง request ต้องล้ม (DB พัง / แก๊สหมด / หมดเวลา / หน่วยความจำเกิน) — โปรแกรม catch ไม่ได้
+    this.fatal = null;       // error that must fail the whole request (DB failure / out of gas / timeout / memory exceeded); programs cannot catch it
     this.writes = [];        // [{ type: "put", dbKey, value } | { type: "del", dbKey }]
-    this.calls = [];         // log การเรียกโปรแกรม
-    this.events = [];        // event ที่โปรแกรม emit (ถูกย้อนพร้อม writes)
-    this.before = new Map(); // dbKey → ค่าก่อนรัน
-    this.loaded = new Set(); // dbKey ที่โปรแกรมอ่าน
-    this.stateKeys = new Set(); // dbKey ที่คิดแก๊ส stateKey ไปแล้ว (ไม่คืนตอน rollback ของกิ่ง — แก๊สที่ใช้ไปแล้วไม่คืน)
+    this.calls = [];         // program call log
+    this.events = [];        // events emitted by programs (rolled back together with writes)
+    this.before = new Map(); // dbKey → value before running
+    this.loaded = new Set(); // dbKeys the program read
+    this.stateKeys = new Set(); // dbKeys already charged stateKey gas (not refunded on a branch rollback; gas already spent is not refunded)
   }
 
-  /** แก๊สของ key ของ state ที่ tx เขียนครั้งแรก (writeDB / deleteDB) */
+  /** gas for state keys a tx writes for the first time (writeDB / deleteDB) */
   useStateKeyGas(dbKey) {
     if (this.stateKeys.has(dbKey)) return;
     this.useGas(this.gas.stateKey);
@@ -1305,7 +1305,7 @@ export class Transaction {
 
   // ---------- DB ----------
 
-  /** อ่าน DB (ครั้งเดียวต่อ key): ถ้าพัง จำ error ไว้เพื่อ throw ซ้ำจนจบ request */
+  /** read the DB (once per key): on failure, remember the error and rethrow it until the request ends */
   read(dbKey) {
     this.assertAlive();
     if (this.#readCache.has(dbKey)) return this.#readCache.get(dbKey);
@@ -1319,17 +1319,17 @@ export class Transaction {
     }
   }
 
-  /** อ่าน DB โดยไม่สนว่า request ล้มไปแล้ว (ใช้ตอนเก็บค่าแก๊สของ tx ที่ล้ม) */
+  /** read the DB regardless of whether the request has failed (used when collecting gas fees of failed txs) */
   readRaw(dbKey) {
     return this.#read(dbKey);
   }
 
-  /** DB พัง / แก๊สหมด → หยุดทุกอย่างและ throw ซ้ำจนจบ request */
+  /** DB failure / out of gas → stop everything and rethrow until the request ends */
   assertAlive() {
     if (this.fatal) throw this.fatal;
   }
 
-  /** นับแก๊ส: เกินยอดที่ผู้จ่ายมี → OUT_OF_GAS (catch ไม่ได้) */
+  /** charge gas: exceeding what the payer has → OUT_OF_GAS (cannot be caught) */
   useGas(amount) {
     this.assertAlive();
     this.gasUsed += amount;
@@ -1339,7 +1339,7 @@ export class Transaction {
     }
   }
 
-  /** sandbox ตั้งให้ทั้ง request ล้ม: "timeout" | "memory" (error แรกชนะ) */
+  /** the sandbox marks the whole request as failed: "timeout" | "memory" (first error wins) */
   abort(kind) {
     this.fatal ??= kind === "timeout"
       ? VMError.from(ERRORS.timeout)
@@ -1349,7 +1349,7 @@ export class Transaction {
 
   // ---------- sandbox ----------
 
-  /** runtime ของ QuickJS ของ tx นี้ (สร้างตอนรันโปรแกรมครั้งแรก — tx ที่ไม่รันโปรแกรมไม่ต้องจ่าย) */
+  /** this tx's QuickJS runtime (created when a program first runs; txs that run no program do not pay for it) */
   sandbox() {
     this.#sandbox ??= new Sandbox(this, {
       ...this.#sandboxOptions,
@@ -1361,17 +1361,17 @@ export class Transaction {
     return this.#sandbox;
   }
 
-  /** คืน runtime / context ทั้งหมด (runAction เรียกเสมอ) */
+  /** release all runtimes / contexts (runAction always calls this) */
   dispose() {
     this.#sandbox?.dispose();
   }
 
-  /** ค่าแก๊สที่ต้องจ่ายเป็น native */
+  /** gas fee to pay, in native */
   gasFee() {
     return this.chargeGas ? BigInt(Math.min(this.gasUsed, this.gasLimit)) * this.gasPrice : 0n;
   }
 
-  /** ค่าล่าสุด: ถ้าเขียนใน request นี้แล้วใช้ค่านั้น ไม่งั้นอ่าน DB */
+  /** latest value: if written in this request, use that; otherwise read the DB */
   current(dbKey) {
     const lastWrite = this.writes.findLast((write) => write.dbKey === dbKey);
     return copyValue(lastWrite ? lastWrite.value : this.read(dbKey));
@@ -1385,7 +1385,7 @@ export class Transaction {
     this.writes.push({ type: WRITE.DEL, dbKey });
   }
 
-  /** แปลง key ของโปรแกรมเป็น dbKey และจำค่าก่อนรันไว้ */
+  /** convert a program key to a dbKey and remember its value before running */
   touch(programUuid, key) {
     const dbKey = storageKey(programUuid, key);
     if (!this.before.has(dbKey)) this.before.set(dbKey, copyValue(this.read(dbKey)));
@@ -1398,10 +1398,10 @@ export class Transaction {
 
   rollbackTo(savepoint) {
     this.writes.length = savepoint.writes;
-    this.events.length = savepoint.events;   // event ของกิ่งที่ถูกย้อนหายไปด้วย
+    this.events.length = savepoint.events;   // events of a rolled-back branch disappear too
   }
 
-  // ---------- เวลา ----------
+  // ---------- time ----------
 
   remainingTime() {
     const remaining = this.deadline - Date.now();
@@ -1409,11 +1409,11 @@ export class Transaction {
     return remaining;
   }
 
-  // ---------- log การเรียก ----------
+  // ---------- call log ----------
 
   startCall({ depth, programUuid, functionName, context, input, value = 0, gasStart = this.gasUsed, type }) {
     const record = { depth, programUuid, functionName, ...pickContext(context), input, value: encodeNative(readNative(value)), gasStart, status: STATUS.RUNNING };
-    if (type) record.type = type;   // "create" = โปรแกรมถูกสร้างด้วย cloneProgram (ไม่มี = call ปกติ)
+    if (type) record.type = type;   // "create" = the program was created with cloneProgram (absent = a normal call)
     this.calls.push(record);
     return record;
   }
@@ -1424,14 +1424,14 @@ export class Transaction {
     if (error) record.error = { code: error.code, message: error.message };
   }
 
-  /** ปิด call ที่ยังค้างทั้งหมดเป็น throw — ใช้ตอน timeout ที่หยุดทุกชั้นพร้อมกัน */
+  /** close every still-open call as throw; used on a timeout, which stops every level at once */
   closeRunningCalls(error) {
     for (const record of this.calls) {
       if (record.status === STATUS.RUNNING) Transaction.finishCall(record, error, this.gasUsed);
     }
   }
 
-  // ---------- สรุปผล ----------
+  // ---------- result summary ----------
 
   summary() {
     const loadValues = [...this.loaded].map((dbKey) => ({ dbKey, loadValue: this.before.get(dbKey) }));
@@ -1450,7 +1450,7 @@ export class Transaction {
 export class VirtualMachine {
   /**
    * @param {{ readKeys(keys: string[]): any[], writeKeys(writes: object[]): any, listKeys?: Function }} db
-   *        DB ที่ใช้เก็บข้อมูล (ดู db.js: DB สำหรับของจริง, MemoryDB สำหรับทดสอบ)
+   *        the DB used for storage (see db.js: DB for production, MemoryDB for tests)
    * @param {object} [options]
    */
   constructor(db, {
@@ -1529,7 +1529,7 @@ export class VirtualMachine {
     this.hashFunction = hashFunction;
     this.gas = { ...DEFAULT_GAS, ...gas };
     this.#setForks(forks ?? {}, { ...FORKS, ...forkRules });
-    // EIP-1559: base fee ต่ำสุด / แก๊สเป้าหมายต่อ block / ตัวหารของการเปลี่ยนต่อ block
+    // EIP-1559: minimum base fee / target gas per block / per-block change denominator
     this.minBaseFee = parseNative(minBaseFee ?? this.gas.price);
     if (this.minBaseFee === null || this.minBaseFee < 0n) fail(ERRORS.invalidBaseFeeOption, "minBaseFee");
     const target = gasTarget ?? (Number.isSafeInteger(maxBlockGas) && maxBlockGas > 0 ? Math.max(1, Math.floor(maxBlockGas / 2)) : null);
@@ -1541,8 +1541,8 @@ export class VirtualMachine {
   }
 
   /**
-   * base fee ของ block ที่ต่อจาก header นี้ (ไม่มี header = block แรก → base fee ขั้นต่ำ)
-   *   read = อ่าน state ก่อน block นั้น (ขั้นต่ำมาจาก gasconfig ที่ admin ตั้งไว้ ถ้ามี · ไม่ส่ง = DB ล่าสุด)
+   * base fee of the block following this header (no header = first block → minimum base fee)
+   *   read = reads the state before that block (the minimum comes from the admin-set gasconfig, if any · not sent = latest DB)
    */
   baseFeeAfter(header, read) {
     const minimum = this.minBaseFeeNow(read);
@@ -1556,22 +1556,22 @@ export class VirtualMachine {
     });
   }
 
-  /** base fee ของ block ถัดไป (ต่อจาก block ล่าสุดใน DB) */
+  /** base fee of the next block (following the latest block in the DB) */
   currentBaseFee() {
     try {
-      if (!this.gasTarget) return this.minBaseFeeNow();   // ไม่มีเป้าหมาย = base fee คงที่ที่ขั้นต่ำ
+      if (!this.gasTarget) return this.minBaseFeeNow();   // no target = base fee fixed at the minimum
       const latest = this.latestBlockNumber();
       return this.baseFeeAfter(latest === null ? null : this.getBlock(latest));
     } catch {
-      return this.minBaseFee;   // DB อ่านไม่ได้ → tx จะล้มเองตอนอ่าน DB (INTERNAL)
+      return this.minBaseFee;   // DB unreadable → the tx will fail on its own when reading the DB (INTERNAL)
     }
   }
 
-  // ---------- ขั้นต่ำของ gas price ที่ admin ตั้งบนเชน (gasconfig · ดู setGasConfig) ----------
+  // ---------- gas price floor set on-chain by the admin (gasconfig · see setGasConfig) ----------
 
   /**
-   * ค่าที่ admin ตั้งไว้ใน state: { minBaseFee: "wei" | null, block, by } หรือ null (ยังไม่เคยตั้ง)
-   *   เชนที่ไม่ตั้ง admins ตั้งค่านี้ไม่ได้เลย → ไม่ต้องอ่าน DB
+   * the admin-set value in state: { minBaseFee: "wei" | null, block, by } or null (never set)
+   *   chains without admins can never set this → no DB read needed
    */
   gasConfig(read = (dbKey) => this.read(dbKey)) {
     if (!this.admins) return null;
@@ -1579,20 +1579,20 @@ export class VirtualMachine {
     return value && typeof value === "object" ? value : null;
   }
 
-  /** base fee ขั้นต่ำ (= ขั้นต่ำของ gas price) ที่ใช้อยู่ = ค่าที่ admin ตั้ง (ถ้ามี) ไม่งั้นค่าจาก genesis (minBaseFee ของ VM) */
+  /** minimum base fee (= gas price floor) in effect = the admin-set value (if any), otherwise the genesis value (the VM's minBaseFee) */
   minBaseFeeNow(read) {
     const configured = parseNative(this.gasConfig(read)?.minBaseFee ?? null);
     return configured ?? this.minBaseFee;
   }
 
-  /** อ่าน 1 key ผ่าน db.readKeys */
+  /** read 1 key via db.readKeys */
   read(dbKey) {
     return this.db.readKeys([dbKey])[0];
   }
 
   /**
-   * บันทึก writes ลง DB ผ่าน db.writeKeys · key ของ state ที่เปลี่ยน → อัปเดต trie (stateRoot) ใน commit เดียวกัน
-   *   trie = ผลของ trieUpdate(writes) ที่คำนวณไว้แล้ว (Block ใช้ตัวเดียวกับที่ทำ stateRoot ใน header) · ไม่ส่ง = คำนวณเอง
+   * persist writes to the DB via db.writeKeys · changed state keys → update the trie (stateRoot) in the same commit
+   *   trie = the precomputed result of trieUpdate(writes) (Block uses the same one it used for the header's stateRoot) · not sent = computed here
    */
   commit(writes, { trie } = {}) {
     this.#ensureTrie();
@@ -1601,10 +1601,10 @@ export class VirtualMachine {
     return this.db.writeKeys(update.writes.length ? [...writes, ...update.writes] : writes);
   }
 
-  // ---------- fork (กติกาตาม block height · ดู FORKS) ----------
+  // ---------- fork (rules by block height · see FORKS) ----------
 
-  #forks = [];          // [{ name, block, rule }] เรียงตาม block
-  #gasCache = new Map(); // ชื่อ fork ที่เปิดแล้ว → ตารางแก๊ส
+  #forks = [];          // [{ name, block, rule }] sorted by block
+  #gasCache = new Map(); // names of active forks → gas table
 
   #setForks(forks, rules) {
     if (typeof forks !== "object" || Array.isArray(forks)) fail(ERRORS.invalidFork, "(ตาราง)", "ต้องเป็น { ชื่อ: block }");
@@ -1621,26 +1621,26 @@ export class VirtualMachine {
     this.#gasCache.clear();
   }
 
-  /** block ที่ tx ที่รันนอก block (query / simulate / mempool) จะได้อยู่ = block ถัดไป */
+  /** the block a tx run outside a block (query / simulate / mempool) would land in = the next block */
   #effectiveBlock(blockNumber) {
     return blockNumber ?? (this.latestBlockNumber() ?? 0) + 1;
   }
 
-  /** fork นี้เปิดใช้แล้วที่ block นั้นไหม (ไม่ส่ง = block ถัดไป) */
+  /** whether this fork is active at that block (not sent = the next block) */
   forkActive(name, blockNumber = null) {
     const fork = this.#forks.find((item) => item.name === name);
     return Boolean(fork) && this.#effectiveBlock(blockNumber) >= fork.block;
   }
 
-  /** ตาราง fork → [{ name, block, active, description }] (active = เปิดแล้วที่ block ถัดไป) */
+  /** fork table → [{ name, block, active, description }] (active = active at the next block) */
   forkSchedule() {
     const next = this.#effectiveBlock(null);
     return this.#forks.map(({ name, block, rule }) => ({ name, block, active: next >= block, description: rule.description ?? null }));
   }
 
-  /** ตารางแก๊สที่ใช้ใน block นั้น = ค่าตั้งต้นของ VM แล้วแทนด้วย fork ที่เปิดแล้วตามลำดับ */
+  /** gas table used in that block = the VM's defaults, overridden by the active forks in order */
   gasAt(blockNumber = null) {
-    if (!this.#forks.length) return this.gas;   // ไม่มี fork = ไม่ต้องอ่านเลข block จาก DB
+    if (!this.#forks.length) return this.gas;   // no forks = no need to read the block number from the DB
     const number = this.#effectiveBlock(blockNumber);
     const active = this.#forks.filter((fork) => number >= fork.block && fork.rule.gas);
     if (!active.length) return this.gas;
@@ -1653,16 +1653,16 @@ export class VirtualMachine {
     return table;
   }
 
-  // ---------- trie ของ state (ระยะ 4.3 · src/core/trie.js) ----------
+  // ---------- state trie (phase 4.3 · src/core/trie.js) ----------
 
   #trieReady = false;
 
-  /** trie ของ state ล่าสุดใน DB (node อยู่ที่ trie:<path> · เก็บแค่ของล่าสุด) */
+  /** the latest state trie in the DB (nodes live at trie:<path> · only the latest is kept) */
   #trie() {
     return new StateTrie({ load: (path) => this.read(trieNodeKey(path)) });
   }
 
-  /** DB ที่มี state แต่ยังไม่มี trie (สร้างก่อนระยะ 4.3 / เขียน state ตรง ๆ) → สร้าง trie จาก state ทั้งหมดครั้งเดียว */
+  /** a DB with state but no trie yet (created before phase 4.3 / state written directly) → build the trie from the whole state once */
   #ensureTrie() {
     if (this.#trieReady) return;
     this.#trieReady = true;
@@ -1670,13 +1670,13 @@ export class VirtualMachine {
     this.rebuildTrie();
   }
 
-  /** root ของ trie ของ state ตอนนี้ (= stateRoot ของ block ล่าสุด) */
+  /** current state trie root (= the latest block's stateRoot) */
   stateRoot() {
     this.#ensureTrie();
     return this.#trie().root;
   }
 
-  /** writes → { parentRoot, root, writes: node ของ trie ที่ต้องบันทึก } (ยังไม่บันทึก · เฉพาะ key ของ state) */
+  /** writes → { parentRoot, root, writes: trie nodes to persist } (not persisted · state keys only) */
   trieUpdate(writes) {
     this.#ensureTrie();
     const trie = this.#trie();
@@ -1688,8 +1688,8 @@ export class VirtualMachine {
   }
 
   /**
-   * สร้าง trie ใหม่จาก state ทั้งหมดใน DB (ลบ node เดิมก่อน) → { root, keys } · ใช้ตอนย้ายข้อมูล / โหลด snapshot
-   * อ่าน key ของ state ทั้งหมดมาเรียงในหน่วยความจำ (≈ 150–250 byte ต่อ key) แล้วสร้างทั้งต้นทีเดียว (buildTrie)
+   * Build a new trie from the whole state in the DB (deleting the old nodes first) → { root, keys } · used for data migration / snapshot load
+   * reads every state key into memory and sorts it (≈ 150–250 bytes per key), then builds the whole tree in one go (buildTrie)
    */
   rebuildTrie({ batch = 5_000 } = {}) {
     for (;;) {
@@ -1720,9 +1720,9 @@ export class VirtualMachine {
   }
 
   /**
-   * หลักฐานของ key ใน state ล่าสุด (แบบ eth_getProof · ตรวจได้ด้วย verifyProof ของ src/core/trie.js / client-sdk)
-   *   → { blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof: [hex ของ node จากราก] }] }
-   * value undefined = ไม่มี key นี้ (หลักฐานพิสูจน์ว่าไม่มีได้เหมือนกัน)
+   * Proof for keys in the latest state (like eth_getProof · verifiable with verifyProof from src/core/trie.js / client-sdk)
+   *   → { blockNumber, blockHash, stateRoot, proofs: [{ dbKey, value, proof: [hex of nodes from the root] }] }
+   * value undefined = the key does not exist (the proof can prove absence too)
    */
   getProof(dbKeys) {
     if (!Array.isArray(dbKeys) || dbKeys.some((dbKey) => !isNonEmptyString(dbKey))) fail(ERRORS.invalidKey);
@@ -1738,9 +1738,9 @@ export class VirtualMachine {
   }
 
   /**
-   * pruning (ระยะ 4.2): ลบ history ของ block ที่เก่ากว่า historyKeep block ล่าสุด → ย้อนดู state / replay ได้แค่ช่วงนั้น
-   * header / body ของ block ยังอยู่ครบ (ซิงก์ให้ node อื่นได้) · ลบทีละไม่เกิน maxKeys key ต่อครั้ง (เปิดบนเชนยาว = ทยอยลบทุก block)
-   *   → { from, to, keys } · to = historyfrom ใหม่
+   * pruning (phase 4.2): delete history of blocks older than the latest historyKeep blocks → state lookback / replay limited to that range
+   * block headers / bodies stay complete (can still sync other nodes) · deletes at most maxKeys keys per call (enabling it on a long chain = gradual deletion every block)
+   *   → { from, to, keys } · to = the new historyfrom
    */
   pruneHistory({ keep = this.historyKeep, maxKeys = 50_000 } = {}) {
     const latest = this.latestBlockNumber();
@@ -1760,9 +1760,9 @@ export class VirtualMachine {
     return { from: start, to: from, keys };
   }
 
-  // ---------- API ของ server ----------
+  // ---------- server API ----------
 
-  /** user ส่งโค้ด → ตรวจ syntax → pending รอรีวิว */
+  /** user submits code → syntax check → pending review */
   deploy({ programUuid: rawProgramUuid, code, context: rawContext, initInput = {}, metadata = {}, upgrader, nonce, gasLimit, gasPrice, value = 0 } = {}, options) {
     return this.runAction((tx) => {
       const derive = this.deriveProgramAddress || rawProgramUuid === undefined;
@@ -1775,7 +1775,7 @@ export class VirtualMachine {
       this.preparePayer(tx, context.sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice, value: amount });
 
       const programUuid = derive
-        // address ของโปรแกรม = hash(deployer + nonce) จึงไม่มีใครมี private key ของมัน
+        // program address = hash(deployer + nonce), so nobody holds its private key
         ? this.programAddressFor(context.sender, tx.payer?.nonce ?? tx.current(nonceKey(context.sender)) ?? 0)
         : normalizeAddress(rawProgramUuid);
       this.rememberTransaction(tx, arguments[0], "deploy");
@@ -1784,7 +1784,7 @@ export class VirtualMachine {
       const codeSize = Buffer.byteLength(oneLineCode, "utf8");
       if (codeSize > this.maxCodeSize) fail(ERRORS.codeTooLong, this.maxCodeSize, codeSize);
 
-      // ค่าพื้นฐานของ tx + ตามขนาดโค้ด (เก็บใน DB ถาวรและถูกคอมไพล์ทุกครั้งที่เรียกใช้)
+      // base tx cost + by code size (stored permanently in the DB and compiled on every call)
       if (this.autoReview) {
         const result = review(code, { apiNames: [...PROGRAM_API_NAMES, "params"] });
         if (!result.ok) fail(ERRORS.reviewFailed, reviewMessage(result));
@@ -1796,10 +1796,10 @@ export class VirtualMachine {
         fail(ERRORS.programUuidUsed, programUuid);
       }
 
-      if (amount > 0n) this.moveNative(tx, context.sender, programUuid, amount); // เงินไปรออยู่ที่โปรแกรมเลย
+      if (amount > 0n) this.moveNative(tx, context.sender, programUuid, amount); // funds go straight to the program and wait there
 
       this.checkMetadata(metadata);
-      // ABI ที่ส่งมาตอน deploy: ฟังก์ชันที่ประกาศต้อง export จริง
+      // ABI supplied at deploy: declared functions must actually be exported
       const missing = (metadata?.abi?.functions ?? []).find((fn) => !this.compiler.compile(oneLineCode).exports.includes(fn.name));
       if (missing) fail(ERRORS.invalidAbi, `ฟังก์ชัน '${missing.name}' ไม่ได้ export`);
       tx.put(pendingKey(programUuid), {
@@ -1808,14 +1808,14 @@ export class VirtualMachine {
         initInput: toInputValue(initInput, "initInput"),
         metadata,
         value: encodeNative(amount),
-        // ไม่ระบุ = ไม่มี field นี้เลย (pending ของโปรแกรมที่แก้ไม่ได้หน้าตาเหมือนเดิมทุกไบต์)
+        // not given = this field is absent entirely (pending entries of immutable programs stay byte-identical)
         ...(upgraderAddress ? { upgrader: upgraderAddress } : {}),
       });
       return { programUuid, code: oneLineCode, state: STATE.PENDING, value: encodeNative(amount), ...(upgraderAddress ? { upgrader: upgraderAddress } : {}) };
     }, options);
   }
 
-  /** ทีมงานอนุมัติ → รัน initialization ครั้งเดียว → บันทึกโปรแกรม → ลบ pending */
+  /** team approves → run initialization once → store the program → delete pending */
   init({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(rawProgramUuid);
@@ -1849,7 +1849,7 @@ export class VirtualMachine {
   }
 
 
-  /** ทีมงานปฏิเสธ → ลบ pending */
+  /** team rejects → delete pending */
   reject({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(rawProgramUuid);
@@ -1859,16 +1859,16 @@ export class VirtualMachine {
       if (!pending) fail(ERRORS.pendingNotFound);
 
       const refund = readNative(pending.value);
-      if (refund > 0n) this.moveNative(tx, programUuid, pending.context.sender, refund); // คืนเงินให้ผู้ deploy
+      if (refund > 0n) this.moveNative(tx, programUuid, pending.context.sender, refund); // refund the deployer
 
       tx.delete(pendingKey(programUuid));
       return { programUuid, state: STATE.REJECTED, refund: encodeNative(refund) };
     }, options);
   }
 
-  // ---------- อัปเกรดโปรแกรม ----------
+  // ---------- program upgrades ----------
 
-  /** โปรแกรมต้องมีอยู่ มี upgrader และ sender ต้องเป็น upgrader คนปัจจุบัน */
+  /** the program must exist and have an upgrader, and the sender must be the current upgrader */
   requireUpgrader(tx, programUuid, sender) {
     if (typeof tx.current(codeKey(programUuid)) !== "string") fail(ERRORS.programNotFound, programUuid);
     const upgrader = tx.current(metadataKey(programUuid, METADATA_FIELD.UPGRADER));
@@ -1877,7 +1877,7 @@ export class VirtualMachine {
     return upgrader;
   }
 
-  /** upgrader ส่งโค้ดใหม่ → ตรวจแบบเดียวกับ deploy → pending-upgrade:<id> รอทีมงานอนุมัติ */
+  /** upgrader submits new code → same checks as deploy → pending-upgrade:<id> awaiting team approval */
   upgrade({ programUuid: rawProgramUuid, code, migrateInput = {}, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(rawProgramUuid);
@@ -1896,7 +1896,7 @@ export class VirtualMachine {
         const result = review(code, { apiNames: [...PROGRAM_API_NAMES, "params"] });
         if (!result.ok) fail(ERRORS.reviewFailed, reviewMessage(result));
       }
-      tx.useGas(tx.gas.call + tx.gas.code * codeSize);   // คิดแบบเดียวกับ deploy
+      tx.useGas(tx.gas.call + tx.gas.code * codeSize);   // charged the same as deploy
       this.compiler.compile(oneLineCode);
 
       this.requireUpgrader(tx, programUuid, userContext.sender);
@@ -1907,7 +1907,7 @@ export class VirtualMachine {
     }, options);
   }
 
-  /** upgrader คนปัจจุบันโอนสิทธิ์ให้คนอื่น หรือสละสิทธิ์ (upgrader: null → โปรแกรมแก้ไม่ได้อีกตลอดไป) */
+  /** the current upgrader transfers the right to someone else, or renounces it (upgrader: null → the program is immutable forever) */
   setUpgrader({ programUuid: rawProgramUuid, upgrader, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(rawProgramUuid);
@@ -1927,14 +1927,14 @@ export class VirtualMachine {
   }
 
   /**
-   * admin ปรับขั้นต่ำของ gas price กลางทาง (ไม่ต้อง fork / ล้างเชน)
-   *   minBaseFee: wei ต่อแก๊ส ≥ 1 · null = กลับไปใช้ค่าใน genesis
-   *     ค่า tx ทุกแบบ (เหรียญ) = แก๊ส × base fee → ลดขั้นต่ำ = ค่า tx ถูกลงตามสัดส่วน โดยแก๊สต่อ tx / ความจุ block เท่าเดิม
-   *     base fee ยังขึ้นลงตามความเต็มของ block (EIP-1559) · ลงหาขั้นต่ำใหม่ทีละไม่เกิน 12.5% ต่อ block · ขึ้น = ใช้ทันทีที่ block ถัดไป
-   *   ราคาต่อหน่วย (DEFAULT_GAS) ปรับที่นี่ไม่ได้ → fork เท่านั้น (key admin หลุดก็ทำให้ tx ฟรีไม่ได้)
-   *   เขียน gasconfig ใน state (อยู่ใน stateRoot / history) · มีผลตั้งแต่ block ถัดไป: Block อ่านจาก state ก่อน block
-   *   → ทุกเครื่องที่ sync / replay ได้ผลเดิม
-   *   ต้องตั้ง admins (genesis config.admins) และผู้เซ็นต้องอยู่ในรายชื่อ · เชนที่ไม่ตั้ง admins (DEV) ปรับไม่ได้
+   * admin adjusts the gas price floor mid-chain (no fork / chain reset)
+   *   minBaseFee: wei per gas ≥ 1 · null = revert to the genesis value
+   *     every tx cost (in coins) = gas × base fee → lowering the floor makes txs proportionally cheaper, while gas per tx / block capacity stay the same
+   *     the base fee still moves with block fullness (EIP-1559) · falls toward a new floor by at most 12.5% per block · a raise applies immediately in the next block
+   *   per-unit prices (DEFAULT_GAS) cannot be adjusted here → fork only (a leaked admin key cannot make txs free)
+   *   writes gasconfig to state (in stateRoot / history) · takes effect from the next block: Block reads it from the state before the block
+   *   → every machine that syncs / replays gets the same result
+   *   admins must be set (genesis config.admins) and the signer must be on the list · chains without admins (DEV) cannot adjust it
    */
   setGasConfig({ minBaseFee, gas, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
@@ -1957,9 +1957,9 @@ export class VirtualMachine {
   }
 
   /**
-   * ทีมงานอนุมัติการอัปเกรด (กติกาของผู้อนุมัติเหมือน init ทุกอย่าง)
-   *   upgradeDelayBlocks = 0 → เปลี่ยนโค้ด + รัน migrate ทันที (migrate ล้ม = อนุมัติไม่สำเร็จ ไม่มีอะไรเปลี่ยน)
-   *   upgradeDelayBlocks = N → นัดเปิดใช้ที่ block (เลข block นี้ + N) โค้ดเดิมยังทำงานจนถึงตอนนั้น
+   * team approves an upgrade (approver rules are identical to init)
+   *   upgradeDelayBlocks = 0 → swap the code + run migrate immediately (migrate fails = approval fails, nothing changes)
+   *   upgradeDelayBlocks = N → schedule activation at block (this block number + N); the old code keeps running until then
    */
   initUpgrade({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
@@ -1970,7 +1970,7 @@ export class VirtualMachine {
       const pending = tx.current(pendingUpgradeKey(programUuid));
       if (!pending) fail(ERRORS.upgradeNotFound);
       if (context === undefined) this.seedRandom(tx, arguments[0], "initUpgrade");
-      // upgrader ต้องยังเป็นคนเดิม (โอน / สละสิทธิ์ไปแล้ว → โค้ดที่ส่งค้างไว้ใช้ไม่ได้ ทีมงาน rejectUpgrade ทิ้งได้)
+      // the upgrader must still be the same (transferred / renounced → the pending code can no longer be used; the team can discard it with rejectUpgrade)
       this.requireUpgrader(tx, programUuid, pending.context.sender);
       tx.delete(pendingUpgradeKey(programUuid));
 
@@ -1986,7 +1986,7 @@ export class VirtualMachine {
     }, options);
   }
 
-  /** ทีมงานปฏิเสธการอัปเกรด → ลบ pending-upgrade (โค้ดเดิมทำงานต่อ) */
+  /** team rejects an upgrade → delete pending-upgrade (the old code keeps running) */
   rejectUpgrade({ programUuid: rawProgramUuid, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(rawProgramUuid);
@@ -2000,9 +2000,9 @@ export class VirtualMachine {
   }
 
   /**
-   * เปิดใช้โค้ดที่ครบ timelock — Block เรียกเองตอนสร้าง block ที่ตรงกับ activateAt
-   * (ไม่ใช่ tx ของใคร: ไม่มีผู้จ่ายแก๊ส ไม่มี hash ไม่อยู่ใน body · replay สร้าง block เดิมก็ได้ผลเดิม)
-   * migrate ล้ม → ผลถูกทิ้ง (Block ลบนัดหมายทิ้งเอง) โค้ดเดิมทำงานต่อ
+   * activate code whose timelock has elapsed; Block calls this itself when creating the block matching activateAt
+   * (not anyone's tx: no gas payer, no hash, not in the body · replaying the same block gives the same result)
+   * migrate fails → the result is discarded (Block deletes the schedule itself) and the old code keeps running
    */
   activateUpgrade({ programUuid, blockNumber }, options) {
     return this.runAction((tx) => {
@@ -2014,12 +2014,12 @@ export class VirtualMachine {
     }, options);
   }
 
-  /** เวอร์ชันปัจจุบันของโค้ด (ไม่มี metadata.version = 1) */
+  /** current code version (no metadata.version = 1) */
   programVersion(tx, programUuid) {
     return Number(tx.current(metadataKey(programUuid, METADATA_FIELD.VERSION)) ?? 1);
   }
 
-  /** เปลี่ยนโค้ด → เก็บเวอร์ชัน → รัน migrate ครั้งเดียว (throw = ทั้ง tx ล้ม ไม่มีอะไรเปลี่ยน) */
+  /** swap the code → store the version → run migrate once (throw = the whole tx fails, nothing changes) */
   applyUpgrade(tx, programUuid, { code, migrateInput = {}, context }) {
     const oldCode = tx.current(codeKey(programUuid));
     if (typeof oldCode !== "string") fail(ERRORS.programNotFound, programUuid);
@@ -2027,7 +2027,7 @@ export class VirtualMachine {
     const next = version + 1;
     tx.useGas(3 * tx.gas.write);
 
-    // เวอร์ชันแรกไม่ถูกเก็บแยกตอน init → เก็บตอนถูกแทนที่ครั้งแรก (blockNumber ไม่รู้ = null)
+    // the first version is not stored separately at init → stored when it is first replaced (blockNumber unknown = null)
     if (tx.current(codeVersionKey(programUuid, version)) === undefined) {
       tx.put(codeVersionKey(programUuid, version), { version, code: oldCode, blockNumber: null,
         timestamp: tx.current(metadataKey(programUuid, METADATA_FIELD.CREATED_AT)) ?? null });
@@ -2036,33 +2036,33 @@ export class VirtualMachine {
     tx.put(codeVersionKey(programUuid, next), { version: next, code, blockNumber: tx.blockNumber, timestamp: tx.timestamp });
     this.writeMetadata(tx, programUuid, { [METADATA_FIELD.VERSION]: next }, { allowReserved: true });
 
-    // migrate เห็นโค้ดใหม่แล้ว (runProgram กลับเข้าตัวเองก็ได้โค้ดใหม่) · context = upgrader ที่ส่งโค้ดมา
+    // migrate already sees the new code (runProgram back into itself also gets the new code) · context = the upgrader who submitted the code
     const program = this.compiler.compile(code);
     const migrateResult = program.hasMigrate
       ? this.runFunction(tx, { programUuid, functionName: MIGRATE_FUNCTION, input: migrateInput, context, value: 0n, code, isInit: true })
       : undefined;
-    // cache คอมไพล์ผูกกับเนื้อโค้ด จึงไม่มีทางได้โค้ดเก่าจาก address นี้อีก · ลืมของเก่าทิ้ง (replay block เก่าก็คอมไพล์ใหม่ได้)
+    // the compile cache is keyed by code content, so this address can never get old code again · forget the old one (replaying old blocks can recompile it)
     if (oldCode !== code) this.compiler.forget(oldCode);
     return { version: next, migrateResult };
   }
 
-  /** โค้ดทุกเวอร์ชันที่ถูกเก็บ (มีเฉพาะโปรแกรมที่เคยอัปเกรด) เก่าไปใหม่ — ต้องมี db.listKeys */
+  /** every stored code version (only for programs that have been upgraded), oldest to newest; requires db.listKeys */
   listCodeVersions(programUuid) {
     const prefix = joinKey(normalizeAddress(programUuid), KEY.CODE_VERSION, "");
     return this.listEntries(prefix).map(({ value }) => value).sort((a, b) => a.version - b.version);
   }
 
-  /** โค้ดเวอร์ชัน n (ไม่มี → null) */
+  /** code version n (missing → null) */
   getCodeVersion(programUuid, version) {
     return this.read(codeVersionKey(normalizeAddress(programUuid), version)) ?? null;
   }
 
-  /** โค้ดที่โปรแกรมใช้ ณ ตอนที่ block <number> ปิด (ต้องเปิด recordHistory) */
+  /** the code a program used when block <number> closed (requires recordHistory) */
   codeAt(number, programUuid) {
     return this.stateAt(number, codeKey(normalizeAddress(programUuid))) ?? null;
   }
 
-  /** user เรียกฟังก์ชันที่ export */
+  /** user calls an exported function */
   call({ programUuid, functionName, input = {}, context, nonce, gasLimit, gasPrice, value = 0 } = {}, options) {
     return this.runAction((tx) => {
       checkProgramUuid(programUuid);
@@ -2075,18 +2075,18 @@ export class VirtualMachine {
       this.preparePayer(tx, sender, { ...feeFields(arguments[0]), nonce, gasLimit, gasPrice, value: amount });
       this.rememberTransaction(tx, arguments[0], "call");
       this.seedRandom(tx, arguments[0], "call");
-      if (amount > 0n) this.moveNative(tx, sender, target, amount); // แนบเงินไปกับ tx
+      if (amount > 0n) this.moveNative(tx, sender, target, amount); // attach funds to the tx
 
       return this.runFunction(tx, { programUuid: target, functionName, input, context: userContext, value: amount });
     }, options);
   }
 
-  /** โอน native ระหว่าง address โดยไม่เรียกโปรแกรม */
+  /** native transfer between addresses without calling a program */
   transfer({ from, to, amount, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       if (!isNonEmptyString(from) || !isNonEmptyString(to)) fail(ERRORS.invalidAddress);
       const value = parseNative(amount);
-      // โอน 0 ได้แบบ EVM (ยังคิดแก๊สและกิน nonce) → ยกเลิกใบที่ค้างในคิวด้วยการโอน 0 ให้ตัวเองได้
+      // transferring 0 is allowed, as in the EVM (still charges gas and consumes the nonce) → a queued tx can be cancelled by sending 0 to yourself
       if (value === null || value < 0n) fail(ERRORS.invalidTransferAmount);
 
       const sender = normalizeAddress(from);
@@ -2095,20 +2095,20 @@ export class VirtualMachine {
       this.rememberTransaction(tx, arguments[0], "transfer");
       this.seedRandom(tx, arguments[0], "transfer");
 
-      tx.useGas(tx.gas.call); // ค่าพื้นฐานของ tx
+      tx.useGas(tx.gas.call); // base tx cost
       this.moveNative(tx, sender, recipient, value);
       return { from: sender, to: recipient, amount: encodeNative(value) };
     }, options);
   }
 
   /**
-   * ข้อมูลที่ใช้ทำ hash ของ tx — มาจาก request ของ user เท่านั้น ไม่มีส่วนของผลลัพธ์
-   * call / deploy / transfer: from + nonce ทำให้ไม่ซ้ำอยู่แล้ว
-   * init / reject: ไม่มี sender / nonce จึงต้องใช้ blockNumber + index ช่วย
+   * data used for the tx hash; comes from the user's request only, with no part of the result
+   * call / deploy / transfer: from + nonce already make it unique
+   * init / reject: no sender / nonce, so blockNumber + index are used as well
    */
   transactionPayload(request = {}, { action = guessAction(request), blockNumber = null, index = null } = {}) {
     const base = { chainId: this.chainId, action };
-    // maxFeePerGas / maxPriorityFeePerGas: ไม่ส่ง = ไม่อยู่ใน hash (hash ของ tx แบบเดิมไม่เปลี่ยน · canonicalJson ข้าม undefined)
+    // maxFeePerGas / maxPriorityFeePerGas: not sent = not part of the hash (legacy tx hashes unchanged · canonicalJson skips undefined)
     const fee = { nonce: request.nonce ?? null, gasLimit: request.gasLimit ?? null, gasPrice: request.gasPrice ?? null,
       ...Object.fromEntries(Object.entries(feeFields(request)).filter(([, value]) => value !== undefined)) };
     if (action === "transfer") {
@@ -2119,7 +2119,7 @@ export class VirtualMachine {
     }
     if (action === "deploy") {
       return { ...base, from: normalizeAddress(request.context?.sender) ?? null, to: normalizeAddress(request.programUuid) ?? null, code: toOneLine(typeof request.code === "string" ? request.code : ""), initInput: normalizeHexDeep(request.initInput ?? {}), value: request.value ?? 0,
-        ...(request.upgrader === undefined ? {} : { upgrader: normalizeAddress(request.upgrader) }),   // ไม่ส่ง = ไม่อยู่ใน hash (hash ของ tx เดิมไม่เปลี่ยน)
+        ...(request.upgrader === undefined ? {} : { upgrader: normalizeAddress(request.upgrader) }),   // not sent = not part of the hash (existing tx hashes unchanged)
         ...fee };
     }
     if (action === "call") {
@@ -2140,45 +2140,45 @@ export class VirtualMachine {
     return { ...base, to: normalizeAddress(request.programUuid) ?? null, blockNumber, index };
   }
 
-  /** hash ของ tx (รู้ได้ตั้งแต่ก่อนส่งเข้า VM) */
+  /** tx hash (known before it is submitted to the VM) */
   hashTransaction(request, meta) {
     return this.hashFunction(canonicalJson(this.transactionPayload(request, meta)));
   }
 
-  /** context ของ tx ที่ user ส่งมา: origin = sender เสมอ (origin เปลี่ยนได้เฉพาะผ่าน runProgram) */
+  /** context of a user-submitted tx: origin = sender always (origin can only change via runProgram) */
   userContext(rawContext) {
     const context = normalizeContext(rawContext);
     return this.forceOriginFromSender ? { sender: context.sender, origin: context.sender } : context;
   }
 
-  /** address ของโปรแกรมจาก deployer + nonce (แบบเดียวกับ contract address ของ EVM) */
+  /** program address from deployer + nonce (same scheme as an EVM contract address) */
   programAddressFor(deployer, nonce) {
     return addressFromHash(this.hashData({ chainId: this.chainId, deployer: normalizeAddress(deployer), nonce }));
   }
 
-  /** ตั้ง seed ของตัวสุ่มให้ tx (ใช้ hash ของ tx เพื่อให้รันซ้ำได้ผลเดิม) */
+  /** set the tx's RNG seed (uses the tx hash so re-running gives the same result) */
   seedRandom(tx, request, action) {
-    // ผูกกับ tx และเวลาของ block: tx เดิมใน block เดิมได้ผลเดิม แต่คนละ block ได้ค่าใหม่
+    // bound to the tx and the block time: the same tx in the same block gives the same result, but a different block gives a new value
     tx.seed = this.hashData({ tx: this.hashTransaction(request, { action }), timestamp: tx.timestamp });
     tx.Math = createSeededMath(createSeededRandom(this.hashFunction, tx.seed));
   }
 
-  /** hash ของข้อมูลใด ๆ แบบเดียวกับที่ใช้ทำ tx hash */
+  /** hash of arbitrary data, same scheme as the tx hash */
   hashData(value) {
     return this.hashFunction(canonicalJson(value));
   }
 
   /**
-   * hash ของ block
-   *   txRoot     = hash ของรายการ tx hash ทั้งหมด (เรียงตาม index)
-   *   stateRoot  = root ของ Merkle Patricia Trie ของ state ทั้งหมดหลัง block นี้ (ระยะ 4.3 · Block คำนวณจาก trie ใน DB แล้วส่งมา)
-   *   writesRoot = hash ของ writes ของ state ใน block นี้ (เรียงตาม dbKey) — replay block เก่าตรวจผลการรันด้วยตัวนี้ (trie เก็บแค่ของล่าสุด)
-   *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed มาจาก Block (ดู Block.receiptEntries) และอยู่ใน hash ด้วย
+   * block hash
+   *   txRoot     = hash of the list of all tx hashes (ordered by index)
+   *   stateRoot  = root of the Merkle Patricia Trie of the whole state after this block (phase 4.3 · Block computes it from the trie in the DB and passes it in)
+   *   writesRoot = hash of this block's state writes (sorted by dbKey); replaying old blocks verifies execution results with this (the trie keeps only the latest)
+   *   receiptsRoot / logsBloom / baseFeePerGas / gasUsed come from Block (see Block.receiptEntries) and are part of the hash too
    */
   hashBlock({ number, parentHash, timestamp, feeRecipient, burnPercent, txHashes, writes, stateRoot, rejected = [],
     baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom: bloom = null, producer = null }) {
     const txRoot = this.hashData(txHashes);
-    // tx ที่ถูกปฏิเสธ: อยู่ใน hash เฉพาะ block ที่มี
+    // rejected txs: part of the hash only for blocks that have them
     const rejectedRoot = rejected.length ? this.hashData(rejected) : null;
     const writesRoot = this.hashData([...writes].sort((a, b) => (a.dbKey < b.dbKey ? -1 : 1)).map((write) => [write.type, write.dbKey, write.value ?? null]));
     const hash = this.hashHeader({
@@ -2188,18 +2188,18 @@ export class VirtualMachine {
     return { hash, txRoot, stateRoot, writesRoot, rejectedRoot };
   }
 
-  /** hash จาก field ของ header (ไม่ต้องมี tx / writes) — header ที่บันทึกไว้ คำนวณกลับได้ hash เดิม (ใช้ตรวจ header ของ snapshot) */
+  /** hash from header fields (no txs / writes needed); a stored header recomputes to the same hash (used to verify snapshot headers) */
   hashHeader(header) {
     return this.hashData(headerFields(header, this.chainId));
   }
 
 
   /**
-   * แปลง request + ผลลัพธ์ เป็น receipt สำหรับ explorer
-   * @param {object} request  request ที่ส่งเข้า deploy / init / reject / call / transfer
-   * @param {object} result   ผลลัพธ์ที่ได้กลับมา
+   * convert a request + result into a receipt for the explorer
+   * @param {object} request  the request sent to deploy / init / reject / call / transfer
+   * @param {object} result   the result returned
    * @param {{ index?: number, action?: string, nativeBefore?: Map }} [meta]  action = "call" | "deploy" | "init" | "reject" | "transfer"
-   *        nativeBefore = dbKey → ค่าก่อน tx นี้ (block.receipt ส่งมา) ทำให้ nativeChanges มี before ด้วย
+   *        nativeBefore = dbKey → value before this tx (passed by block.receipt), so nativeChanges also includes before
    */
   buildReceipt(request = {}, result = {}, { index = 0, action = guessAction(request), blockNumber = null, nativeBefore = null } = {}) {
     const changes = collapseWrites(result.writes ?? []);
@@ -2208,7 +2208,7 @@ export class VirtualMachine {
 
     return {
       hash: this.hashTransaction(request, { action, blockNumber, index }),
-      digest: request.digest ?? null,   // hash ที่ผู้ใช้เซ็น (ถ้ามาจาก tx ที่เซ็นแล้ว)
+      digest: request.digest ?? null,   // the hash the user signed (if it came from a signed tx)
       index,
       action,
       timestamp: result.timestamp ?? null,
@@ -2223,7 +2223,7 @@ export class VirtualMachine {
       error: result.error ?? null,
       gasUsed: result.gasUsed ?? 0,
       gasPrice: request.gasPrice === undefined || request.gasPrice === null ? null : encodeNative(readNative(request.gasPrice)),
-      // EIP-1559: ราคาจริงที่จ่าย · base fee ของ block · ราคาที่ผู้ส่งเสนอ (แบบเดิม = gasPrice ทั้งสองช่อง) · แยกส่วนที่เผา / ผู้ปิด block ได้
+      // EIP-1559: actual price paid · block base fee · price the sender offered (legacy = gasPrice in both fields) · breakdown of burned / block closer share
       type: isFeeMarketRequest(request) ? 2 : 0,
       effectiveGasPrice: result.gasPrice ?? null,
       baseFeePerGas: result.baseFee ?? null,
@@ -2232,14 +2232,14 @@ export class VirtualMachine {
       burnedFee: result.burnedFee ?? "0n",
       producerFee: result.producerFee ?? "0n",
       fee: result.fee ?? "0n",
-      // เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (อยู่ในลายเซ็น · หน้าเว็บใส่เอง ไม่ใช่หลักฐาน) · ไม่มี = tx ของระบบ / เก่ากว่า
+      // the chain the wallet was on when signing (in the signature · set by the web page, not proof) · absent = system tx / older
       ...(request.signedOnChainId === undefined || request.signedOnChainId === null ? {} : { signedOnChainId: Number(request.signedOnChainId) }),
-      ...(request.sponsor ? { sponsor: normalizeAddress(request.sponsor) } : {}),   // ผู้จ่ายค่าแก๊สแทนผู้ส่ง (อยู่ใน hash ของ tx แล้ว)
-      ...(request.evmRaw ? { evmHash: request.digest } : {}),   // มาจาก eth_sendRawTransaction: hash แบบ Ethereum = keccak(raw)
+      ...(request.sponsor ? { sponsor: normalizeAddress(request.sponsor) } : {}),   // the party paying gas on the sender's behalf (already part of the tx hash)
+      ...(request.evmRaw ? { evmHash: request.digest } : {}),   // came from eth_sendRawTransaction: Ethereum-style hash = keccak(raw)
       nonce: pick(KEY.NONCE)[0]?.value ?? null,
       events: (result.events ?? []).map((event) => ({ ...event })),
       trace: (result.calls ?? []).map((call) => ({
-        ...(call.type ? { type: call.type } : {}),   // "create" = โปรแกรมถูกสร้างด้วย cloneProgram
+        ...(call.type ? { type: call.type } : {}),   // "create" = the program was created with cloneProgram
         depth: call.depth,
         program: call.programUuid,
         method: call.functionName,
@@ -2264,19 +2264,19 @@ export class VirtualMachine {
 
   // ---------- metadata ----------
 
-  /** ตรวจ metadata ที่ผู้ใช้ส่งมา (ค่า null = ลบฟิลด์นั้น) */
+  /** validate user-supplied metadata (null value = delete that field) */
   checkMetadata(metadata, { allowReserved = false } = {}) {
     if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) fail(ERRORS.invalidMetadata);
     for (const [field, value] of Object.entries(metadata)) {
       if (!METADATA_FIELD_PATTERN.test(field)) fail(ERRORS.invalidMetadataField, field);
       if (!allowReserved && RESERVED_METADATA.includes(field)) fail(ERRORS.reservedMetadata, field);
       if (value !== null) toJsonValue(value, `metadata.${field}`);
-      if (field === METADATA_FIELD.ABI && value !== null) checkAbi(value);   // ABI ต้องตรงตาม schema (ดู checkAbi)
+      if (field === METADATA_FIELD.ABI && value !== null) checkAbi(value);   // the ABI must match the schema (see checkAbi)
     }
     return metadata;
   }
 
-  /** เขียน metadata ของ address (namespace ห้ามซ้ำ และจะปล่อยชื่อเดิมให้คนอื่นใช้ต่อ) */
+  /** write an address's metadata (namespace must be unique; the old name is released for others to use) */
   writeMetadata(tx, address, metadata, { allowReserved = false } = {}) {
     this.checkMetadata(metadata, { allowReserved });
 
@@ -2292,7 +2292,7 @@ export class VirtualMachine {
 
   updateNamespace(tx, address, name) {
     const current = tx.current(metadataKey(address, METADATA_FIELD.NAMESPACE));
-    if (current !== undefined) tx.delete(namespaceKey(current)); // ปล่อยชื่อเดิม
+    if (current !== undefined) tx.delete(namespaceKey(current)); // release the old name
 
     if (name === null) {
       tx.delete(metadataKey(address, METADATA_FIELD.NAMESPACE));
@@ -2309,8 +2309,8 @@ export class VirtualMachine {
   }
 
   /**
-   * init / reject: ถ้าส่ง context มา ถือเป็น tx ที่ทีมงานเซ็น (มี nonce / ค่าแก๊ส / hash ของตัวเอง)
-   * ไม่ส่ง context = เรียกภายใน (ใช้ตอนทดสอบหรือสคริปต์ของ server เอง)
+   * init / reject: if a context is sent, treat it as a team-signed tx (with its own nonce / gas fee / hash)
+   * no context = internal call (used in tests or by the server's own scripts)
    */
   prepareAdminAction(tx, request, action, { context, nonce, gasLimit, gasPrice }) {
     if (context === undefined) {
@@ -2327,7 +2327,7 @@ export class VirtualMachine {
     tx.useGas(tx.gas.call);
   }
 
-  /** tx ของ user: ตั้ง metadata ของ address ตัวเอง */
+  /** user tx: set metadata of one's own address */
   setMetadata({ metadata = {}, context, nonce, gasLimit, gasPrice } = {}, options) {
     return this.runAction((tx) => {
       checkContext(context);
@@ -2344,32 +2344,32 @@ export class VirtualMachine {
     }, options);
   }
 
-  /** metadata ทั้งหมดของ address (ต้องมี db.listKeys) */
+  /** all metadata of an address (requires db.listKeys) */
   getMetadata(address) {
     const account = normalizeAddress(address);
     const prefix = joinKey(account, KEY.METADATA, "");
     return Object.fromEntries(this.listEntries(prefix).map(({ dbKey, value }) => [decodeDbKey(dbKey).field, value]));
   }
 
-  /** ค้น address จาก namespace */
+  /** look up an address by namespace */
   resolveNamespace(name) {
     return this.read(namespaceKey(String(name).toLowerCase())) ?? null;
   }
 
-  // ---------- อ่านข้อมูลสำหรับ explorer (ต้องมี db.listKeys) ----------
+  // ---------- reads for the explorer (requires db.listKeys) ----------
 
-  /** รายชื่อ key ตาม prefix — options: { start, limit, reverse } */
+  /** key list by prefix; options: { start, limit, reverse } */
   listKeys(prefix = "", options) {
     if (typeof this.db.listKeys !== "function") fail(ERRORS.listNotSupported);
     return this.db.listKeys(prefix, options);
   }
 
-  /** [{ dbKey, value }] ตาม prefix */
+  /** [{ dbKey, value }] by prefix */
   listEntries(prefix = "", options) {
     return this.listKeys(prefix, options).map((dbKey) => ({ dbKey, value: this.read(dbKey) }));
   }
 
-  /** ยอด native ของ address จาก DB: { received, sended, consumed, balance } */
+  /** native balances of an address from the DB: { received, sended, consumed, balance } */
   nativeBalanceOf(address) {
     const account = normalizeAddress(address);
     const [received, sended, consumed] = this.db.readKeys([
@@ -2380,18 +2380,18 @@ export class VirtualMachine {
     return { received, sended, consumed, balance: received - sended - consumed };   // BigInt
   }
 
-  /** hash ของ genesis (ไม่รวม "forks" / "producerSchedule" — ตารางที่เพิ่มทีหลังได้โดย genesis hash เดิม) */
+  /** genesis hash (excluding "forks" / "producerSchedule"; tables that can be added later with the same genesis hash) */
   hashGenesis(genesis = {}) {
     const { forks, producerSchedule, ...rest } = genesis ?? {};
     return this.hashData(rest);
   }
 
-  /** hash ของ genesis ที่บันทึกไว้ */
+  /** the stored genesis hash */
   genesisHash() {
     return this.read(KEY.GENESIS) ?? null;
   }
 
-  /** ตั้งสถานะเริ่มต้นของ chain แล้วบันทึก hash ไว้ให้ node อื่นเทียบ */
+  /** set the chain's initial state, then store its hash for other nodes to compare */
   applyGenesis(genesis = {}) {
     const hash = this.hashGenesis(genesis);
     const current = this.genesisHash();
@@ -2408,7 +2408,7 @@ export class VirtualMachine {
     return { hash, applied: true };
   }
 
-  /** เทียบ genesis ที่ node นี้ใช้กับของที่ส่งมา */
+  /** compare the genesis this node uses with the one supplied */
   checkGenesis(genesis) {
     const hash = this.hashGenesis(genesis);
     const current = this.genesisHash();
@@ -2416,7 +2416,7 @@ export class VirtualMachine {
     return hash;
   }
 
-  /** เลข block ล่าสุด */
+  /** latest block number */
   latestBlockNumber() {
     return this.read(LATEST_BLOCK_KEY) ?? null;
   }
@@ -2425,7 +2425,7 @@ export class VirtualMachine {
     return this.read(blockKey(number)) ?? null;
   }
 
-  /** tx ที่ส่งมาหา address นี้ (โปรแกรมถูกเรียก หรือได้รับเงิน) — ใหม่ไปเก่า */
+  /** txs sent to this address (program called, or funds received), newest to oldest */
   listTransactionsTo(address, { limit = 20, reverse = true, start } = {}) {
     const prefix = `${joinKey(KEY.TX_TO, normalizeAddress(address))}${KEY.SEPARATOR}`;
     const headers = new Map();
@@ -2433,8 +2433,8 @@ export class VirtualMachine {
   }
 
   /**
-   * รายการ txto เต็ม: blockNumber + index มาจาก key · timestamp มาจาก header (ไม่เก็บซ้ำในค่า)
-   * headers = Map ที่ใช้ซ้ำในหน้าเดียวกัน (หลายแถวมักอยู่ block เดียวกัน)
+   * full txto entries: blockNumber + index come from the key · timestamp comes from the header (not duplicated in the value)
+   * headers = a Map reused within the same page (many rows are often in the same block)
    */
   readTransactionTo(dbKey, headers = new Map()) {
     const value = this.read(dbKey);
@@ -2444,7 +2444,7 @@ export class VirtualMachine {
     return { ...value, blockNumber: number, index, timestamp: value.timestamp ?? headers.get(number) };
   }
 
-  /** ค้น event ที่โปรแกรมเคย emit — ใหม่ไปเก่า */
+  /** search events a program has emitted, newest to oldest */
   listEvents({ program, name = "", limit = 20, reverse = true, start } = {}) {
     const prefix = program
       ? joinKey(KEY.EVENT, normalizeAddress(program), name ? `${name}${KEY.SEPARATOR}` : "")
@@ -2453,10 +2453,10 @@ export class VirtualMachine {
   }
 
   /**
-   * event ที่ field ที่ indexed มีค่านี้ (ใช้ดัชนี eventidx: ไม่ไล่ event ทั้งหมด) — ใหม่ไปเก่า
-   *   value = ค่าที่ต้องการ (string / BigInt / "123n" / bool) หรือ topic = topic 0x…64 hex ตรง ๆ
-   *   string ที่เป็นตัวเลข / true / false อาจเป็นได้หลายชนิด → ค้นทุกแบบที่เป็นไปได้แล้วรวมกัน
-   * → { items: [event], next } · next = cursor (dbKey ของ event ถัดไป) ส่งกลับมาเป็น cursor
+   * events whose indexed field has this value (uses the eventidx index instead of scanning all events), newest to oldest
+   *   value = the desired value (string / BigInt / "123n" / bool) or topic = a raw 0x…64-hex topic
+   *   numeric / true / false strings may be several types → search every possible form and merge
+   * → { items: [event], next } · next = cursor (dbKey of the next event), passed back as cursor
    */
   listIndexedEvents({ program, name, field, value, topic, limit = 20, cursor, fromBlock = null, toBlock = null } = {}) {
     const address = normalizeAddress(program);
@@ -2471,7 +2471,7 @@ export class VirtualMachine {
     return { items: page.map((dbKey) => this.read(dbKey)).filter(Boolean), next: sorted[Math.max(start, 0) + limit] ?? null, limit };
   }
 
-  /** dbKey ของ event (event:…) ที่ field = topic ในช่วง block [fromBlock, toBlock] (เก่าไปใหม่) */
+  /** event dbKeys (event:…) where field = topic within block range [fromBlock, toBlock] (oldest to newest) */
   indexedEventRefs({ program, name, field, topic, fromBlock = null, toBlock = null, max = 100_000 }) {
     const prefix = eventIndexPrefix(normalizeAddress(program), name, field, topic);
     const start = fromBlock === null ? undefined : `${prefix}${String(fromBlock).padStart(BLOCK_NUMBER_WIDTH, "0")}`;
@@ -2483,12 +2483,12 @@ export class VirtualMachine {
     return refs.filter(Boolean);
   }
 
-  /** event ที่มี topic0 นี้ (log แบบ EVM) → [{ program, name, indexed }] */
+  /** events with this topic0 (EVM-style logs) → [{ program, name, indexed }] */
   listEventSignatures(topic0) {
     return this.listEntries(`${joinKey(KEY.EVENT_SIG, String(topic0).toLowerCase())}${KEY.SEPARATOR}`, { limit: 1000 }).map((entry) => entry.value);
   }
 
-  /** tx ดิบของ block (สำหรับ replay / explorer) */
+  /** raw txs of a block (for replay / explorer) */
   getBlockBody(number) {
     return this.read(blockBodyKey(number)) ?? null;
   }
@@ -2498,76 +2498,76 @@ export class VirtualMachine {
     return number === undefined ? null : this.getBlock(number);
   }
 
-  /** header ของหลาย block (ใหม่ไปเก่า) */
+  /** headers of several blocks (newest to oldest) */
   listBlocks({ limit = 20, reverse = true, start } = {}) {
     return this.listEntries(`${KEY.BLOCK}${KEY.SEPARATOR}`, { limit, reverse, start }).map((entry) => entry.value);
   }
 
-  /** ค้น tx จาก hash ของระบบ หรือจาก hash ที่ผู้ใช้เซ็น (EIP-712 digest) ก็ได้ */
+  /** look up a tx by system hash or by the hash the user signed (EIP-712 digest) */
   getTransaction(hash, { signature = false } = {}) {
     const entry = this.read(txIndexKey(hash)) ?? this.read(txIndexKey(this.read(sigTxKey(hash)) ?? ""));
     if (!entry) return null;
     const record = entry.from === null ? null : this.read(txnKey(entry.from, entry.nonce, entry.hash)) ?? null;
-    // ลายเซ็นเก็บใน blockbody ที่เดียว (txn ไม่เก็บซ้ำ) → อ่านเพิ่มเมื่อขอเท่านั้น
+    // signatures are stored only in blockbody (txn does not duplicate them) → read additionally only on request
     if (signature && record) return { ...entry, record: { ...record, signature: this.transactionSignature(entry), digest: entry.digest ?? null } };
     return { ...entry, record };
   }
 
-  /** ลายเซ็นของ tx ใน block (จาก blockbody) · { blockNumber, index } ของดัชนี tx */
+  /** signature of a tx in a block (from blockbody) · { blockNumber, index } from the tx index */
   transactionSignature({ blockNumber, index }) {
     return this.getBlockBody(blockNumber)?.[index]?.request?.signature ?? null;
   }
 
-  /** โปรแกรม token ที่ address นี้เคยได้รับเหรียญ (จาก event Transfer) */
+  /** token programs this address has received tokens from (from Transfer events) */
   listHoldings(address, { limit = 200 } = {}) {
     return this.listEntries(`${joinKey(KEY.HOLDING, normalizeAddress(address))}${KEY.SEPARATOR}`, { limit }).map((entry) => entry.value);
   }
 
-  /** รายการ tx ของ address (ใหม่ไปเก่า) */
+  /** an address's tx list (newest to oldest) */
   listTransactionsOf(address, { limit = 20, reverse = true, start } = {}) {
     const prefix = joinKey(normalizeAddress(address), KEY.TXN, "");
     return this.listKeys(prefix, { limit, reverse, start }).map((dbKey) => this.readTransactionRecord(dbKey));
   }
 
-  /** รายการ txn + digest จากดัชนี tx (txn ไม่เก็บซ้ำ) · ลายเซ็นอ่านทีละใบด้วย getTransaction(hash, { signature: true }) */
+  /** txn entries + digest from the tx index (txn does not duplicate them) · signatures are read one at a time with getTransaction(hash, { signature: true }) */
   readTransactionRecord(dbKey) {
     const record = this.read(dbKey);
-    if (!record || "digest" in record) return record;   // ข้อมูลรุ่นเก่ายังมี digest ในตัว
+    if (!record || "digest" in record) return record;   // legacy data still has the digest inline
     return { ...record, digest: this.read(txIndexKey(record.hash))?.digest ?? null };
   }
 
-  /** storage ทั้งหมดของโปรแกรม → { key: [...], value } */
+  /** all storage of a program → { key: [...], value } */
   listProgramStorage(programUuid, options) {
     const prefix = joinKey(normalizeAddress(programUuid), KEY.STORAGE, "");
     return this.listEntries(prefix, options).map(({ dbKey, value }) => ({ key: decodeDbKey(dbKey).key, value }));
   }
 
-  // ---------- ย้อนดูข้อมูลเก่า (ต้องเปิด recordHistory) ----------
+  // ---------- historical lookback (requires recordHistory) ----------
 
-  /** รายชื่อ key ที่ block นั้นแตะ */
+  /** list of keys that block touched */
   getBlockUndo(number) {
     return this.read(blockUndoKey(number)) ?? null;
   }
 
-  /** tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ (ไม่มี = []) */
+  /** rejected txs recorded in this block (none = []) */
   getBlockRejected(number) {
     return this.read(blockRejectedKey(number)) ?? [];
   }
 
-  /** tx ที่ถูกปฏิเสธจาก hash → { hash, blockNumber, index, sender, nonce, action, to, gasPrice, reason, code, stage, timestamp } | null */
+  /** rejected tx by hash → { hash, blockNumber, index, sender, nonce, action, to, gasPrice, reason, code, stage, timestamp } | null */
   getRejectedTransaction(hash) {
     return this.read(rejectedTxKey(String(hash ?? "").toLowerCase())) ?? null;
   }
 
-  /** tx ที่ถูกปฏิเสธของผู้ส่งคนนี้ (ใหม่ไปเก่า) · start = dbKey ต่อจากหน้าก่อน */
+  /** rejected txs of this sender (newest to oldest) · start = dbKey continuing from the previous page */
   listRejectedOf(address, { limit = 20, reverse = true, start } = {}) {
     const prefix = `${joinKey(REJECTED_KEY.FROM, normalizeAddress(address))}${KEY.SEPARATOR}`;
     return this.listEntries(prefix, { limit, reverse, start });
   }
 
   /**
-   * ค่าของ key หนึ่ง ณ ตอนที่ block <number> ปิดพอดี
-   * อ่านรายการแรกใน history ที่เลข block มากกว่า number (seek ครั้งเดียว ไม่ขึ้นกับความยาวของเชน)
+   * the value of a key exactly when block <number> closed
+   * reads the first history entry with a block number greater than number (a single seek, independent of chain length)
    */
   stateAt(number, dbKey) {
     const prefix = historyPrefix(dbKey);
@@ -2579,12 +2579,12 @@ export class VirtualMachine {
         return entry?.existed ? copyValue(entry.before) : undefined;
       }
     }
-    return this.read(dbKey); // ไม่มีใครแก้ตั้งแต่ block นั้น → ค่าปัจจุบัน
+    return this.read(dbKey); // nobody changed it since that block → current value
   }
 
   /**
-   * block แรกที่ย้อนดูได้ (history ครบตั้งแต่ block นี้ถึงล่าสุด) · ไม่มี block = null
-   * เชนเก่าที่ยังไม่มี historyfrom → ไล่ blockundo ครั้งเดียว (ช้า) แล้ว block ถัดไปจะบันทึกค่าให้
+   * first block available for lookback (history complete from this block to the latest) · no blocks = null
+   * older chains without historyfrom yet → walk blockundo once (slow), then the next block records the value
    */
   historyFrom() {
     const saved = this.read(HISTORY_FROM_KEY);
@@ -2596,30 +2596,30 @@ export class VirtualMachine {
     return from;
   }
 
-  /** ย้อนดู state ณ ตอนปิด block number ได้ไหม (ต้องมี history ของทุก block หลังจากนั้น) */
+  /** whether state at the close of block number can be looked up (requires history of every later block) */
   #checkHistoryAt(number) {
     const latest = this.latestBlockNumber() ?? 0;
     if (!Number.isSafeInteger(number) || number < 0 || number > latest) fail(ERRORS.blockMissing, number);
     if (number < latest && number + 1 < (this.historyFrom() ?? 1)) fail(ERRORS.historyMissing, number + 1);
   }
 
-  /** ข้อมูลตาม prefix ณ block นั้น → { dbKey: value } (ทั้งหมด · ดู pageSnapshotAt สำหรับแบ่งหน้า) */
+  /** data by prefix at that block → { dbKey: value } (everything · see pageSnapshotAt for paging) */
   snapshotAt(number, prefix = "") {
     return Object.fromEntries(this.pageSnapshotAt(number, prefix).items);
   }
 
   /**
-   * ข้อมูลตาม prefix ณ block นั้น แบบแบ่งหน้า → { items: [[dbKey, value]], next } · next = after ของหน้าถัดไป (null = หมด)
-   * key ที่ต้องดู = key ที่มีตอนนี้ ∪ key ที่มี history (ถูกแก้ / ลบหลัง block นั้น)
-   * ไล่ history แบบกระโดดทีละ key (ไม่อ่าน history ทุกรายการ) → ต้นทุนตามจำนวน key ไม่ใช่ความยาวเชน
-   * ข้อจำกัด: key ลูกที่ส่วนถัดไปเป็นตัวเลขขึ้นต้นด้วย 0 ยาวพอ ๆ กับเลข block 12 หลัก (เช่น map("a", "0000000001")) และถูกลบไปแล้ว อาจไม่ขึ้น
+   * data by prefix at that block, paged → { items: [[dbKey, value]], next } · next = after for the next page (null = done)
+   * keys to inspect = keys present now ∪ keys with history (modified / deleted after that block)
+   * walks history jumping key by key (does not read every history entry) → cost scales with key count, not chain length
+   * limitation: child keys whose next segment is a number starting with 0, about as long as a 12-digit block number (e.g. map("a", "0000000001")), that have been deleted may not show up
    */
   pageSnapshotAt(number, prefix = "", { limit = Infinity, after } = {}) {
     this.#checkHistoryAt(number);
     const latest = this.latestBlockNumber() ?? 0;
     const chunk = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 1000) : 1000;
 
-    // key ที่มีอยู่ตอนนี้ (เรียงอยู่แล้ว · start ของ listKeys รวมตัวมันเอง จึงข้าม after)
+    // keys present now (already sorted · listKeys' start is inclusive, so skip after)
     function* current(vm) {
       let start = after;
       for (;;) {
@@ -2629,7 +2629,7 @@ export class VirtualMachine {
         start = keys[chunk];
       }
     }
-    // key ที่มี history: เจอ history:<key>:<n> แล้วกระโดดข้าม history ของ key นั้นทั้งหมด
+    // keys with history: on finding history:<key>:<n>, jump past all history of that key
     function* changed(vm) {
       const historyBase = `${KEY.HISTORY}${KEY.SEPARATOR}${prefix}`;
       let start = after === undefined ? historyBase : `${historyKey(after, latest)}\u0000`;
@@ -2655,7 +2655,7 @@ export class VirtualMachine {
       else { dbKey = x.value; x = a.next(); y = b.next(); }
       if (dbKey === last) continue;
       last = dbKey;
-      if (isIndexKey(dbKey)) continue;   // ดัชนีไม่มี history → ค่าที่อ่านได้คือปัจจุบัน ไม่ใช่ ณ block นั้น
+      if (isIndexKey(dbKey)) continue;   // indexes have no history → the value read is the current one, not as of that block
       const value = this.stateAt(number, dbKey);
       if (value === undefined) continue;
       if (items.length === limit) return { items, next: items[items.length - 1][0] };
@@ -2665,8 +2665,8 @@ export class VirtualMachine {
   }
 
   /**
-   * รัน block เก่าใหม่บนสถานะ ณ ตอนนั้น (ไม่แตะ DB จริง) → receipt เต็มพร้อม trace / stateChanges
-   * อ่านเฉพาะ key ที่ block นั้นแตะ จึงเร็วเท่ากันไม่ว่าจะย้อนไกลแค่ไหน
+   * re-run an old block on the state as of then (without touching the real DB) → full receipt with trace / stateChanges
+   * reads only the keys that block touched, so it is equally fast however far back it goes
    */
   replayBlock(number, { verify = true } = {}) {
     const header = this.getBlock(number);
@@ -2674,7 +2674,7 @@ export class VirtualMachine {
     const body = this.getBlockBody(number);
     if (!body) fail(ERRORS.historyMissing, number);
 
-    // ต้องมี history ของทุก block ตั้งแต่ block นี้ ไม่งั้นย้อน state กลับไปไม่ได้ (เช็คครั้งเดียวจาก historyfrom)
+    // history of every block from this one on is required, otherwise state cannot be rolled back (checked once via historyfrom)
     if (number < (this.historyFrom() ?? 1)) fail(ERRORS.historyMissing, number);
 
     const overlay = new Map();
@@ -2688,7 +2688,7 @@ export class VirtualMachine {
       number,
       parentHash: header.parentHash,
       parentStateRoot: header.parentStateRoot,
-      stateRoot: header.stateRoot,   // trie ใน DB เป็นของล่าสุด → ใช้ root ที่บันทึกไว้ · ผลการรันตรวจด้วย writesRoot / receiptsRoot
+      stateRoot: header.stateRoot,   // the trie in the DB is the latest → use the stored root · execution results are verified with writesRoot / receiptsRoot
       timestamp: header.timestamp,
       feeRecipient: header.feeRecipient,
       burnPercent: header.burnPercent,
@@ -2711,18 +2711,18 @@ export class VirtualMachine {
   }
 
   /**
-   * กู้ระบบ: ย้อน state ไปก่อน block 1 แล้วรัน block 1..target ใหม่จาก blockbody
-   * ใช้แทน rollback (ช้ากว่าแต่สร้างจากข้อมูลต้นทาง จึงถูกต้องเสมอ)
+   * system recovery: roll state back to before block 1, then re-run blocks 1..target from blockbody
+   * used instead of rollback (slower, but built from source data, so always correct)
    */
   rebuildFrom(target, { verify = true, batch = 10_000 } = {}) {
     const latest = this.latestBlockNumber();
     if (latest === null) fail(ERRORS.blockMissing, target);
     if (!Number.isSafeInteger(target) || target < 0 || target > latest) fail(ERRORS.blockMissing, target);
     if ((this.historyFrom() ?? 1) > 1) fail(ERRORS.historyMissing, this.historyFrom() - 1);
-    // ทุกขั้นทำทีละชุด (batch) ไม่ถือทั้งเชนไว้ในหน่วยความจำ · header / body ของ block ที่จะรันใหม่อ่านทีละ block ตอน replay
+    // every step works in batches without holding the whole chain in memory · headers / bodies of blocks to re-run are read one block at a time during replay
 
-    // 1) คืนทุก key ที่เคยถูกแตะ กลับไปเป็นสถานะก่อน block 1 = ค่า before ของ history รายการแรกของ key นั้น
-    //    (ไล่ history ทั้งหมดตามลำดับ · รายการแรกของ key คือรายการที่ seek จาก history:<key>: แล้วเจอเป็นตัวแรก)
+    // 1) restore every key ever touched to its state before block 1 = the before value of the key's first history entry
+    //    (walk all history in order · a key's first entry is the first one found when seeking from history:<key>:)
     const historyBase = `${KEY.HISTORY}${KEY.SEPARATOR}`;
     let reverted = 0;
     for (let start = historyBase; ;) {
@@ -2741,7 +2741,7 @@ export class VirtualMachine {
       start = keys[batch];
     }
 
-    // 2) ลบ history ทั้งหมด (replay สร้างใหม่ของ block 1..target) · ดัชนีทั้งหมด (replay สร้างใหม่)
+    // 2) delete all history (replay rebuilds it for blocks 1..target) · all indexes (replay rebuilds them)
     for (;;) {
       const keys = this.listKeys(historyBase, { limit: batch });
       if (!keys.length) break;
@@ -2750,7 +2750,7 @@ export class VirtualMachine {
     this.commit([{ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: 1 }]);
     this.#deleteIndexes(batch);
 
-    // 3) รัน block 1..target ใหม่ทีละ block · บันทึกทับ header / body / undo เดิม (overwrite) ในการ commit เดียว
+    // 3) re-run blocks 1..target one at a time · overwrite the existing header / body / undo in a single commit
     for (let number = 1; number <= target; number += 1) {
       const header = this.getBlock(number);
       if (!header) fail(ERRORS.historyMissing, number);
@@ -2776,7 +2776,7 @@ export class VirtualMachine {
       block.commit();
     }
 
-    // 4) ลบ block ที่เกิน target ทีละชุด
+    // 4) delete blocks beyond target in batches
     for (let from = target + 1; from <= latest; from += batch) {
       const writes = [];
       for (let number = from; number <= Math.min(latest, from + batch - 1); number += 1) {
@@ -2802,7 +2802,7 @@ export class VirtualMachine {
     };
   }
 
-  /** ลบดัชนีทั้งหมด (มาจาก block เท่านั้น · genesis ไม่มีดัชนี) ทีละชุด ไม่ต้องถือทั้งหมดไว้ในหน่วยความจำ */
+  /** delete all indexes (they come only from blocks · genesis has no indexes) in batches, without holding everything in memory */
   #deleteIndexes(batch = 10_000) {
     for (const prefix of INDEX_PREFIXES) {
       for (;;) {
@@ -2811,7 +2811,7 @@ export class VirtualMachine {
         const writes = [];
         for (const { dbKey, value } of entries) {
           writes.push({ type: WRITE.DEL, dbKey });
-          // txn ขึ้นต้นด้วย address → หาจากดัชนี tx (from + nonce + hash ครบ)
+          // txn starts with an address → found via the tx index (from + nonce + hash complete)
           if (value?.from && value.nonce !== null && value.nonce !== undefined) writes.push({ type: WRITE.DEL, dbKey: txnKey(value.from, value.nonce, value.hash) });
         }
         this.commit(writes);
@@ -2820,8 +2820,8 @@ export class VirtualMachine {
   }
 
   /**
-   * เรียกฟังก์ชันของโปรแกรมแบบอ่านอย่างเดียว: ไม่กิน nonce ไม่เสียค่าแก๊ส ไม่เขียน DB
-   * ใช้ทำ endpoint /query ให้แอปอ่านค่าจากโปรแกรมได้โดยไม่ต้องส่ง tx
+   * call a program function read-only: no nonce consumed, no gas fee, no DB writes
+   * used for the /query endpoint so apps can read values from programs without sending a tx
    */
   query({ programUuid, functionName, input = {}, context, value = 0 } = {}, options = {}) {
     const caller = context ?? { sender: normalizeAddress(programUuid), origin: normalizeAddress(programUuid) };
@@ -2832,12 +2832,12 @@ export class VirtualMachine {
       return this.runFunction(tx, { programUuid, functionName, input, context: caller, value });
     }, { ...options, timestamp: options.timestamp ?? RealDate.now() });
 
-    // ทิ้ง writes ทั้งหมด เหลือเฉพาะข้อมูลที่อ่านได้
+    // discard all writes, keep only the data read
     const { writes, ...rest } = result;
     return { ...rest, readOnly: true };
   }
 
-  /** หลาย call แล้ว commit ทีเดียว */
+  /** several calls, then commit once */
   createBlock(options) {
     return new Block(this, options);
   }
@@ -2851,11 +2851,11 @@ export class VirtualMachine {
       read,
       timestamp,
       blockNumber,
-      baseFee: baseFee ?? this.currentBaseFee(),   // รันนอก block = base fee ของ block ถัดไป
+      baseFee: baseFee ?? this.currentBaseFee(),   // running outside a block = the next block's base fee
       timeoutMs,
       maxCallDepth: this.maxCallDepth,
       maxTxGas: this.maxTxGas,
-      gas: this.gasAt(blockNumber),   // ตามกติกาของ block ที่ tx อยู่ (fork)
+      gas: this.gasAt(blockNumber),   // per the rules of the block the tx is in (fork)
       chargeGas: this.chargeGas,
       feeRecipient: feeRecipient === null || feeRecipient === undefined ? null : normalizeAddress(feeRecipient),
       burnPercent: checkBurnPercent(burnPercent),
@@ -2865,7 +2865,7 @@ export class VirtualMachine {
     });
   }
 
-  /** รัน action(tx) แล้วแปลงเป็น response (คืน sandbox ของ tx ทุกกรณี) */
+  /** run action(tx) and convert it to a response (always releases the tx's sandbox) */
   runAction(action, options) {
     const tx = this.createTransaction(options);
     try {
@@ -2878,7 +2878,7 @@ export class VirtualMachine {
   #runAction(tx, action) {
     try {
       const result = action(tx);
-      const charge = this.chargeOnSuccess(tx); // โปรแกรมโอน native ออกจนจ่ายค่าแก๊สไม่ไหว → OUT_OF_GAS
+      const charge = this.chargeOnSuccess(tx); // the program transferred out so much native that gas cannot be paid → OUT_OF_GAS
       const record = this.transactionRecordWrites(tx, { status: STATUS.SUCCESS });
       const summary = tx.summary();
       return {
@@ -2896,15 +2896,15 @@ export class VirtualMachine {
       };
     } catch (err) {
       const { code, message } = err instanceof VMError ? err : new VMError(INTERNAL, err.message);
-      // TIMEOUT ขึ้นกับความเร็วเครื่อง → ไม่รับเข้า block และไม่เก็บค่าใด ๆ
+      // TIMEOUT depends on machine speed → not admitted to the block and nothing is charged
       const accepted = code === TIMEOUT ? false : this.isAccepted(tx);
       const writes = !accepted ? [] : [
-        ...this.chargeOnFailure(tx), // tx ที่ล้มก็ยังกิน nonce และค่าแก๊ส
+        ...this.chargeOnFailure(tx), // failed txs still consume the nonce and gas fee
         ...this.transactionRecordWrites(tx, { status: STATUS.THROW, error: { code, message } }),
       ];
       return {
         status: STATUS.THROW,
-        // tx ที่ยังไม่ผ่านการตรวจเบื้องต้น (เช่น nonce ผิด) ถือว่าไม่ถูกรับเข้าระบบ จึงไม่เข้า block
+        // txs that have not passed preliminary checks (e.g. wrong nonce) are considered not admitted, so they do not enter the block
         accepted,
         timestamp: tx.timestamp,
         gasUsed: tx.gasUsed,
@@ -2912,34 +2912,34 @@ export class VirtualMachine {
         ...this.feeSummary(tx),
         fee: encodeNative(tx.feeCharged),
         error: { code, message },
-        debug: err?.detail ?? null,   // ข้อมูลดีบัก ไม่ถูกบันทึกลง DB และไม่เข้า hash
+        debug: err?.detail ?? null,   // debug info; not stored in the DB and not part of any hash
         calls: tx.calls,
-        events: [],   // tx ที่ล้มทั้งใบ = ไม่มี event
+        events: [],   // a wholly failed tx = no events
         writes,
       };
     }
   }
 
-  /** ค่าแก๊สแยกส่วน (อยู่ในผลของทุก tx): baseFee ของ block · ส่วนที่เผา · ส่วนที่ผู้ปิด block ได้ · type 2 = ส่ง maxFee / priority มา */
+  /** gas fee breakdown (in every tx result): block baseFee · burned portion · block closer's portion · type 2 = maxFee / priority were sent */
   feeSummary(tx) {
     return {
       baseFee: encodeNative(tx.baseFee),
       burnedFee: encodeNative(tx.feeBurned),
       producerFee: encodeNative(tx.feeReward),
       ...(tx.fees?.type === 2 ? { feeType: 2, maxFeePerGas: encodeNative(tx.fees.maxFee), maxPriorityFeePerGas: encodeNative(tx.fees.maxPriority) } : {}),
-      ...(tx.payer?.sponsor ? { sponsor: tx.payer.sponsor } : {}),   // ผู้จ่ายค่าแก๊สของใบนี้
+      ...(tx.payer?.sponsor ? { sponsor: tx.payer.sponsor } : {}),   // the gas payer for this tx
     };
   }
 
-  /** tx ถูกรับเข้าระบบแล้วหรือยัง (ผ่าน nonce และมีผู้จ่ายแล้ว) */
+  /** whether the tx has been admitted (nonce passed and a payer is set) */
   isAccepted(tx) {
     if (tx.payer) return true;
     return !this.requireNonce && !this.chargeGas && !this.recordTransactions;
   }
 
   /**
-   * ตรวจเบื้องต้นก่อนรับ tx เข้าคิว (อ่าน DB แค่ nonce — ไม่รันโปรแกรม)
-   * ใช้กรอง tx ซ้ำทิ้งตั้งแต่ก่อนเข้า block
+   * preliminary check before admitting a tx to the queue (reads only the nonce from the DB; does not run the program)
+   * used to filter out duplicate txs before they enter a block
    */
   checkTransaction({ nonce, from, context } = {}, { read = (dbKey) => this.read(dbKey) } = {}) {
     const address = normalizeAddress(from ?? context?.sender);
@@ -2951,38 +2951,38 @@ export class VirtualMachine {
     return { ok: true, expectedNonce };
   }
 
-  // ---------- nonce / ค่าแก๊ส ----------
+  // ---------- nonce / gas fees ----------
 
-  /** ตั้งผู้จ่ายของ tx ชั้นนอกสุด: ตรวจ nonce แล้วกำหนดเพดานแก๊สจากยอด native */
+  /** set the payer of the outermost tx: check the nonce, then set the gas ceiling from the native balance */
   preparePayer(tx, address, { nonce, gasLimit, gasPrice, maxFeePerGas, maxPriorityFeePerGas, sponsor, value = 0 } = {}) {
     const requestedLimit = Math.min(checkGasLimit(gasLimit), tx.maxTxGas);
-    // ราคาจริง = min(maxFee, baseFee + priority) · maxFee ต่ำกว่า baseFee ของ block → ไม่รับ (ไม่กิน nonce)
+    // actual price = min(maxFee, baseFee + priority) · maxFee below the block's baseFee → rejected (nonce not consumed)
     tx.fees = resolveFees({ gasPrice, maxFeePerGas, maxPriorityFeePerGas }, tx.baseFee);
     tx.gasPrice = tx.fees.price;
     if (!this.requireNonce && !this.chargeGas && !this.recordTransactions) {
       tx.gasLimit = requestedLimit;
-      if (tx.gas.tx) tx.useGas(tx.gas.tx);   // ค่าพื้นฐานต่อ tx (fork bluewolf)
+      if (tx.gas.tx) tx.useGas(tx.gas.tx);   // base cost per tx (bluewolf fork)
       return;
     }
 
     const current = tx.current(nonceKey(address)) ?? 0;
     if (this.requireNonce && nonce !== current) fail(ERRORS.invalidNonce, current, nonce);
-    // sponsor: จ่ายแก๊สแทนผู้ส่ง (ผู้ส่งยังใช้ nonce ของตัวเองและจ่าย value เอง) · ตรวจลายเซ็นของ sponsor แล้วตอนรับ tx (verifyTransaction)
+    // sponsor: pays gas on the sender's behalf (the sender still uses its own nonce and pays value itself) · the sponsor's signature was verified when the tx was admitted (verifyTransaction)
     tx.payer = sponsor && sponsor !== address ? { address, nonce: current, sponsor } : { address, nonce: current };
 
     if (tx.chargeGas) {
       if (tx.payer.sponsor && this.nativeBalance(tx, address) < readNative(value)) fail(ERRORS.nativeInsufficient, address);
-      // เงินที่จ่ายแก๊สได้ = ยอดของผู้จ่าย (หัก value ที่แนบไปกับ tx เมื่อผู้จ่ายคือผู้ส่งเอง)
+      // funds available for gas = the payer's balance (minus the value attached to the tx when the payer is the sender)
       const available = tx.payer.sponsor ? this.nativeBalance(tx, tx.payer.sponsor) : this.nativeBalance(tx, address) - readNative(value);
       if (available < 0n) fail(ERRORS.nativeInsufficient, address);
       tx.gasLimit = tx.gasPrice > 0n ? Math.min(gasUnits(available / tx.gasPrice), requestedLimit) : requestedLimit;
     } else {
       tx.gasLimit = requestedLimit;
     }
-    if (tx.gas.tx) tx.useGas(tx.gas.tx);   // ค่าพื้นฐานต่อ tx (fork bluewolf)
+    if (tx.gas.tx) tx.useGas(tx.gas.tx);   // base cost per tx (bluewolf fork)
   }
 
-  /** จำ request ไว้เพื่อเขียนรายการ tx (เรียกหลัง preparePayer) */
+  /** remember the request to write the tx list entry (called after preparePayer) */
   rememberTransaction(tx, request, action) {
     if (!this.recordTransactions || !tx.payer) return;
     tx.transaction = {
@@ -2991,7 +2991,7 @@ export class VirtualMachine {
     };
   }
 
-  /** write ของรายการ tx: <address>:txn:<nonce>:<txhash> */
+  /** write for the tx list: <address>:txn:<nonce>:<txhash> */
   transactionRecordWrites(tx, { status, error = null }) {
     if (!tx.transaction) return [];
     const { address, nonce } = tx.payer;
@@ -3003,7 +3003,7 @@ export class VirtualMachine {
     }];
   }
 
-  /** writes ของ nonce + ค่าแก๊ส (ส่วน base fee เผาตาม burnPercent · tip เข้าผู้ปิด block) */
+  /** writes for nonce + gas fee (base fee portion burned per burnPercent · tip goes to the block closer) */
   buildChargeWrites(tx, balance, raw) {
     const { address, nonce } = tx.payer;
     const feePayer = tx.payer.sponsor ?? address;
@@ -3014,14 +3014,14 @@ export class VirtualMachine {
     if (this.requireNonce) writes.push({ type: WRITE.PUT, dbKey: nonceKey(address), value: nonce + 1 });
     if (fee <= 0n) return writes;
 
-    // ค่าแก๊สเข้าช่อง consumed ของผู้จ่าย ส่วนที่ไม่ได้เผาทิ้งเข้าช่อง received ของผู้ปิด block
+    // the gas fee goes into the payer's consumed field; the unburned part goes into the block closer's received field
     writes.push({
       type: WRITE.PUT,
       dbKey: nativeKey(feePayer, NATIVE_FIELD.CONSUMED),
       value: encodeNative(this.nativeField(tx, feePayer, NATIVE_FIELD.CONSUMED, raw) + fee),
     });
 
-    // EIP-1559: ส่วน base fee (แก๊ส × baseFee) เผา burnPercent % · tip (ส่วนที่เกิน baseFee) เข้าผู้ปิด block ทั้งหมด
+    // EIP-1559: of the base fee portion (gas × baseFee), burnPercent % is burned · the tip (amount above baseFee) goes entirely to the block closer
     const baseDue = BigInt(Math.min(tx.gasUsed, tx.gasLimit)) * tx.baseFee;
     const basePart = baseDue < fee ? baseDue : fee;
     const reward = tx.feeRecipient ? fee - basePart + (basePart * BigInt(100 - tx.burnPercent)) / 100n : 0n;
@@ -3035,7 +3035,7 @@ export class VirtualMachine {
       });
     }
 
-    const burned = fee - reward; // ส่วนที่เผา → ส่งไปที่ 0x000…000
+    const burned = fee - reward; // burned portion → sent to 0x000…000
     if (burned > 0n) {
       writes.push({
         type: WRITE.PUT,
@@ -3056,16 +3056,16 @@ export class VirtualMachine {
   chargeOnFailure(tx) {
     if (!tx.payer) return [];
     try {
-      // ค่าใน DB (writes ของ tx ถูกทิ้งไปแล้ว)
+      // values in the DB (the tx's writes have already been discarded)
       return this.buildChargeWrites(tx, this.nativeBalance(tx, tx.payer.sponsor ?? tx.payer.address, true), true);
     } catch {
-      return []; // DB อ่านไม่ได้ → เก็บค่าแก๊สไม่ได้
+      return []; // DB unreadable → gas fee cannot be collected
     }
   }
 
-  // ---------- รันฟังก์ชันของโปรแกรม ----------
+  // ---------- running program functions ----------
 
-  /** โหลดโปรแกรมจากโค้ดที่ส่งมา หรือจาก DB */
+  /** load a program from the supplied code or from the DB */
   loadProgram(tx, programUuid, code = tx.current(codeKey(programUuid))) {
     if (typeof code !== "string") fail(ERRORS.programNotFound, programUuid);
     return this.compiler.compile(code);
@@ -3074,8 +3074,8 @@ export class VirtualMachine {
   /**
    * @param {Transaction} tx
    * @param {object} request  { programUuid, functionName, input, context, depth, code, isInit }
-   *   code   โค้ดบรรทัดเดียว (ใช้ตอน init เพราะยังไม่อยู่ใน DB)
-   *   isInit อนุญาตให้เรียก initialization
+   *   code   single-line code (used at init because it is not in the DB yet)
+   *   isInit allow calling initialization
    */
   runFunction(tx, { programUuid: rawProgramUuid, functionName, input = {}, context: rawContext, value = 0, depth = 0, code, isInit = false, callType, readonly = false }) {
     const programUuid = normalizeAddress(rawProgramUuid);
@@ -3094,46 +3094,46 @@ export class VirtualMachine {
       const params = {
         input: toProgram(toInputValue(input, "input") ?? {}, "input"),
         context: pickContext(context),
-        value: readNative(value),   // native ที่แนบมากับการเรียกนี้
+        value: readNative(value),   // native attached to this call
         block: { timestamp: BigInt(tx.timestamp) },
       };
       const result = this.invokeProgram(tx, program, api, functionName, params, depth, programUuid);
-      tx.assertAlive(); // DB พังแต่โปรแกรม catch ไว้ → ยัง throw
+      tx.assertAlive(); // DB failed but the program caught it → still throw
       record.result = result;
       Transaction.finishCall(record, undefined, tx.gasUsed);
       return result;
     } catch (err) {
       const error = VMError.fromProgram(err);
-      // timeout จริงออกมาที่ชั้นนอกสุดเท่านั้น (catch ของชั้นในไม่ได้ทำงาน) → ปิดทุก call ที่ค้างที่นี่
+      // a real timeout only surfaces at the outermost level (inner catches never ran) → close every open call here
       if (depth === 0 && error.code === TIMEOUT) tx.closeRunningCalls(error);
       else Transaction.finishCall(record, error, tx.gasUsed);
       throw error;
     }
   }
 
-  /** รันใน sandbox ของ tx (เวลา / หน่วยความจำ / stack นับรวมทั้งสายการเรียก) */
+  /** run in the tx's sandbox (time / memory / stack counted across the whole call chain) */
   invokeProgram(tx, program, api, functionName, params, depth, programUuid) {
-    if (depth === 0) tx.remainingTime();   // หมดเวลาไปก่อนเริ่มแล้ว → TIMEOUT
+    if (depth === 0) tx.remainingTime();   // time already ran out before starting → TIMEOUT
     const outcome = tx.sandbox().invoke({ programUuid, source: program.source, functionName, params, api, blockNumber: tx.blockNumber });
     if (outcome.kind === "fatal") throw tx.fatal;
     if (outcome.kind === "async") fail(ERRORS.asyncNotSupported);
     if (outcome.kind === "throw") {
-      if (outcome.hostError !== undefined) throw outcome.hostError;   // error ของ host ตัวเดิมที่โปรแกรมไม่ได้ catch
+      if (outcome.hostError !== undefined) throw outcome.hostError;   // the original host error that the program did not catch
       if (outcome.fakeTimeout) fail(ERRORS.timeout);
       if (outcome.guestError) throw VMError.fromGuest(outcome.guestError);
       throw new VMError(PROGRAM_ERROR, outcome.text);
     }
-    // ค่าที่ออกจากโปรแกรม: BigInt ถูกแปลงเป็น "123n" เพื่อให้ส่งเป็น JSON ได้
+    // values leaving the program: BigInt converted to "123n" so they can be sent as JSON
     return this.checkValueSize(fromProgram(outcome.value, "ค่าที่ return"), "ค่าที่ return");
   }
 
-  // ---------- API ที่โปรแกรมเรียกใช้ ----------
+  // ---------- APIs that programs call ----------
 
   /**
-   * API ฝั่ง host ที่โปรแกรมเรียกผ่าน sandbox (ค่าที่ได้รับเป็นสำเนาจากโปรแกรมเสมอ)
-   * __gas / __str / __props / __spread / map / Date / Math / ThisAddress / BlockNumber อยู่ใน sandbox เอง (ดู sandbox.js)
-   * ทุกฟังก์ชันหยุดทันทีถ้า DB พังไปแล้วใน request นี้
-   * caller.readonly (เรียกด้วย runProgram แบบ { readonly: true } ชั้นใดชั้นหนึ่งด้านบน) → API ที่แก้ state throw (catch ได้)
+   * host-side APIs that programs call through the sandbox (values received are always copies from the program)
+   * __gas / __str / __props / __spread / map / Date / Math / ThisAddress / BlockNumber live in the sandbox itself (see sandbox.js)
+   * every function stops immediately if the DB has already failed in this request
+   * caller.readonly (called via runProgram with { readonly: true } at any level above) → state-changing APIs throw (catchable)
    */
   createProgramApi(tx, caller) {
     const { programUuid } = caller;
@@ -3165,26 +3165,26 @@ export class VirtualMachine {
         "ผลลัพธ์")),
       cloneProgram: mutating("cloneProgram", (template, initInput, options) => this.programCloneProgram(tx, caller, template,
         fromProgram(initInput ?? {}, "initInput"), options)),
-      // ---- precompile (ข้อมูลเข้าแบบเดียวกับ keccak256: string หรือข้อมูล JSON) ----
+      // ---- precompiles (input format same as keccak256: string or JSON data) ----
       sha256: guard((value) => this.programDigest(tx, "sha256", text(value, "ค่าที่ sha256"))),
       ripemd160: guard((value) => this.programDigest(tx, "ripemd160", text(value, "ค่าที่ ripemd160"))),
       blake2b: guard((value) => this.programDigest(tx, "blake2b", text(value, "ค่าที่ blake2b"))),
       modexp: guard((base, exponent, modulus) => this.programModexp(tx, base, exponent, modulus)),
-      // ---- ข้อมูลของ block / tx / โค้ด ----
+      // ---- block / tx / code data ----
       BlockHash: guard((number) => this.programBlockHash(tx, number)),
       ChainId: guard(() => this.programEnv(tx, BigInt(this.chainId))),
       Coinbase: guard(() => this.programEnv(tx, tx.feeRecipient ?? null)),
       BlockGasLimit: guard(() => this.programEnv(tx, this.maxBlockGas === null || this.maxBlockGas === undefined ? null : BigInt(this.maxBlockGas))),
-      GasPrice: guard(() => this.programEnv(tx, tx.gasPrice)),   // ราคาจริงของ tx นี้ = min(maxFee, baseFee + priority)
-      BaseFee: guard(() => this.programEnv(tx, tx.baseFee)),     // base fee ของ block (EIP-1559 · BASEFEE)
+      GasPrice: guard(() => this.programEnv(tx, tx.gasPrice)),   // actual price of this tx = min(maxFee, baseFee + priority)
+      BaseFee: guard(() => this.programEnv(tx, tx.baseFee)),     // block base fee (EIP-1559 · BASEFEE)
       GasLeft: guard(() => {
-        tx.useGas(tx.gas.env);   // หักค่าของตัวเองก่อน แล้วค่อยนับที่เหลือ
+        tx.useGas(tx.gas.env);   // deduct this call's own cost first, then count what remains
         const left = tx.gasLimit - tx.gasUsed;
         return Number.isFinite(left) ? BigInt(left) : null;
       }),
       CodeHashOf: guard((address) => this.programCodeOf(tx, address, true)),
       CodeSizeOf: guard((address) => this.programCodeOf(tx, address, false)),
-      // ---- byte ดิบ / EIP-712 (ลายเซ็นแบบ eth_signTypedData_v4 ของ MetaMask) ----
+      // ---- raw bytes / EIP-712 (MetaMask eth_signTypedData_v4 signatures) ----
       keccak256Bytes: guard((hex) => this.programKeccakBytes(tx, hex)),
       ecrecoverDigest: guard((digest, signature) => this.programEcrecoverDigest(tx, digest, signature)),
       eip712Digest: guard((domain, types, primaryType, message) => this.programEip712(tx, (meter) => eip712Digest(
@@ -3194,7 +3194,7 @@ export class VirtualMachine {
     };
   }
 
-  /** key ต้องไม่ยาวเกินกำหนด (LMDB จำกัด ~1978 ไบต์ และ history: ซ้อนทับอีกชั้น) */
+  /** keys must not exceed the length limit (LMDB caps at ~1978 bytes, and history: adds another layer) */
   checkKeySize(dbKey) {
     const size = Buffer.byteLength(dbKey, "utf8");
     if (size > this.maxKeySize) fail(ERRORS.keyTooLong, this.maxKeySize, size);
@@ -3225,13 +3225,13 @@ export class VirtualMachine {
     tx.delete(dbKey);
   }
 
-  /** ยอดสะสมแต่ละช่อง */
+  /** each cumulative total field */
   nativeField(tx, address, field, raw = false) {
     const dbKey = nativeKey(address, field);
     return readNative(raw ? tx.readRaw(dbKey) : tx.current(dbKey));
   }
 
-  /** ยอดคงเหลือ = received - sended - consumed */
+  /** balance = received - sended - consumed */
   nativeBalance(tx, address, raw = false) {
     const { RECEIVED, SENDED, CONSUMED } = NATIVE_FIELD;
     return this.nativeField(tx, address, RECEIVED, raw)
@@ -3239,12 +3239,12 @@ export class VirtualMachine {
       - this.nativeField(tx, address, CONSUMED, raw);
   }
 
-  /** เพิ่มยอดสะสม (ค่าเหล่านี้ลดลงไม่ได้) */
+  /** increase a cumulative total (these values can never decrease) */
   addNative(tx, address, field, amount) {
     tx.put(nativeKey(address, field), encodeNative(this.nativeField(tx, address, field) + amount));
   }
 
-  /** โอน native ระหว่าง address (ใช้ทั้ง transferNative และ value ที่แนบมากับ call) */
+  /** native transfer between addresses (used by both transferNative and the value attached to a call) */
   moveNative(tx, from, to, amount) {
     tx.useGas(2 * (tx.gas.read + tx.gas.write));
     if (this.nativeBalance(tx, from) < amount) fail(ERRORS.nativeInsufficient, from);
@@ -3253,28 +3253,28 @@ export class VirtualMachine {
     this.addNative(tx, to, NATIVE_FIELD.RECEIVED, amount);
   }
 
-  /** ค่าที่ออกจากโปรแกรมต้องไม่ใหญ่เกินกำหนด (กันการสร้างข้อมูลมหาศาลใส่ DB) */
+  /** values leaving a program must not exceed the size limit (prevents dumping huge data into the DB) */
   checkValueSize(value, label) {
     const size = valueSize(value);
     if (size > this.maxValueSize) fail(ERRORS.valueTooLarge, this.maxValueSize, size);
     return value;
   }
 
-  /** ยอด native คงเหลือของ address (อ่าน 3 ช่อง) */
+  /** native balance of an address (reads 3 fields) */
   programNativeBalance(tx, address) {
     if (!isNonEmptyString(address)) fail(ERRORS.invalidAddress);
     tx.useGas(3 * tx.gas.read);
     return this.nativeBalance(tx, normalizeAddress(address));
   }
 
-  /** address นี้เป็นโปรแกรมหรือ wallet (ใช้กันการโอนเข้าโปรแกรมที่รับเงินไม่เป็น) */
+  /** whether this address is a program or a wallet (used to prevent transfers into programs that cannot handle funds) */
   programIsProgram(tx, address) {
     if (!isNonEmptyString(address)) fail(ERRORS.invalidAddress);
     tx.useGas(tx.gas.read);
     return tx.current(thisKey(normalizeAddress(address))) !== undefined;
   }
 
-  /** อ่าน metadata ของ address ใดก็ได้ เช่น namespace / creator */
+  /** read metadata of any address, e.g. namespace / creator */
   programMetadataOf(tx, address, field) {
     if (!isNonEmptyString(address)) fail(ERRORS.invalidAddress);
     if (!isNonEmptyString(field)) fail(ERRORS.invalidMetadataField, field);
@@ -3283,14 +3283,14 @@ export class VirtualMachine {
     return value ?? null;
   }
 
-  /** keccak256 ของ string หรือข้อมูล JSON (object ถูกแปลงแบบ canonical ก่อน) */
+  /** keccak256 of a string or JSON data (objects are canonicalized first) */
   programKeccak(tx, value) {
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ keccak256"));
     tx.useGas(tx.gas.hash + tx.gas.byte * Buffer.byteLength(text, "utf8"));
     return keccak256Hex(text);
   }
 
-  /** sha256 / ripemd160 / blake2b (BLAKE2b-512) ของ string หรือข้อมูล JSON → hex 0x… · แก๊ส = ค่าของ hash นั้น + byte ของข้อมูล */
+  /** sha256 / ripemd160 / blake2b (BLAKE2b-512) of a string or JSON data → 0x… hex · gas = that hash's cost + bytes of data */
   programDigest(tx, name, value) {
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, `ค่าที่ ${name}`));
     const bytes = utf8ToBytes(text);
@@ -3299,8 +3299,8 @@ export class VirtualMachine {
   }
 
   /**
-   * (base ** exponent) % modulus แบบ BigInt (precompile MODEXP) · modulus = 0n → 0n
-   * แก๊ส = modexp + ⌊word² × max(bit ของ exponent, 1) / 3⌋ — คิดก่อนคำนวณ จึงหยุดได้ก่อนเครื่องทำงานหนัก
+   * BigInt (base ** exponent) % modulus (MODEXP precompile) · modulus = 0n → 0n
+   * gas = modexp + ⌊words² × max(exponent bits, 1) / 3⌋, charged before computing, so it can stop before the machine does heavy work
    */
   programModexp(tx, base, exponent, modulus) {
     for (const [label, value] of [["base", base], ["exponent", exponent], ["modulus", modulus]]) {
@@ -3320,8 +3320,8 @@ export class VirtualMachine {
   }
 
   /**
-   * hash ของ block ก่อนหน้า (เหมือน BLOCKHASH): ย้อนได้ BLOCK_HASH_WINDOW block · block ปัจจุบัน / อนาคต / เก่ากว่านั้น → null
-   * รันนอก block (query) → นับ block ถัดจากล่าสุดเป็น block ปัจจุบัน
+   * hash of a previous block (like BLOCKHASH): reaches back BLOCK_HASH_WINDOW blocks · current / future / older blocks → null
+   * running outside a block (query) → the block after the latest counts as the current block
    */
   programBlockHash(tx, number) {
     if (typeof number === "number") fail(ERRORS.numberNotAllowed, "BlockHash");
@@ -3332,16 +3332,16 @@ export class VirtualMachine {
     return tx.current(blockKey(Number(number)))?.hash ?? null;
   }
 
-  /** ค่าของ chain / block / tx ที่รู้อยู่แล้ว (ไม่อ่าน DB) */
+  /** chain / block / tx values already known (no DB read) */
   programEnv(tx, value) {
     tx.useGas(tx.gas.env);
     return value;
   }
 
   /**
-   * โค้ดที่ address นั้นใช้อยู่ (โปรแกรมที่ init แล้ว · อัปเกรดแล้ว = โค้ดใหม่)
-   *   hash = true  → keccak256 ของโค้ด (ค่าเดียวกับ codeHash ที่ cloneProgram ใช้คำนวณ address) · ไม่ใช่โปรแกรม → null
-   *   hash = false → ความยาวโค้ดเป็น byte (BigInt) · ไม่ใช่โปรแกรม → 0n
+   * the code an address currently uses (initialized programs · upgraded = new code)
+   *   hash = true  → keccak256 of the code (same value as the codeHash cloneProgram uses to compute addresses) · not a program → null
+   *   hash = false → code length in bytes (BigInt) · not a program → 0n
    */
   programCodeOf(tx, address, hash) {
     if (!isNonEmptyString(address)) fail(ERRORS.invalidAddress);
@@ -3354,7 +3354,7 @@ export class VirtualMachine {
     return keccak256Hex(code);
   }
 
-  /** กู้ address ของผู้เซ็นจากข้อความ + ลายเซ็น (r + s + v เหมือน EIP-191/712) · digest = keccak256(UTF-8 ของข้อความ / canonical JSON) */
+  /** recover the signer address from a message + signature (r + s + v, as in EIP-191/712) · digest = keccak256(UTF-8 of the message / canonical JSON) */
   programEcrecover(tx, value, signature) {
     if (!isNonEmptyString(signature) || !/^0x[0-9a-fA-F]{130}$/.test(signature)) fail(ERRORS.invalidSignature);
     const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ ecrecover"));
@@ -3363,8 +3363,8 @@ export class VirtualMachine {
   }
 
   /**
-   * ecrecover แบบ EVM: กู้ address จาก digest 32 byte ตรง ๆ (ไม่ hash ซ้ำ) — ใช้กับ eip712Digest / keccak256Bytes
-   * ลายเซ็นใช้ไม่ได้ (v ไม่ใช่ 27/28, จุดไม่อยู่บนเส้นโค้ง) → null · รูปแบบผิด → throw (catch ได้) · แก๊ส = recover
+   * EVM-style ecrecover: recover an address from a raw 32-byte digest (no re-hashing); used with eip712Digest / keccak256Bytes
+   * unusable signature (v not 27/28, point not on the curve) → null · malformed → throw (catchable) · gas = recover
    */
   programEcrecoverDigest(tx, digest, signature) {
     if (typeof digest !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(digest)) fail(ERRORS.invalidDigest);
@@ -3373,7 +3373,7 @@ export class VirtualMachine {
     return recoverAddress(hexToBytesStrict(digest), signature);
   }
 
-  /** keccak256 ของ byte ดิบ ("0x…" hex) → "0x…" 32 byte · แก๊ส = hash + byte × จำนวน byte (เท่า keccak256 ของข้อความยาวเท่ากัน) */
+  /** keccak256 of raw bytes ("0x…" hex) → "0x…" 32 bytes · gas = hash + byte × number of bytes (same as keccak256 of a text of equal length) */
   programKeccakBytes(tx, hex) {
     let bytes;
     try {
@@ -3386,9 +3386,9 @@ export class VirtualMachine {
   }
 
   /**
-   * eip712Digest / eip712DomainSeparator — คำนวณก่อน (งานเป็นเส้นตรงกับขนาดข้อมูลที่โปรแกรมจ่ายแก๊สสร้างมาแล้ว) แล้วคิดแก๊ส
-   * แก๊ส = hash × จำนวนครั้งที่ keccak + byte × byte ทั้งหมดที่ถูก hash (typeHash / string / bytes / array / struct / digest)
-   * ข้อมูลผิดรูปแบบ → INVALID_REQUEST (catch ได้) คิดแก๊สเท่าที่ทำไปแล้ว
+   * eip712Digest / eip712DomainSeparator: compute first (work is linear in data size the program already paid gas to create), then charge gas
+   * gas = hash × number of keccak calls + byte × all bytes hashed (typeHash / string / bytes / array / struct / digest)
+   * malformed data → INVALID_REQUEST (catchable), charging gas for the work done so far
    */
   programEip712(tx, compute) {
     const meter = { hashes: 0, bytes: 0 };
@@ -3403,27 +3403,27 @@ export class VirtualMachine {
   }
 
   /**
-   * บันทึก event ให้ explorer อ่าน (ถูกย้อนพร้อม writes ถ้ากิ่งนั้นล้ม)
-   *   emit(name, data, { indexed: ["from", "to"] }) → ค้นด้วยค่าของ field เหล่านั้นได้ (GET /program/:a/events?name=&to= · eth_getLogs ตาม topic)
+   * record an event for the explorer to read (rolled back with writes if that branch fails)
+   *   emit(name, data, { indexed: ["from", "to"] }) → searchable by those fields' values (GET /program/:a/events?name=&to= · eth_getLogs by topic)
    */
   programEmit(tx, programUuid, depth, name, data = {}, options) {
     if (!isNonEmptyString(name) || !METADATA_FIELD_PATTERN.test(name)) fail(ERRORS.invalidEventName);
     const value = this.checkValueSize(toInputValue(data, `event '${name}'`) ?? {}, "event");
     const indexed = checkIndexed(options, value);
-    // indexed: ต่อ field เขียนดัชนีถาวร 1 key (eventidx:) → คิดเพิ่ม topic ต่อ field
+    // indexed: each field writes 1 permanent index key (eventidx:) → charge an extra topic per field
     tx.useGas(tx.gas.event + tx.gas.byte * valueSize(value) + tx.gas.topic * indexed.length);
     tx.events.push({ index: tx.events.length, depth, program: programUuid, name, data: value, ...(indexed.length ? { indexed } : {}) });
     return true;
   }
 
-  /** โปรแกรมตั้ง metadata ของตัวเอง (ฟิลด์ของระบบแก้ไม่ได้) */
+  /** a program sets its own metadata (system fields cannot be changed) */
   programSetMetadata(tx, programUuid, field, value) {
     tx.useGas(tx.gas.write + tx.gas.byte * valueSize(value));
     this.writeMetadata(tx, programUuid, { [field]: value === undefined ? null : value });
     return true;
   }
 
-  /** โอน native จากกระเป๋าของโปรแกรมนี้ไปยัง address อื่น */
+  /** transfer native from this program's wallet to another address */
   programTransferNative(tx, programUuid, to, amount) {
     if (!isNonEmptyString(to)) fail(ERRORS.invalidAddress);
     if (amount <= 0n) fail(ERRORS.invalidAmount);
@@ -3432,8 +3432,8 @@ export class VirtualMachine {
   }
 
   /**
-   * sender = โปรแกรมที่เรียก, origin = คงเดิม; ปลายทาง error → ย้อนการเขียนของปลายทางแล้ว throw ให้ผู้เรียกจัดการ
-   * { readonly: true } = แบบ STATICCALL: ปลายทางและทุกชั้นที่มันเรียกต่อแก้ state ไม่ได้ (ชั้นที่ readonly อยู่แล้วส่งต่อเสมอ)
+   * sender = the calling program, origin = unchanged; callee error → roll back the callee's writes, then throw for the caller to handle
+   * { readonly: true } = STATICCALL-style: the callee and every level it calls cannot modify state (a level already readonly always passes it on)
    */
   programRunProgram(tx, caller, programUuid, functionName, input, { value = 0n, readonly = false } = {}) {
     value = checkValue(value);
@@ -3442,9 +3442,9 @@ export class VirtualMachine {
     const savepoint = tx.savepoint();
     try {
       const target = normalizeAddress(programUuid);
-      if (value > 0n) this.moveNative(tx, caller.programUuid, target, value); // แนบเงินไปกับการเรียก
+      if (value > 0n) this.moveNative(tx, caller.programUuid, target, value); // attach funds to the call
       const context = { sender: caller.programUuid, origin: caller.context.origin };
-      // input / ค่าที่ return ถูกคัดลอกข้ามเขตแดน (JSON) → builtin ต่อ 32 byte (ปัดขึ้น) ทั้งขาไปและขากลับ
+      // input / return value are copied across the boundary (JSON) → builtin per 32 bytes (rounded up), both ways
       tx.useGas(tx.gas.builtin * copyUnits(input));
       const result = this.runFunction(tx, { programUuid: target, functionName, input, context, value, depth: caller.depth + 1,
         readonly, callType: readonly ? "staticcall" : undefined });
@@ -3456,17 +3456,17 @@ export class VirtualMachine {
     }
   }
 
-  /** address ของโปรแกรมที่ cloneProgram สร้าง (แบบ CREATE2: factory + salt + hash ของโค้ด) → รู้ได้ก่อนสร้างจริง */
+  /** address of a program created by cloneProgram (CREATE2-style: factory + salt + code hash) → known before it is actually created */
   cloneAddressFor(factory, salt, oneLineCode) {
     return addressFromHash(this.hashData({ chainId: this.chainId, factory: normalizeAddress(factory), salt: String(salt), codeHash: keccak256Hex(oneLineCode) }));
   }
 
   /**
-   * cloneProgram(template, initInput, { salt, value }) → address ใหม่
-   *   copy โค้ดของ template (ต้องอนุมัติแล้ว) ไปไว้ที่ address ใหม่ แล้วรัน initialization ทันทีใน tx เดียวกัน
-   *   context.sender ของ initialization = โปรแกรมที่เรียก (factory) · value โอนจาก factory ไปโปรแกรมใหม่
-   *   โปรแกรมใหม่ได้รับอนุมัติทันที (ไม่มี upgrader = แก้ไม่ได้) · ล้มตรงไหน → ย้อนทั้งหมด
-   *   trace: บันทึกเป็น call ชนิด "create" (explorer / callTracer แสดงเป็น CREATE)
+   * cloneProgram(template, initInput, { salt, value }) → new address
+   *   copies the template's code (must be approved) to a new address, then runs initialization immediately in the same tx
+   *   initialization's context.sender = the calling program (factory) · value is transferred from the factory to the new program
+   *   the new program is approved immediately (no upgrader = immutable) · failure anywhere → everything rolls back
+   *   trace: recorded as a call of kind "create" (explorer / callTracer show it as CREATE)
    */
   programCloneProgram(tx, caller, template, initInput, options) {
     const { salt, value } = options ?? {};
@@ -3480,14 +3480,14 @@ export class VirtualMachine {
     const factory = caller.programUuid;
     const source = normalizeAddress(template);
     tx.useGas(tx.gas.read);
-    const code = tx.current(codeKey(source));   // มีเฉพาะโปรแกรมที่ init แล้ว (pending / rejected / ไม่มี → ไม่มี code)
+    const code = tx.current(codeKey(source));   // only initialized programs have it (pending / rejected / missing → no code)
     if (typeof code !== "string") fail(ERRORS.templateNotActive, source);
 
     const address = this.cloneAddressFor(factory, saltText, code);
     if (tx.current(codeKey(address)) !== undefined || tx.current(pendingKey(address)) !== undefined
       || tx.current(thisKey(address)) !== undefined) fail(ERRORS.programUuidUsed, address);
 
-    // ค่าแก๊ส: call (นับใน runFunction) + ตามขนาดโค้ด (เหมือน deploy) + write ของ code / context / this / metadata 4 ช่อง
+    // gas fee: call (counted in runFunction) + by code size (like deploy) + writes of code / context / this / 4 metadata fields
     const codeSize = Buffer.byteLength(code, "utf8");
     tx.useGas(tx.gas.code * codeSize + 7 * tx.gas.write);
 
@@ -3495,11 +3495,11 @@ export class VirtualMachine {
     try {
       if (amount > 0n) this.moveNative(tx, factory, address, amount);
       const context = { sender: factory, origin: caller.context.origin };
-      tx.useGas(tx.gas.builtin * copyUnits(initInput));   // initInput ถูกคัดลอกข้ามเขตแดนเหมือน input ของ runProgram
+      tx.useGas(tx.gas.builtin * copyUnits(initInput));   // initInput is copied across the boundary, like runProgram input
       if (this.compiler.compile(code).hasInit) {
         this.runFunction(tx, { programUuid: address, functionName: INIT_FUNCTION, input: initInput, context, value: amount, depth, code, isInit: true, callType: "create" });
       } else {
-        // ไม่มี initialization ก็ยังต้องมีรายการ create ใน trace
+        // even without initialization, the trace still needs a create entry
         const record = tx.startCall({ depth, programUuid: address, functionName: "create", context, input: toInputValue(initInput, "initInput") ?? {}, value: amount, type: "create" });
         tx.useGas(tx.gas.call);
         Transaction.finishCall(record, undefined, tx.gasUsed);
@@ -3522,16 +3522,16 @@ export class VirtualMachine {
 }
 
 /**
- * เรียง tx ที่รออยู่: tip ต่อแก๊สสูงกว่าได้ก่อน แต่ของแต่ละ address ยังเรียงตาม nonce เสมอ
- *   tip = min(maxPriorityFeePerGas, maxFeePerGas - baseFee) (แบบเดิม gasPrice = ทั้งสองค่า) · ดู effectiveTip
- *   baseFee ไม่ส่ง = 0 → เรียงตามราคาที่เสนอตรง ๆ แบบเดิม · ใบที่ maxFee < baseFee นับ tip = -1 (ไปท้ายสุด — Mempool.take ข้ามให้)
+ * Order pending txs: higher tip per gas goes first, but each address's txs always stay in nonce order
+ *   tip = min(maxPriorityFeePerGas, maxFeePerGas - baseFee) (legacy gasPrice = both values) · see effectiveTip
+ *   baseFee not sent = 0 → order by the offered price directly, as before · txs with maxFee < baseFee count as tip = -1 (go last; Mempool.take skips them)
  * @param {Array<{ request: object, receivedAt?: number }>} items
  */
 export function sortPendingTransactions(items, { defaultGasPrice = DEFAULT_GAS.price, baseFee = 0n } = {}) {
   const senderOf = (request) => normalizeAddress(request.from ?? request.context?.sender) ?? "";
   const priceOf = (request) => effectiveTip(request, readNative(baseFee), { defaultGasPrice }) ?? -1n;
 
-  // ราคาของ address = ใบที่ถูกที่สุดในคิวของคนนั้น (กันการใส่ใบแพงใบเดียวเพื่อลัดคิวทั้งชุด)
+  // an address's price = the cheapest tx in its queue (prevents one expensive tx from jumping the whole batch ahead)
   const groups = new Map();
   for (const item of items) {
     const sender = senderOf(item.request);
@@ -3550,33 +3550,33 @@ export function sortPendingTransactions(items, { defaultGasPrice = DEFAULT_GAS.p
 }
 
 // ============================================================================
-//  Block: รันหลาย call ต่อกัน แล้ว commit ทีเดียว
+//  Block: run several calls in sequence, then commit once
 // ============================================================================
 
 /**
- * แต่ละ tx รันตามลำดับ และเห็นผลของ tx ก่อนหน้าใน block (ยังไม่ลง DB)
- * tx ที่ throw ไม่มีผลกับ block, tx อื่นยังทำงานต่อได้
+ * each tx runs in order and sees the results of earlier txs in the block (not yet in the DB)
+ * a tx that throws has no effect on the block; other txs keep running
  *
- * ข้อมูลระดับ block (รูปแบบเดียวกับ call):
- *   loadValues()   storage key ที่ tx ที่ success อ่าน + ค่าใน DB ก่อน block
- *   afterValues()  storage key ที่ tx ที่ success แตะ + ค่าหลังทั้ง block + changed เทียบกับก่อน block
- *   writes()       writes สุดท้าย 1 รายการต่อ key
- *   timestamp      เวลาของ block ที่ทุก tx เห็น
+ * block-level data (same format as call):
+ *   loadValues()   storage keys read by successful txs + DB values before the block
+ *   afterValues()  storage keys touched by successful txs + values after the whole block + changed relative to before the block
+ *   writes()       final writes, 1 entry per key
+ *   timestamp      block time every tx sees
  */
 export class Block {
   #vm;
   #read;
-  #state = new Map();   // dbKey → write ล่าสุด (put / del)
-  #dbCache = new Map(); // dbKey → ค่าที่อ่านจาก DB (อ่านแต่ละ key จาก DB ครั้งเดียวต่อ block)
-  #loaded = new Set();  // storage key ที่ tx ที่ success อ่าน
-  #touched = new Set(); // storage key ที่ tx ที่ success แตะ (อ่าน / เขียน / ลบ)
+  #state = new Map();   // dbKey → latest write (put / del)
+  #dbCache = new Map(); // dbKey → value read from the DB (each key is read from the DB once per block)
+  #loaded = new Set();  // storage keys read by successful txs
+  #touched = new Set(); // storage keys touched by successful txs (read / write / delete)
   #results = [];
-  #requests = [];       // { action, request } ของแต่ละ tx สำหรับทำ receipt
-  #rejected = [];       // tx ที่ไม่ถูกรับเข้า block (เช่น nonce ผิด)
+  #requests = [];       // { action, request } of each tx for building receipts
+  #rejected = [];       // txs not admitted to the block (e.g. wrong nonce)
   #committed = false;
   #timestamp;
 
-  /** options: { read, timestamp } — ไม่ส่ง timestamp → Date.now() ตอนสร้าง block */
+  /** options: { read, timestamp }; no timestamp → Date.now() when the block is created */
   #feeRecipient;
   #burnPercent;
   #maxTransactions;
@@ -3590,15 +3590,15 @@ export class Block {
   #parentStateRoot;
   #recordBlocks;
   #overwrite;
-  #upgrades = [];       // การอัปเกรดที่ครบ timelock และถูกเปิดใช้ตอนเริ่ม block นี้
-  #rejectedTxs = [];    // tx ที่ผู้ผลิตปฏิเสธไปตั้งแต่ block ก่อน (บันทึกไว้เฉย ๆ ไม่รัน) — ดู recordRejected
-  #hashesCache = null;  // ผลของ hashes() ล่าสุด (ล้างเมื่อ block เปลี่ยน)
-  #trieCache = null;    // node ของ trie ที่ hashes() คำนวณไว้ (commit ใช้ตัวเดียวกัน)
-  #trustedStateRoot;    // replayBlock: stateRoot จาก header ที่บันทึกไว้ (trie ใน DB เป็นของล่าสุด คำนวณของ block เก่าไม่ได้)
-  #baseFee;             // base fee ของ block นี้ (BigInt · EIP-1559 คำนวณจาก block ก่อนหน้า)
-  #producer;            // address ผู้ผลิต (อยู่ใน hash) · null = block แบบเดิม
-  #producerSignature;   // ลายเซ็นของผู้ผลิตบน hash ของ block (ส่งมา = sync / replay · ไม่ส่ง = เซ็นด้วย vm.producer ตอนต้องใช้)
-  #timeoutMs;           // เวลาต่อ tx (null = vm.timeoutMs) — replay / sync ใช้ vm.replayTimeoutMs
+  #upgrades = [];       // upgrades whose timelock elapsed and were activated at the start of this block
+  #rejectedTxs = [];    // txs the producer rejected in earlier blocks (only recorded, not executed); see recordRejected
+  #hashesCache = null;  // result of the latest hashes() (cleared when the block changes)
+  #trieCache = null;    // trie nodes computed by hashes() (commit uses the same ones)
+  #trustedStateRoot;    // replayBlock: stateRoot from the stored header (the trie in the DB is the latest, so an old block's cannot be computed)
+  #baseFee;             // this block's base fee (BigInt · EIP-1559, computed from the previous block)
+  #producer;            // producer address (part of the hash) · null = legacy block
+  #producerSignature;   // producer's signature over the block hash (passed in = sync / replay · not passed = signed with vm.producer when needed)
+  #timeoutMs;           // per-tx time (null = vm.timeoutMs); replay / sync use vm.replayTimeoutMs
 
   constructor(vm, {
     read = (dbKey) => vm.read(dbKey),
@@ -3612,7 +3612,7 @@ export class Block {
     recordBlocks = vm.recordBlocks,
     recordHistory = vm.recordHistory,
     checkChain = true,
-    overwrite = false,     // rebuildFrom: บันทึกทับ block เลขเดิม (header / body / undo) ใน commit เดียว
+    overwrite = false,     // rebuildFrom: overwrite the same block number (header / body / undo) in a single commit
     maxTransactions = vm.maxTransactions,
     maxTransactionsPerSender = vm.maxTransactionsPerSender,
     maxBlockGas = vm.maxBlockGas,
@@ -3625,11 +3625,11 @@ export class Block {
     this.#read = read;
     this.#timestamp = timestamp;
 
-    // ไม่ส่งเลข block มา → ต่อจาก block ล่าสุดใน DB ให้เอง
+    // no block number given → continue from the latest block in the DB automatically
     this.#number = number === undefined ? (recordBlocks ? (vm.latestBlockNumber() ?? 0) + 1 : null) : number;
     const previous = this.#number === null ? null : vm.getBlock(this.#number - 1);
 
-    // parentHash / parentStateRoot ไม่ส่งมา → อ่านจาก block ก่อนหน้า
+    // parentHash / parentStateRoot not given → read from the previous block
     this.#parentHash = parentHash ?? previous?.hash ?? null;
     this.#parentStateRoot = parentStateRoot ?? previous?.stateRoot ?? null;
     this.#recordBlocks = recordBlocks && this.#number !== null;
@@ -3649,17 +3649,17 @@ export class Block {
     this.#producerSignature = producerSignature;
     this.#timeoutMs = timeoutMs;
     this.#trustedStateRoot = stateRoot;
-    // base fee มาจาก header ของ block ก่อนหน้าเสมอ (ไม่รับจากผู้เรียก) → sync / replay คำนวณเองแล้วเทียบ hash
-    // block ที่ไม่มีเลข (simulate) = base fee ของ block ถัดไป
-    // ขั้นต่ำที่ admin ตั้ง (gasconfig) อ่านจาก state ก่อน block (read ของผู้เรียก) → setGasConfig ใน block นี้มีผลตั้งแต่ block ถัดไป
+    // the base fee always comes from the previous block's header (never accepted from the caller) → sync / replay compute it themselves and compare hashes
+    // a block without a number (simulate) = the next block's base fee
+    // the admin-set floor (gasconfig) is read from the state before the block (the caller's read) → setGasConfig in this block takes effect from the next block
     this.#baseFee = this.#number === null ? vm.currentBaseFee() : vm.baseFeeAfter(previous, read);
     if (this.#number !== null) this.#activateUpgrades();
   }
 
   /**
-   * timelock ของการอัปเกรด: ก่อน tx ใบแรกของ block N เปิดใช้โค้ดทุกตัวที่นัดไว้ที่ N (upgradeat:<N>)
-   * ทำตอนสร้าง block จึงขึ้นกับเลข block อย่างเดียว — replay / rebuild สร้าง block เดิมก็ได้ผลเดิมทุกครั้ง
-   * writes เข้า state ของ block (อยู่ใน stateRoot / history) แต่ไม่ใช่ tx: ไม่มี hash ไม่อยู่ใน body
+   * upgrade timelock: before the first tx of block N, activate all code scheduled for N (upgradeat:<N>)
+   * done at block creation, so it depends only on the block number; replay / rebuild of the same block always gives the same result
+   * writes go into the block's state (in stateRoot / history) but are not a tx: no hash, not in the body
    */
   #activateUpgrades() {
     const dueKey = upgradeAtKey(this.#number);
@@ -3677,7 +3677,7 @@ export class Block {
       if (result.status === STATUS.SUCCESS) {
         for (const write of result.writes ?? []) this.#state.set(write.dbKey, copyValue(write));
       }
-      // ล้ม (migrate throw) → ทิ้งนัดหมาย โค้ดเดิมทำงานต่อ
+      // failed (migrate threw) → discard the schedule, the old code keeps running
       this.#state.set(scheduledUpgradeKey(programUuid), { type: WRITE.DEL, dbKey: scheduledUpgradeKey(programUuid) });
       this.#upgrades.push({ program: programUuid, status: result.status, version: result.result?.version ?? null, error: result.error ?? null });
     }
@@ -3685,17 +3685,17 @@ export class Block {
     this.#hashesCache = null;
   }
 
-  /** โปรแกรมที่ถูกเปิดใช้โค้ดใหม่ตอนเริ่ม block นี้ (timelock ครบ) */
+  /** programs whose new code was activated at the start of this block (timelock elapsed) */
   upgrades() {
     return this.#upgrades.map(copyValue);
   }
 
-  /** base fee ของ block นี้ (BigInt wei ต่อแก๊ส) */
+  /** this block's base fee (BigInt wei per gas) */
   get baseFee() {
     return this.#baseFee;
   }
 
-  /** ผู้ปิด block ที่ได้ส่วนแบ่งค่าแก๊ส */
+  /** block closer receiving a share of the gas fee */
   get feeRecipient() {
     return this.#feeRecipient;
   }
@@ -3708,12 +3708,12 @@ export class Block {
     return this.#parentHash;
   }
 
-  /** stateRoot ของ block ก่อนหน้า (สายของ state ต่อกัน) */
+  /** stateRoot of the previous block (the chain of state links up) */
   get parentStateRoot() {
     return this.#parentStateRoot;
   }
 
-  /** เวลาของ block: ทุก tx เห็นค่านี้ */
+  /** block time: every tx sees this value */
   get timestamp() {
     return this.#timestamp;
   }
@@ -3762,19 +3762,19 @@ export class Block {
     return this.#execute("rejectUpgrade", request);
   }
 
-  /** ผลของทุก tx ที่เข้า block (copy) */
+  /** results of every tx in the block (copy) */
   results() {
     return this.#results.map(copyValue);
   }
 
-  /** ตรวจเบื้องต้นโดยนับ tx ที่อยู่ใน block นี้แล้วด้วย (ใช้กรองคิวก่อนเรียกจริง) */
+  /** preliminary check that also counts txs already in this block (used to filter the queue before the real call) */
   checkTransaction(request) {
     const quotaError = this.#quotaError(request);
     if (quotaError) return { ok: false, reason: quotaError.message };
     return this.#vm.checkTransaction(request, { read: (dbKey) => this.read(dbKey) });
   }
 
-  /** โควตาที่เหลือของ block นี้ */
+  /** remaining quota of this block */
   capacity(address) {
     const sender = address === undefined ? null : normalizeAddress(address);
     return {
@@ -3786,17 +3786,17 @@ export class Block {
     };
   }
 
-  /** tx ที่ถูกปฏิเสธก่อนเข้า block (nonce ผิด ฯลฯ) */
+  /** txs rejected before entering the block (wrong nonce etc.) */
   rejected() {
     return this.#rejected.map(copyValue);
   }
 
-  /** storage key ที่ถูกอ่าน พร้อมค่าใน DB ก่อน block */
+  /** storage keys read, with their DB values before the block */
   loadValues() {
     return [...this.#loaded].map((dbKey) => ({ dbKey, loadValue: this.#beforeBlock(dbKey) }));
   }
 
-  /** storage key ที่ถูกแตะ พร้อมค่าหลังทั้ง block และเปลี่ยนจากก่อน block หรือไม่ */
+  /** storage keys touched, with values after the whole block and whether they changed from before the block */
   afterValues() {
     return [...this.#touched].map((dbKey) => {
       const afterValue = this.read(dbKey);
@@ -3804,29 +3804,29 @@ export class Block {
     });
   }
 
-  /** writes ของ tx ทั้งหมด (ยังไม่รวมข้อมูล block) */
+  /** writes of all txs (block data not yet included) */
   stateWrites() {
     return [...this.#state.values()].map(copyValue);
   }
 
-  /** writes สุดท้ายของทั้ง block (1 รายการต่อ key) สำหรับบันทึกทีเดียว */
+  /** final writes of the whole block (1 entry per key) to persist in one go */
   writes() {
     const stateWrites = this.stateWrites();
     const blockWrites = this.blockWrites();
     return [...stateWrites, ...blockWrites, ...this.historyWrites([...stateWrites, ...blockWrites])];
   }
 
-  /** ค่าก่อนเปลี่ยนของ key หนึ่ง (อ่านจาก cache ของ block ถ้ามี ไม่งั้นอ่าน DB) */
+  /** the value of a key before it changed (from the block cache if present, otherwise from the DB) */
   #beforeValue(dbKey) {
     if (!this.#dbCache.has(dbKey)) this.#dbCache.set(dbKey, this.#read(dbKey));
     return this.#dbCache.get(dbKey);
   }
 
-  /** history:<key>:<block> ของทุก key ที่ block นี้แตะ + blockundo:<block> */
+  /** history:<key>:<block> for every key this block touched + blockundo:<block> */
   historyWrites(writes = this.writes()) {
     if (!this.#recordHistory) return [];
 
-    // ข้อมูลของ chain เอง (block / ดัชนี) ไม่ต้องเก็บ history เพราะสร้างใหม่ได้จาก body
+    // the chain's own data (blocks / indexes) needs no history because it can be rebuilt from the bodies
     const keys = [...new Set(writes.map((write) => write.dbKey))].filter(isStateKey);
     const history = keys.map((dbKey) => {
       const before = this.#beforeValue(dbKey);
@@ -3839,9 +3839,9 @@ export class Block {
     return [...history, { type: WRITE.PUT, dbKey: blockUndoKey(this.#number), value: keys }];
   }
 
-  /** hash ของ block: { hash, parentHash, txRoot, stateRoot, writesRoot, ... } */
+  /** block hash: { hash, parentHash, txRoot, stateRoot, writesRoot, ... } */
   hashes() {
-    // ผลเดิมจนกว่า block จะเปลี่ยน (รัน tx / บันทึกใบที่ถูกปฏิเสธ / เปิดใช้อัปเกรด) — header() / receipt() / commit() เรียกหลายรอบ
+    // same result until the block changes (tx run / rejected tx recorded / upgrade activated); header() / receipt() / commit() call it several times
     if (this.#hashesCache) return { ...this.#hashesCache };
     this.#hashesCache = this.#computeHashes();
     return { ...this.#hashesCache };
@@ -3851,7 +3851,7 @@ export class Block {
     const writes = this.stateWrites();
     const txHashes = this.txHashes();
     const { receiptsRoot, logsBloom: bloom } = this.receiptRoots(txHashes);
-    // stateRoot = root ของ trie หลังใส่ writes ของ block นี้ลงบน trie ล่าสุดใน DB (= state ก่อน block นี้)
+    // stateRoot = trie root after applying this block's writes onto the latest trie in the DB (= the state before this block)
     this.#trieCache = this.#trustedStateRoot === null ? this.#vm.trieUpdate(writes) : null;
     const { hash, txRoot, stateRoot, writesRoot, rejectedRoot } = this.#vm.hashBlock({
       number: this.#number,
@@ -3873,9 +3873,9 @@ export class Block {
   }
 
   /**
-   * receipt ย่อของทุก tx (ข้อมูลที่ได้จากการรัน — ไม่มีใน txRoot) เรียงตาม index
+   * condensed receipts of every tx (data produced by execution; not in txRoot), ordered by index
    *   { hash, status, gasUsed, cumulativeGasUsed, effectiveGasPrice, fee, error, logs: [{ address, topics, data }] }
-   * receiptsRoot = hash ของรายการนี้ · logsBloom = bloom ของทุก log (แบบ EVM) → อยู่ใน header และ hash ของ block
+   * receiptsRoot = hash of this list · logsBloom = bloom of every log (EVM-style) → in the header and the block hash
    */
   receiptEntries(txHashes = this.txHashes()) {
     let cumulative = 0;
@@ -3894,16 +3894,16 @@ export class Block {
     });
   }
 
-  /** { receiptsRoot, logsBloom } ของ block นี้ */
+  /** { receiptsRoot, logsBloom } of this block */
   receiptRoots(txHashes = this.txHashes()) {
     const entries = this.receiptEntries(txHashes);
     return { receiptsRoot: this.#vm.hashData(entries), logsBloom: logsBloom(entries.flatMap((entry) => entry.logs)) };
   }
 
   /**
-   * บันทึก tx ที่ถูกปฏิเสธลง block (ไม่รัน ไม่แตะ state ไม่กิน nonce ไม่เสียค่าแก๊ส) → entry ที่เก็บ
+   * record a rejected tx in the block (not executed, no state touched, no nonce consumed, no gas fee) → the stored entry
    *   { hash, sender, nonce, action, to, gasPrice, reason, code, stage }   stage: "sendtx" | "block" | "expired"
-   * อยู่ใน hash ของ block (rejectedRoot) → replay / sync ต้องใส่รายการเดิมตามลำดับเดิมจึงได้ hash ตรง
+   * part of the block hash (rejectedRoot) → replay / sync must insert the same entries in the same order to get a matching hash
    */
   recordRejected({ hash, sender, nonce = null, action = "call", to = null, gasPrice = null, reason = "", code = null, stage } = {}) {
     if (this.#committed) fail(ERRORS.blockCommitted);
@@ -3927,12 +3927,12 @@ export class Block {
     return { ...entry };
   }
 
-  /** tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ (copy) */
+  /** rejected txs recorded in this block (copy) */
   rejectedTransactions() {
     return this.#rejectedTxs.map((entry) => ({ ...entry }));
   }
 
-  /** hash ของทุก tx ใน block เรียงตามลำดับ */
+  /** hashes of every tx in the block, in order */
   txHashes() {
     return this.#results.map((result, index) => {
       const { action, request } = this.#requests[index];
@@ -3940,7 +3940,7 @@ export class Block {
     });
   }
 
-  /** ข้อมูล block ที่จะบันทึกลง DB (block:<number>, blockhash:<hash>, latestblock, tx:<hash>) */
+  /** block data to persist to the DB (block:<number>, blockhash:<hash>, latestblock, tx:<hash>) */
   blockWrites() {
     if (!this.#recordBlocks) return [];
 
@@ -3952,7 +3952,7 @@ export class Block {
       { type: WRITE.PUT, dbKey: LATEST_BLOCK_KEY, value: this.#number },
     ];
 
-    // tx ที่ถูกปฏิเสธ: รายการของ block + ดัชนีจาก hash / ผู้ส่ง
+    // rejected txs: the block's list + indexes by hash / sender
     if (this.#rejectedTxs.length) {
       writes.push({ type: WRITE.PUT, dbKey: blockRejectedKey(this.#number), value: this.rejectedTransactions() });
       this.#rejectedTxs.forEach((entry, index) => {
@@ -3962,7 +3962,7 @@ export class Block {
       });
     }
 
-    const signatures = new Set();   // eventsig: เขียนครั้งเดียวต่อ block
+    const signatures = new Set();   // eventsig: written once per block
     header.txHashes.forEach((hash, index) => {
       const { request, action } = this.#requests[index];
       const result = this.#results[index];
@@ -3979,16 +3979,16 @@ export class Block {
           status: result.status,
           from: normalizeAddress(action === "transfer" ? request.from : request.context?.sender) ?? null,
           nonce: request.nonce ?? null,
-          // ค่าแก๊ส (eth_feeHistory อ่านจากตรงนี้โดยไม่ต้อง replay)
+          // gas fees (eth_feeHistory reads them from here without replaying)
           gasUsed: result.gasUsed ?? 0,
           gasPrice: result.gasPrice ?? null,
           tip: encodeNative(readNative(result.gasPrice) > this.#baseFee ? readNative(result.gasPrice) - this.#baseFee : 0n),
         },
       });
-      // ค้นจาก hash ที่ผู้ใช้เซ็น (EIP-712) กลับมาหา tx ได้ด้วย
+      // also allows lookup from the hash the user signed (EIP-712) back to the tx
       if (digest) writes.push({ type: WRITE.PUT, dbKey: sigTxKey(digest), value: hash });
 
-      // ดัชนี "ใครมา interact กับ address นี้" (โปรแกรมที่ถูกเรียก หรือผู้รับเงิน)
+      // index of "who interacted with this address" (called program, or funds recipient)
       const target = normalizeAddress(action === "transfer" ? request.to : request.programUuid ?? result.result?.programUuid);
       if (target) {
         writes.push({
@@ -3999,19 +3999,19 @@ export class Block {
             from: normalizeAddress(action === "transfer" ? request.from : request.context?.sender) ?? null,
             method: request.functionName ?? null,
             value: request.value ?? request.amount ?? 0,
-            // blockNumber / index อยู่ใน key · timestamp อ่านจาก header (readTransactionTo)
+            // blockNumber / index are in the key · timestamp is read from the header (readTransactionTo)
           },
         });
       }
 
-      // โปรแกรมที่ถูกเรียกซ้อน (runProgram) ก็ต้องเห็นว่ามีใครมาเรียกเหมือนกัน
+      // programs called in a nested way (runProgram) must also see who called them
       (result.calls ?? []).forEach((call, callIndex) => {
-        if (call.depth === 0) return;   // ชั้นนอกสุดถูกบันทึกไปแล้วด้านบน
+        if (call.depth === 0) return;   // the outermost level was already recorded above
         writes.push({
           type: WRITE.PUT,
           dbKey: txToKey(call.programUuid, this.#number, index, callIndex + 1),
           value: {
-            // status = ผลของการเรียกชั้นนี้ · txStatus = ผลของทั้ง tx (ชั้นนี้ล้มได้ แต่ชั้นบนอาจ catch ไว้)
+            // status = result of this level's call · txStatus = result of the whole tx (this level may fail while an upper level catches it)
             hash, action: call.type === "create" ? "create" : "call", status: call.status, txStatus: result.status,
             from: normalizeAddress(call.sender ?? call.context?.sender) ?? null,
             method: call.functionName ?? null,
@@ -4020,14 +4020,14 @@ export class Block {
         });
       });
 
-      // ดัชนี event: ค้นได้ว่าโปรแกรมนี้ emit อะไรไว้บ้าง
+      // event index: lets you search what this program has emitted
       for (const event of result.events ?? []) {
         writes.push({
           type: WRITE.PUT,
           dbKey: eventKey(event.program, event.name, this.#number, index, event.index),
           value: { ...event, blockNumber: this.#number, txIndex: index, txHash: hash, timestamp: this.#timestamp },
         });
-        // field ที่ indexed → eventidx:<program>:<name>:<field>:<topic>:… (ค้นด้วยค่าได้ไม่ต้องไล่ทุก event) + eventsig: (topic0 → ชื่อ)
+        // indexed fields → eventidx:<program>:<name>:<field>:<topic>:… (searchable by value without scanning every event) + eventsig: (topic0 → name)
         if (event.indexed?.length) {
           const ref = eventKey(event.program, event.name, this.#number, index, event.index);
           for (const field of event.indexed) {
@@ -4039,8 +4039,8 @@ export class Block {
             writes.push({ type: WRITE.PUT, dbKey: sigKey, value: { program: event.program, name: event.name, indexed: event.indexed } });
           }
         }
-        // event Transfer ของ token / NFT และ TransferSingle / TransferBatch ของ multi-token → จำว่า address นี้ถือของของโปรแกรมนี้
-        // (ยอดจริงอ่านจากโปรแกรมตอนแสดง)
+        // Transfer events of token / NFT and TransferSingle / TransferBatch of multi-token → remember that this address holds this program's assets
+        // (the real balance is read from the program when displayed)
         if (HOLDING_EVENTS.has(event.name) && result.status === STATUS.SUCCESS) {
           for (const holder of [event.data?.to, event.data?.from]) {
             if (!isWalletAddress(holder) || /^0x0{40}$/i.test(holder)) continue;
@@ -4050,18 +4050,18 @@ export class Block {
         }
       }
     });
-    // history ครบตั้งแต่ block ไหน: block นี้ไม่เก็บ history → นับใหม่จาก block ถัดไป · ยังไม่มีค่า → block แรกที่เก็บ
+    // from which block history is complete: this block keeps no history → count again from the next block · no value yet → the first block that keeps it
     if (!this.#recordHistory) writes.push({ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: this.#number + 1 });
     else if (this.#vm.read(HISTORY_FROM_KEY) === undefined) writes.push({ type: WRITE.PUT, dbKey: HISTORY_FROM_KEY, value: this.#vm.historyFrom() ?? this.#number });
     return writes;
   }
 
-  /** tx ดิบของทุกใบใน block ตามลำดับ (ใช้ replay ได้) */
+  /** raw txs of every tx in the block, in order (usable for replay) */
   body() {
     return this.#requests.map(({ action, method, request }) => ({ action, method, request: copyValue(request) }));
   }
 
-  /** header ของ block (ไม่มีรายละเอียด tx) */
+  /** block header (no tx details) */
   header() {
     const txHashes = this.txHashes();
     const { hash, txRoot, stateRoot, writesRoot, receiptsRoot, logsBloom: bloom } = this.hashes();
@@ -4079,26 +4079,26 @@ export class Block {
       failedCount: statuses.filter((status) => status === STATUS.THROW).length,
       gasUsed: this.#results.reduce((sum, result) => sum + (result.gasUsed ?? 0), 0),
       fee: encodeNative(this.#results.reduce((sum, result) => sum + readNative(result.fee), 0n)),
-      baseFeePerGas: encodeNative(this.#baseFee),   // EIP-1559 (อยู่ใน hash)
-      gasTarget: this.#vm.gasTarget,                // แก๊สเป้าหมายต่อ block (null = base fee คงที่)
-      burnedFee: sum("burnedFee"),                  // ค่าแก๊สที่เผาทั้ง block
-      producerFee: sum("producerFee"),              // ค่าแก๊สที่ผู้ปิด block ได้ (tip + base fee ส่วนที่ไม่ได้เผา)
+      baseFeePerGas: encodeNative(this.#baseFee),   // EIP-1559 (part of the hash)
+      gasTarget: this.#vm.gasTarget,                // target gas per block (null = fixed base fee)
+      burnedFee: sum("burnedFee"),                  // gas fees burned in the whole block
+      producerFee: sum("producerFee"),              // gas fees the block closer receives (tip + unburned base fee portion)
       parentStateRoot: this.#parentStateRoot,
       txRoot,
-      stateRoot,                                     // root ของ trie ของ state ทั้งหมดหลัง block นี้ (ตรวจค่าด้วย getProof ได้)
-      writesRoot,                                    // hash ของ writes ของ state ใน block นี้
-      receiptsRoot,                                  // hash ของ receipt ย่อทุกใบ (อยู่ใน hash)
-      logsBloom: bloom,                              // bloom ของ log ทุกใบแบบ EVM (อยู่ใน hash)
+      stateRoot,                                     // root of the trie of the whole state after this block (verifiable with getProof)
+      writesRoot,                                    // hash of this block's state writes
+      receiptsRoot,                                  // hash of every condensed receipt (part of the hash)
+      logsBloom: bloom,                              // EVM-style bloom of every log (part of the hash)
       txHashes,
       ...(this.#rejectedTxs.length ? { rejectedCount: this.#rejectedTxs.length, rejectedRoot: this.hashes().rejectedRoot } : {}),
-      ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelock ครบใน block นี้ (ไม่เข้า hash — ผลอยู่ใน stateRoot แล้ว)
+      ...(this.#upgrades.length ? { upgrades: this.upgrades() } : {}),   // timelocks elapsed in this block (not part of the hash; the effect is already in stateRoot)
       ...(this.#producer ? { producer: this.#producer, producerSignature: this.producerSignature() } : {}),
     };
   }
 
   /**
-   * ลายเซ็นของผู้ผลิตบน hash ของ block → "0x" + r + s + v · null = ไม่มีผู้ผลิต หรือ node นี้ไม่ใช่ผู้ผลิตของ block
-   * node ผู้ผลิตเซ็นด้วย vm.producer.sign (ได้ค่าเดิมทุกครั้งต่อ hash เดียวกัน) · sync / replay ใช้ลายเซ็นที่มากับ header
+   * producer's signature over the block hash → "0x" + r + s + v · null = no producer, or this node is not the block's producer
+   * the producer node signs with vm.producer.sign (same value every time for the same hash) · sync / replay use the signature that came with the header
    */
   producerSignature() {
     if (!this.#producer) return null;
@@ -4115,9 +4115,9 @@ export class Block {
     return this.#producer;
   }
 
-  /** receipt ของทั้ง block สำหรับ explorer */
+  /** receipt of the whole block for the explorer */
   receipt({ number = this.#number, feeRecipient = this.#feeRecipient } = {}) {
-    // ค่า native ก่อน tx แต่ละใบ (ไล่ตามลำดับใน block) → receipt บอกได้ว่าแต่ละช่องเปลี่ยนไปเท่าไร
+    // native values before each tx (walked in block order) → the receipt can show how much each field changed
     const running = new Map();
     const transactions = this.#results.map((result, index) => {
       const { action, request } = this.#requests[index];
@@ -4155,8 +4155,8 @@ export class Block {
       gasUsed: transactions.reduce((sum, tx) => sum + tx.gasUsed, 0),
       fee: encodeNative(transactions.reduce((sum, tx) => sum + readNative(tx.fee), 0n)),
       transactions,
-      rejected: this.rejectedTransactions(),   // tx ที่ถูกปฏิเสธ (ไม่ได้รัน) ที่บันทึกไว้ใน block นี้
-      // event ของทั้ง block เรียงตามลำดับ tx (ใช้ทำฟีดของ explorer)
+      rejected: this.rejectedTransactions(),   // rejected txs (not executed) recorded in this block
+      // events of the whole block in tx order (used for the explorer feed)
       events: transactions.flatMap((tx) => tx.events.map((event) => ({ ...event, txIndex: tx.index, txHash: tx.hash }))),
       stateChanges: this.afterValues()
         .filter((value) => value.changed)
@@ -4171,7 +4171,7 @@ export class Block {
     };
   }
 
-  /** สรุปทั้ง block ในรูปแบบเดียวกับผลของ call */
+  /** summary of the whole block in the same format as a call result */
   summary() {
     return {
       timestamp: this.#timestamp,
@@ -4182,11 +4182,11 @@ export class Block {
     };
   }
 
-  /** บันทึก writes ของทั้ง block ลง DB ครั้งเดียว แล้วปิด block */
+  /** persist the whole block's writes to the DB in one go, then close the block */
   commit() {
     if (this.#committed) fail(ERRORS.blockCommitted);
     if (this.#recordBlocks && !this.#overwrite && this.#vm.getBlock(this.#number)) fail(ERRORS.blockExists, this.#number);
-    const writes = this.writes();   // คำนวณ hashes (+ trie) ถ้ายังไม่ได้ทำ
+    const writes = this.writes();   // compute hashes (+ trie) if not done yet
     const result = this.#vm.commit(writes, this.#trieCache ? { trie: this.#trieCache } : {});
     this.#committed = true;
     if (this.#recordBlocks && this.#recordHistory && this.#vm.historyKeep !== null) this.#vm.pruneHistory();
@@ -4197,7 +4197,7 @@ export class Block {
     return this.#committed;
   }
 
-  /** ค่าปัจจุบันของ block: สถานะของ block → ค่าที่เคยอ่านจาก DB → อ่าน DB */
+  /** current value within the block: block state → value previously read from the DB → read the DB */
   read(dbKey) {
     if (this.#state.has(dbKey)) {
       const write = this.#state.get(dbKey);
@@ -4207,17 +4207,17 @@ export class Block {
     return copyValue(this.#dbCache.get(dbKey));
   }
 
-  /** ค่าใน DB ก่อน block (key ที่ถูกแตะโดย tx ที่ success ถูกอ่านจาก DB แล้วเสมอ) */
+  /** DB value before the block (keys touched by successful txs have always already been read from the DB) */
   #beforeBlock(dbKey) {
     return copyValue(this.#dbCache.get(dbKey));
   }
 
-  /** address ผู้ส่งของ request (ใช้จำกัดจำนวนต่อคน) */
+  /** sender address of a request (used for per-sender limits) */
   #senderOf(request) {
     return normalizeAddress(request?.from ?? request?.context?.sender) ?? null;
   }
 
-  /** เหลือโควตาให้ tx ใบนี้ไหม — คืน error ถ้าเต็ม */
+  /** whether quota remains for this tx; returns an error if full */
   #quotaError(request) {
     if (this.#maxTransactions !== null && this.#results.length >= this.#maxTransactions) {
       return VMError.from(ERRORS.blockFull, this.#maxTransactions);
@@ -4230,7 +4230,7 @@ export class Block {
     return null;
   }
 
-  /** ผลลัพธ์ของ tx ที่ไม่ถูกรับเข้า block (ไม่ได้รันโปรแกรม) */
+  /** result of a tx not admitted to the block (no program run) */
   #rejection(error) {
     return {
       status: STATUS.THROW,
@@ -4267,10 +4267,10 @@ export class Block {
     });
     if (result.accepted === false) {
       this.#rejected.push({ action, request: copyValue(request) ?? {}, error: result.error });
-      return result; // ไม่เข้า block เลย: ไม่มี writes / hash / ดัชนี
+      return result; // never enters the block: no writes / hash / indexes
     }
 
-    // แก๊สของ block เต็ม → ไม่รับใบนี้ (ผลที่รันไปถูกทิ้ง)
+    // block gas is full → this tx is not accepted (its execution result is discarded)
     if (this.#maxBlockGas !== null && this.#gasUsed + (result.gasUsed ?? 0) > this.#maxBlockGas) {
       const rejected = this.#rejection(VMError.from(ERRORS.blockGasFull, this.#maxBlockGas));
       this.#rejected.push({ action, request: copyValue(request) ?? {}, error: rejected.error });
@@ -4286,7 +4286,7 @@ export class Block {
       for (const { dbKey } of result.loadValues) this.#loaded.add(dbKey);
       for (const { dbKey } of result.afterValues) this.#touched.add(dbKey);
     }
-    this.#results.push(copyValue(result)); // เก็บ copy: ผู้เรียกแก้ result ที่ได้คืนไปก็ไม่กระทบ block
+    this.#results.push(copyValue(result)); // store a copy: callers modifying the returned result do not affect the block
     this.#requests.push({ action, method, request: copyValue(request) ?? {} });
     return result;
   }

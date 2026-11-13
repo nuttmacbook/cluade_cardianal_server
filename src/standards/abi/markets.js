@@ -1,4 +1,4 @@
-/** metadata.abi ของโปรแกรมแถม: staking · limit order · NFT market — ดู src/standards/system-abi.js */
+/** metadata.abi of the bundled programs: staking · limit order · NFT market — see src/standards/system-abi.js */
 
 const u = (name) => ({ name, type: "uint" });
 const a = (name) => ({ name, type: "address" });

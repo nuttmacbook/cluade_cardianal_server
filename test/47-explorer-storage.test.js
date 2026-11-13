@@ -4,7 +4,7 @@ import { VM, MemoryDB } from "./helpers.js";
 import { storageLayout, storageMap, storageGet, programFlags } from "../src/node/explorer-api.js";
 import { TOKEN } from "./programs.js";
 
-/* แถบ "ข้อมูล" ของ explorer แยก storage ตามจำนวนชั้นของ key: variable (1) / contract (2) / get storage (3+) */
+/* the explorer's "Data" tab groups storage by key depth: variable (1) / contract (2) / get storage (3+) */
 
 const P = "0x00000000000000000000000000000000000000aa";
 const ALICE = "0xAbCdEf0000000000000000000000000000000001";
@@ -15,11 +15,11 @@ function setup() {
   const rows = [
     put(["owner"], ALICE.toLowerCase()),
     put(["price"], "100n"),
-    put(["ชื่อ"], "ร้าน:ทดสอบ"),
-    put(["items", 1], { name: "เก้าอี้" }),
-    put(["items", 2], { name: "โคมไฟ" }),
+    put(["title"], "shop:test"),
+    put(["items", 1], { name: "chair" }),
+    put(["items", 2], { name: "lamp" }),
     put(["allow", ALICE, "0xbb"], "5n"),
-    put(["mixed", "a"], 1),            // กลุ่มเดียวกันมีทั้ง 2 ชั้นและ 3 ชั้น
+    put(["mixed", "a"], 1),            // the same group has both 2-level and 3-level keys
     put(["mixed", "a", "b"], 2),
     put(["deeper", "x", "y", "z"], true),
   ];
@@ -28,10 +28,10 @@ function setup() {
   return vm;
 }
 
-test("layout: แยก key 1 ชั้น (พร้อมค่า) / 2 ชั้น (นับจำนวน) / 3 ชั้นขึ้นไป (นับ + ชั้นลึกสุด)", () => {
+test("layout: splits 1-level keys (with values) / 2-level (counted) / 3+ levels (counted + max depth)", () => {
   const layout = storageLayout(setup(), P.toUpperCase().replace("0X", "0x"));
   assert.deepEqual(layout.variables.map((v) => [v.key, v.value]).sort(), [
-    ["owner", ALICE.toLowerCase()], ["price", "100n"], ["ชื่อ", "ร้าน:ทดสอบ"],
+    ["owner", ALICE.toLowerCase()], ["price", "100n"], ["title", "shop:test"],
   ].sort());
   assert.deepEqual(layout.maps.sort((a, b) => a.name.localeCompare(b.name)),
     [{ name: "balances", count: 120 }, { name: "items", count: 2 }, { name: "mixed", count: 1 }]);
@@ -41,13 +41,13 @@ test("layout: แยก key 1 ชั้น (พร้อมค่า) / 2 ชั
   assert.equal(layout.truncated, false);
 });
 
-test("layout: ไล่ key เกินกำหนด → truncated", () => {
+test("layout: scanning past the key limit → truncated", () => {
   const layout = storageLayout(setup(), P, { scanLimit: 10 });
   assert.equal(layout.truncated, true);
   assert.equal(layout.scanned, 10);
 });
 
-test("map: แสดงเฉพาะ key ชั้นที่ 2 ของกลุ่ม แบ่งหน้าด้วย cursor จนครบไม่ซ้ำ", () => {
+test("map: shows only the group's level-2 keys, paged by cursor to the end without repeats", () => {
   const vm = setup();
   const seen = [];
   let next;
@@ -63,30 +63,30 @@ test("map: แสดงเฉพาะ key ชั้นที่ 2 ของก�
   assert.equal(new Set(seen).size, 120);
   assert.equal(storageMap(vm, P, "balances", { limit: 1 }).items[0].value, "0n");
 
-  // กลุ่มที่มีทั้ง 2 และ 3 ชั้น → ได้เฉพาะ 2 ชั้น
+  // a group with both 2 and 3 levels → only the 2-level keys
   assert.deepEqual(storageMap(vm, P, "mixed"), { name: "mixed", items: [{ key: "a", value: 1 }], next: null });
-  // limit พอดีกับจำนวนที่มี → ไม่มีหน้าถัดไป
+  // limit exactly equals the count → no next page
   assert.equal(storageMap(vm, P, "items", { limit: 2 }).next, null);
   assert.equal(storageMap(vm, P, "items", { limit: 1 }).next !== null, true);
 });
 
-test("map: cursor ที่ไม่ใช่ของกลุ่มนี้ถูกเมิน", () => {
+test("map: a cursor from another group is ignored", () => {
   const page = storageMap(setup(), P, "items", { start: "0xzz:storage:zzz" });
   assert.equal(page.items.length, 2);
 });
 
-test("get: อ่าน key ทีละตัวทุกความลึก (address ตัวพิมพ์ใหญ่ / ตัวเลข ใช้ได้)", () => {
+test("get: reads single keys at any depth (upper-case addresses / numbers work)", () => {
   const vm = setup();
   assert.deepEqual(storageGet(vm, P, ["allow", ALICE, "0xBB"]), { key: ["allow", ALICE.toLowerCase(), "0xbb"], exists: true, value: "5n" });
   assert.deepEqual(storageGet(vm, P, ["deeper", "x", "y", "z"]).value, true);
-  assert.deepEqual(storageGet(vm, P, ["items", "1"]).value, { name: "เก้าอี้" });
+  assert.deepEqual(storageGet(vm, P, ["items", "1"]).value, { name: "chair" });
   assert.deepEqual(storageGet(vm, P, ["price"]).value, "100n");
   assert.deepEqual(storageGet(vm, P, ["allow", ALICE, "0xcc"]), { key: ["allow", ALICE.toLowerCase(), "0xcc"], exists: false, value: null });
   assert.equal(storageGet(vm, P, []).status, 400);
   assert.equal(storageGet(vm, P, ["allow", "", "x"]).status, 400);
 });
 
-test("is-program: มีโค้ด (init แล้ว) หรือรอ init = โปรแกรม · กระเป๋าธรรมดา = ไม่ใช่", () => {
+test("is-program: has code (initialized) or awaiting init = program · plain wallet = not a program", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   const plain = new VM.VirtualMachine(vm.db);
   const context = { sender: "0xalice", origin: "0xalice" };

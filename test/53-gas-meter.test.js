@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY } from "./helpers.js";
 import { instrument, METER_FNS, PLAIN_HELPERS } from "../src/core/gasmeter.js";
 
-/* แก๊สแบบนับขั้น: ตัวนับที่ฉีดตอนคอมไพล์ (src/core/gasmeter.js) */
+/* step-counted gas: the counter injected at compile time (src/core/gasmeter.js) */
 
 const T = 1_700_000_000_000;
 
-/** รันโค้ดที่ฉีดตัวนับแล้วใน V8 (ตัวช่วยตามขนาดข้อมูลเป็น identity) → { result, gas } */
+/** Run instrumented code in V8 (size-based helpers are identity) → { result, gas } */
 function runInstrumented(body) {
   let gas = 0;
   const helpers = { ...PLAIN_HELPERS, __gas: (n) => { gas += n; } };
@@ -40,7 +40,7 @@ const LOOPS = `function program() {
   return { count, spin, swallow, swallowFinally, recurse }
 }`;
 
-test("ผลลัพธ์ของโค้ดที่ฉีดตัวนับเหมือนเดิมทุกโครงสร้าง (if / switch / try / ลูป / arrow / เมธอดในตัว)", () => {
+test("instrumented code gives the same results for every construct (if / switch / try / loops / arrow / built-in methods)", () => {
   const body = `
     function pick(x) { if (x > 2) return "big"; else if (x > 0) { return "small" } else return "zero" }
     function kind(x) { switch (x) { case 1: return "one"; case 2: case 3: { return "few" } default: return "many" } }
@@ -64,40 +64,40 @@ test("ผลลัพธ์ของโค้ดที่ฉีดตัวน�
   assert.ok(gas > 0);
 });
 
-test("บรรทัดของโค้ดไม่เปลี่ยนหลังฉีดตัวนับ (error ยังชี้บรรทัดเดิม)", () => {
+test("line numbers do not change after instrumentation (errors still point to the same line)", () => {
   const body = "const a = [1]\n  .map((x) => x)\n  .join(',');\nfunction f() {\n  return 1\n}";
   assert.equal(instrument(body).split("\n").length, body.split("\n").length);
 });
 
-test("แก๊สเพิ่มตามจำนวนรอบของลูป (ได้ค่าเท่ากันทุกครั้ง)", () => {
+test("gas grows with loop iterations (same value every time)", () => {
   const { activate, call } = setup();
   activate("loops", LOOPS);
   const g = (n) => call("loops", "count", { n }).gasUsed;
   const [g10, g20, g30] = [g(10), g(20), g(30)];
-  assert.equal(g20 - g10, g30 - g20);   // ต่อรอบคงที่
+  assert.equal(g20 - g10, g30 - g20);   // constant per iteration
   assert.ok(g20 - g10 > 0);
-  assert.equal(g(20), g20);             // ซ้ำได้ค่าเดิม
+  assert.equal(g(20), g20);             // repeatable
 });
 
-test("ลูปไม่รู้จบ → OUT_OF_GAS ที่เพดาน maxTxGas (ไม่ต้องรอ timeout) แม้ไม่ได้หักค่าแก๊ส", () => {
+test("infinite loop → OUT_OF_GAS at the maxTxGas cap (no wait for timeout) even when gas is not charged", () => {
   const { activate, call } = setup({ maxTxGas: 1_000_000 });
   activate("loops", LOOPS);
   const res = call("loops", "spin");
   assert.equal(res.error.code, "OUT_OF_GAS");
-  assert.ok(res.gasUsed > 1_000_000 && res.gasUsed < 1_000_010);   // หยุดที่ช่วงแรกที่เกินเพดาน
+  assert.ok(res.gasUsed > 1_000_000 && res.gasUsed < 1_000_010);   // stops at the first step past the cap
 });
 
-test("catch / finally กลืน OUT_OF_GAS ไม่ได้", () => {
+test("catch / finally cannot swallow OUT_OF_GAS", () => {
   const { activate, call } = setup({ maxTxGas: 1_000_000 });
   activate("loops", LOOPS);
   assert.equal(call("loops", "swallow").error.code, "OUT_OF_GAS");
   assert.equal(call("loops", "swallowFinally").error.code, "OUT_OF_GAS");
 });
 
-test("ลูปไม่รู้จบใน block: หมดแก๊สตามยอดเงิน → เข้า block และเสียค่าแก๊ส (ผลไม่ขึ้นกับความเร็วเครื่อง)", () => {
+test("infinite loop in a block: runs out of gas per balance → enters the block and pays gas (result does not depend on machine speed)", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { requireNonce: true, chargeGas: true, recordBlocks: true, timeoutMs: 5000 });
   vm.db.load({ "alice:native:received": "50000n" });
-  const plain = new VM.VirtualMachine(vm.db);   // เตรียมโปรแกรมโดยไม่ต้องใช้ nonce / ค่าแก๊ส
+  const plain = new VM.VirtualMachine(vm.db);   // set up the program without using nonce / gas
   plain.commit(plain.deploy({ programUuid: "loops", code: LOOPS, context: as("owner") }, { timestamp: T }).writes);
   plain.commit(plain.init({ programUuid: "loops" }, { timestamp: T }).writes);
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
@@ -105,11 +105,11 @@ test("ลูปไม่รู้จบใน block: หมดแก๊สตา
   block.commit();
   assert.equal(res.error.code, "OUT_OF_GAS");
   assert.equal(res.accepted, true);
-  assert.equal(vm.nativeBalanceOf("alice").balance, 0n);   // จ่ายเท่าที่มี
+  assert.equal(vm.nativeBalanceOf("alice").balance, 0n);   // pays all it has
   assert.equal(vm.getBlock(1).txCount, 1);
 });
 
-test("เมธอดในตัวคิดแก๊สตามขนาดข้อมูล · repeat ขนาดใหญ่ถูกหยุดก่อนสร้างข้อมูล", () => {
+test("built-in methods charge gas by data size · a large repeat is stopped before building the data", () => {
   const code = `function program() {
     function joinN(params) { const list = []; list.length = Number(params.input.n); return BigInt(list.fill("x").join("").length) }
     function huge() { return "x".repeat(1e9).length }
@@ -119,15 +119,15 @@ test("เมธอดในตัวคิดแก๊สตามขนาด�
   activate("b", code);
   const small = call("b", "joinN", { n: 1_000 }).gasUsed;
   const big = call("b", "joinN", { n: 2_000 }).gasUsed;
-  // fill (เข้า + ออก) + join (เข้า) = 3 ต่อสมาชิกที่เพิ่ม × 1,000 · ผลของ join คิดต่อ 32 ตัวอักษร: ⌈2000/32⌉ − ⌈1000/32⌉ = 31
-  // (เดิม 4,000 เมื่อ string คิด 1 ต่อตัวอักษร — ตอนนี้ string คิด 1 ต่อ 32 ตัวอักษรเหมือนทุกทางที่สร้าง string)
+  // fill (in + out) + join (in) = 3 per added element × 1,000 · join's result is charged per 32 characters: ⌈2000/32⌉ − ⌈1000/32⌉ = 31
+  // (formerly 4,000 when strings cost 1 per character; now strings cost 1 per 32 characters, like every other way of building a string)
   assert.equal(big - small, 3_031);
   const started = Date.now();
   assert.equal(call("b", "huge").error.code, "OUT_OF_GAS");
   assert.ok(Date.now() - started < 1000);
 });
 
-test("ราคาต่อ node / builtin ปรับได้ · ตั้ง 0 = คิดเฉพาะ API แบบเดิม", () => {
+test("per-node / builtin prices are configurable · 0 = charge only APIs, as before", () => {
   const plain = setup({ gas: API_GAS_ONLY });
   const priced = setup({ gas: { node: 3 } });
   for (const s of [plain, priced]) s.activate("loops", LOOPS);
@@ -136,7 +136,7 @@ test("ราคาต่อ node / builtin ปรับได้ · ตั้ง
   assert.ok(priced.call("loops", "count", { n: 5 }).gasUsed > base);
 });
 
-test("ชื่อ __gas / __call / __str / __props / __spread สงวนไว้ → deploy ไม่ผ่าน", () => {
+test("names __gas / __call / __str / __props / __spread are reserved → deploy fails", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   for (const code of [
     "function program() { function f() { const __gas = () => 0; while (true) {} } return { f } }",
@@ -151,9 +151,9 @@ test("ชื่อ __gas / __call / __str / __props / __spread สงวนไ�
   }
 });
 
-// เดิม gasmeter แปลงการเรียกเมธอดเป็น __call(…) และเคยแปลง (255).toString(36) ผิด — ตอนนี้ไม่แปลงการเรียกแล้ว (ห่อเมธอดใน sandbox)
-// แต่ยังตรวจไว้ว่าโค้ดลักษณะนี้ฉีดตัวนับแล้วยังถูกต้องและบรรทัดไม่เปลี่ยน
-test("เรียกเมธอดบนตัวเลข / ค่าในวงเล็บ: (255).toString(36) · 1..toString() · (1n).toString(16) แปลงแล้วยังเป็นโค้ดที่ถูกต้อง", () => {
+// gasmeter used to rewrite method calls into __call(…) and once rewrote (255).toString(36) wrongly; it no longer rewrites calls (methods are wrapped in the sandbox)
+// but we still check that such code stays valid after instrumentation and keeps its line numbers
+test("method calls on numbers / parenthesized values: (255).toString(36) · 1..toString() · (1n).toString(16) remain valid code after instrumentation", () => {
   const cases = [
     "(255).toString(36)", "1..toString()", "1.5.toString()", "(1n).toString(16)", "((255)) . toString ( 2 )",
     "(list).join('-')", "(list.join)('+')", "(((list.join)))('*')", "((list)[name])('/')", "list[(name)]('|')",
@@ -164,11 +164,11 @@ test("เรียกเมธอดบนตัวเลข / ค่าใน�
     const expected = new Function(body)();
     const code = instrument(body);
     assert.equal(runInstrumented(body).result, expected, `${expr} → ${code}`);
-    assert.equal(code.split("\n").length, body.split("\n").length, `${expr}: บรรทัดต้องเท่าเดิม`);
+    assert.equal(code.split("\n").length, body.split("\n").length, `${expr}: line count must not change`);
   }
 });
 
-test("โปรแกรมที่ใช้ (255).toString(36) / 1..toString() / (1n).toString(16) deploy และรันได้ (ผ่าน autoreview)", () => {
+test("programs using (255).toString(36) / 1..toString() / (1n).toString(16) deploy and run (pass autoreview)", () => {
   const code = `function program() {
     function show() { return [(255).toString(36), 1..toString(), (1n).toString(16), (255n).toString(2), ("ab").toUpperCase()] }
     return { show }

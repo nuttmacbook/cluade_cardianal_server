@@ -1,9 +1,9 @@
 /**
- * ชิ้นโค้ดที่โปรแกรมกลางใช้ร่วมกัน (ใส่ใน function program() { … } ด้วย template string)
- *   SET_METADATA  → setProgramMetadata(input): ตั้ง namespace / icon / url / contact / description จาก input ตอน initialization
- *   CHECK_ADDRESS → checkAddress(address, label): ตรวจว่าเป็น address 0x + 40 ตัว แล้วคืนเป็นตัวพิมพ์เล็ก
+ * Code snippets shared by the system programs (inserted into function program() { … } via template string)
+ *   SET_METADATA  → setProgramMetadata(input): set namespace / icon / url / contact / description from input during initialization
+ *   CHECK_ADDRESS → checkAddress(address, label): check it is a 0x + 40-char address, then return it lowercased
  */
-/** ตั้ง metadata ของโปรแกรมจาก input ตอน initialization (ตั้งได้จากโค้ดเท่านั้น) */
+/** Set the program's metadata from input during initialization (can only be set from code) */
 export const SET_METADATA = `function setProgramMetadata(input) {
     if (typeof input.namespace === "string" && input.namespace !== "") setMetadata("namespace", input.namespace)
     if (typeof input.icon === "string" && input.icon !== "") setMetadata("icon", input.icon)

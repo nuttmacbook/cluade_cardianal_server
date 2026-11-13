@@ -6,11 +6,11 @@ import { TOKEN_PROGRAM, ZERO_ADDRESS, exportedFunctions, checkStandard } from ".
 import { reviewProgram } from "../src/core/autoreview.js";
 
 /*
- * Token Lock (src/standards/tokenlock.js) — ล็อก token / LP token แบบ PinkLock
- *   เวลาในโปรแกรมเป็นวินาที · block.timestamp เป็นมิลลิวินาที
+ * Token Lock (src/standards/tokenlock.js) — PinkLock-style token / LP token locks
+ *   program time is in seconds · block.timestamp is in milliseconds
  */
 
-const T0 = 1_800_000_000;   // วินาที
+const T0 = 1_800_000_000;   // seconds
 const DEPLOYER = "0x00000000000000000000000000000000000000d1";
 const ALICE = "0x00000000000000000000000000000000000000a1";
 const BOB = "0x00000000000000000000000000000000000000b1";
@@ -23,7 +23,7 @@ const EVIL = "0x0000000000000000000000000000000000002004";
 const COIN = 10n ** 18n;
 const DAY = 86_400;
 
-/** token ทดสอบพฤติกรรมแปลก ๆ: fee (หัก 10 % ตอน transferFrom) · lie (คืน true แต่ไม่โอน) · greedy (transfer ดึงออก 2 เท่า) · reenter (เรียก locker ซ้อน) · inflate */
+/** test tokens with odd behavior: fee (takes 10 % on transferFrom) · lie (returns true without transferring) · greedy (transfer pulls out 2×) · reenter (calls the locker re-entrantly) · inflate */
 const WEIRD_TOKEN = `function program() {
   function initialization(params) {
     writeDB("mode", params.input.mode)
@@ -108,7 +108,7 @@ function setup() {
 }
 const big = (v) => BigInt(String(v).replace(/n$/, ""));
 
-test("tokenlock: export / autoreview / มาตรฐาน", () => {
+test("tokenlock: export / autoreview / standard", () => {
   assert.deepEqual(TOKEN_LOCK_FUNCTIONS, ["lock", "vestingLock", "unlock", "extendLock", "increaseLock", "transferLockOwnership", "renounceLockOwnership"]);
   assert.deepEqual(exportedFunctions(TOKEN_LOCK_PROGRAM), [...TOKEN_LOCK_FUNCTIONS, ...TOKEN_LOCK_READS]);
   assert.deepEqual(checkStandard(TOKEN_LOCK_PROGRAM, TOKEN_LOCK_FUNCTIONS, TOKEN_LOCK_EVENTS), { ok: true, missing: [] });
@@ -119,7 +119,7 @@ test("tokenlock: export / autoreview / มาตรฐาน", () => {
   assert.equal(t.vm.getMetadata(LOCKER).upgrader, undefined);
 });
 
-test("lock ธรรมดา: ดึง token · ถอนก่อนเวลาไม่ได้ · ถึงเวลาถอนได้ครั้งเดียว", () => {
+test("plain lock: pulls tokens · no withdrawal before time · withdraw once when due", () => {
   const t = setup();
   const amount = 1000n * COIN;
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: `${amount}n` }));
@@ -158,7 +158,7 @@ test("lock ธรรมดา: ดึง token · ถอนก่อนเวล
   t.fail(/nothing to withdraw/, ALICE, LOCKER, "unlock", { id: "0n" });
 });
 
-test("lock: owner คนอื่น · LP token · ตรวจ input ทุกช่อง", () => {
+test("lock: another owner · LP token · every input validated", () => {
   const t = setup();
   t.ok(t.send(ALICE, LP, "approve", { spender: LOCKER, amount: `${100n * COIN}n` }));
   const unlockAt = `${T0 + 365 * DAY}n`;
@@ -189,7 +189,7 @@ test("lock: owner คนอื่น · LP token · ตรวจ input ทุก
   assert.equal(t.q(LOCKER, "lockCount"), "1n");
 });
 
-test("fee-on-transfer: บันทึกยอดที่ได้รับจริง · token ที่โกหก / เพิ่มยอดเกินถูกปฏิเสธ", () => {
+test("fee-on-transfer: records the amount actually received · lying / inflating tokens are rejected", () => {
   const t = setup();
   t.ok(t.send(ALICE, FEE, "approve", { spender: LOCKER, amount: "10000n" }));
   t.ok(t.send(ALICE, LOCKER, "lock", { token: FEE, amount: "1000n", unlockAt: `${T0 + DAY}n` }));
@@ -197,7 +197,7 @@ test("fee-on-transfer: บันทึกยอดที่ได้รับจ
   assert.equal(info.amount, "900n");
   assert.equal(t.q(LOCKER, "totalLocked", { token: FEE }), "900n");
   assert.equal(t.bal(FEE, LOCKER), 900n);
-  // increaseLock ก็นับยอดจริง
+  // increaseLock also counts the real amount
   const inc = t.ok(t.send(ALICE, LOCKER, "increaseLock", { id: "0n", amount: "100n" }));
   assert.equal(inc.result, "90n");
   assert.equal(inc.events.find((e) => e.name === "LockIncreased").data.total, "990n");
@@ -210,7 +210,7 @@ test("fee-on-transfer: บันทึกยอดที่ได้รับจ
   t.fail(/more than amount/, ALICE, LOCKER, "lock", { token: FEE, amount: "100n", unlockAt: `${T0 + 2 * DAY}n` });
 });
 
-test("ความปลอดภัย: reentrancy · token ที่ดึงเงินเกินตอนถอน · ล็อกอื่นของ token เดียวกันปลอดภัย", () => {
+test("security: reentrancy · a token that pulls extra on withdrawal · other locks of the same token stay safe", () => {
   const t = setup();
   t.deploy(EVIL, WEIRD_TOKEN, { mode: "normal", locker: LOCKER, supply: "1000000n" }, ALICE);
   t.ok(t.send(ALICE, EVIL, "approve", { spender: LOCKER, amount: "100000n" }));
@@ -221,10 +221,10 @@ test("ความปลอดภัย: reentrancy · token ที่ดึง�
   t.fail(/reentrant call/, ALICE, LOCKER, "lock", { token: EVIL, amount: "10n", unlockAt: `${T0 + DAY}n` });
 
   t.at(T0 + DAY);
-  // ถอนยอดของตัวเอง แต่ token แอบดึงออกจาก locker เพิ่มอีกเท่าตัว (ยอดของ BOB) → ปฏิเสธ
+  // withdraws its own amount, but the token secretly pulls the same again from the locker (BOB's balance) → rejected
   t.ok(t.send(ALICE, EVIL, "setMode", { mode: "greedy" }));
   t.fail(/unexpected amount/, ALICE, LOCKER, "unlock", { id: "0n" });
-  // transfer เรียก unlock ซ้อน → ปฏิเสธ
+  // transfer calls unlock re-entrantly → rejected
   t.ok(t.send(ALICE, EVIL, "setMode", { mode: "reenterUnlock" }));
   t.fail(/reentrant call/, ALICE, LOCKER, "unlock", { id: "0n" });
   assert.equal(t.bal(EVIL, LOCKER), 2000n);
@@ -235,12 +235,12 @@ test("ความปลอดภัย: reentrancy · token ที่ดึง�
   t.fail(/not unlocked yet/, BOB, LOCKER, "unlock", { id: "1n" });
   assert.equal(t.bal(EVIL, LOCKER), 1000n);
   assert.equal(t.q(LOCKER, "totalLocked", { token: EVIL }), "1000n");
-  // token ที่ส่งเข้ามาตรง ๆ ไม่ถูกนับในล็อกใด
+  // tokens sent in directly are not counted in any lock
   t.ok(t.send(ALICE, TOKEN, "transfer", { to: LOCKER, amount: "5n" }));
   assert.equal(t.q(LOCKER, "totalLocked", { token: TOKEN }), "0n");
 });
 
-test("vesting: TGE + รอบ · ปัดลง · ครบ 100 % ไม่มีเศษค้าง", () => {
+test("vesting: TGE + cycles · rounds down · reaches 100 % with no leftover dust", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "1000000n" }));
   const tgeAt = T0 + DAY;
@@ -252,7 +252,7 @@ test("vesting: TGE + รอบ · ปัดลง · ครบ 100 % ไม่�
   assert.equal(info.unlockAt, `${tgeAt + 4 * 7 * DAY}n`);   // 10 % + 4 × 25 % ≥ 100 %
   t.fail(/not unlocked yet/, BOB, LOCKER, "unlock", { id: "0n" });
   t.at(tgeAt);
-  assert.equal(t.q(LOCKER, "withdrawableOf", { id: "0n" }), "100n");   // 1001 × 10 % ปัดลง
+  assert.equal(t.q(LOCKER, "withdrawableOf", { id: "0n" }), "100n");   // 1001 × 10 % rounded down
   assert.equal(t.ok(t.send(BOB, LOCKER, "unlock", { id: "0n" })).result, "100n");
   t.fail(/nothing to withdraw/, BOB, LOCKER, "unlock", { id: "0n" });
   t.at(tgeAt + 7 * DAY - 1);
@@ -262,12 +262,12 @@ test("vesting: TGE + รอบ · ปัดลง · ครบ 100 % ไม่�
   t.at(tgeAt + 3 * 7 * DAY + 5);
   assert.equal(t.ok(t.send(BOB, LOCKER, "unlock", { id: "0n" })).result, "500n");   // 85 % = 850
   t.at(tgeAt + 100 * 7 * DAY);
-  assert.equal(t.ok(t.send(BOB, LOCKER, "unlock", { id: "0n" })).result, "151n");   // เศษคืนครบ
+  assert.equal(t.ok(t.send(BOB, LOCKER, "unlock", { id: "0n" })).result, "151n");   // remainder fully returned
   assert.equal(t.bal(TOKEN, BOB), 1001n);
   t.fail(/nothing to withdraw/, BOB, LOCKER, "unlock", { id: "0n" });
   t.fail(/fully withdrawn/, BOB, LOCKER, "transferLockOwnership", { id: "0n", newOwner: CAROL });
 
-  // bps เล็กมากกับยอดน้อย: ยังถอนได้ครบเมื่อครบรอบ
+  // tiny bps with a small amount: still fully withdrawable once all cycles pass
   t.ok(t.send(ALICE, LOCKER, "vestingLock", { token: TOKEN, amount: "3n", tgeAt: `${t.now() + 1}n`, tgeBps: "1n", cycleSeconds: "1n", cycleBps: "5000n" }));
   t.at(t.now() + 3);
   assert.equal(t.ok(t.send(ALICE, LOCKER, "unlock", { id: "1n" })).result, "3n");
@@ -286,7 +286,7 @@ test("vesting: TGE + รอบ · ปัดลง · ครบ 100 % ไม่�
   for (const [re, i] of bad) t.fail(re, ALICE, LOCKER, "vestingLock", i);
 });
 
-test("extendLock / increaseLock: เฉพาะ owner · เฉพาะ lock ธรรมดา · เงื่อนไขเวลา", () => {
+test("extendLock / increaseLock: owner only · plain locks only · time conditions", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "1000000n" }));
   const unlockAt = T0 + 10 * DAY;
@@ -317,7 +317,7 @@ test("extendLock / increaseLock: เฉพาะ owner · เฉพาะ lock �
   t.fail(/fully withdrawn/, ALICE, LOCKER, "extendLock", { id: "0n", unlockAt: `${unlockAt + 99 * DAY}n` });
 });
 
-test("โอน / สละสิทธิ์: ย้ายรายการ locksOf · สละแล้วไม่มีใครถอนได้ (รวมผู้ deploy)", () => {
+test("transfer / renounce: moves locksOf entries · once renounced nobody can withdraw (deployer included)", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "1000000n" }));
   for (let i = 0; i < 3; i += 1) t.ok(t.send(ALICE, LOCKER, "lock", { token: TOKEN, amount: "10n", unlockAt: `${T0 + DAY}n` }));
@@ -346,11 +346,11 @@ test("โอน / สละสิทธิ์: ย้ายรายการ lo
   t.fail(/only lock owner/, ALICE, LOCKER, "unlock", { id: "0n" });
   assert.equal(t.ok(t.send(BOB, LOCKER, "unlock", { id: "0n" })).result, "10n");
   assert.equal(t.ok(t.send(ALICE, LOCKER, "unlock", { id: "2n" })).result, "10n");
-  assert.equal(t.q(LOCKER, "totalLocked", { token: TOKEN }), "10n");   // ล็อกที่สละไว้ยังอยู่ตลอดไป
+  assert.equal(t.q(LOCKER, "totalLocked", { token: TOKEN }), "10n");   // renounced locks stay forever
   assert.equal(t.bal(TOKEN, LOCKER), 10n);
 });
 
-test("อ่านแบบแบ่งหน้า: start / limit · limit สูงสุด 50 · ตรวจ input", () => {
+test("paged reads: start / limit · max limit 50 · input validation", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "1000000n" }));
   t.ok(t.send(ALICE, LP, "approve", { spender: LOCKER, amount: "1000000n" }));
@@ -378,7 +378,7 @@ test("อ่านแบบแบ่งหน้า: start / limit · limit ส�
   assert.equal(t.vm.query({ programUuid: LOCKER, functionName: "getLock", input: { id: "56n" } }).status, "throw");
 });
 
-test("ห้ามแนบ native value: lock / lockCount ล้ม · โปรแกรมไม่ถือเหรียญหลัก", () => {
+test("no native value allowed: lock / lockCount fail · the program holds no native coin", () => {
   const t = setup();
   t.vm.db.load({ [VM.nativeKey(ALICE, "received")]: `${1000n * COIN}n` });
   const nat = (who) => BigInt(t.vm.nativeBalanceOf(who).balance);
@@ -396,7 +396,7 @@ test("ห้ามแนบ native value: lock / lockCount ล้ม · โป�
   assert.equal(t.bal(TOKEN, LOCKER), 0n);
 });
 
-test("ล็อกที่สละสิทธิ์: withdrawable = 0 แม้พ้นเวลา · unlock ยังล้ม", () => {
+test("renounced lock: withdrawable = 0 even after the time · unlock still fails", () => {
   const t = setup();
   t.ok(t.send(ALICE, TOKEN, "approve", { spender: LOCKER, amount: "100n" }));
   t.ok(t.send(ALICE, LOCKER, "lock", { token: TOKEN, amount: "100n", unlockAt: `${T0 + DAY}n` }));

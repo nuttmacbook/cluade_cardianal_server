@@ -1,20 +1,20 @@
 /**
- * fuzz เขตแดนระหว่างโปรแกรม (QuickJS) กับ host — สุ่มค่าแปลก ๆ ส่งเข้า API ทุกตัว / คืนจากฟังก์ชัน / ส่งเป็น input
+ * Fuzzes the boundary between programs (QuickJS) and the host — sends odd random values into every API / returns them from functions / passes them as input
  *
- *   npm run fuzz                                   # 2,000 รอบ seed สุ่ม
- *   npm run fuzz -- --iterations 20000 --seed 42   # ทำซ้ำรอบที่ล้มได้ด้วย seed เดิม
+ *   npm run fuzz                                   # 2,000 iterations, random seed
+ *   npm run fuzz -- --iterations 20000 --seed 42   # reproduce a failing iteration with the same seed
  *
- * กติกาที่ต้องจริงทุกรอบ (ผิดข้อเดียว = รายงาน seed + โค้ดของรอบนั้น แล้ว exit 1)
- *   1. VM ไม่ throw ออกมาถึงผู้เรียก · status เป็น success / throw · error ไม่ใช่ INTERNAL (= host พัง ไม่ใช่โปรแกรมผิด)
- *   2. deterministic: รันซ้ำบน VM ใหม่ได้ status / gasUsed / result / writes / events เหมือนเดิมทุกไบต์
- *   3. host ไม่ถูกแตะ: Object.prototype / Array.prototype / globalThis ไม่มีอะไรเพิ่ม · ค่าที่ได้จากโปรแกรมเป็นข้อมูลล้วน (ไม่มี function / prototype แปลก)
- *   4. sandbox ยังใช้ต่อได้: หลังรอบที่ล้ม (รวม OUT_OF_MEMORY / OUT_OF_GAS) tx ปกติถัดไปได้ผลเดิม
+ * Rules that must hold every iteration (any violation = report the seed + that iteration's code, then exit 1)
+ *   1. The VM never throws out to the caller · status is success / throw · error is not INTERNAL (= host broke, not a program bug)
+ *   2. deterministic: re-running on a new VM gives the same status / gasUsed / result / writes / events, byte for byte
+ *   3. host untouched: nothing added to Object.prototype / Array.prototype / globalThis · values from the program are pure data (no functions / odd prototypes)
+ *   4. sandbox still usable: after a failing iteration (including OUT_OF_MEMORY / OUT_OF_GAS) the next normal tx gives the same result
  */
 import { VirtualMachine, ERROR_CODE } from "../src/core/virtualmachine.js";
 import { MemoryDB } from "../src/storage/db.js";
 import { decodeFromGuest, encodeForGuest } from "../src/core/sandbox.js";
 
-/** PRNG ที่ทำซ้ำได้ (mulberry32) */
+/** Reproducible PRNG (mulberry32) */
 export function random(seed) {
   let state = seed >>> 0;
   const next = () => {
@@ -27,7 +27,7 @@ export function random(seed) {
   return { next, int: (n) => Math.floor(next() * n), pick: (list) => list[Math.floor(next() * list.length)] };
 }
 
-// ค่าแปลกฝั่งโปรแกรม: เขียนเป็นโค้ด (รันใน sandbox) · depth จำกัดความลึกของค่าที่ซ้อน
+// odd values on the program side: written as code (runs in the sandbox) · depth limits how deeply values nest
 const LEAVES = [
   "0n", "1n", "-1n", "(2n ** 255n)", "(-(2n ** 256n))", "(2n ** 8000n)", "0", "1.5", "-0", "NaN", "Infinity", "undefined", "null", "true", "false",
   '""', '"a"', '"\\u0000"', '"\\ud800"', '"__proto__"', '"constructor"', '"x:y"', '"0x" + "ab".repeat(32)', '"z".repeat(70000)', '"🙂".repeat(5)',
@@ -43,7 +43,7 @@ export function guestValue(rng, depth = 0) {
   switch (roll) {
     case 3: return `[${Array.from({ length: rng.int(4) }, () => guestValue(rng, depth + 1)).join(", ")}]`;
     case 4: return `({ ${Array.from({ length: rng.int(4) }, () => `[${rng.pick(KEYS)}]: ${guestValue(rng, depth + 1)}`).join(", ")} })`;
-    case 5: return `(() => { const o = {}; o.self = o; o.v = ${guestValue(rng, depth + 1)}; return o })()`;   // วน
+    case 5: return `(() => { const o = {}; o.self = o; o.v = ${guestValue(rng, depth + 1)}; return o })()`;   // cyclic
     case 6: return `(() => { const a = []; a.push(a, ${guestValue(rng, depth + 1)}); return a })()`;
     case 7: return `({ get a() { throw new Error("getter") }, b: ${guestValue(rng, depth + 1)} })`;
     case 8: return `({ toJSON() { return ${guestValue(rng, depth + 1)} } })`;
@@ -52,13 +52,13 @@ export function guestValue(rng, depth = 0) {
     case 10: return `Object.defineProperty({}, ${rng.pick(KEYS)}, { enumerable: true, get() { return ${guestValue(rng, depth + 1)} } })`;
     case 11: return `Object.setPrototypeOf({ a: ${guestValue(rng, depth + 1)} }, ${rng.pick(["null", "Array.prototype", "Map.prototype", "Date.prototype"])})`;
     case 12: return `Object.assign([], { length: ${rng.pick(["3", "100000", "2 ** 31"])} })`;
-    case 13: return `(() => { let o = ${guestValue(rng, depth + 1)}; for (let i = 0; i < ${rng.pick([10, 200, 5000])}; i++) o = [o]; return o })()`;   // ซ้อนลึก
+    case 13: return `(() => { let o = ${guestValue(rng, depth + 1)}; for (let i = 0; i < ${rng.pick([10, 200, 5000])}; i++) o = [o]; return o })()`;   // deeply nested
     case 14: return `new (class X { constructor() { this.v = ${guestValue(rng, depth + 1)} } })()`;
     default: return `({ valueOf() { return 1n }, toString() { throw new Error("str") } })`;
   }
 }
 
-// API ในโปรแกรม (ชื่อ, จำนวน argument) — ทุกตัวต้องรับค่าแปลกได้โดย host ไม่พัง
+// program APIs (name, argument count) — each must accept odd values without breaking the host
 const API = [
   ["readDB", 1], ["writeDB", 2], ["deleteDB", 1], ["map", 3], ["emit", 3], ["setMetadata", 2], ["keccak256", 1], ["ecrecover", 2],
   ["sha256", 1], ["ripemd160", 1], ["blake2b", 1], ["modexp", 3], ["keccak256Bytes", 1], ["ecrecoverDigest", 2],
@@ -67,7 +67,7 @@ const API = [
   ["ThisAddress", 0], ["ThisBalance", 0], ["BlockNumber", 0], ["ChainId", 0], ["Coinbase", 0], ["BlockGasLimit", 0], ["GasPrice", 0], ["BaseFee", 0], ["GasLeft", 0],
 ];
 
-/** โปรแกรม 1 ตัวต่อรอบ: เรียก API แบบสุ่ม (catch ไว้เป็นส่วนใหญ่) แล้วคืนค่าแปลก */
+/** 1 program per iteration: calls APIs at random (mostly caught), then returns odd values */
 export function guestProgram(rng) {
   const steps = Array.from({ length: 1 + rng.int(4) }, () => {
     const [name, arity] = rng.pick(API);
@@ -89,7 +89,7 @@ export function guestProgram(rng) {
 }`;
 }
 
-// ค่าแปลกฝั่ง host (ส่งเป็น input) — ข้ามเขตแดนเข้าไปเป็น JSON ติดป้าย
+// odd values on the host side (passed as input) — cross the boundary as tagged JSON
 export function hostValue(rng, depth = 0) {
   const leaves = [0n, -1n, 2n ** 300n, "", "\u0000", "__proto__", "x".repeat(5000), null, true, undefined, 1, -0, NaN, Infinity, "1n"];
   const roll = rng.int(depth > 2 ? 2 : 6);
@@ -105,7 +105,7 @@ const as = { sender: ALICE, origin: ALICE };
 const T = Date.parse("2026-01-01T00:00:00Z");
 const OPTIONS = { chargeGas: false, recordBlocks: true, maxTxGas: 2_000_000, timeoutMs: 20_000, memoryLimitBytes: 8 * 1024 * 1024 };
 
-/** VM ใหม่ + deploy โปรแกรม → ผลของการเรียก fn (ตัดให้เหลือส่วนที่ต้องเหมือนกันทุกครั้ง) */
+/** New VM + deploy the program → result of calling fn (trimmed to the parts that must match every time) */
 function runOnce(code, fn, input) {
   const vm = new VirtualMachine(new MemoryDB(), OPTIONS);
   vm.db.load({ [`${ALICE}:native:received`]: "1000000n", "tmpl:this": "tmpl" });
@@ -114,7 +114,7 @@ function runOnce(code, fn, input) {
   if (deployed.status !== "success") return { vm, deploy: deployed, summary: { deploy: deployed.status, error: deployed.error?.code } };
   block.init({ programUuid: "fz", context: as });
   const res = block.call({ programUuid: "fz", functionName: fn, input, context: as });
-  const after = block.call({ programUuid: "fz", functionName: "ok", input: {}, context: as });   // กติกา 4
+  const after = block.call({ programUuid: "fz", functionName: "ok", input: {}, context: as });   // rule 4
   return {
     vm, res, after,
     summary: { status: res.status, code: res.error?.code ?? null, message: res.error?.message ?? null, gasUsed: res.gasUsed,
@@ -126,22 +126,22 @@ function runOnce(code, fn, input) {
 const snapshotHost = () => JSON.stringify([Object.getOwnPropertyNames(Object.prototype), Object.getOwnPropertyNames(Array.prototype),
   Object.getOwnPropertyNames(globalThis).length, ({}).polluted, [].polluted]);
 
-/** ค่าจากโปรแกรมต้องเป็นข้อมูลล้วน: plain object / array / ค่าพื้นฐาน / BigInt (GuestValue = ป้ายของค่าที่ไม่ใช่ข้อมูล) */
+/** Values from the program must be pure data: plain object / array / primitive / BigInt (GuestValue = tag for non-data values) */
 function plainData(value, seen = new Set()) {
   if (value === null || ["string", "number", "boolean", "bigint", "undefined"].includes(typeof value)) return true;
   if (typeof value === "function" || typeof value === "symbol") return false;
-  if (seen.has(value)) return false;   // ค่าวนข้ามเขตแดนไม่ได้
+  if (seen.has(value)) return false;   // cyclic values can't cross the boundary
   seen.add(value);
   const proto = Object.getPrototypeOf(value);
   if (!(Array.isArray(value) ? proto === Array.prototype : proto === Object.prototype || proto === null || value.constructor?.name === "GuestValue")) return false;
   return Object.values(value).every((item) => plainData(item, seen));
 }
 
-/** 1 รอบ → null (ผ่าน) หรือข้อความที่ผิด */
+/** 1 iteration → null (pass) or a message describing the violation */
 export function fuzzOnce(seed) {
   const rng = random(seed);
   const code = guestProgram(rng);
-  const mode = rng.int(3);   // 0 = เรียก API · 1 = echo input จาก host · 2 = ทั้งคู่ด้วย input แปลก
+  const mode = rng.int(3);   // 0 = call APIs · 1 = echo input from the host · 2 = both, with odd input
   const fn = mode === 1 ? "echo" : "fuzz";
   const input = mode === 0 ? {} : { v: hostValue(rng), w: hostValue(rng) };
   const before = snapshotHost();
@@ -151,23 +151,23 @@ export function fuzzOnce(seed) {
     first = runOnce(code, fn, input);
     second = runOnce(code, fn, input);
   } catch (error) {
-    return { seed, code, problem: `VM throw ออกมาถึงผู้เรียก: ${error.stack}` };
+    return { seed, code, problem: `VM threw out to the caller: ${error.stack}` };
   }
-  if (snapshotHost() !== before) return { seed, code, problem: "host ถูกแตะ (prototype / globalThis เปลี่ยน)" };
-  if (first.deploy) return null;   // deploy ไม่ผ่าน (โค้ดผิด syntax / ใหญ่เกิน) = ปกติ
+  if (snapshotHost() !== before) return { seed, code, problem: "host was touched (prototype / globalThis changed)" };
+  if (first.deploy) return null;   // deploy rejected (syntax error / too large) = normal
   const { res, summary } = first;
-  if (!["success", "throw"].includes(res.status)) return { seed, code, problem: `status แปลก: ${res.status}` };
+  if (!["success", "throw"].includes(res.status)) return { seed, code, problem: `odd status: ${res.status}` };
   if (res.error?.code === ERROR_CODE.INTERNAL) return { seed, code, problem: `INTERNAL: ${res.error.message}` };
-  if (!Object.values(ERROR_CODE).includes(res.error?.code ?? ERROR_CODE.INVALID_REQUEST)) return { seed, code, problem: `error code แปลก: ${res.error.code}` };
+  if (!Object.values(ERROR_CODE).includes(res.error?.code ?? ERROR_CODE.INVALID_REQUEST)) return { seed, code, problem: `odd error code: ${res.error.code}` };
   if (JSON.stringify(summary) !== JSON.stringify(second.summary)) {
-    return { seed, code, problem: `ไม่ deterministic:\n  ${JSON.stringify(summary).slice(0, 400)}\n  ${JSON.stringify(second.summary).slice(0, 400)}` };
+    return { seed, code, problem: `not deterministic:\n  ${JSON.stringify(summary).slice(0, 400)}\n  ${JSON.stringify(second.summary).slice(0, 400)}` };
   }
-  if (!plainData(res.result)) return { seed, code, problem: "ค่าที่คืนไม่ใช่ข้อมูลล้วน" };
-  if (first.after.status !== "success") return { seed, code, problem: `sandbox ใช้ต่อไม่ได้หลังรอบนี้: ${JSON.stringify(first.after.error)}` };
+  if (!plainData(res.result)) return { seed, code, problem: "returned value is not pure data" };
+  if (first.after.status !== "success") return { seed, code, problem: `sandbox unusable after this iteration: ${JSON.stringify(first.after.error)}` };
   return null;
 }
 
-/** fuzz ตัวถอดข้อความจากโปรแกรม (host parser) โดยตรง: ข้อความ JSON สุ่ม + ป้ายแปลก */
+/** Fuzzes the host parser for program messages directly: random JSON text + odd tags */
 export function fuzzDecoder(seed, iterations = 500) {
   const rng = random(seed);
   const pieces = ['{"\\u0000":"b","v":"1"}', '{"\\u0000":"b","v":"zz"}', '{"\\u0000":"u"}', '{"\\u0000":"n","v":"x"}', '{"\\u0000":"x","t":{}}',
@@ -179,9 +179,9 @@ export function fuzzDecoder(seed, iterations = 500) {
     try {
       decodeFromGuest(text, (...parts) => parts.join(":"));
     } catch (error) {
-      if (!(error instanceof Error)) failures.push(`throw ค่าที่ไม่ใช่ Error: ${text}`);
+      if (!(error instanceof Error)) failures.push(`threw a non-Error value: ${text}`);
     }
-    if (({}).polluted !== undefined || Object.prototype.polluted !== undefined) failures.push(`prototype ถูกแก้: ${text}`);
+    if (({}).polluted !== undefined || Object.prototype.polluted !== undefined) failures.push(`prototype was modified: ${text}`);
   }
   return failures;
 }
@@ -202,8 +202,8 @@ if (process.argv[1]?.endsWith("fuzz-sandbox.js")) {
   const seed = option("seed", Date.now() % 1_000_000);
   const iterations = option("iterations", 2000);
   const started = performance.now();
-  const result = runFuzz({ seed, iterations, onProgress: (n, bad) => { if (n % 250 === 0) console.log(`${n}/${iterations} รอบ · พบปัญหา ${bad}`); } });
-  console.log(`seed ${seed} · ${iterations} รอบ · ${((performance.now() - started) / 1000).toFixed(1)} วิ · ปัญหา ${result.failures.length} · decoder ${result.decoder.length}`);
+  const result = runFuzz({ seed, iterations, onProgress: (n, bad) => { if (n % 250 === 0) console.log(`${n}/${iterations} iterations · ${bad} problems found`); } });
+  console.log(`seed ${seed} · ${iterations} iterations · ${((performance.now() - started) / 1000).toFixed(1)} s · problems ${result.failures.length} · decoder ${result.decoder.length}`);
   for (const failure of result.failures.slice(0, 5)) console.log(`\n--- seed ${failure.seed}: ${failure.problem}\n${failure.code}`);
   for (const failure of result.decoder.slice(0, 5)) console.log(`decoder: ${failure}`);
   process.exit(result.failures.length || result.decoder.length ? 1 : 0);

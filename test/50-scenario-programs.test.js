@@ -5,7 +5,7 @@ import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { MULTISEND_PROGRAM, CHAIN_PROGRAM, ROUTER_PROGRAM } from "../dev/scenario-programs.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* โปรแกรมของ dev/scenario.js: แจก native หลายกระเป๋า · เรียกต่อกัน 6 ทอด · ส่งต่อ token + native หลายทอด */
+/* programs from dev/scenario.js: pay native to many wallets · a 6-hop call chain · forward token + native over many hops */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
 const USER = "0x00000000000000000000000000000000000000b2";
@@ -38,11 +38,11 @@ function chain() {
   return { vm, call };
 }
 
-test("โปรแกรมของ scenario ผ่าน autoreview (deploy ผ่าน /sendtx ได้)", () => {
+test("scenario programs pass autoreview (deployable via /sendtx)", () => {
   for (const code of [MULTISEND_PROGRAM, CHAIN_PROGRAM, ROUTER_PROGRAM]) assert.deepEqual(reviewProgram(code).issues, []);
 });
 
-test("multiSend: แจก native หลายกระเป๋าใน tx เดียว · value ต้องเท่าผลรวม", () => {
+test("multiSend: pays native to many wallets in one tx · value must equal the total", () => {
   const { vm, call } = chain();
   const recipients = Array.from({ length: 100 }, (_, i) => ({ to: `0x${(0xb000 + i).toString(16).padStart(40, "0")}`, amount: "3000n" }));
   const ok = call(OWNER, SEND, "multiSend", { recipients }, 300_000);
@@ -52,7 +52,7 @@ test("multiSend: แจก native หลายกระเป๋าใน tx เ
   assert.equal(call(OWNER, SEND, "multiSend", { recipients }, 1).status, "throw");
 });
 
-test("step: เรียกต่อกัน 6 ทอด A→F · C / E แวะอ่าน balanceOf · trace มี input / result ทุกชั้น", () => {
+test("step: a 6-hop call chain A→F · C / E also read balanceOf · trace has input / result at every level", () => {
   const { call } = chain();
   const [a, ...rest] = CHAIN.map((c) => c.address);
   const res = call(USER, a, "step", { path: rest, depth: "0n", note: "hello" });
@@ -67,7 +67,7 @@ test("step: เรียกต่อกัน 6 ทอด A→F · C / E แว�
   assert.equal(res.events.length, 6);
 });
 
-test("step: ชั้น F ล้ม → D catch ไว้ tx ยังสำเร็จ · ชั้น B ล้ม → ทั้ง tx ล้ม", () => {
+test("step: F fails → D catches it and the tx still succeeds · B fails → the whole tx fails", () => {
   const { call } = chain();
   const [a, ...rest] = CHAIN.map((c) => c.address);
   const caught = call(USER, a, "step", { path: rest, depth: "0n", failAt: "f" });
@@ -78,18 +78,18 @@ test("step: ชั้น F ล้ม → D catch ไว้ tx ยังสำเ
   assert.equal(failed.status, "throw");
 });
 
-test("forward: token + native ผ่าน router 4 ทอด หักทอดละ 1% · ผู้รับได้ทั้งคู่", () => {
+test("forward: token + native through 4 router hops, 1% taken per hop · the recipient gets both", () => {
   const { vm, call } = chain();
   assert.equal(call(OWNER, T, "transfer", { to: USER, amount: "1000000000n" }).status, "success");
   assert.equal(call(USER, T, "approve", { spender: ROUTERS[0], amount: "1000000000n" }).status, "success");
   const res = call(USER, ROUTERS[0], "forward", { token: T, path: ROUTERS.slice(1), to: RECEIVER, amount: "100000000n", pull: true }, 2_500);
   assert.equal(res.status, "success", JSON.stringify(res.error));
-  // 100,000,000 → ×0.99 สี่ครั้ง
+  // 100,000,000 → ×0.99 four times
   let out = 100_000_000n;
   for (let i = 0; i < 4; i += 1) out -= out / 100n;
   assert.deepEqual(res.result, { delivered: `${out}n`, value: "2500n", to: RECEIVER });
   assert.equal(vm.query({ programUuid: T, functionName: "balanceOf", input: { who: RECEIVER } }).result, `${out}n`);
   assert.equal(vm.nativeBalanceOf(RECEIVER).balance, 2500n);
-  assert.equal(res.events.filter((e) => e.name === "Transfer").length, 5);   // ดึงเข้า + 3 ทอด + ส่งออก
+  assert.equal(res.events.filter((e) => e.name === "Transfer").length, 5);   // pull in + 3 hops + send out
   assert.equal(Math.max(...res.calls.map((c) => c.depth)), 4);
 });

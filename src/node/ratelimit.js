@@ -1,15 +1,15 @@
 /**
- * จำกัดจำนวนครั้งต่อช่วงเวลา แยกตาม key (เช่น IP ของผู้เรียก)
+ * Limits the number of calls per time window, per key (e.g. the caller's IP)
  *
  *   const limiter = new RateLimiter({ limit: 60, windowMs: 60_000 });
  *   if (!limiter.allow(ip)) return 429;
  *
- * limit = 0 หรือ Infinity → ไม่จำกัด
+ * limit = 0 or Infinity → unlimited
  */
 export const DEFAULT_RATE_LIMIT = {
-  limit: 60,          // จำนวนครั้งที่ key เดียวเรียกได้ต่อช่วงเวลา
-  windowMs: 60_000,   // ช่วงเวลาที่นับ
-  maxKeys: 100_000,   // จำนวน key สูงสุดที่จำไว้ (กันหน่วยความจำโตไม่จำกัด)
+  limit: 60,          // calls one key may make per window
+  windowMs: 60_000,   // window length
+  maxKeys: 100_000,   // max keys remembered (keeps memory bounded)
 };
 
 export class RateLimiter {
@@ -25,7 +25,7 @@ export class RateLimiter {
     return Number.isFinite(limit) && limit > 0;
   }
 
-  /** นับครั้งนี้และคืน true ถ้ายังไม่เกินกำหนด (ครั้งที่ถูกปฏิเสธไม่ถูกนับ) */
+  /** count this call and return true if still within the limit (rejected calls are not counted) */
   allow(key, { now = Date.now() } = {}) {
     if (!this.enabled) return true;
     const { limit, windowMs, maxKeys } = this.#options;
@@ -35,13 +35,13 @@ export class RateLimiter {
       return false;
     }
     times.push(now);
-    this.#hits.delete(key);          // ย้ายไปท้าย Map → key ที่ไม่ได้ใช้นานสุดอยู่หัว
+    this.#hits.delete(key);          // move to the end of the Map → the least recently used key stays at the head
     this.#hits.set(key, times);
     if (this.#hits.size > maxKeys) this.#hits.delete(this.#hits.keys().next().value);
     return true;
   }
 
-  /** วินาทีที่ต้องรอก่อนเรียกได้อีก (ไว้ใส่ header Retry-After) */
+  /** seconds to wait before calling again (for the Retry-After header) */
   retryAfter(key, { now = Date.now() } = {}) {
     const times = this.#hits.get(key) ?? [];
     if (times.length < this.#options.limit) return 0;

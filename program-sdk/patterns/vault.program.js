@@ -1,16 +1,16 @@
-/** ตัวอย่างโปรแกรมที่ใช้ pattern ปลอดภัยครบ: modifier + checks-effects-interactions + ล็อก */
+/** Example program using every safe pattern: modifier + checks-effects-interactions + lock */
 export default function program() {
   // ---------- modifier ----------
   function onlyOwner(fn) {
     return function (params) {
-      if (params.context.sender !== readDB("owner")) throw new Error("ไม่ใช่เจ้าของ");
+      if (params.context.sender !== readDB("owner")) throw new Error("not the owner");
       return fn(params);
     };
   }
 
   function nonReentrant(fn) {
     return function (params) {
-      if (readDB("locked")) throw new Error("กำลังทำงานอยู่");
+      if (readDB("locked")) throw new Error("already in progress");
       writeDB("locked", true);
       try {
         return fn(params);
@@ -20,7 +20,7 @@ export default function program() {
     };
   }
 
-  // ---------- ภายใน ----------
+  // ---------- internal ----------
   function initialization(params) {
     writeDB("owner", params.context.sender);
     writeDB("paused", false);
@@ -31,13 +31,13 @@ export default function program() {
   }
 
   function requireAmount(amount) {
-    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount ไม่ถูกต้อง");   // ตัวเลขเป็น BigInt เสมอ
+    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("invalid amount");   // numbers are always BigInt
     return amount;
   }
 
-  // ---------- ให้เรียกจากภายนอก ----------
+  // ---------- callable from outside ----------
   function deposit(params) {
-    if (readDB("paused")) throw new Error("ปิดรับฝากชั่วคราว");
+    if (readDB("paused")) throw new Error("deposits temporarily paused");
     const who = params.context.sender;
     writeDB(map("balances", who), balanceOf(who) + params.value);
     emit("Deposited", { who, amount: params.value });
@@ -47,10 +47,10 @@ export default function program() {
   const withdraw = nonReentrant(function (params) {
     const who = params.context.sender;
     const amount = requireAmount(params.input.amount);
-    if (balanceOf(who) < amount) throw new Error("ยอดไม่พอ");
+    if (balanceOf(who) < amount) throw new Error("insufficient balance");
 
-    writeDB(map("balances", who), balanceOf(who) - amount);   // effects ก่อน
-    transferNative(who, amount);                              // interactions ทีหลัง
+    writeDB(map("balances", who), balanceOf(who) - amount);   // effects first
+    transferNative(who, amount);                              // interactions after
     emit("Withdrawn", { who, amount });
     return balanceOf(who);
   });

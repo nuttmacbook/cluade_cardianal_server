@@ -1,6 +1,6 @@
-// ตัวดักดูคำขอ JSON-RPC ที่ส่งเข้า /evm (ใช้หาว่า Blockscout ถามอะไรแล้วเราตอบอะไร) — ไม่แตะเชน
-//   node dev/evm-proxy.mjs          → ฟังที่ :3001 ส่งต่อไป http://127.0.0.1:3000/evm
-//   PORT=3001 TARGET=http://127.0.0.1:3000/evm node dev/evm-proxy.mjs · วิธีใช้กับ Blockscout: docs/blockscout.md
+// Intercepts JSON-RPC requests sent to /evm (to see what Blockscout asks and what we answer) — doesn't touch the chain
+//   node dev/evm-proxy.mjs          → listens on :3001, forwards to http://127.0.0.1:3000/evm
+//   PORT=3001 TARGET=http://127.0.0.1:3000/evm node dev/evm-proxy.mjs · how to use with Blockscout: docs/blockscout.md
 import http from "node:http";
 import zlib from "node:zlib";
 
@@ -15,7 +15,7 @@ http.createServer(async (request, response) => {
   const gzip = /gzip/i.test(request.headers["content-encoding"] ?? "");
   if (gzip) body = zlib.gunzipSync(body);
   let asks = [];
-  try { asks = [JSON.parse(body.toString("utf8"))].flat(); } catch { /* ไม่ใช่ JSON */ }
+  try { asks = [JSON.parse(body.toString("utf8"))].flat(); } catch { /* not JSON */ }
   let status = 502;
   let text = "";
   try {
@@ -23,11 +23,11 @@ http.createServer(async (request, response) => {
     status = reply.status;
     text = await reply.text();
   } catch (error) {
-    console.log("ส่งต่อไม่ได้:", error.message);
+    console.log("forward failed:", error.message);
   }
   let answers = [];
-  try { answers = [JSON.parse(text)].flat(); } catch { /* ไม่ใช่ JSON */ }
-  if (!asks.length) console.log(`${request.method} ${request.url} body ที่อ่านไม่ได้: ${body.toString("utf8").slice(0, 200)} → HTTP ${status}`);
+  try { answers = [JSON.parse(text)].flat(); } catch { /* not JSON */ }
+  if (!asks.length) console.log(`${request.method} ${request.url} unreadable body: ${body.toString("utf8").slice(0, 200)} → HTTP ${status}`);
   for (const ask of asks) {
     const answer = answers.find((a) => a?.id === ask?.id);
     const result = answer?.error ? `ERROR ${short(answer.error, 300)}` : short(answer?.result, 200);

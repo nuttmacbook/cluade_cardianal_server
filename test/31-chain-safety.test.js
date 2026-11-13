@@ -4,10 +4,10 @@ import { VM, MemoryDB, num } from "./helpers.js";
 import { TOKEN } from "./programs.js";
 
 /*
- * ความถูกต้องของสาย block และการกัน tx ซ้ำ
- *   - VM ต่อ block ให้เอง (number / parentHash / parentStateRoot)
- *   - commit เลขซ้ำไม่ได้, timestamp ถอยหลังไม่ได้
- *   - tx ที่ nonce ผิด ไม่เข้า block และไม่ทับดัชนี tx ที่สำเร็จ
+ * block chain integrity and duplicate tx protection
+ *   - the VM links blocks itself (number / parentHash / parentStateRoot)
+ *   - no committing a repeated number, no timestamp going backwards
+ *   - txs with a wrong nonce never enter a block and never overwrite the index of a successful tx
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -27,10 +27,10 @@ function setup() {
 const transfer = (nonce, amount = 10) => ({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount }, context: user("alice"), nonce });
 
 // ---------------------------------------------------------------------------
-//  สาย block
+//  block chain
 // ---------------------------------------------------------------------------
 
-test("chain: block ที่สร้างต่อกันมี parentHash / parentStateRoot ครบ ไม่เป็น null อีก", () => {
+test("chain: consecutive blocks have parentHash / parentStateRoot set, never null anymore", () => {
   const vm = setup();
   const second = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   second.call(transfer(1));
@@ -41,7 +41,7 @@ test("chain: block ที่สร้างต่อกันมี parentHash /
   assert.equal(header.parentHash, vm.getBlock(1).hash);
   assert.equal(header.parentStateRoot, vm.getBlock(1).stateRoot);
 
-  // ตรวจสายทั้งเส้น
+  // verify the whole chain
   let previous = null;
   for (let number = 1; number <= vm.latestBlockNumber(); number += 1) {
     const block = vm.getBlock(number);
@@ -52,7 +52,7 @@ test("chain: block ที่สร้างต่อกันมี parentHash /
   }
 });
 
-test("chain: blockhash ไม่ค้าง เพราะ commit เลขเดิมซ้ำไม่ได้", () => {
+test("chain: no stale blockhash, since the same number cannot be committed twice", () => {
   const vm = setup();
   const second = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   second.call(transfer(1));
@@ -60,38 +60,38 @@ test("chain: blockhash ไม่ค้าง เพราะ commit เลขเ
   assert.throws(() => second.commit(), { code: "INVALID_REQUEST" });
 
   const hashKeys = vm.db.listKeys("blockhash:");
-  assert.equal(hashKeys.length, vm.latestBlockNumber()); // 1 hash ต่อ 1 block เท่านั้น
+  assert.equal(hashKeys.length, vm.latestBlockNumber()); // exactly 1 hash per block
   assert.deepEqual(hashKeys.map((key) => vm.db.readKeys([key])[0]).sort(), [1, 2]);
 });
 
 // ---------------------------------------------------------------------------
-//  tx ซ้ำ
+//  duplicate txs
 // ---------------------------------------------------------------------------
 
-test("nonce ผิด: ไม่เข้า block เลย — ไม่มี txHashes / body / ดัชนี และไม่ทับ tx ที่สำเร็จ", () => {
+test("wrong nonce: never enters the block — no txHashes / body / index, and no overwrite of the successful tx", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   const ok = block.call(transfer(1));
   const hash = vm.hashTransaction(transfer(1), { action: "call" });
 
-  const duplicates = [1, 2, 3].map(() => block.call(transfer(1))); // ส่งซ้ำ nonce เดิม
+  const duplicates = [1, 2, 3].map(() => block.call(transfer(1))); // resend with the same nonce
   assert.ok(duplicates.every((res) => res.status === "throw" && res.accepted === false));
   assert.ok(duplicates.every((res) => res.writes.length === 0));
 
-  assert.equal(block.results().length, 1);       // มีแค่ใบที่ถูกรับ
-  assert.equal(block.rejected().length, 3);      // ใบที่ถูกปฏิเสธแยกไว้ให้ดู
+  assert.equal(block.results().length, 1);       // only the accepted tx
+  assert.equal(block.rejected().length, 3);      // rejected txs are kept separately for inspection
   const header = block.header();
   assert.deepEqual(header.txHashes, [hash]);
   assert.deepEqual([header.txCount, header.successCount, header.failedCount], [1, 1, 0]);
   block.commit();
 
   assert.equal(vm.getBlockBody(2).length, 1);
-  assert.equal(vm.getTransaction(hash).status, "success"); // ไม่ถูกทับด้วยใบที่ล้ม
+  assert.equal(vm.getTransaction(hash).status, "success"); // not overwritten by the failed ones
   assert.equal(vm.getTransaction(hash).blockNumber, 2);
   assert.equal(ok.status, "success");
 });
 
-test("nonce ผิด: ไม่กิน nonce และไม่เสียค่าแก๊ส", () => {
+test("wrong nonce: does not consume a nonce or pay gas", () => {
   const vm = setup();
   const before = vm.nativeBalanceOf("alice");
   const res = vm.call(transfer(99), { timestamp: T + 1000 });
@@ -102,7 +102,7 @@ test("nonce ผิด: ไม่กิน nonce และไม่เสีย�
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], 1);
 });
 
-test("checkTransaction: กรอง tx ซ้ำทิ้งก่อนเข้า block (อ่าน DB แค่ nonce)", () => {
+test("checkTransaction: filters out duplicate txs before the block (reads only the nonce from the DB)", () => {
   const vm = setup();
   assert.deepEqual(vm.checkTransaction(transfer(1)), { ok: true, expectedNonce: 1 });
   assert.deepEqual(vm.checkTransaction(transfer(0)), { ok: false, reason: "nonce ต้องเป็น 1", expectedNonce: 1 });
@@ -110,24 +110,24 @@ test("checkTransaction: กรอง tx ซ้ำทิ้งก่อนเข�
   assert.deepEqual(vm.checkTransaction({ from: "alice", to: "bob", amount: 1, nonce: 1 }), { ok: true, expectedNonce: 1 });
   assert.equal(vm.checkTransaction({}).ok, false);
 
-  // ใช้กรองก่อนใส่เข้า block
+  // used to filter before adding to a block
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   const queue = [transfer(1), transfer(1), transfer(1)];
   for (const request of queue) {
-    if (!block.checkTransaction(request).ok) continue; // นับ tx ที่อยู่ใน block แล้วด้วย
+    if (!block.checkTransaction(request).ok) continue; // also counts txs already in the block
     block.call(request);
   }
   assert.equal(block.results().length, 1);
   assert.equal(block.rejected().length, 0);
 });
 
-test("tx ที่ล้มจากโปรแกรม (ยอดไม่พอ) ยังเข้า block และเสียค่าแก๊สตามเดิม", () => {
+test("a tx failing in the program (insufficient balance) still enters the block and pays gas as usual", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   const res = block.call(transfer(1, 99999));
 
   assert.equal(res.status, "throw");
-  assert.equal(res.accepted, true);   // ผ่าน nonce แล้ว จึงถือว่าเข้าระบบ
+  assert.equal(res.accepted, true);   // passed the nonce check, so it counts as accepted
   assert.ok(num(res.fee) > 0);
   block.commit();
 
@@ -136,11 +136,11 @@ test("tx ที่ล้มจากโปรแกรม (ยอดไม่พ
   assert.equal(vm.getTransaction(vm.getBlock(2).txHashes[0]).status, "throw");
 });
 
-test("replay: block ที่ได้มามีแต่ tx ที่ถูกรับแล้ว จึงรันซ้ำได้ตรง", () => {
+test("replay: received blocks hold only accepted txs, so they replay exactly", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 1000, feeRecipient: "miner" });
   block.call(transfer(1));
-  block.call(transfer(1)); // ซ้ำ ถูกทิ้ง
+  block.call(transfer(1)); // duplicate, dropped
   block.call(transfer(2, 5));
   block.commit();
 

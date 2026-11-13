@@ -1,8 +1,8 @@
-/** รันสถานการณ์ตลาดจริงบน chain ผ่าน HTTP: node dev/demo-market.js [url] */
+/** Runs a real market scenario on the chain over HTTP: node dev/demo-market.js [url] */
 import * as sign from "../src/crypto/signature.js";
 import fs from "node:fs";
 
-// native มี 18 ทศนิยม (wei) และราคาแก๊ส 1 gwei → ยอด native ในสคริปต์นับเป็น gwei
+// native has 18 decimals (wei) and the gas price is 1 gwei → native amounts in this script are counted in gwei
 const gwei = (amount) => `${BigInt(amount) * 10n ** 9n}`;
 
 const API = process.argv[2] ?? "http://localhost:3000";
@@ -15,7 +15,7 @@ const KEYS = [
 const [alice, bob, carol, dave] = KEYS.map((key, i) => ({ key, address: sign.addressOf(key), name: ["alice", "bob", "carol", "dave"][i] }));
 const TREASURY = "0x9999999999999999999999999999999999999999";
 
-/** โปรแกรมเดียวกับที่ใช้ใน test/44-complex-scenario.test.js */
+/** The same programs used in test/44-complex-scenario.test.js */
 const source = fs.readFileSync(new URL("../test/44-complex-scenario.test.js", import.meta.url), "utf8");
 const pick = (name) => source.slice(source.indexOf(`const ${name} = \``) + `const ${name} = \``.length, source.indexOf("`;", source.indexOf(`const ${name} = \``)));
 const TOKEN = pick("TOKEN");
@@ -31,7 +31,7 @@ async function send(user, fields, { expectFail = false } = {}) {
   const result = await post("/sendtx", { tx, signature: sign.signTransaction(tx, user.key) });
   const label = `${user.name.padEnd(5)} ${(fields.method || fields.action).padEnd(12)}`;
   if (result.queued) { console.log(`${label} ✓`); return result.hash; }
-  console.log(`${label} ✗ ${expectFail ? "(คาดไว้)" : "(ไม่คาดคิด)"} ${result.simulation?.error ?? result.error ?? ""}`);
+  console.log(`${label} ✗ ${expectFail ? "(expected)" : "(unexpected)"} ${result.simulation?.error ?? result.error ?? ""}`);
   return null;
 }
 async function confirm(hash) {
@@ -49,16 +49,16 @@ const market = (await get(`/tx/${(await get(`/block/${marketHash.blockNumber}`))
 await confirm(await send(alice, { action: "init", to: market }));
 console.log(`\ncoin   ${coin}\nmarket ${market}\n`);
 
-// ---------- แจกเหรียญและ native ----------
+// ---------- hand out coins and native ----------
 for (const who of [bob, carol, dave]) {
   await send(alice, { action: "call", to: coin, method: "transfer", input: { to: who.address, amount: 50_000 } });
   await send(alice, { action: "transfer", to: who.address, value: gwei(200_000) });
 }
 await wait(2000);
 
-// ---------- ประกาศขาย ----------
+// ---------- list items for sale ----------
 const listings = [];
-for (const [seller, price, name] of [[bob, 10_000, "เก้าอี้"], [bob, 3_000, "โคมไฟ"], [dave, 25_000, "โต๊ะไม้"]]) {
+for (const [seller, price, name] of [[bob, 10_000, "chair"], [bob, 3_000, "lamp"], [dave, 25_000, "wooden table"]]) {
   const hash = await send(seller, { action: "call", to: market, method: "list", input: { price, name } });
   listings.push(await confirm(hash));
 }
@@ -67,37 +67,37 @@ for (const entry of listings) {
   const header = await get(`/block/${entry.blockNumber}`);
   ids.push((await get(`/tx/${header.txHashes[entry.index]}/receipt`)).result);
 }
-console.log("ประกาศขาย:", ids.join(", "));
+console.log("listed:", ids.join(", "));
 
-// ---------- ซื้อขายจริง ----------
+// ---------- real trades ----------
 await confirm(await send(carol, { action: "call", to: coin, method: "approve", input: { spender: market, amount: 20_000 } }));
 await confirm(await send(carol, { action: "call", to: market, method: "buy", input: { id: ids[0] } }));
-await send(dave, { action: "call", to: market, method: "buy", input: { id: ids[1] } }, { expectFail: true });   // ยังไม่ approve
+await send(dave, { action: "call", to: market, method: "buy", input: { id: ids[1] } }, { expectFail: true });   // not approved yet
 await confirm(await send(dave, { action: "call", to: coin, method: "approve", input: { spender: market, amount: 50_000 } }));
 await confirm(await send(dave, { action: "call", to: market, method: "buy", input: { id: ids[1] } }));
-await send(carol, { action: "call", to: market, method: "buy", input: { id: ids[0] } }, { expectFail: true });  // ขายไปแล้ว
-await send(bob, { action: "call", to: market, method: "cancel", input: { id: ids[2] } }, { expectFail: true }); // ไม่ใช่เจ้าของ
+await send(carol, { action: "call", to: market, method: "buy", input: { id: ids[0] } }, { expectFail: true });  // already sold
+await send(bob, { action: "call", to: market, method: "cancel", input: { id: ids[2] } }, { expectFail: true }); // not the owner
 
-// ---------- ฝาก-ถอน native ----------
+// ---------- deposit / withdraw native ----------
 await confirm(await send(bob, { action: "call", to: market, method: "deposit", input: {}, value: gwei(30_000) }));
 await confirm(await send(carol, { action: "call", to: market, method: "deposit", input: {}, value: gwei(12_000) }));
-await send(dave, { action: "call", to: market, method: "withdraw", input: {} }, { expectFail: true });          // ไม่มีเงินฝาก
+await send(dave, { action: "call", to: market, method: "withdraw", input: {} }, { expectFail: true });          // no deposit
 await confirm(await send(bob, { action: "call", to: market, method: "withdraw", input: {} }));
 
-// ---------- ตั้งชื่อให้ address ----------
+// ---------- name the addresses ----------
 for (const [who, namespace] of [[alice, "alice"], [bob, "bob"], [carol, "carol"]]) {
-  await send(who, { action: "metadata", input: { namespace, description: `ผู้ใช้ ${namespace}` } });
+  await send(who, { action: "metadata", input: { namespace, description: `user ${namespace}` } });
 }
 await wait(2500);
 
-// ---------- สรุป ----------
+// ---------- summary ----------
 const stats = await query(market, "stats");
 const holders = await Promise.all([alice, bob, carol, dave].map(async (u) => `${u.name} ${await query(coin, "balanceOf", { who: u.address })}`));
 const marketInfo = await get(`/program/${market}?limit=200`);
 const latest = await get("/block/latest");
 
-console.log(`\nstats ตลาด: ${JSON.stringify(stats)}`);
-console.log(`เหรียญ: ${holders.join(" · ")} · คลัง ${await query(coin, "balanceOf", { who: TREASURY })}`);
-console.log(`native ในตลาด: ${marketInfo.native.balance} · storage ${marketInfo.storage.length} key · event ${marketInfo.events.length}`);
-console.log(`ผู้ที่เรียกใช้ตลาด: ${marketInfo.interactions.length} ครั้ง · block ทั้งหมด ${latest.number}`);
-console.log(`\nเปิด ${API}  →  โปรแกรม: ${API}/#address/${market}`);
+console.log(`\nmarket stats: ${JSON.stringify(stats)}`);
+console.log(`coin: ${holders.join(" · ")} · treasury ${await query(coin, "balanceOf", { who: TREASURY })}`);
+console.log(`native in market: ${marketInfo.native.balance} · storage ${marketInfo.storage.length} keys · events ${marketInfo.events.length}`);
+console.log(`market interactions: ${marketInfo.interactions.length} · total blocks ${latest.number}`);
+console.log(`\nopen ${API}  →  program: ${API}/#address/${market}`);

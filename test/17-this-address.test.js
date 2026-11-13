@@ -5,24 +5,24 @@ import { TOKEN, SELF_AWARE } from "./programs.js";
 
 beforeEach(resetVM);
 
-test("init เขียน <address>:this และ ThisAddress() คืนค่าเดียวกัน", () => {
+test("init writes <address>:this and ThisAddress() returns the same value", () => {
   const res = ok(vm.deploy({ programUuid: "Vault", code: SELF_AWARE, context: user("alice"), initInput: { token: "token" } }));
   const initialized = ok(vm.init({ programUuid: res.result.programUuid }));
 
   assert.equal(initialized.writes.some((w) => w.dbKey === "vault:this" && w.value === "vault"), true);
   assert.equal(mockData.get("vault:this"), "vault");
-  assert.equal(stored("vault", "bornAs"), "vault"); // ใช้ ThisAddress() ได้ตั้งแต่ใน initialization
+  assert.equal(stored("vault", "bornAs"), "vault"); // ThisAddress() is usable already inside initialization
   assert.equal(ok(vm.call({ programUuid: "vault", functionName: "whoAmI", context: user("bob") })).result, "vault");
 });
 
-test("ThisAddress() ของแต่ละโปรแกรมเป็นของตัวเอง แม้ถูกเรียกซ้อน", () => {
+test("each program's ThisAddress() is its own, even in nested calls", () => {
   activate("vault-a", SELF_AWARE, { initInput: { token: "token" } });
   activate("vault-b", SELF_AWARE, { initInput: { token: "token" } });
   const res = ok(vm.call({ programUuid: "vault-a", functionName: "askOther", input: { target: "vault-b" }, context: user("alice") }));
   assert.deepEqual(res.result, { me: "vault-a", other: "vault-b" });
 });
 
-test("โปรแกรมรับเงินเข้ากระเป๋าตัวเองได้โดยไม่ต้องรู้ address ล่วงหน้า", () => {
+test("a program can receive funds into its own wallet without knowing its address in advance", () => {
   activate("token", TOKEN, { context: user("alice"), initInput: { supply: 1000 } });
   activate("vault", SELF_AWARE, { initInput: { token: "token" } });
   ok(vm.call({ programUuid: "token", functionName: "approve", input: { spender: "vault", amount: 500 }, context: user("alice") }));
@@ -35,19 +35,19 @@ test("โปรแกรมรับเงินเข้ากระเป๋�
   assert.equal(stored("vault", "collected"), "120n");
 });
 
-test("ThisAddress เป็นตัวพิมพ์เล็กเสมอ (ตรงกับ key ที่ VM ใช้)", () => {
+test("ThisAddress is always lowercase (matches the key the VM uses)", () => {
   activate("0xE7F1725E7734CE288F8367e1Bb143E90bb3F0512", SELF_AWARE, { initInput: { token: "token" } });
   const address = "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512";
   assert.equal(mockData.get(`${address}:this`), address);
   assert.equal(ok(vm.call({ programUuid: address, functionName: "whoAmI", context: user("a") })).result, address);
 });
 
-test("โปรแกรมประกาศฟังก์ชันชื่อ ThisAddress ทับไม่ได้", () => {
+test("a program cannot override ThisAddress with its own function", () => {
   const code = "function program() {\n  function ThisAddress() { return \"fake\" }\n  function a() { return 1 }\n  return { a }\n}";
   fails(vm.deploy({ programUuid: "p", code, context: user("a") }), "INVALID_REQUEST", /syntax error/);
 });
 
-test("<address>:this มีเฉพาะของโปรแกรม — wallet ไม่มี key ใด ๆ", () => {
+test("<address>:this exists only for programs — wallets have no keys at all", () => {
   activate("token", TOKEN, { context: user("alice"), initInput: { supply: 10 } });
   ok(vm.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice") }));
 
@@ -56,6 +56,6 @@ test("<address>:this มีเฉพาะของโปรแกรม — wal
     assert.equal(mockData.has(`alice${suffix}`), false);
     assert.equal(mockData.has(`bob${suffix}`), false);
   }
-  // wallet มีตัวตนผ่านข้อมูลของโปรแกรมอื่นเท่านั้น
+  // a wallet exists only through other programs' data
   assert.equal(stored("token", "balances", "bob"), "1n");
 });

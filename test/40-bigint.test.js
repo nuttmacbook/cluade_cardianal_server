@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 
 /*
- * ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (VM ทำงานแบบนี้เสมอ ไม่มีโหมด number แล้ว)
- *   - เก็บใน DB เป็น string ลงท้าย n ("1000n")
- *   - แปลงเป็น BigInt อัตโนมัติเมื่อส่งเข้าโปรแกรม แปลงกลับเป็น string เมื่อออกจากโปรแกรม
+ * Numbers in programs must be BigInt only (the VM always works this way; there is no number mode anymore)
+ *   - stored in the DB as strings ending in n ("1000n")
+ *   - converted to BigInt automatically on the way into a program, and back to strings on the way out
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -23,7 +23,7 @@ function program() {
   function transfer(params) {
     const from = params.context.sender
     const balance = readDB(map("balances", from)) || 0n
-    if (balance < params.input.amount) throw new Error("ยอดไม่พอ")
+    if (balance < params.input.amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance - params.input.amount)
     writeDB(map("balances", params.input.to), (readDB(map("balances", params.input.to)) || 0n) + params.input.amount)
     emit("Transfer", { from, to: params.input.to, amount: params.input.amount })
@@ -62,35 +62,35 @@ const call = (vm, functionName, input = {}, extra = {}) =>
 
 // ---------------------------------------------------------------------------
 
-test("เก็บใน DB เป็น string ลงท้าย n", () => {
+test("stored in the DB as strings ending in n", () => {
   const vm = setup();
   assert.equal(vm.db.readKeys(["token:storage:balances:alice"])[0], "1000n");
-  assert.equal(vm.db.readKeys(["token:storage:owner"])[0], "alice");   // string ยังเป็น string
+  assert.equal(vm.db.readKeys(["token:storage:owner"])[0], "alice");   // strings stay strings
 });
 
-test("input ที่เป็นตัวเลขธรรมดาถูกแปลงเป็น BigInt ให้อัตโนมัติ", () => {
+test("plain number input is converted to BigInt automatically", () => {
   const vm = setup();
-  const res = call(vm, "transfer", { to: "bob", amount: 30 });         // client ส่ง 30 มาปกติ
+  const res = call(vm, "transfer", { to: "bob", amount: 30 });         // client sends a plain 30
   assert.equal(res.status, "success");
-  assert.equal(res.result, "970n");                                    // ผลลัพธ์ออกมาเป็น string
+  assert.equal(res.result, "970n");                                    // the result comes out as a string
   vm.commit(res.writes);
   assert.deepEqual(vm.db.readKeys(["token:storage:balances:alice", "token:storage:balances:bob"]), ["970n", "30n"]);
 });
 
-test("input ที่ส่งมาเป็น \"123n\" ก็ใช้ได้", () => {
+test("input sent as \"123n\" also works", () => {
   const vm = setup();
   const res = call(vm, "transfer", { to: "bob", amount: "250n" });
   assert.equal(res.result, "750n");
 });
 
-test("ตัวเลขใหญ่เกิน 2^53 ทำงานได้ถูกต้อง", () => {
+test("numbers above 2^53 work correctly", () => {
   const vm = setup();
   const huge = 10n ** 30n;
   const res = call(vm, "bigMath", { a: `${huge}n`, b: "3n" });
   assert.deepEqual(res.result, { sum: `${huge + 3n}n`, product: `${huge * 3n}n` });
 });
 
-test("เวลา / เลข block / ยอดเงิน ที่โปรแกรมเห็นเป็น BigInt", () => {
+test("time / block number / balances are BigInt inside programs", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T + 2000, feeRecipient: "miner" });
   const res = block.call({ programUuid: "token", functionName: "info", context: user("alice"), value: 500 });
@@ -98,7 +98,7 @@ test("เวลา / เลข block / ยอดเงิน ที่โปร�
   assert.deepEqual(res.result, { time: `${T + 2000}n`, block: "2n", balance: "500n", value: "500n" });
 });
 
-test("transferNative รับ BigInt", () => {
+test("transferNative takes BigInt", () => {
   const vm = setup();
   vm.commit(vm.transfer({ from: "alice", to: "token", amount: 1000 }, { timestamp: T + 500 }).writes);
   const res = call(vm, "payout", { to: "bob", amount: 400 });
@@ -107,31 +107,31 @@ test("transferNative รับ BigInt", () => {
   assert.equal(vm.nativeBalanceOf("bob").balance, 400n);
 });
 
-test("event เก็บตัวเลขเป็น string ลงท้าย n", () => {
+test("events store numbers as strings ending in n", () => {
   const vm = setup();
   const res = call(vm, "transfer", { to: "bob", amount: 30 });
   assert.deepEqual(res.events[0].data, { from: "alice", to: "bob", amount: "30n" });
 });
 
-test("ใช้ number ในโปรแกรม → ถูกปฏิเสธ", () => {
+test("using number inside a program → rejected", () => {
   const vm = setup();
   assert.match(call(vm, "useNumber").error.message, /ต้องเป็น BigInt/);
   assert.match(call(vm, "writeNumber").error.message, /ต้องเป็น BigInt/);
 });
 
-test("ทศนิยมใน input → ถูกปฏิเสธ", () => {
+test("decimals in input → rejected", () => {
   const vm = setup();
   assert.match(call(vm, "balanceOf", { who: "alice", extra: 1.5 }).error.message, /ต้องเป็น BigInt/);
 });
 
-test("เทียบค่าและคำนวณข้ามฟังก์ชันได้ปกติ", () => {
+test("comparisons and arithmetic across functions work normally", () => {
   const vm = setup();
   assert.equal(call(vm, "balanceOf", { who: "alice" }).result, "1000n");
-  assert.equal(call(vm, "balanceOf", { who: "ไม่มีใคร" }).result, "0n");
-  assert.match(call(vm, "transfer", { to: "bob", amount: 99_999 }).error.message, /ยอดไม่พอ/);
+  assert.equal(call(vm, "balanceOf", { who: "nobody" }).result, "0n");
+  assert.match(call(vm, "transfer", { to: "bob", amount: 99_999 }).error.message, /insufficient balance/);
 });
 
-test("ไม่มีโหมด number แล้ว: ส่ง bigintValues: false มาก็ยังเป็น BigInt", () => {
+test("no number mode anymore: passing bigintValues: false still gives BigInt", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, bigintValues: false });
   assert.equal("bigintValues" in VM.DEFAULT_OPTIONS, false);
   const code = `function program() {
@@ -150,8 +150,8 @@ test("ไม่มีโหมด number แล้ว: ส่ง bigintValues: f
   assert.match(number.error.message, /ต้องเป็น BigInt/);
 });
 
-test("helper แปลงค่าไปกลับ", () => {
+test("helpers convert values both ways", () => {
   assert.deepEqual(VM.encodeBigints({ a: 10n, b: ["x", 2n] }), { a: "10n", b: ["x", "2n"] });
-  assert.deepEqual(VM.decodeBigints({ a: "10n", b: 5, c: "ปกติ" }), { a: 10n, b: 5n, c: "ปกติ" });
+  assert.deepEqual(VM.decodeBigints({ a: "10n", b: 5, c: "plain" }), { a: 10n, b: 5n, c: "plain" });
   assert.equal(VM.canonicalJson({ amount: 10n }), '{"amount":"10n"}');
 });

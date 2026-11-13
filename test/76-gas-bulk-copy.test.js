@@ -3,15 +3,15 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB } from "./helpers.js";
 
 /*
- * แก๊สตามขนาดข้อมูลที่ถูกคัดลอก / สร้าง (src/core/sandbox.js "แก๊สตามขนาดข้อมูล" · src/core/gasmeter.js)
- *   builtin 1 gas ต่อหน่วย · 1 หน่วย = 1 สมาชิก (array / property / Set / Map / argument) หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
- * เดิม [...a, ...a] / f(...a) / { ...o } / a + "" คิดแค่ 1 gas ต่อ node → ลูปทวีคูณจองหน่วยความจำ 32 MB ได้ด้วย ~230 gas
- * เทสต์คิดส่วนต่างของแก๊สระหว่างข้อมูล n กับ 2n ตัว (ส่วนคงที่ของโค้ดหักล้างกันหมด) → เห็นราคาต่อหน่วยตรง ๆ
+ * gas by the size of data copied / created (src/core/sandbox.js "gas by data size" · src/core/gasmeter.js)
+ *   builtin 1 gas per unit · 1 unit = 1 element (array / property / Set / Map / argument) or 32 characters / bytes (rounded up)
+ * previously [...a, ...a] / f(...a) / { ...o } / a + "" cost only 1 gas per node → a doubling loop could allocate 32 MB for ~230 gas
+ * tests take the gas difference between n and 2n items (the code's fixed costs cancel out) → the per-unit price shows directly
  */
 
 const T = 1_700_000_000_000;
 const as = (who) => ({ sender: who, origin: who });
-const units = (length) => Math.ceil(length / 32);   // 32 ตัวอักษร / byte = 1 หน่วย
+const units = (length) => Math.ceil(length / 32);   // 32 characters / bytes = 1 unit
 
 function setup(options = {}) {
   const vm = new VM.VirtualMachine(new MemoryDB(), { timeoutMs: 20_000, ...options });
@@ -29,7 +29,7 @@ function setup(options = {}) {
   return { vm, activate, call };
 }
 
-/** โปรแกรมที่ทุกฟังก์ชันสร้างข้อมูลขนาด n ก่อน (prepare) แล้วทำ op หนึ่งอย่าง */
+/** A program whose every function first builds data of size n (prepare), then does one op */
 function program(prepare, ops) {
   const fns = Object.entries(ops).map(([name, op]) => `function ${name}(params) { const n = Number(params.input.n); ${prepare} ${op}; return 1n }`);
   return `function program() {
@@ -41,7 +41,7 @@ function program(prepare, ops) {
 }`;
 }
 
-/** แก๊สที่ op ใช้เพิ่มเมื่อข้อมูลโตจาก n เป็น 2n (หักส่วนที่ prepare ใช้แล้ว) */
+/** Extra gas the op uses when data grows from n to 2n (minus what prepare used) */
 function perGrowth(call, uuid, name, n) {
   const gas = (fn, size) => {
     const res = call(uuid, fn, { n: `${size}n` });
@@ -51,31 +51,31 @@ function perGrowth(call, uuid, name, n) {
   return (gas(name, 2 * n) - gas(name, n)) - (gas("base", 2 * n) - gas("base", n));
 }
 
-test("ลูป [...a, ...a] ทวีคูณ: แก๊สโตตามจำนวนสมาชิก · หมดแก๊ส (OUT_OF_GAS) ก่อนถึงเพดานหน่วยความจำ 32 MB", () => {
+test("doubling [...a, ...a] loop: gas grows with element count · runs out of gas (OUT_OF_GAS) before the 32 MB memory cap", () => {
   const code = `function program() {
     function double(params) { let a = [1n]; for (let i = 0n; i < params.input.k; i++) a = [...a, ...a]; return BigInt(a.length) }
     function keep(params) { let a = [1n]; const all = []; for (let i = 0n; i < params.input.k; i++) { a = [...a, ...a]; all.push(a) } return BigInt(a.length) }
     return { double, keep }
   }`;
-  const { activate, call } = setup({ maxTxGas: 3_000_000 });   // เพดานต่อ tx เท่า server
+  const { activate, call } = setup({ maxTxGas: 3_000_000 });   // same per-tx cap as the server
   activate("lab", code);
   const gas = (k) => call("lab", "double", { k: `${k}n` }).gasUsed;
-  // รอบที่ k คัดลอก 2^k สมาชิก → ส่วนต่างของส่วนต่าง = 2^k พอดี (โค้ดต่อรอบเท่าเดิม)
+  // round k copies 2^k elements → the second difference = exactly 2^k (same code per round)
   const [g10, g11, g12] = [gas(10), gas(11), gas(12)];
   assert.equal((g12 - g11) - (g11 - g10), 2 ** 12 - 2 ** 11);
-  assert.ok(g12 - g11 > 2 ** 12, "รอบที่ 12 ต้องคิดอย่างน้อย 4,096 (จำนวนสมาชิกที่คัดลอก)");
-  // 2^20 สมาชิก (~8 MB) ใช้ ~2.1M gas · 2^21 ต้องใช้อีก 2.1M → หมดแก๊สที่ 3M ก่อนจองถึง 32 MB
+  assert.ok(g12 - g11 > 2 ** 12, "round 12 must cost at least 4,096 (elements copied)");
+  // 2^20 elements (~8 MB) take ~2.1M gas · 2^21 needs another 2.1M → out of gas at 3M before reaching 32 MB
   const twenty = call("lab", "double", { k: "20n" });
   assert.equal(twenty.status, "success");
   assert.ok(twenty.gasUsed > 2 ** 21 && twenty.gasUsed < 2 ** 21 + 10_000, String(twenty.gasUsed));
   const runaway = call("lab", "double", { k: "64n" });
-  assert.equal(runaway.error.code, "OUT_OF_GAS");          // เดิม: OUT_OF_MEMORY ที่ ~230 gas
+  assert.equal(runaway.error.code, "OUT_OF_GAS");          // previously: OUT_OF_MEMORY at ~230 gas
   assert.ok(runaway.gasUsed > 3_000_000);
-  // เก็บทุกก้อนไว้ (แบบกับดักเดิมของ GAS_LAB_PROGRAM) ก็หมดแก๊สก่อนเช่นกัน
+  // keeping every chunk (like the old GAS_LAB_PROGRAM trap) also runs out of gas first
   assert.equal(call("lab", "keep", { k: "64n" }).error.code, "OUT_OF_GAS");
 });
 
-test("spread / rest ของ array: 1 หน่วยต่อสมาชิก ([...a] · f(...a) · new F(...a) · apply · const [x, ...r] = a · Set / Map)", () => {
+test("array spread / rest: 1 unit per element ([...a] · f(...a) · new F(...a) · apply · const [x, ...r] = a · Set / Map)", () => {
   const { activate, call } = setup();
   activate("arr", program("const a = Array(n).fill(7);", {
     arrayLiteral: "const b = [...a]",
@@ -95,14 +95,14 @@ test("spread / rest ของ array: 1 หน่วยต่อสมาชิ�
   const cases = {
     arrayLiteral: n, twice: 2 * n, callArgs: n, newArgs: n, applyArgs: n, reflectApply: n, arrayRest: n, assignRest: n,
     set: n,
-    mapCtor: 2 * n + n,    // Object.entries (เข้า n + ออก n) + Map n
-    arrayFrom: 2 * n,      // ข้อมูลเข้า n + ผลลัพธ์ n
-    arrayOnly: 0,          // Array(n) ไม่จองที่ให้สมาชิก (QuickJS) → ไม่คิด · fill / spread / map … คิดตาม length ตอนใช้
+    mapCtor: 2 * n + n,    // Object.entries (in n + out n) + Map n
+    arrayFrom: 2 * n,      // input n + result n
+    arrayOnly: 0,          // Array(n) allocates no element storage (QuickJS) → free · fill / spread / map … charge by length when used
   };
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "arr", name, n), expected, name);
 });
 
-test("{ ...o } และ const { a, ...rest } = o: 1 หน่วยต่อ property ที่ถูกคัดลอก", () => {
+test("{ ...o } and const { a, ...rest } = o: 1 unit per copied property", () => {
   const { activate, call } = setup();
   activate("obj", program("const a = Array(n).fill(7); const o = Object.fromEntries(Object.entries(a));", {
     objectSpread: "const c = { ...o }",
@@ -117,7 +117,7 @@ test("{ ...o } และ const { a, ...rest } = o: 1 หน่วยต่อ pr
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "obj", name, n), expected, name);
 });
 
-test("เมธอดของ array คิดเท่ากันทุกทางที่เรียก (.call / Reflect.apply / เก็บใส่ตัวแปร / แปลงเป็น string โดยนัย)", () => {
+test("array methods cost the same however they are called (.call / Reflect.apply / stored in a variable / implicit string conversion)", () => {
   const { activate, call } = setup();
   activate("methods", program("const a = Array(n).fill(7);", {
     join: "a.join(',')",
@@ -139,22 +139,22 @@ test("เมธอดของ array คิดเท่ากันทุกท�
     fromLength: "Array.from({ length: n })",
   }));
   const n = 1000;
-  // "7,7,…" ยาว 2n − 1 ตัวอักษร
-  const joined = n + units(2 * (2 * n) - 1) - units(2 * n - 1);   // ข้อมูลเข้า n สมาชิก + ผลลัพธ์ (ต่อ 32 ตัวอักษร)
+  // "7,7,…" is 2n − 1 characters long
+  const joined = n + units(2 * (2 * n) - 1) - units(2 * n - 1);   // input n elements + result (per 32 characters)
   const cases = {
     join: joined, joinCall: joined, joinReflect: joined, joinAlias: joined,
-    toStringImplicit: joined + units(4 * n - 1) - units(2 * n - 1),   // + string ที่ได้จาก a + ''
-    template: n + joined + (units(4 * n - 1) - units(2 * n - 1)),       // "".concat(a): เข้า a (n สมาชิก) → join ข้างใน → ออก
+    toStringImplicit: joined + units(4 * n - 1) - units(2 * n - 1),   // + the string from a + ''
+    template: n + joined + (units(4 * n - 1) - units(2 * n - 1)),       // "".concat(a): in a (n elements) → internal join → out
     stringCall: joined,
-    stringify: 3 * n + units(4 * n + 1) - units(2 * n + 1),            // "[7,7,…]" + 2 หน่วยต่อค่าที่แปลง (เทสต์ 88)
+    stringify: 3 * n + units(4 * n + 1) - units(2 * n + 1),            // "[7,7,…]" + 2 units per converted value (test 88)
     keys: 2 * n, slice: 2 * n, concat: 4 * n, fill: 2 * n, toSorted: 2 * n, reverse: 2 * n,
-    flat: 2 * n,                     // สมาชิกที่ไล่ทุกชั้น (เทสต์ 88) + ผลลัพธ์
+    flat: 2 * n,                     // elements walked at every level (test 88) + result
     splice: n, fromLength: n,
   };
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "methods", name, n), expected, name);
 });
 
-test("string: ต่อด้วย + / += / template · repeat / padEnd / split / replaceAll / concat คิด 1 หน่วยต่อ 32 ตัวอักษร", () => {
+test("string: concatenation with + / += / template · repeat / padEnd / split / replaceAll / concat cost 1 unit per 32 characters", () => {
   const { activate, call } = setup();
   activate("text", program("const s = 'x'.repeat(n);", {
     plus: "const t = s + s",
@@ -168,23 +168,23 @@ test("string: ต่อด้วย + / += / template · repeat / padEnd / split
     repeatCall: "String.prototype.repeat.call('ab', n)",
     parse: "JSON.parse(JSON.stringify(s))",
   }));
-  const n = 32_000;   // 1,000 หน่วย
+  const n = 32_000;   // 1,000 units
   const u = units(n);
   const cases = {
     plus: 2 * u, plusAssign: 2 * u,
-    template: 2 * u + 2 * u,         // QuickJS สร้าง template ด้วย "".concat(…) → เข้า s + s · ออก 2n ตัวอักษร
-    concat: 2 * u + 2 * u,           // เข้า s + s · ออก 2n ตัวอักษร
+    template: 2 * u + 2 * u,         // QuickJS builds templates with "".concat(…) → in s + s · out 2n characters
+    concat: 2 * u + 2 * u,           // in s + s · out 2n characters
     upper: 2 * u,
-    padEnd: u + 2 * u,               // เข้า s · ผลลัพธ์ 2n ตัวอักษรคิดก่อนสร้าง
+    padEnd: u + 2 * u,               // in s · the 2n-character result is charged before it is built
     replaceAll: u + 2 * u,
-    split: u + n,                    // ผลลัพธ์ = n สมาชิก
-    repeatCall: 2 * u,               // "ab" × n = 2n ตัวอักษร คิดก่อนสร้าง
-    parse: 2 * u + 3 * u,            // stringify (เข้า + ออก) + parse (เข้า + ออก + งานแปลงต่อตัวอักษร เทสต์ 88)
+    split: u + n,                    // result = n elements
+    repeatCall: 2 * u,               // "ab" × n = 2n characters, charged before building
+    parse: 2 * u + 3 * u,            // stringify (in + out) + parse (in + out + per-character conversion work, test 88)
   };
   for (const [name, expected] of Object.entries(cases)) assert.equal(perGrowth(call, "text", name, n), expected, name);
 });
 
-test("ArrayBuffer / typed array คิดตามขนาดที่จอง · คิดก่อนจองจึงหยุดได้ก่อนสร้างข้อมูล · RegExp ปิด (เทสต์ 81)", () => {
+test("ArrayBuffer / typed arrays cost by allocated size · charged before allocating, so they stop before building data · RegExp disabled (test 81)", () => {
   const { activate, call } = setup({ maxTxGas: 3_000_000 });
   activate("bytes", program("", {
     buffer: "new ArrayBuffer(n)",
@@ -197,18 +197,18 @@ test("ArrayBuffer / typed array คิดตามขนาดที่จอง
   const n = 32_000;
   assert.equal(perGrowth(call, "bytes", "buffer", n), units(n));
   assert.equal(perGrowth(call, "bytes", "resizable", n), units(n));
-  assert.equal(perGrowth(call, "bytes", "bytes", n), n);                // typed array = 1 หน่วยต่อสมาชิก
+  assert.equal(perGrowth(call, "bytes", "bytes", n), n);                // typed array = 1 unit per element
   assert.equal(perGrowth(call, "bytes", "words", n), n);
-  assert.equal(perGrowth(call, "bytes", "copy", n), 2 * n + n);          // fill (เข้า + ออก) + สมาชิกที่คัดลอก
-  // RegExp ถูกปิดทั้งหมด (backtrack คิดแก๊สล่วงหน้าไม่ได้ — ดูเทสต์ 81) เดิม: คิดตามความยาว pattern
+  assert.equal(perGrowth(call, "bytes", "copy", n), 2 * n + n);          // fill (in + out) + copied elements
+  // RegExp is fully disabled (backtracking cannot be charged up front, see test 81); previously charged by pattern length
   assert.equal(call("bytes", "regexp", { n: "10n" }).error.message, "โปรแกรมทำงานผิดพลาด (TypeError)");
   const started = Date.now();
-  assert.equal(call("bytes", "buffer", { n: "2000000000n" }).error.code, "OUT_OF_GAS");   // ไม่ได้จองจริง
+  assert.equal(call("bytes", "buffer", { n: "2000000000n" }).error.code, "OUT_OF_GAS");   // never actually allocated
   assert.equal(call("bytes", "bytes", { n: "100000000n" }).error.code, "OUT_OF_GAS");
   assert.ok(Date.now() - started < 1000);
 });
 
-test("ช่องทางเลี่ยง: iterator ที่สร้างก่อนข้อมูลโต · Proxy ที่ ownKeys ตอบไม่เหมือนกัน · แก้ iterator ในตัว", () => {
+test("bypass attempts: an iterator created before the data grows · a Proxy whose ownKeys answers inconsistently · patching built-in iterators", () => {
   const { activate, call } = setup();
   activate("tricks", `function program() {
     function base(params) { const n = Number(params.input.n); const a = []; a.push(...Array(n).fill(1)); return 1n }
@@ -231,17 +231,17 @@ test("ช่องทางเลี่ยง: iterator ที่สร้าง
     function nativeLook() { return [Function.prototype.toString.call([].join), [].join.name, BigInt([].join.length), BigInt("ab".padStart.length)] }
     return { base, staleIterator, lyingProxy, patchIterator, patchNext, nativeLook }
   }`);
-  // iterator สร้างตอน array ยังว่าง แล้วค่อยเติม → [...it] ยังถูกคิดต่อสมาชิก
+  // iterator created while the array is empty, then filled → [...it] is still charged per element
   assert.equal(perGrowth(call, "tricks", "staleIterator", 1000), 1000);
-  // copy ของ Proxy ถาม ownKeys ครั้งเดียว (ตามมาตรฐาน) แล้วคิดตามคำตอบนั้น — engine ไม่ได้ถามซ้ำให้ตอบอีกแบบ
+  // copying a Proxy asks ownKeys once (per the spec) and charges by that answer; the engine never asks again for a different answer
   assert.deepEqual(call("tricks", "lyingProxy").result, ["0n", "1n"]);
   assert.deepEqual(call("tricks", "patchIterator").result, "TypeError");
   assert.deepEqual(call("tricks", "patchNext").result, "TypeError");
-  // ตัวห่อดูเหมือนของจริง (ชื่อ / length / toString)
+  // the wrappers look like the real thing (name / length / toString)
   assert.deepEqual(call("tricks", "nativeLook").result, ["function join() {\n    [native code]\n}", "join", "1n", "1n"]);
 });
 
-test("...rest ในตำแหน่งที่คิดแก๊สไม่ได้ (พารามิเตอร์ / for…of / catch / ซ้อน) → deploy ไม่ผ่าน · function f(...args) ใช้ได้", () => {
+test("...rest in positions that cannot be metered (parameters / for…of / catch / nested) → deploy fails · function f(...args) is allowed", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   for (const body of [
     "function f({ a, ...rest }) { return rest }",
@@ -258,7 +258,7 @@ test("...rest ในตำแหน่งที่คิดแก๊สไม่
   assert.equal(ok.status, "success", JSON.stringify(ok.error));
 });
 
-test("input / ผลของ runProgram คิดตามขนาด JSON (1 หน่วยต่อ 32 byte ทั้งขาไปและขากลับ)", () => {
+test("runProgram input / result are charged by JSON size (1 unit per 32 bytes, both directions)", () => {
   const { activate, call } = setup();
   activate("echo", "function program() { function echo(params) { return params.input.text } return { echo } }");
   activate("caller", `function program() {
@@ -267,11 +267,11 @@ test("input / ผลของ runProgram คิดตามขนาด JSON (1 
     return { base, relay }
   }`);
   const n = 32_000;
-  // {"text":"xxx…"} ขาไป + "xxx…" ขากลับ: ส่วนที่โตตาม n = 2 × n byte
+  // {"text":"xxx…"} going out + "xxx…" coming back: the part that grows with n = 2 × n bytes
   assert.equal(perGrowth(call, "caller", "relay", n), units(2 * n + 11) - units(n + 11) + units(2 * n + 2) - units(n + 2));
 });
 
-test("หน่วยความจำเกิน (OUT_OF_MEMORY) เสียค่าแก๊สของงานที่ทำไปจริง ไม่ใช่แค่ส่วนที่ส่งให้ host แล้ว", () => {
+test("memory overflow (OUT_OF_MEMORY) pays gas for the work actually done, not just what reached the host", () => {
   const { activate, call } = setup({ maxTxGas: 3_000_000 });
   activate("mem", `function program() {
     function grow() { const keep = []; while (true) keep.push("x".repeat(1048576)) }
@@ -279,10 +279,10 @@ test("หน่วยความจำเกิน (OUT_OF_MEMORY) เสีย
   }`);
   const res = call("mem", "grow");
   assert.equal(res.error.code, "OUT_OF_MEMORY");
-  assert.ok(res.gasUsed > 900_000 && res.gasUsed < 1_200_000, String(res.gasUsed));   // ≈ 32 MB ÷ 32 = 1M หน่วย
+  assert.ok(res.gasUsed > 900_000 && res.gasUsed < 1_200_000, String(res.gasUsed));   // ≈ 32 MB ÷ 32 = 1M units
 });
 
-test("ผลเหมือนเดิมทุกครั้ง (คิดแก๊สตามขนาดข้อมูลไม่ขึ้นกับเครื่อง)", () => {
+test("same results every time (size-based gas does not depend on the machine)", () => {
   const code = `function program() {
     function mix(params) {
       const a = Array(Number(params.input.n)).fill("ab")

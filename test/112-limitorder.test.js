@@ -9,8 +9,8 @@ import {
 } from "../src/standards/limitorder.js";
 
 /*
- * Limit order book (src/standards/limitorder.js): escrow ของ maker · taker กินเอง · ไม่มีค่าธรรมเนียม
- *   ทุกสถานการณ์จบด้วยการตรวจ escrow invariant: ยอดของโปรแกรมในแต่ละ token = ผลรวม remaining ของ order ที่ยังเปิด
+ * Limit order book (src/standards/limitorder.js): maker escrow · takers fill directly · no fees
+ *   every scenario ends with the escrow invariant check: the program's balance of each token = sum of remaining over open orders
  */
 
 const T = Date.parse("2026-11-01T00:00:00Z");
@@ -28,7 +28,7 @@ const LIAR = "0x0000000000000000000000000000000000001ee1";
 const EVIL = "0x000000000000000000000000000000000000e111";
 const SUPPLY = 1_000_000_000n;
 
-/** token สำหรับทดสอบ: mode "fee" = หัก 1% ทุกการโอน (เผาทิ้ง) · "lie" = transfer ตอบ true แต่ไม่โอน · "reenter" = transferFrom เรียกกลับเข้า book */
+/** test token: mode "fee" = takes 1% on every transfer (burned) · "lie" = transfer returns true without transferring · "reenter" = transferFrom calls back into the book */
 const TEST_TOKEN = `function program() {
   function initialization(params) {
     writeDB("mode", params.input.mode)
@@ -107,7 +107,7 @@ function setup() {
 
   const bal = (token, who) => query(token, "balanceOf", { who });
   const now = () => time;
-  /** escrow invariant: balanceOf(BOOK) ของทุก token = Σ remaining ของ order ที่ยังเปิด (open / expired) */
+  /** escrow invariant: balanceOf(BOOK) of every token = Σ remaining over orders still open (open / expired) */
   const invariant = () => {
     const count = query(BOOK, "orderCount");
     const sums = Object.fromEntries(tokens.map((t) => [t, 0n]));
@@ -119,7 +119,7 @@ function setup() {
     }
     assert.equal(BigInt(vm.nativeBalanceOf(BOOK).balance), 0n, "book never holds native coin");
     for (const token of tokens) {
-      if (token === LIAR) continue;   // token ที่โกหกไม่มีความหมาย แต่ยอดที่ฝากไว้ต้องไม่หาย (ตรวจแยก)
+      if (token === LIAR) continue;   // a lying token's balance is meaningless, but deposits must not vanish (checked separately)
       assert.equal(bal(token, BOOK), sums[token], `escrow mismatch for ${token}`);
     }
     return sums;
@@ -133,7 +133,7 @@ function setup() {
 
 // ---------------------------------------------------------------------------
 
-test("limitorder: โค้ดผ่าน autoreview · export ครบ · emit event ครบ · metadata ตั้งตอน init", () => {
+test("limitorder: code passes autoreview · all exports · all events emitted · metadata set at init", () => {
   assert.ok(reviewProgram(LIMIT_ORDER_PROGRAM).ok, reviewProgram(LIMIT_ORDER_PROGRAM).message);
   assert.deepEqual(checkStandard(LIMIT_ORDER_PROGRAM, [...LIMIT_ORDER_FUNCTIONS, "getOrder", "orderCount", "ordersOf", "ordersForPair", "bestOrders", "quoteFill"], LIMIT_ORDER_EVENTS), { ok: true, missing: [] });
   const t = setup();
@@ -144,9 +144,9 @@ test("limitorder: โค้ดผ่าน autoreview · export ครบ · emi
   t.invariant();
 });
 
-test("limitorder: วาง order → escrow · กินบางส่วน (ปัดขึ้น) · กินจนหมด → filled", () => {
+test("limitorder: place order → escrow · partial fill (rounded up) · fill completely → filled", () => {
   const t = setup();
-  // ALICE ขาย 1,000 AAA แลก 3,000 BBB (ราคา 3 BBB / AAA)
+  // ALICE sells 1,000 AAA for 3,000 BBB (price 3 BBB / AAA)
   const { id, res } = t.place(ALICE, { sellToken: TA, sellAmount: "1000n", buyToken: TB, buyAmount: "3000n" });
   assert.equal(id, 0n);
   console.log("gas placeOrder:", res.gasUsed);
@@ -181,16 +181,16 @@ test("limitorder: วาง order → escrow · กินบางส่วน (
   t.invariant();
 });
 
-test("limitorder: ปัดขึ้นเสมอ — maker ไม่ได้น้อยกว่าราคา แม้กินทีละนิด", () => {
+test("limitorder: always rounds up — the maker never gets less than the price, even with tiny fills", () => {
   const t = setup();
-  // ขาย 3 AAA แลก 1 BBB: กิน 1 AAA ต้องจ่าย ⌈1/3⌉ = 1 BBB (ไม่ใช่ 0)
+  // sell 3 AAA for 1 BBB: filling 1 AAA costs ⌈1/3⌉ = 1 BBB (not 0)
   const { id } = t.place(ALICE, { sellToken: TA, sellAmount: "3n", buyToken: TB, buyAmount: "1n" });
   for (let i = 0; i < 3; i++) {
     const r = deep(t.ok(t.send(BOB, BOOK, "fillOrder", { orderId: s(id), sellAmountToTake: "1n" })).result);
     assert.equal(r.paid, 1n);
   }
-  assert.equal(t.bal(TB, ALICE), SUPPLY + 3n, "maker ได้มากกว่าหรือเท่าราคาเสมอ");
-  // ราคา 7 BBB ต่อ 3 AAA: กิน 2 → ⌈14/3⌉ = 5
+  assert.equal(t.bal(TB, ALICE), SUPPLY + 3n, "the maker always gets at least the price");
+  // price 7 BBB per 3 AAA: fill 2 → ⌈14/3⌉ = 5
   const two = t.place(ALICE, { sellToken: TA, sellAmount: "3n", buyToken: TB, buyAmount: "7n" });
   assert.equal(t.query(BOOK, "quoteFill", { orderId: s(two.id), sellAmountToTake: "2n" }).paid, 5n);
   t.fails(t.send(BOB, BOOK, "fillOrder", { orderId: s(two.id), sellAmountToTake: "2n", maxBuyAmount: "4n" }), /exceeds maxBuyAmount/);
@@ -200,7 +200,7 @@ test("limitorder: ปัดขึ้นเสมอ — maker ไม่ได้
   t.invariant();
 });
 
-test("limitorder: allowPartial = false → กินได้ทั้ง order เท่านั้น", () => {
+test("limitorder: allowPartial = false → only the whole order can be filled", () => {
   const t = setup();
   const { id } = t.place(ALICE, { sellToken: TA, sellAmount: "500n", buyToken: TB, buyAmount: "100n", allowPartial: false });
   t.fails(t.send(BOB, BOOK, "fillOrder", { orderId: s(id), sellAmountToTake: "499n" }), /does not allow partial/);
@@ -210,7 +210,7 @@ test("limitorder: allowPartial = false → กินได้ทั้ง order 
   t.invariant();
 });
 
-test("limitorder: ตรวจ input ของ placeOrder / fillOrder ทุกกรณี", () => {
+test("limitorder: placeOrder / fillOrder input validation in every case", () => {
   const t = setup();
   const base = { sellToken: TA, sellAmount: "10n", buyToken: TB, buyAmount: "10n" };
   const bad = [
@@ -231,7 +231,7 @@ test("limitorder: ตรวจ input ของ placeOrder / fillOrder ทุก�
   ];
   for (const [input, message] of bad) t.fails(t.send(ALICE, BOOK, "placeOrder", input), message);
   t.fails(t.send(ALICE, BOOK, "placeOrder", base, { value: 5 }), /native coin not accepted/);
-  t.fails(t.send(DEPLOYER, BOOK, "placeOrder", base), /insufficient allowance/);   // ยังไม่ approve
+  t.fails(t.send(DEPLOYER, BOOK, "placeOrder", base), /insufficient allowance/);   // not approved yet
   assert.equal(t.query(BOOK, "orderCount"), 0n);
 
   const { id } = t.place(ALICE, base);
@@ -249,7 +249,7 @@ test("limitorder: ตรวจ input ของ placeOrder / fillOrder ทุก�
   t.invariant();
 });
 
-test("limitorder: หมดอายุ (unix วินาที) → กินไม่ได้ · ใครก็คืน escrow ให้ maker ได้ · ยกเลิกได้เฉพาะ maker", () => {
+test("limitorder: expired (unix seconds) → cannot be filled · anyone can return the escrow to the maker · only the maker can cancel", () => {
   const t = setup();
   const expiresAt = BigInt(Math.floor(t.now() / 1000)) + 60n;
   const { id } = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n", expiresAt: s(expiresAt) });
@@ -257,12 +257,12 @@ test("limitorder: หมดอายุ (unix วินาที) → กิน�
   t.fails(t.send(CAROL, BOOK, "cancelExpired", { orderId: s(id) }), /has not expired/);
   t.fails(t.send(BOB, BOOK, "cancelOrder", { orderId: s(id) }), /only the maker/);
 
-  const at = Number(expiresAt) * 1000;   // วินาทีของ block = expiresAt → หมดอายุแล้ว
+  const at = Number(expiresAt) * 1000;   // block second = expiresAt → already expired
   assert.equal(t.query(BOOK, "getOrder", { orderId: s(id) }, at).status, "expired");
   assert.equal(t.query(BOOK, "getOrder", { orderId: s(id) }, at - 1000).status, "open");
   assert.equal(t.query(BOOK, "quoteFill", { orderId: s(id), sellAmountToTake: "1n" }, at).reason, "order expired");
   t.fails(t.send(BOB, BOOK, "fillOrder", { orderId: s(id), sellAmountToTake: "1n" }, { at }), /order expired/);
-  t.invariant();   // expired แต่ยังไม่คืน = ยังอยู่ใน escrow
+  t.invariant();   // expired but not returned = still in escrow
 
   const before = t.bal(TA, ALICE);
   const res = t.ok(t.send(CAROL, BOOK, "cancelExpired", { orderId: s(id) }, { at: at + 1000 }));
@@ -276,7 +276,7 @@ test("limitorder: หมดอายุ (unix วินาที) → กิน�
   t.invariant();
 });
 
-test("limitorder: cancelOrder คืนยอดที่เหลือ · ยกเลิกซ้ำ / กินหลังยกเลิกไม่ได้", () => {
+test("limitorder: cancelOrder returns the remainder · no repeated cancel / fill after cancel", () => {
   const t = setup();
   const { id } = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "100n" });
   t.ok(t.send(BOB, BOOK, "fillOrder", { orderId: s(id), sellAmountToTake: "30n" }));
@@ -292,7 +292,7 @@ test("limitorder: cancelOrder คืนยอดที่เหลือ · ย�
   t.invariant();
 });
 
-test("limitorder: fillOrders กินหลาย order (buyToken เดียวกัน) · maxTotalBuy · จำกัดจำนวน · ล้มทั้งชุด", () => {
+test("limitorder: fillOrders fills several orders (same buyToken) · maxTotalBuy · count limit · the whole batch fails together", () => {
   const t = setup();
   const a = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n" }).id;
   const c = t.place(CAROL, { sellToken: TC, sellAmount: "50n", buyToken: TB, buyAmount: "75n" }).id;
@@ -305,7 +305,7 @@ test("limitorder: fillOrders กินหลาย order (buyToken เดีย�
   const fills = [{ orderId: s(a), sellAmountToTake: "50n" }, { orderId: s(c), sellAmountToTake: "50n" }];   // 100 + 75 = 175 BBB
   t.fails(t.send(BOB, BOOK, "fillOrders", { fills, maxTotalBuy: "174n" }), /exceeds maxTotalBuy/);
   t.fails(t.send(BOB, BOOK, "fillOrders", { fills, maxTotalBuy: "x" }), /maxTotalBuy must be/);
-  t.fails(t.send(ALICE, BOOK, "fillOrders", { fills }), /your own order/);   // ALICE มี order a อยู่ในชุด → ทั้งชุดล้ม
+  t.fails(t.send(ALICE, BOOK, "fillOrders", { fills }), /your own order/);   // ALICE's order a is in the batch → the whole batch fails
   assert.equal(t.query(BOOK, "getOrder", { orderId: s(c) }).remaining, 50n);
 
   const res = t.ok(t.send(BOB, BOOK, "fillOrders", { fills, maxTotalBuy: "175n" }));
@@ -313,14 +313,14 @@ test("limitorder: fillOrders กินหลาย order (buyToken เดีย�
   assert.deepEqual(deep(res.result), { count: 2n, sold: [50n, 50n], paid: [100n, 75n], totalPaid: 175n });
   assert.equal(t.query(BOOK, "getOrder", { orderId: s(c) }).status, "filled");
   assert.equal(t.bal(TB, CAROL), SUPPLY + 75n);
-  // order เดียวกันซ้ำในชุด: รายการหลังเห็นยอดที่ลดแล้ว
+  // the same order twice in a batch: the later entry sees the reduced amount
   t.fails(t.send(BOB, BOOK, "fillOrders", { fills: [{ orderId: s(a), sellAmountToTake: "30n" }, { orderId: s(a), sellAmountToTake: "30n" }] }), /exceeds remaining/);
   t.ok(t.send(BOB, BOOK, "fillOrders", { fills: [{ orderId: s(a), sellAmountToTake: "25n" }, { orderId: s(a), sellAmountToTake: "25n" }] }));
   assert.equal(t.query(BOOK, "getOrder", { orderId: s(a) }).status, "filled");
   t.invariant();
 });
 
-test("limitorder: fillOrders เต็มชุด 20 รายการ อยู่ในงบแก๊ส", () => {
+test("limitorder: a full fillOrders batch of 20 stays within the gas budget", () => {
   const t = setup();
   const ids = [];
   for (let i = 0; i < LIMIT_ORDER_MAX_BATCH; i++) ids.push(t.place(ALICE, { sellToken: TA, sellAmount: "10n", buyToken: TB, buyAmount: s(10n + BigInt(i)) }).id);
@@ -330,16 +330,16 @@ test("limitorder: fillOrders เต็มชุด 20 รายการ อย�
   t.invariant();
 });
 
-test("limitorder: อ่าน — ordersOf / ordersForPair (ทั้งหมด / เฉพาะที่เปิด) / bestOrders เรียงราคาดีสุด", () => {
+test("limitorder: reads — ordersOf / ordersForPair (all / open only) / bestOrders sorted best price first", () => {
   const t = setup();
-  // ขาย AAA แลก BBB ราคาต่าง ๆ (BBB ต่อ AAA): 3, 2, 5, 2 (id น้อยก่อน), 1 (หมดอายุ), 4 (ยกเลิก)
+  // sell AAA for BBB at various prices (BBB per AAA): 3, 2, 5, 2 (lower id first), 1 (expired), 4 (cancelled)
   const prices = [[100n, 300n], [100n, 200n], [10n, 50n], [50n, 100n]];
   const ids = prices.map(([sell, buy], i) => t.place(i % 2 ? BOB : ALICE, { sellToken: TA, sellAmount: s(sell), buyToken: TB, buyAmount: s(buy) }).id);
   const soon = BigInt(Math.floor(t.now() / 1000)) + 30n;
   const expired = t.place(CAROL, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "100n", expiresAt: s(soon) }).id;
   const cancelled = t.place(ALICE, { sellToken: TA, sellAmount: "10n", buyToken: TB, buyAmount: "40n" }).id;
   t.ok(t.send(ALICE, BOOK, "cancelOrder", { orderId: s(cancelled) }));
-  t.place(ALICE, { sellToken: TB, sellAmount: "10n", buyToken: TA, buyAmount: "1n" });   // คู่กลับด้าน: ไม่ปน
+  t.place(ALICE, { sellToken: TB, sellAmount: "10n", buyToken: TA, buyAmount: "1n" });   // reversed pair: not mixed in
   const later = Number(soon) * 1000 + 1000;
 
   assert.equal(t.query(BOOK, "orderCount"), 7n);
@@ -357,11 +357,11 @@ test("limitorder: อ่าน — ordersOf / ordersForPair (ทั้งหม�
   assert.deepEqual(open.orders.map((o) => o.orderId).sort(), [...ids, expired].sort());
 
   const best = t.query(BOOK, "bestOrders", { sellToken: TA, buyToken: TB, limit: "3n" }, later);
-  assert.deepEqual(best.orders.map((o) => o.orderId), [ids[1], ids[3], ids[0]], "ราคา 2 (id น้อยก่อน), 2, 3 · ข้ามที่หมดอายุ");
+  assert.deepEqual(best.orders.map((o) => o.orderId), [ids[1], ids[3], ids[0]], "price 2 (lower id first), 2, 3 · expired skipped");
   assert.equal(best.totalOpen, 5n);
   assert.equal(best.scanned, 5n);
   assert.equal(best.truncated, false);
-  // ก่อนหมดอายุ: order ราคา 1 ดีสุด
+  // before expiry: the price 1 order is best
   assert.equal(t.query(BOOK, "bestOrders", { sellToken: TA, buyToken: TB, limit: "1n" }).orders[0].orderId, expired);
   assert.deepEqual(t.query(BOOK, "bestOrders", { sellToken: TB, buyToken: TC }).orders, []);
 
@@ -377,7 +377,7 @@ test("limitorder: อ่าน — ordersOf / ordersForPair (ทั้งหม�
   t.invariant();
 });
 
-test("limitorder: bestOrders ตรวจได้ไม่เกิน 100 order ต่อครั้ง (truncated) · เรียกต่อด้วย start", () => {
+test("limitorder: bestOrders scans at most 100 orders per call (truncated) · continue with start", () => {
   const t = setup();
   const n = LIMIT_ORDER_BEST_SCAN + 5;
   for (let i = 0; i < n; i++) t.place(ALICE, { sellToken: TA, sellAmount: "10n", buyToken: TB, buyAmount: s(BigInt(1000 - i)) });
@@ -394,7 +394,7 @@ test("limitorder: bestOrders ตรวจได้ไม่เกิน 100 orde
   t.invariant();
 });
 
-test("limitorder: รายการเปิดลบแบบสลับตัวท้าย ยังถูกต้องหลังปิด order กลางรายการ", () => {
+test("limitorder: the open list uses swap-with-last removal and stays correct after closing an order mid-list", () => {
   const t = setup();
   const ids = [];
   for (let i = 0; i < 5; i++) ids.push(t.place(ALICE, { sellToken: TA, sellAmount: "10n", buyToken: TB, buyAmount: "10n" }).id);
@@ -411,25 +411,25 @@ test("limitorder: รายการเปิดลบแบบสลับต�
   t.invariant();
 });
 
-test("limitorder: token หักค่าโอน — order ขายเท่าที่ได้รับจริง · ใช้เป็น buyToken ไม่ได้ (maker ได้น้อยกว่าราคา)", () => {
+test("limitorder: fee-on-transfer token — the order sells what was actually received · cannot be the buyToken (maker would get less than the price)", () => {
   const t = setup();
   const { id } = t.place(ALICE, { sellToken: FEE, sellAmount: "1000n", buyToken: TB, buyAmount: "990n" });
   const order = t.query(BOOK, "getOrder", { orderId: s(id) });
-  assert.equal(order.sellAmount, 990n, "ฝากจริง 990 (หัก 1%)");
+  assert.equal(order.sellAmount, 990n, "990 actually deposited (1% fee)");
   assert.equal(t.bal(FEE, BOOK), 990n);
   t.invariant();
-  // ส่ง FEE ออกจาก escrow: ยอดของโปรแกรมลดเท่าที่ส่งพอดี (ผู้รับโดนหักเอง) → ผ่าน
+  // sending FEE out of escrow: the program's balance drops by exactly the amount sent (the recipient bears the fee) → passes
   t.ok(t.send(BOB, BOOK, "fillOrder", { orderId: s(id), sellAmountToTake: "500n" }));
   assert.equal(t.bal(FEE, BOB), SUPPLY + 495n);
   t.invariant();
-  // FEE เป็นของที่ maker ขอรับ → maker ได้ไม่ครบ → ล้ม
+  // FEE is what the maker asks for → the maker gets less → fails
   const other = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: FEE, buyAmount: "100n" }).id;
   t.fails(t.send(BOB, BOOK, "fillOrder", { orderId: s(other), sellAmountToTake: "100n" }), /maker received less than the price/);
   t.ok(t.send(ALICE, BOOK, "cancelOrder", { orderId: s(id) }));
   t.invariant();
 });
 
-test("limitorder: token ที่ตอบ true แต่ไม่โอนจริง → fill / cancel ล้ม ไม่กระทบ escrow ของ token อื่น", () => {
+test("limitorder: a token returning true without transferring → fill / cancel fail, other tokens' escrow unaffected", () => {
   const t = setup();
   const good = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "100n" }).id;
   const { id } = t.place(ALICE, { sellToken: LIAR, sellAmount: "100n", buyToken: TB, buyAmount: "100n" });
@@ -442,11 +442,11 @@ test("limitorder: token ที่ตอบ true แต่ไม่โอนจ�
   t.invariant();
 });
 
-test("limitorder: reentrancy — token เรียกกลับเข้า book ระหว่างโอน → ล้มด้วย reentrant call", () => {
+test("limitorder: reentrancy — token calls back into the book during transfer → fails with reentrant call", () => {
   const t = setup();
   const victim = t.place(CAROL, { sellToken: TA, sellAmount: "100n", buyToken: EVIL, buyAmount: "100n" }).id;
   const own = t.place(ALICE, { sellToken: EVIL, sellAmount: "100n", buyToken: TB, buyAmount: "100n" }).id;
-  // ระหว่าง BOB จ่ายด้วย EVIL → EVIL พยายาม cancel / fill ซ้ำ
+  // while BOB pays with EVIL → EVIL tries to cancel / fill again
   for (const attack of [
     { target: BOOK, fn: "fillOrder", input: { orderId: s(victim), sellAmountToTake: "50n" } },
     { target: BOOK, fn: "cancelOrder", input: { orderId: s(own) } },
@@ -462,7 +462,7 @@ test("limitorder: reentrancy — token เรียกกลับเข้า b
   t.invariant();
 });
 
-test("limitorder: tx ที่ล้มไม่ทิ้งตัวล็อกค้าง · ใช้งานต่อได้", () => {
+test("limitorder: a failed tx leaves no stuck lock · usage continues", () => {
   const t = setup();
   t.fails(t.send(ALICE, BOOK, "placeOrder", { sellToken: TA, sellAmount: "1n", buyToken: TA, buyAmount: "1n" }));
   assert.equal(t.vm.read(`${BOOK}:storage:lock`), undefined);
@@ -470,7 +470,7 @@ test("limitorder: tx ที่ล้มไม่ทิ้งตัวล็อ�
   t.invariant();
 });
 
-test("limitorder: จำนวน ≥ 2^128 → too large · expiresAt เป็นมิลลิวินาที → ล้ม · bestOrders ยังใช้ได้", () => {
+test("limitorder: amount ≥ 2^128 → too large · expiresAt in milliseconds → fails · bestOrders still works", () => {
   const t = setup();
   const good = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n" }).id;
   const huge = s(2n ** 128n);
@@ -485,11 +485,11 @@ test("limitorder: จำนวน ≥ 2^128 → too large · expiresAt เป็
   t.invariant();
 });
 
-test("limitorder: ห้ามแนบ native value — placeOrder / ฟังก์ชันอ่าน getOrder / bestOrders ล้ม · book ไม่ถือเหรียญหลัก", () => {
+test("limitorder: no native value allowed — placeOrder / read functions getOrder / bestOrders fail · the book holds no native coin", () => {
   const t = setup();
   const id = t.place(ALICE, { sellToken: TA, sellAmount: "100n", buyToken: TB, buyAmount: "200n" }).id;
   const a0 = BigInt(t.vm.nativeBalanceOf(ALICE).balance);
-  t.fails(t.send(ALICE, BOOK, "placeOrder", { sellToken: TA, sellAmount: "1n", buyToken: TB, buyAmount: "1n" }, { value: "10" }), /native coin not accepted/);   // ฟังก์ชันเขียน state ปฏิเสธอยู่แล้ว
+  t.fails(t.send(ALICE, BOOK, "placeOrder", { sellToken: TA, sellAmount: "1n", buyToken: TB, buyAmount: "1n" }, { value: "10" }), /native coin not accepted/);   // state-writing functions already reject it
   t.fails(t.send(ALICE, BOOK, "getOrder", { orderId: s(id) }, { value: "10" }), /this function does not accept native value/);
   t.fails(t.send(ALICE, BOOK, "bestOrders", { sellToken: TA, buyToken: TB }, { value: "10" }), /this function does not accept native value/);
   assert.equal(BigInt(t.vm.nativeBalanceOf(BOOK).balance), 0n);

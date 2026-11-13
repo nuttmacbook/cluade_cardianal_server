@@ -1,39 +1,39 @@
 /**
- * ตัวแปลง JSON-RPC แบบ EVM (POST /evm) — อ่านข้อมูลเชนเดิมแล้วตอบในรูปแบบที่ MetaMask / ethers / viem เข้าใจ
+ * EVM-style JSON-RPC adapter (POST /evm) — reads the existing chain data and answers in the format MetaMask / ethers / viem understand
  *
  *   const rpc = createEvmRpc({ vm, mempool });
  *   rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })   // → { jsonrpc, id, result: "0x1" }
  *
- * อ่านอย่างเดียว: ไม่เขียน DB ไม่แตะ mempool ไม่เปลี่ยนกฎของเชน (ยกเว้น eth_sendRawTransaction ที่ส่งผ่าน submit ของ server)
- *   - eth_sendRawTransaction (src/node/evm-raw.js): tx แบบ legacy (EIP-155) / type 2 → โอน native · ERC-20 ของ token มาตรฐาน · ฟังก์ชันตาม metadata.abi
- *     ส่งต่อให้ submit(verified) ของ server (ผ่าน mempool + simulate แบบเดียวกับ /sendtx) · hash = keccak(raw)
- *   - eth_estimateGas: เรียกโปรแกรม = จำลองด้วย vm.query แล้วเผื่อ 25% (แก๊สของเชน)
- *   - native ของเชนเป็นหน่วยย่อย 18 ทศนิยมแบบ wei อยู่แล้ว → ส่งตรง ๆ (decimals = ทศนิยมที่ต้องเติมเพิ่ม ค่าเริ่มต้น 0)
- *   - token มาตรฐาน (src/standards/token.js) ตอบ eth_call แบบ ERC-20 ได้ (balanceOf / decimals / symbol / name / totalSupply / allowance)
- *   - NFT / multi-token มาตรฐาน (src/standards/nft.js / multitoken.js) emit แบบ indexed → log แบบ ERC-721 (tokenId เป็น topic ที่ 4) / ERC-1155
- *   - event → log ด้วย eventLog() ของ VM (ค่าเดียวกับที่ใช้ทำ logsBloom / receiptsRoot ใน header):
- *       emit แบบ indexed → topic0 = keccak("ชื่อ(ชนิด,…)") + topic ของ field ที่ indexed (Transfer ของ token มาตรฐาน = log แบบ ERC-20)
- *       ไม่มี indexed → topic0 = keccak(ชื่อ), data = JSON เป็น hex
- *   - EIP-1559: baseFeePerGas ใน block · eth_feeHistory · eth_maxPriorityFeePerGas · eth_gasPrice = base fee ถัดไป + tip ที่แนะนำ
- *     tx แบบ 1559 → type 0x2 + maxFeePerGas / maxPriorityFeePerGas · receipt มี effectiveGasPrice
- *   - eth_getLogs: ข้าม block ด้วย logsBloom ของ header · มี topic0 + topic อื่น → ใช้ดัชนี eventidx: replay เฉพาะ block ที่ตรง
- *   - cardianal_getAbi(address) → metadata.abi ของโปรแกรมแปลงเป็น JSON ABI แบบ Ethereum (โปรแกรมแถมได้ ABI จากโค้ด: src/standards/system-abi.js · null = ไม่ได้ประกาศ)
- *   - cardianal_getProof([key, …]) → หลักฐาน Merkle ของ key ใน state ล่าสุด เทียบกับ stateRoot ของ block ล่าสุด (vm.getProof)
- *       key = dbKey ("0xprog:storage:balances:0xabc") หรือ { program, key } (key เป็น string หรือ array = map(...))
- *     eth_getProof ตอบ error: state ของเชนไม่ใช่ account trie แบบ EVM (ไม่มี storageHash / slot 32 byte) → ใช้ cardianal_getProof
- *     eth_call ของทั้งสองแบบ: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
- *   - eth_call ของโปรแกรมอื่นที่ประกาศ metadata.abi: ถอด / เข้ารหัสตาม ABI ของ Solidity (src/node/evm-abi.js) → dApp ใช้ ethers / viem อ่านได้ตรง ๆ
- *   - ยอด / nonce / code / eth_call ตามเลข block อ่านจาก history ของเชน (vm.stateAt) · ต้องเปิด recordHistory
- *   - debug_trace* (callTracer) แปลงจาก trace + nativeChanges ของการ replay block · ผล replay เก็บ cache ไว้ต่อ block
- *   - filter แบบ HTTP (ethers contract.on ผ่าน JsonRpcProvider ใช้ชุดนี้): eth_newFilter / eth_newBlockFilter / eth_newPendingTransactionFilter
- *       → eth_getFilterChanges (ของใหม่ตั้งแต่ครั้งก่อน) · eth_getFilterLogs · eth_uninstallFilter
- *       เก็บในหน่วยความจำของ node (restart = หาย → "filter not found" ให้ dApp สร้างใหม่) · ไม่ถูกเรียกเกิน filterTtlMs = ลบ (แบบ geth)
- *       จำกัด maxFilters ทั้ง node และ maxFiltersPerClient ต่อ IP · log filter ไล่ทีละไม่เกิน logRange block ต่อครั้ง
- *       pending filter ได้ hash จาก mempool.onAdded · เก็บค้างได้ไม่เกิน PENDING_BUFFER ใบ (เกินทิ้งใบเก่า)
- *   - eth_createAccessList: เชนไม่มี access list → accessList ว่าง + gasUsed เท่ากับ eth_estimateGas
- *   - eth_simulateV1: รันหลาย call ต่อกันบน block จำลองถัดไป (ไม่ commit) · คืน status / returnData / gasUsed / logs ต่อ call
- *       รองรับ blockStateCalls 1 ชุด · ไม่รับ stateOverrides / blockOverrides · หักค่าแก๊สเหมือน tx จริง (ผู้ส่งต้องมียอดพอ)
- *       nonce เติมให้ตามลำดับใน block จำลอง · traceTransfers ไม่สร้าง log ของการโอน native
+ * Read-only: doesn't write the DB, touch the mempool or change chain rules (except eth_sendRawTransaction, which goes through the server's submit)
+ *   - eth_sendRawTransaction (src/node/evm-raw.js): legacy (EIP-155) / type 2 txs → native transfer · ERC-20 on standard tokens · functions per metadata.abi
+ *     forwarded to the server's submit(verified) (through the mempool + simulate, same as /sendtx) · hash = keccak(raw)
+ *   - eth_estimateGas: program calls = simulated with vm.query plus a 25% margin (chain gas)
+ *   - the chain's native coin already uses 18-decimal wei-style units → passed through as is (decimals = extra decimals to add, default 0)
+ *   - standard tokens (src/standards/token.js) answer ERC-20 eth_calls (balanceOf / decimals / symbol / name / totalSupply / allowance)
+ *   - standard NFTs / multi-tokens (src/standards/nft.js / multitoken.js) emit indexed → ERC-721 logs (tokenId as the 4th topic) / ERC-1155
+ *   - events → logs via the VM's eventLog() (the same values used for logsBloom / receiptsRoot in the header):
+ *       indexed emit → topic0 = keccak("name(type,…)") + topics for indexed fields (a standard token's Transfer = an ERC-20 log)
+ *       no indexed → topic0 = keccak(name), data = JSON as hex
+ *   - EIP-1559: baseFeePerGas in blocks · eth_feeHistory · eth_maxPriorityFeePerGas · eth_gasPrice = next base fee + suggested tip
+ *     1559 txs → type 0x2 + maxFeePerGas / maxPriorityFeePerGas · receipts have effectiveGasPrice
+ *   - eth_getLogs: skips blocks using the header's logsBloom · with topic0 + another topic → uses the eventidx: index, replaying only matching blocks
+ *   - cardianal_getAbi(address) → the program's metadata.abi converted to an Ethereum JSON ABI (bundled programs get their ABI from code: src/standards/system-abi.js · null = not declared)
+ *   - cardianal_getProof([key, …]) → Merkle proofs of keys in the latest state against the latest block's stateRoot (vm.getProof)
+ *       key = dbKey ("0xprog:storage:balances:0xabc") or { program, key } (key is a string or an array = map(...))
+ *     eth_getProof returns an error: the chain's state is not an EVM account trie (no storageHash / 32-byte slots) → use cardianal_getProof
+ *     eth_call for both: name / symbol / balanceOf / ownerOf / tokenURI / getApproved / uri / isApprovedForAll / supportsInterface
+ *   - eth_call on other programs that declare metadata.abi: decoded / encoded per the Solidity ABI (src/node/evm-abi.js) → dApps can read them directly with ethers / viem
+ *   - balance / nonce / code / eth_call at a block number are read from chain history (vm.stateAt) · requires recordHistory
+ *   - debug_trace* (callTracer) built from the trace + nativeChanges of a block replay · replay results are cached per block
+ *   - HTTP filters (ethers contract.on over JsonRpcProvider uses these): eth_newFilter / eth_newBlockFilter / eth_newPendingTransactionFilter
+ *       → eth_getFilterChanges (new since the last call) · eth_getFilterLogs · eth_uninstallFilter
+ *       kept in the node's memory (restart = lost → "filter not found", the dApp recreates it) · not polled within filterTtlMs = deleted (like geth)
+ *       capped at maxFilters per node and maxFiltersPerClient per IP · log filters scan at most logRange blocks per call
+ *       pending filters get hashes from mempool.onAdded · buffer at most PENDING_BUFFER hashes (excess drops the oldest)
+ *   - eth_createAccessList: the chain has no access lists → empty accessList + gasUsed equal to eth_estimateGas
+ *   - eth_simulateV1: runs several calls in sequence on a simulated next block (no commit) · returns status / returnData / gasUsed / logs per call
+ *       supports 1 blockStateCalls set · no stateOverrides / blockOverrides · charges gas like a real tx (the sender needs enough balance)
+ *       nonces filled in order within the simulated block · traceTransfers doesn't create logs for native transfers
  */
 import crypto from "node:crypto";
 import { keccak_256 } from "@noble/hashes/sha3.js";
@@ -53,30 +53,30 @@ const ZERO_HASH = `0x${"0".repeat(64)}`;
 const ZERO_ADDRESS = `0x${"0".repeat(40)}`;
 const EMPTY_BLOOM = `0x${"0".repeat(512)}`;
 const EMPTY_UNCLES = "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347";   // keccak(rlp([]))
-const BLOCK_GAS_LIMIT = 30_000_000;   // ใช้เมื่อเชนไม่ได้ตั้ง maxBlockGas
-const REPLAY_CACHE = 64;              // จำนวน block ที่เก็บผล replay ไว้
-const LOG_RANGE = 1000;               // ช่วง block สูงสุดของ eth_getLogs
-const TRANSFER_GAS = 21_000;   // gas ที่ MetaMask ตั้งให้การโอนธรรมดา (ใช้ตอบ eth_estimateGas เท่านั้น)
-const FILTER_TTL_MS = 5 * 60_000;     // filter ที่ไม่ถูกเรียกนานเท่านี้ถูกลบ (เท่า geth)
-const MAX_FILTERS = 10_000;           // filter ทั้ง node
-const MAX_FILTERS_PER_CLIENT = 100;   // filter ต่อ IP
-const PENDING_BUFFER = 10_000;        // hash ที่ pending filter เก็บค้างได้
-const SIMULATE_MAX_CALLS = 100;       // call ต่อ eth_simulateV1
+const BLOCK_GAS_LIMIT = 30_000_000;   // used when the chain doesn't set maxBlockGas
+const REPLAY_CACHE = 64;              // number of blocks whose replay results are cached
+const LOG_RANGE = 1000;               // max block range for eth_getLogs
+const TRANSFER_GAS = 21_000;   // gas MetaMask sets for a plain transfer (used only for eth_estimateGas answers)
+const FILTER_TTL_MS = 5 * 60_000;     // filters not polled for this long are deleted (same as geth)
+const MAX_FILTERS = 10_000;           // filters per node
+const MAX_FILTERS_PER_CLIENT = 100;   // filters per IP
+const PENDING_BUFFER = 10_000;        // hashes a pending filter can buffer
+const SIMULATE_MAX_CALLS = 100;       // calls per eth_simulateV1
 
-const TOKEN_WRITE = {   // ERC-20 ที่กระเป๋าส่งมา (eth_sendRawTransaction) → ฟังก์ชันของ token มาตรฐาน
+const TOKEN_WRITE = {   // ERC-20 sent by wallets (eth_sendRawTransaction) → standard token functions
   "0xa9059cbb": { method: "transfer", args: 2 }, "0x095ea7b3": { method: "approve", args: 2 }, "0x23b872dd": { method: "transferFrom", args: 3 },
 };
-const SELECTOR = {   // ERC-20 ที่ token มาตรฐานตอบได้
+const SELECTOR = {   // ERC-20 that standard tokens can answer
   "0x70a08231": "balanceOf", "0x313ce567": "decimals", "0x95d89b41": "symbol",
   "0x06fdde03": "name", "0x18160ddd": "totalSupply", "0xdd62ed3e": "allowance",
 };
 const selectors = (map) => Object.fromEntries(Object.entries(map).map(([signature, fn]) => [keccakHex(signature).slice(0, 10), fn]));
-const NFT_SELECTOR = selectors({   // ERC-721 ที่ NFT มาตรฐานตอบได้
+const NFT_SELECTOR = selectors({   // ERC-721 that standard NFTs can answer
   "name()": "name", "symbol()": "symbol", "totalSupply()": "totalSupply", "balanceOf(address)": "balanceOf",
   "ownerOf(uint256)": "ownerOf", "tokenURI(uint256)": "tokenURI", "getApproved(uint256)": "getApproved",
   "isApprovedForAll(address,address)": "isApprovedForAll", "supportsInterface(bytes4)": "supportsInterface",
 });
-const MULTITOKEN_SELECTOR = selectors({   // ERC-1155 ที่ multi-token มาตรฐานตอบได้
+const MULTITOKEN_SELECTOR = selectors({   // ERC-1155 that standard multi-tokens can answer
   "name()": "name", "symbol()": "symbol", "balanceOf(address,uint256)": "balanceOf", "uri(uint256)": "uri",
   "totalSupply(uint256)": "totalSupply", "isApprovedForAll(address,address)": "isApprovedForAll", "supportsInterface(bytes4)": "supportsInterface",
 });
@@ -89,11 +89,11 @@ const fail = (code, message, data) => { throw new RpcError(code, message, data);
 function keccakHex(text) { return `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`; }
 const hexBytes = (hex) => Buffer.from(String(hex).replace(/^0x/, ""), "hex");
 
-const bloomOf = logsBloom;   // แบบเดียวกับ header ของ block (ดู virtualmachine.js)
-const FEE_HISTORY_BLOCKS = 1024;   // eth_feeHistory ขอได้สูงสุดกี่ block
-const TIP_SAMPLE_BLOCKS = 20;      // tip ที่แนะนำ = มัธยฐานของ tip ใน block ล่าสุดเท่านี้
+const bloomOf = logsBloom;   // same as the block header (see virtualmachine.js)
+const FEE_HISTORY_BLOCKS = 1024;   // max blocks eth_feeHistory can request
+const TIP_SAMPLE_BLOCKS = 20;      // suggested tip = median tip over this many recent blocks
 
-/** ค่าตัวเลขของเชน (number / "123n" / "123") → bigint */
+/** chain numeric value (number / "123n" / "123") → bigint */
 export function toBig(value) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") return BigInt(Math.trunc(value));
@@ -106,7 +106,7 @@ export const quantity = (value) => {
 };
 const word = (value) => toBig(value).toString(16).padStart(64, "0");
 const addressWord = (address) => String(address ?? "").toLowerCase().replace(/^0x/, "").padStart(64, "0");
-/** ABI: string ตัวเดียว */
+/** ABI: a single string */
 const abiString = (text) => {
   const hex = bytesToHex(utf8ToBytes(String(text ?? "")));
   return `0x${word(32)}${word(hex.length / 2)}${hex.padEnd(Math.ceil(hex.length / 64) * 64, "0")}`;
@@ -126,30 +126,30 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   const native = (value) => toBig(value) * scale;
   const latest = () => vm.latestBlockNumber() ?? 0;
 
-  // ---------- state ณ block ----------
-  /** tag → null (ค่าปัจจุบัน) หรือเลข block ที่ต้องย้อนไปอ่าน */
+  // ---------- state at a block ----------
+  /** tag → null (current value) or the block number to read back at */
   const stateBlock = (tag) => {
     if (tag === undefined || tag === null || tag === "pending") return null;
     const number = blockNumberOf(tag);
     if (number > latest()) fail(EVM_ERROR.SERVER, "header not found");
     return number >= latest() ? null : number;
   };
-  /** ค่าของ key ณ ตอนที่ block นั้นปิด (history ของเชน) · null = ค่าปัจจุบัน */
+  /** a key's value as of when that block was sealed (chain history) · null = current value */
   const readAt = (at, dbKey) => (at === null ? vm.read(dbKey) : vm.stateAt(at, dbKey));
   const isProgramAt = (address, at = null) => readAt(at, codeKey(address)) !== undefined;
-  /** อ่านฟังก์ชันของโปรแกรมบน state ณ block นั้น (ไม่เขียนอะไร) */
+  /** read a program function on the state at that block (writes nothing) */
   const queryAt = (at, programUuid, functionName, input = {}, context = undefined) => {
     const options = at === null ? {} : { read: (dbKey) => vm.stateAt(at, dbKey), blockNumber: at, timestamp: headerAt(at)?.timestamp || undefined };
     return vm.query({ programUuid, functionName, input, context }, options);
   };
-  /** ข้อมูล token มาตรฐาน ณ block (null = ไม่ใช่ token มาตรฐาน / ยังไม่ได้ deploy) */
+  /** standard token info at a block (null = not a standard token / not yet deployed) */
   const tokenAt = (address, at = null) => {
     const source = readAt(at, codeKey(address));
     if (source === undefined || !checkTokenStandard(source).ok) return null;
     const read = (fn) => { const r = queryAt(at, address, fn); return r.status === "success" ? r.result : null; };
     return { address, name: read("name"), ticker: read("ticker"), decimals: read("decimals"), totalSupply: read("totalSupply") };
   };
-  /** NFT / multi-token มาตรฐาน ณ block → "erc721" | "erc1155" | null (ดูจากโค้ดอย่างเดียว ไม่รันโปรแกรม) */
+  /** standard NFT / multi-token at a block → "erc721" | "erc1155" | null (judged from the code only, without running the program) */
   const collectionAt = (address, at = null) => {
     const source = address ? readAt(at, codeKey(address)) : undefined;
     if (source === undefined) return null;
@@ -170,14 +170,14 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     }
     return fail(EVM_ERROR.PARAMS, `invalid block tag: ${JSON.stringify(tag)}`);
   };
-  // genesis ไม่มีเวลา → ใช้เวลาของ block 1 (Blockscout จะได้ไม่แสดงเป็นปี 1970)
+  // genesis has no time → use block 1's time (so Blockscout doesn't show the year 1970)
   const genesisBlock = () => ({
     number: 0, hash: vm.genesisHash(), parentHash: ZERO_HASH, timestamp: vm.getBlock(1)?.timestamp ?? 0, feeRecipient: ZERO_ADDRESS,
     gasUsed: 0, stateRoot: ZERO_HASH, txRoot: ZERO_HASH, txHashes: [],
   });
   const headerAt = (number) => (number === 0 ? genesisBlock() : vm.getBlock(number));
 
-  // ผล replay ต่อ block (cache ตาม hash: block ที่ปิดแล้วไม่เปลี่ยน) → receipt ทุกใบ + logIndex / gas สะสมทั้ง block
+  // replay results per block (cached by hash: sealed blocks don't change) → every receipt + logIndex / cumulative gas for the block
   const replays = new Map();
   function replayed(number) {
     const header = headerAt(number);
@@ -204,9 +204,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   }
 
   /**
-   * tx ที่ถูกปฏิเสธที่บันทึกใน block นี้ → แสดงต่อท้าย tx จริงเป็น tx ที่ล้ม (status 0x0, gasUsed 0) ให้ Blockscout เห็น
-   * ข้าม hash ที่ภายหลังเข้า block จริงแล้ว หรือถูกปฏิเสธซ้ำใน block หลัง (1 hash = 1 tx ในมุมของ EVM)
-   * index ของ EVM = จำนวน tx จริง + ลำดับในรายการนี้
+   * rejected txs recorded in this block → appended after the real txs as failed txs (status 0x0, gasUsed 0) so Blockscout sees them
+   * skips hashes that were later actually included, or rejected again in a later block (1 hash = 1 tx from the EVM's point of view)
+   * EVM index = number of real txs + position in this list
    */
   function rejectedIn(header) {
     if (!header?.rejectedCount) return [];
@@ -215,9 +215,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       .filter((entry) => !vm.getTransaction(entry.hash) && vm.getRejectedTransaction(entry.hash)?.blockNumber === header.number)
       .map((entry, i) => ({ ...entry, evmIndex: base + i }));
   }
-  /** hash ทุกใบของ block ในมุมของ EVM: tx จริงตามลำดับ แล้วตามด้วย tx ที่ถูกปฏิเสธ */
+  /** every tx hash of the block from the EVM's point of view: real txs in order, followed by rejected txs */
   const evmHashes = (header) => [...(header?.txHashes ?? []), ...rejectedIn(header).map((entry) => entry.hash)];
-  /** tx ที่ถูกปฏิเสธ → { found, receipt, block, logStart, cumulativeGas } แบบเดียวกับ tx จริง (ไม่มี log · gas ไม่เพิ่ม) */
+  /** a rejected tx → { found, receipt, block, logStart, cumulativeGas } like a real tx (no logs · gas unchanged) */
   function rejectedTx(entry, header, offsets) {
     const last = offsets.at(-1);
     const logStart = last ? last.logStart + (last.logCount ?? 0) : 0;
@@ -232,10 +232,10 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   function formatBlock(header, full) {
     const number = header.number;
     const hashes = evmHashes(header);
-    // logsBloom / receiptsRoot มาจาก header (อยู่ใน hash ของ block) · header เก่าที่ไม่มี → คำนวณจาก receipt
+    // logsBloom / receiptsRoot come from the header (part of the block hash) · old headers without them → computed from receipts
     let bloom = header.logsBloom ?? EMPTY_BLOOM;
     if (!header.logsBloom && hashes.length) {
-      try { bloom = bloomOf(blockReceipts(number).flatMap((r) => r.logs)); } catch { /* ไม่มี history → bloom ว่าง */ }
+      try { bloom = bloomOf(blockReceipts(number).flatMap((r) => r.logs)); } catch { /* no history → empty bloom */ }
     }
     return {
       number: quantity(number), hash: header.hash,
@@ -264,16 +264,16 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const header = headerByHash(hash);
     return header ? formatBlock(header, Boolean(full)) : null;
   };
-  /** tag หรือ hash ของ block (แบบที่ eth_getBlockReceipts / debug_trace* รับ) → เลข block */
+  /** a block tag or hash (as eth_getBlockReceipts / debug_trace* accept) → block number */
   const blockRef = (ref) => (isHash(ref) ? headerByHash(ref)?.number ?? null : blockNumberOf(ref));
 
   // ---------- tx ----------
-  /** ผลของ tx เดิมจากการ replay block (แบบเดียวกับ GET /tx/:hash/receipt) */
+  /** the result of an existing tx from replaying its block (same as GET /tx/:hash/receipt) */
   function located(hash) {
     if (!isHash(hash)) fail(EVM_ERROR.PARAMS, `invalid transaction hash: ${hash}`);
     const found = vm.getTransaction(hash.toLowerCase());
     if (!found) {
-      // ถูกปฏิเสธ (บันทึกใน block) → tx ที่ล้มแบบ EVM
+      // rejected (recorded in a block) → an EVM-style failed tx
       const entry = vm.getRejectedTransaction(hash.toLowerCase());
       const header = entry ? headerAt(entry.blockNumber) : null;
       const listed = header ? rejectedIn(header).find((item) => item.hash === entry.hash) : null;
@@ -281,7 +281,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     }
     const { header, transactions, offsets } = replayed(found.blockNumber);
     const receipt = transactions[found.index];
-    // tx จาก eth_sendRawTransaction: ตอบด้วย hash แบบ Ethereum (keccak(raw)) ที่กระเป๋าถือไว้
+    // tx from eth_sendRawTransaction: answer with the Ethereum-style hash (keccak(raw)) the wallet holds
     return { found: receipt?.evmHash ? { ...found, hash: receipt.evmHash } : found, receipt, block: header, ...offsets[found.index] };
   }
   const signatureParts = (signature) => {
@@ -289,9 +289,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (hex.length !== 130) return { v: "0x0", r: "0x0", s: "0x0" };
     return { r: `0x${hex.slice(0, 64)}`, s: `0x${hex.slice(64, 128)}`, v: quantity(Number.parseInt(hex.slice(128), 16)) };
   };
-  /** to ของ EVM: โปรแกรมที่ถูกเรียก / ผู้รับเงิน · deploy = null */
+  /** EVM to: the program called / the recipient · deploy = null */
   const targetOf = (r) => (r.action === "deploy" ? null : r.to ?? (r.action === "call" ? r.programUuid ?? null : null));
-  /** input ของ EVM: ข้อมูลที่ส่งไปจริง (method + input) เข้ารหัสเป็น JSON แล้วเป็น hex */
+  /** EVM input: the data actually sent (method + input) encoded as JSON, then hex */
   const inputOf = (r) => (r.action === "transfer" ? "0x" : hexOfJson({ action: r.action, method: r.method ?? null, input: r.input ?? null }));
 
   function formatTransaction({ found, receipt, block }) {
@@ -303,16 +303,16 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       gas: quantity(receipt.gasLimit ?? receipt.gasUsed ?? 0), gasPrice: quantity(native(receipt.effectiveGasPrice ?? receipt.gasPrice ?? vm.gas.price)),
       input: inputOf({ ...receipt, action: found.action }),
       ...feeFieldsOf(receipt), chainId: quantity(vm.chainId),
-      ...signatureParts(vm.transactionSignature(found)),   // ลายเซ็นอยู่ใน blockbody
+      ...signatureParts(vm.transactionSignature(found)),   // the signature is in the blockbody
     };
   }
-  /** type ของ tx แบบ EVM: 0x2 (EIP-1559) มี maxFeePerGas / maxPriorityFeePerGas · แบบเดิม 0x0 */
+  /** EVM tx type: 0x2 (EIP-1559) has maxFeePerGas / maxPriorityFeePerGas · legacy 0x0 */
   function feeFieldsOf(receipt) {
     if (receipt.type !== 2) return { type: "0x0" };
     return { type: "0x2", maxFeePerGas: quantity(native(receipt.maxFeePerGas ?? receipt.effectiveGasPrice ?? 0)),
       maxPriorityFeePerGas: quantity(native(receipt.maxPriorityFeePerGas ?? 0)), accessList: [] };
   }
-  /** tx ที่ยังรอใน mempool (มีแค่ข้อมูลที่ mempool.list() ให้) */
+  /** a tx still waiting in the mempool (only the data mempool.list() provides) */
   const pendingTransaction = (item) => ({
     hash: item.hash, nonce: quantity(item.nonce ?? 0), blockHash: null, blockNumber: null, transactionIndex: null,
     from: item.sender ?? null, to: item.to ?? null, value: "0x0", gas: "0x0",
@@ -337,9 +337,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   };
 
   /**
-   * event ของเชน → log แบบ EVM (logIndex นับต่อเนื่องทั้ง block)
-   * topics / data มาจาก eventLog ของ VM = ค่าเดียวกับที่ใช้ทำ logsBloom / receiptsRoot ของ header
-   * โปรแกรมมาตรฐาน (token / NFT / multi-token) emit แบบ indexed → log แบบ ERC-20 / ERC-721 / ERC-1155 ตรงตัว
+   * chain events → EVM logs (logIndex counts continuously across the block)
+   * topics / data come from the VM's eventLog = the same values used for the header's logsBloom / receiptsRoot
+   * standard programs (token / NFT / multi-token) emit indexed → exactly ERC-20 / ERC-721 / ERC-1155 logs
    */
   function formatLog(event, logIndex, base) {
     const { address, topics, data } = eventLog(event);
@@ -361,7 +361,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const tx = located(hash);
     return tx ? formatReceipt(tx) : null;
   }
-  /** ทุก tx ของ block จาก replay ครั้งเดียว: { found, receipt, block, logStart, cumulativeGas } */
+  /** every tx of a block from a single replay: { found, receipt, block, logStart, cumulativeGas } */
   function blockTransactions(number) {
     const data = number === null ? null : replayed(number);
     if (!data) return null;
@@ -374,7 +374,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   }
   const blockReceipts = (number) => blockTransactions(number)?.map(formatReceipt) ?? null;
 
-  // ---------- internal tx (debug_trace* แบบ callTracer ของ geth) ----------
+  // ---------- internal txs (geth callTracer-style debug_trace*) ----------
   const frameError = (entry) => (entry?.status && entry.status !== "success" ? entry.error?.message ?? entry.status : undefined);
   const frameOf = (fields) => {
     const frame = { type: "CALL", gas: "0x0", gasUsed: "0x0", input: "0x", output: "0x", value: "0x0", ...fields };
@@ -384,8 +384,8 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   const codeHex = (source) => `0x${bytesToHex(utf8ToBytes(unescapeCode(source ?? "")))}`;
 
   /**
-   * native ที่โปรแกรมโอนด้วย transferNative ไม่อยู่ใน trace → หาจาก nativeChanges
-   * ตัด value ของทุกชั้นใน trace และค่าธรรมเนียม (consumed → address ศูนย์ / feeRecipient) ออกก่อน ที่เหลือจับคู่ผู้ส่ง → ผู้รับ
+   * native sent by programs via transferNative isn't in the trace → derived from nativeChanges
+   * subtract the value of every trace frame and the fees (consumed → zero address / feeRecipient) first, then pair the remaining senders → recipients
    */
   function nativeMoves(receipt, block, valueMoves) {
     const delta = new Map();
@@ -439,13 +439,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     });
     if (onlyTopCall) return root;
 
-    // trace เรียงแบบ pre-order (depth 0 = ชั้นนอกสุด) → ซ้อนเป็น calls[]
+    // trace is in pre-order (depth 0 = outermost) → nested into calls[]
     const frames = [{ frame: root, to: root.to }];
     const stack = [root];
     for (const entry of trace) {
       if (entry.depth === 0) continue;
       const frame = frameOf({
-        // cloneProgram = สร้างโปรแกรมใหม่ระหว่างทาง · runProgram แบบ { readonly: true } = STATICCALL
+        // cloneProgram = creates a new program along the way · runProgram with { readonly: true } = STATICCALL
         type: entry.type === "create" ? "CREATE" : entry.type === "staticcall" ? "STATICCALL" : "CALL",
         from: entry.from, to: entry.program, value: quantity(native(entry.value ?? 0)),
         gas: quantity(entry.gasUsed ?? 0), gasUsed: quantity(entry.gasUsed ?? 0),
@@ -488,15 +488,15 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
   // ---------- log ----------
   const topicMatch = (filter, topic) => filter === null || filter === undefined
     || (Array.isArray(filter) ? filter.some((t) => String(t).toLowerCase() === topic) : String(filter).toLowerCase() === topic);
-  /** header ของ block นี้อาจมี log ที่ตรง filter ไหม (ดูจาก logsBloom · ไม่มี bloom = ต้องดู) */
+  /** might this block's header have logs matching the filter (judged from logsBloom · no bloom = must check) */
   const bloomAllows = (header, addresses, topics) => {
     if (!header?.logsBloom) return true;
     if (addresses && !addresses.some((address) => bloomContains(header.logsBloom, address))) return false;
     return topics.every((t) => t === null || [t].flat().some((topic) => bloomContains(header.logsBloom, topic)));
   };
   /**
-   * เลข block ที่มี log ตรงเงื่อนไขจากดัชนี eventidx: (ใช้ได้เมื่อมี topic0 และ topic ตำแหน่งอื่นอย่างน้อย 1 ตัว) · ใช้ไม่ได้ → null
-   * topic0 → (โปรแกรม, ชื่อ event, field ที่ indexed) จาก eventsig: แล้วค้นค่าของ topic ตำแหน่ง i ใน field ที่ i
+   * block numbers with logs matching the filter from the eventidx: index (usable with topic0 and at least 1 other topic) · unusable → null
+   * topic0 → (program, event name, indexed fields) from eventsig:, then look up the value of topic i in field i
    */
   function indexedBlocks(topics, addresses, from, to) {
     const topic0s = topics[0] === null || topics[0] === undefined ? null : [topics[0]].flat();
@@ -532,7 +532,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const topics = (Array.isArray(filter.topics) ? filter.topics : []).map((t) => (t === null || t === undefined ? null
       : Array.isArray(t) ? t.map((x) => String(x).toLowerCase()) : String(t).toLowerCase()));
     const first = Math.max(from, 1);
-    // มีดัชนีให้ใช้ → replay เฉพาะ block ที่มี event ตรง · ไม่งั้นไล่ทุก block แต่ข้ามด้วย logsBloom ของ header
+    // index available → replay only blocks with matching events · otherwise walk every block, skipping via the header's logsBloom
     const numbers = indexedBlocks(topics, addresses, first, to) ?? Array.from({ length: Math.max(0, to - first + 1) }, (_, i) => first + i);
     const logs = [];
     for (const number of numbers) {
@@ -549,13 +549,13 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return logs;
   }
 
-  // ---------- ค่าแก๊ส (EIP-1559) ----------
+  // ---------- gas fees (EIP-1559) ----------
   const gasLimitOf = () => vm.maxBlockGas ?? BLOCK_GAS_LIMIT;
-  /** tip ต่อแก๊สของทุก tx ใน block (จากดัชนี tx: ไม่ต้อง replay) → [{ tip, gasUsed }] เรียงจากน้อยไปมาก */
+  /** tip per gas of every tx in the block (from the tx: index, no replay) → [{ tip, gasUsed }] ascending */
   const tipsOf = (header) => (header?.txHashes ?? []).map((hash) => vm.getTransaction(hash))
     .filter(Boolean).map((tx) => ({ tip: toBig(tx.tip ?? 0), gasUsed: Number(tx.gasUsed ?? 0) }))
     .sort((a, b) => (a.tip === b.tip ? 0 : a.tip < b.tip ? -1 : 1));
-  /** tip ที่แนะนำ = มัธยฐานของ tip ใน TIP_SAMPLE_BLOCKS block ล่าสุด (ไม่มี tx = 0) */
+  /** suggested tip = median tip over the last TIP_SAMPLE_BLOCKS blocks (no txs = 0) */
   function suggestedTip() {
     const tips = [];
     for (let n = latest(); n > 0 && n > latest() - TIP_SAMPLE_BLOCKS; n -= 1) tips.push(...tipsOf(vm.getBlock(n)).map((item) => item.tip));
@@ -563,9 +563,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     tips.sort((a, b) => (a === b ? 0 : a < b ? -1 : 1));
     return tips[Math.floor(tips.length / 2)];
   }
-  /** eth_feeHistory(blockCount, newestBlock, rewardPercentiles) แบบ geth (reward ถ่วงด้วยแก๊สที่ใช้) */
+  /** geth-style eth_feeHistory(blockCount, newestBlock, rewardPercentiles) (rewards weighted by gas used) */
   function feeHistory(blockCount, newest, percentiles) {
-    // blockCount เป็น quantity ("0x5") หรือตัวเลข
+    // blockCount is a quantity ("0x5") or a number
     const asked = typeof blockCount === "string" && /^0x[0-9a-fA-F]+$/.test(blockCount) ? Number.parseInt(blockCount, 16) : Number(toBig(blockCount));
     const count = Math.min(Math.max(asked || 0, 0), FEE_HISTORY_BLOCKS);
     const end = blockNumberOf(newest ?? "latest");
@@ -594,7 +594,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
         return quantity(native(tips.at(-1).tip));
       }));
     }
-    // ช่องสุดท้าย = base fee ของ block ถัดจาก newest
+    // last slot = base fee of the block after newest
     if (count > 0) baseFees.push(quantity(native(end >= latest() ? vm.currentBaseFee() : headerAt(end + 1)?.baseFeePerGas ?? vm.minBaseFeeNow())));
     return { oldestBlock: quantity(count > 0 ? start : end), baseFeePerGas: baseFees, gasUsedRatio: ratios, ...(wanted ? { reward: rewards } : {}) };
   }
@@ -615,19 +615,19 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (at === null) return quantity(vm.checkTransaction({ from: account, nonce: -1 }).expectedNonce ?? 0);
     return quantity(readAt(at, nonceKey(account)) ?? 0);
   };
-  // ไม่ใช่ bytecode: ซอร์ส JS ของโปรแกรมเป็น UTF-8 hex (Blockscout แสดงเป็น hex · ถอดดูตาม docs/blockscout.md) · กระเป๋า → 0x
+  // not bytecode: the program's JS source as UTF-8 hex (Blockscout shows hex · decode it per docs/blockscout.md) · wallets → 0x
   const code = (address, tag) => {
     const source = readAt(stateBlock(tag), codeKey(needAddress(address)));
     return source === undefined ? "0x" : codeHex(source);
   };
 
-  /** eth_call: เฉพาะฟังก์ชันอ่านของ ERC-20 / ERC-721 / ERC-1155 บนโปรแกรมมาตรฐาน · รันบน state ณ block ที่ขอ */
+  /** eth_call: only ERC-20 / ERC-721 / ERC-1155 read functions on standard programs · runs on the state at the requested block */
   function call(request = {}, tag) {
     const to = needAddress(request.to);
     const at = stateBlock(tag);
     const data = String(request.data ?? request.input ?? "0x").toLowerCase();
     const arg = (i) => `0x${data.slice(10 + i * 64 + 24, 10 + (i + 1) * 64)}`;
-    // from = ผู้เรียก (context.sender ของโปรแกรม แบบ msg.sender) · ไม่ส่ง = ค่าเดิมของ vm.query
+    // from = the caller (the program's context.sender, like msg.sender) · omitted = vm.query's default
     const context = isAddress(request.from) ? { sender: normalizeAddress(request.from), origin: normalizeAddress(request.from) } : undefined;
     const query = (functionName, input = {}) => {
       const result = queryAt(at, to, functionName, input, context);
@@ -645,7 +645,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return `0x${word(query("allowance", { owner: arg(0), spender: arg(1) }))}`;
   }
 
-  /** eth_call ของ NFT (ERC-721) / multi-token (ERC-1155) มาตรฐาน */
+  /** eth_call for standard NFTs (ERC-721) / multi-tokens (ERC-1155) */
   function collectionCall(to, at, data, arg, query) {
     const kind = collectionAt(to, at);
     const fn = kind === "erc721" ? NFT_SELECTOR[data.slice(0, 10)] : kind === "erc1155" ? MULTITOKEN_SELECTOR[data.slice(0, 10)] : undefined;
@@ -669,9 +669,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return abiString(query(fn, { id: uint(0) }));   // uri
   }
 
-  /** eth_call ของโปรแกรมที่ประกาศ metadata.abi: selector = keccak("ชื่อ(ชนิด,…)") ตาม toEvmAbi → ถอด argument → query → เข้ารหัสผลตาม outputs */
+  /** eth_call on programs that declare metadata.abi: selector = keccak("name(type,…)") per toEvmAbi → decode arguments → query → encode the result per outputs */
   function abiCall(to, at, data, query) {
-    const abi = resolveAbi((dbKey) => readAt(at, dbKey), to);   // ประกาศเอง ?? โปรแกรมแถม
+    const abi = resolveAbi((dbKey) => readAt(at, dbKey), to);   // declared ?? bundled program
     const fn = abi ? abiFunctions(abi).get(data.slice(0, 10)) : undefined;
     if (!fn) fail(EVM_ERROR.SERVER, abi ? `execution reverted: no function in metadata.abi matches selector ${data.slice(0, 10)}`
       : "execution reverted: program has no metadata.abi (only ERC-20 / ERC-721 / ERC-1155 reads on standard programs work without one)");
@@ -682,9 +682,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     }
   }
 
-  // ---------- เขียน: eth_sendRawTransaction / eth_estimateGas ----------
+  // ---------- writes: eth_sendRawTransaction / eth_estimateGas ----------
 
-  /** calldata ที่กระเป๋าส่งไปโปรแกรม → { method, input }: ERC-20 ของ token มาตรฐานก่อน แล้วจึง metadata.abi */
+  /** calldata a wallet sends to a program → { method, input }: ERC-20 on standard tokens first, then metadata.abi */
   function resolveCall(to, data) {
     const selector = data.slice(0, 10).toLowerCase();
     const word = (i) => data.slice(10 + i * 64, 10 + (i + 1) * 64);
@@ -692,14 +692,14 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const amount = (i) => `${BigInt(`0x${word(i) || "0"}`)}n`;
     const write = TOKEN_WRITE[selector];
     if (write && checkTokenStandard(readAt(null, codeKey(to)) ?? "").ok) {
-      if (data.length !== 10 + write.args * 64) throw new RawTxError(`calldata ของ ${write.method} ยาวไม่ถูกต้อง`);
+      if (data.length !== 10 + write.args * 64) throw new RawTxError(`calldata for ${write.method} has the wrong length`);
       if (write.method === "transfer") return { method: "transfer", input: { to: address(0), amount: amount(1) }, token: true };
       if (write.method === "approve") return { method: "approve", input: { spender: address(0), amount: amount(1) }, token: true };
       return { method: "transferFrom", input: { from: address(0), to: address(1), amount: amount(2) }, token: true };
     }
     const abi = resolveAbi((dbKey) => readAt(null, dbKey), to);
     const fn = abi ? abiFunctions(abi).get(selector) : undefined;
-    if (!fn) throw new RawTxError(abi ? `ไม่มีฟังก์ชันใน metadata.abi ที่ตรงกับ selector ${selector}` : "โปรแกรมนี้ไม่ได้ประกาศ metadata.abi (กระเป๋า EVM เรียกได้เฉพาะ token มาตรฐาน / โปรแกรมที่มี ABI)");
+    if (!fn) throw new RawTxError(abi ? `no function in metadata.abi matches selector ${selector}` : "this program does not declare metadata.abi (EVM wallets can only call standard tokens / programs with an ABI)");
     try { return { method: fn.name, input: decodeInput(fn, data), fn }; }
     catch (error) { throw error instanceof AbiError ? new RawTxError(`${fn.signature}: ${error.message}`) : error; }
   }
@@ -718,7 +718,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     return verified.hash;
   }
 
-  /** แก๊สของเชน (ไม่ใช่แก๊สของ EVM): โอน native = 21000 แบบที่กระเป๋าคาด · เรียกโปรแกรม = จำลองแล้วเผื่อ 25% */
+  /** chain gas (not EVM gas): native transfer = 21000 as wallets expect · program calls = simulated plus a 25% margin */
   function estimateGas(request = {}) {
     const to = request.to ? needAddress(request.to) : null;
     if (!to) fail(EVM_ERROR.SERVER, "deploying EVM bytecode is not supported");
@@ -730,12 +730,12 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const from = isAddress(request.from) ? normalizeAddress(request.from) : ZERO_ADDRESS;
     const result = vm.query({ programUuid: to, functionName: call.method, input: call.input, context: { sender: from, origin: from }, value: `${/^0x[0-9a-f]+$/i.test(String(request.value ?? "")) ? BigInt(request.value) : toBig(request.value ?? 0)}n` });
     if (result.status !== "success") fail(EVM_ERROR.SERVER, `execution reverted: ${result.error?.message ?? call.method}`);
-    // vm.query ไม่ใช่ tx ของ user → ไม่มีค่าพื้นฐานต่อ tx (gas.tx) · บวกเองตามตารางของ block ถัดไป
+    // vm.query isn't a user tx → no per-tx base cost (gas.tx) · added here per the next block's table
     return quantity(Math.ceil(Number(result.gasUsed ?? 0) * 1.25) + 1000 + (vm.gasAt?.().tx ?? 0));
   }
 
 
-  // ---------- filter แบบ HTTP ----------
+  // ---------- HTTP filters ----------
   const filters = new Map();   // id → { kind: "logs" | "blocks" | "pending", client, touched, last, criteria?, hashes? }
   const exactBlock = (tag) => (tag === "earliest" ? 0 : typeof tag === "string" && /^0x[0-9a-fA-F]+$/.test(tag) ? Number.parseInt(tag, 16) : null);
   function pruneFilters() {
@@ -765,9 +765,9 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     if (!criteria || typeof criteria !== "object" || Array.isArray(criteria)) fail(EVM_ERROR.PARAMS, "filter must be an object");
     if (criteria.blockHash !== undefined) fail(EVM_ERROR.PARAMS, "blockHash is not supported in eth_newFilter (use eth_getLogs)");
     const { address, topics } = criteria;
-    getLogs({ address, topics, fromBlock: "latest", toBlock: "latest" });   // address / topics ผิด → error ตอนสร้างเลย
+    getLogs({ address, topics, fromBlock: "latest", toBlock: "latest" });   // bad address / topics → error at creation time
     const from = exactBlock(criteria.fromBlock);
-    // ของใหม่ = block หลังจากที่สร้าง filter (หรือตั้งแต่ fromBlock ถ้าอยู่ในอนาคต) · ของเก่าดูด้วย eth_getFilterLogs
+    // new = blocks after the filter was created (or from fromBlock if it's in the future) · older ones via eth_getFilterLogs
     const last = Math.max(latest(), from === null ? 0 : from - 1);
     return installFilter("logs", { last, criteria: { address, topics, fromBlock: criteria.fromBlock, toBlock: criteria.toBlock } }, client);
   }
@@ -778,7 +778,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const end = filter.kind === "logs" ? Math.min(head, exactBlock(filter.criteria.toBlock) ?? head) : head;
     const start = filter.last + 1;
     if (start > end) { filter.last = Math.max(filter.last, Math.min(head, end)); return []; }
-    const stop = Math.min(end, start + logRange - 1);   // ตามไม่ทันเกิน logRange → ส่งทีละช่วง ครั้งถัดไปได้ต่อ
+    const stop = Math.min(end, start + logRange - 1);   // more than logRange behind → send in chunks, continue next time
     filter.last = stop;
     if (filter.kind === "blocks") return Array.from({ length: stop - start + 1 }, (_, i) => headerAt(start + i)?.hash).filter(Boolean);
     const { address, topics } = filter.criteria;
@@ -839,7 +839,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     const number = latest() + 1;
     const timestamp = Math.max(now(), (parent?.timestamp ?? 0) + 1);
     const preview = vm.createBlock({ timestamp, feeRecipient: ZERO_ADDRESS, number, checkChain: false, recordBlocks: false, recordHistory: false });
-    const blockHash = ZERO_HASH;   // block จำลองไม่มี hash จริง
+    const blockHash = ZERO_HASH;   // the simulated block has no real hash
     let logIndex = 0;
     let gasUsed = 0;
     const results = calls.map((request, index) => {
@@ -896,7 +896,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
     eth_accounts: () => [],
     eth_coinbase: () => ZERO_ADDRESS,
     eth_blockNumber: () => quantity(latest()),
-    eth_gasPrice: () => quantity(native(vm.currentBaseFee() + suggestedTip())),   // base fee ของ block ถัดไป + tip ที่แนะนำ
+    eth_gasPrice: () => quantity(native(vm.currentBaseFee() + suggestedTip())),   // next block's base fee + suggested tip
     eth_maxPriorityFeePerGas: () => quantity(native(suggestedTip())),
     eth_feeHistory: ([blockCount, newest, percentiles]) => feeHistory(blockCount, newest, percentiles),
     cardianal_getAbi: ([address]) => {
@@ -970,7 +970,7 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
 
   return {
     methods: Object.keys(METHODS),
-    /** รับ body ที่ parse แล้ว (object หรือ batch array) → คำตอบ JSON-RPC · client = IP ของผู้เรียก (นับโควตา filter) */
+    /** takes a parsed body (object or batch array) → JSON-RPC response · client = the caller's IP (for filter quotas) */
     handle(body, { client } = {}) {
       if (Array.isArray(body)) {
         if (body.length === 0) return { jsonrpc: "2.0", id: null, error: { code: EVM_ERROR.REQUEST, message: "empty batch" } };
@@ -978,18 +978,18 @@ export function createEvmRpc({ vm, mempool = null, decimals = 0, clientVersion =
       }
       return one(body, client);
     },
-    /** listener(hash) ทุกครั้งที่มี tx เข้า mempool (ws newPendingTransactions) · คืนฟังก์ชันเลิกฟัง */
+    /** listener(hash) whenever a tx enters the mempool (ws newPendingTransactions) · returns an unsubscribe function */
     onPendingTransaction(listener) {
       pendingListeners.add(listener);
       return () => pendingListeners.delete(listener);
     },
-    /** จำนวน filter ที่ยังไม่หมดอายุ */
+    /** number of unexpired filters */
     filterCount() { pruneFilters(); return filters.size; },
-    /** ค่าที่ใส่ใน wallet_addEthereumChain ได้ทันที */
+    /** values ready to pass to wallet_addEthereumChain */
     chainParams({ rpcUrl, explorerUrl, name = "Bluewolfchain", symbol = "BWSC" } = {}) {
       return {
         chainId: quantity(vm.chainId), chainName: name,
-        nativeCurrency: { name, symbol, decimals: 18 },   // MetaMask บังคับ 18 · เชนเป็น wei อยู่แล้ว
+        nativeCurrency: { name, symbol, decimals: 18 },   // MetaMask requires 18 · the chain already uses wei
         rpcUrls: rpcUrl ? [rpcUrl] : [], blockExplorerUrls: explorerUrl ? [explorerUrl] : [],
       };
     },

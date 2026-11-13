@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/tx.js [แก้ได้ · หน้าตา]
-   หน้า tx (#tx/<hash>): สถานะ, ค่าแก๊ส, ค่าที่คืน, ยอดที่เปลี่ยน, แผนภาพการเรียกโปรแกรม (trace), event */
+/* explorerscan/ui/pages/tx.js [editable · look]
+   tx page (#tx/<hash>): status, gas fee, return value, balance changes, program call diagram (trace), events */
 
 // ---------- transaction ----------
 //   Program calls = a small top-down tree: one numbered box per call (order only), arrows from caller to callee

@@ -1,6 +1,6 @@
 /**
- * metadata.abi ของโปรแกรมแถม (multicall / wcard / multisig / factory / multisender) — ดู src/standards/system-abi.js
- * ชนิด: object / array / any = string ที่เป็น JSON (BigInt ข้างใน JSON เขียนเป็น "123n")
+ * metadata.abi of the bundled programs (multicall / wcard / multisig / factory / multisender) — see src/standards/system-abi.js
+ * Types: object / array / any = a JSON string (BigInt inside JSON is written as "123n")
  */
 
 const f = (name, type) => ({ name, type });

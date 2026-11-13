@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/address.js [แก้ได้ · หน้าตา]
-   หน้า address / โปรแกรม (#address/<address>): ข้อมูลหลัก + แท็บ (เนื้อหาแท็บอยู่ใน ui/tabs/) · ปุ่มอนุมัติของ admin */
+/* explorerscan/ui/pages/address.js [editable · look]
+   Address / program page (#address/<address>): main info + tabs (tab contents are in ui/tabs/) · admin approve button */
 
 // ---------- address / program ----------
 /** token URI of an NFT: http(s) → link · ipfs:// and others → text (never a script link) */

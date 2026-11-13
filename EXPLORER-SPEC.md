@@ -1,118 +1,118 @@
-# สเปคสำหรับสร้าง Explorer
+# Spec for building the Explorer
 
-เอกสารนี้อธิบายทุกอย่างที่ต้องรู้เพื่อสร้างหน้า explorer ของ chain นี้
-ผู้อ่านคือคนหรือ agent ที่จะเขียนฝั่งหน้าเว็บ ไม่ต้องอ่านโค้ดของ VM
+This document explains everything you need to know to build the explorer for this chain
+The reader is a person or agent writing the web front end; no need to read the VM code
 
 ---
 
-## 1. ภาพรวมของ chain
+## 1. Chain overview
 
-- server เดียวเป็นผู้ผลิต block, ปิด block ทุก ~2 วินาที (`BLOCK_MS`), block ว่างจะไม่ถูกสร้าง
-- ทุก tx เซ็นด้วย EIP-712 (secp256k1) เหมือน Ethereum จึงใช้ MetaMask ได้ · domain ไม่มี chainId (เซ็นจากกระเป๋าที่เปิดเชนไหนก็ได้) · chainId ของเชนอยู่ใน message → node ปฏิเสธถ้าไม่ตรง
-- address เป็นตัวพิมพ์เล็กเสมอ รูปแบบ `0x` + 40 hex — **ต้อง lowercase ก่อนค้นเสมอ**
-- โปรแกรม (smart contract) เขียนด้วย JavaScript และมี address แบบเดียวกับ wallet
+- a single server produces blocks, sealing one every ~2 seconds (`BLOCK_MS`); empty blocks are not created
+- every tx is signed with EIP-712 (secp256k1) like Ethereum, so MetaMask works · the domain has no chainId (sign from a wallet on any chain) · the chain's chainId is in the message → the node rejects it if it does not match
+- addresses are always lowercase, format `0x` + 40 hex — **always lowercase before searching**
+- programs (smart contracts) are written in JavaScript and have the same kind of address as wallets
 
-### tx มี 5 ประเภท
+### There are 5 tx types
 
-| action | ความหมาย | ฟิลด์ที่ใช้ |
+| action | Meaning | Fields used |
 |---|---|---|
-| `call` | เรียกฟังก์ชันของโปรแกรม | `to` (โปรแกรม), `method`, `input`, `value` |
-| `deploy` | ส่งโค้ดขึ้น chain (ยังใช้งานไม่ได้จนกว่าจะ init) | `code`, `input` (initInput), `metadata`, `value` |
-| `init` / `reject` | ทีมงานอนุมัติหรือปฏิเสธโปรแกรม | `to` (โปรแกรม) |
-| `transfer` | โอนเหรียญหลัก ไม่เกี่ยวกับโปรแกรม | `to`, `value` |
-| `metadata` | ตั้งชื่อ/คำอธิบายของ address ตัวเอง | `input` |
+| `call` | call a program function | `to` (program), `method`, `input`, `value` |
+| `deploy` | upload code to the chain (not usable until init) | `code`, `input` (initInput), `metadata`, `value` |
+| `init` / `reject` | the team approves or rejects a program | `to` (program) |
+| `transfer` | transfer the native coin, no program involved | `to`, `value` |
+| `metadata` | set the name/description of your own address | `input` |
 
-**สถานะของโปรแกรม:** `deploy` → รอรีวิว (`pending`) → `init` → ใช้งานได้ (`active`) หรือ `reject` → ถูกปฏิเสธและคืนเงิน
-หน้า explorer ควรแยกให้เห็นว่าโปรแกรมไหนยังรอรีวิวอยู่
+**Program status:** `deploy` → awaiting review (`pending`) → `init` → usable (`active`) or `reject` → rejected and refunded
+The explorer should make it clear which programs are still awaiting review
 
 ---
 
-## 2. เรื่องที่ต้องรู้ก่อนเขียนโค้ด (สำคัญมาก)
+## 2. Things to know before writing code (very important)
 
-### 2.1 ตัวเลขเป็น string ลงท้าย `n`
+### 2.1 Numbers are strings ending in `n`
 
-ตัวเลขในโปรแกรมเป็น BigInt เสมอ ตัวเลขทุกตัวที่มาจากโปรแกรมและจาก storage จึงเป็น string แบบนี้
+Numbers in programs are always BigInt, so every number coming from a program or from storage is a string like this
 
 ```json
 { "amount": "1000n", "balance": "999999999999999999999n" }
 ```
 
-**ห้ามใช้ `Number()`** เพราะค่าใหญ่เกิน 2^53 ได้ ให้แปลงด้วย `BigInt(value.slice(0, -1))` แล้วจัดรูปแบบเอง
-ยอดเหรียญหลัก (native, wei 18 ทศนิยม) ก็เป็น `"123n"` เช่นกัน ส่วนค่าของระบบ (ค่าแก๊ส, nonce, เลข block, timestamp) ยังเป็น number ปกติ
+**Never use `Number()`** because values can exceed 2^53; convert with `BigInt(value.slice(0, -1))` and format it yourself
+Native coin balances (native, wei with 18 decimals) are also `"123n"`, while system values (gas, nonce, block number, timestamp) are still plain numbers
 
-### 2.2 tx มี 2 hash ที่ค้นได้ทั้งคู่
+### 2.2 A tx has 2 hashes, both searchable
 
-| ชื่อ | มาจากไหน | ใช้ที่ไหน |
+| Name | Comes from | Used where |
 |---|---|---|
-| `hash` | VM คำนวณเอง | key ใน DB, `txHashes` ของ block |
-| `digest` | EIP-712 ที่ผู้ใช้เซ็น | สิ่งที่ wallet แสดงให้ผู้ใช้เห็น |
+| `hash` | computed by the VM | DB key, the block's `txHashes` |
+| `digest` | the EIP-712 data the user signed | what the wallet shows the user |
 
-`GET /tx/:hash` รับได้ทั้งสองค่า **แนะนำให้แสดง `digest` เป็นเลขที่ tx ในหน้าเว็บ** เมื่อมี เพราะตรงกับที่ผู้ใช้เห็นตอนเซ็น แล้วใช้ `hash` เป็นกลไกภายใน
+`GET /tx/:hash` accepts both values. **We recommend showing `digest` as the tx id on the page** when available, since it matches what the user saw when signing, and using `hash` as an internal mechanism
 
-### 2.3 tx ที่ล้มมี 2 แบบ ต้องแสดงต่างกัน
+### 2.3 There are 2 kinds of failed tx, display them differently
 
-| แบบ | `accepted` | อยู่ใน block ไหม | เสียค่าแก๊สไหม |
+| Kind | `accepted` | In a block? | Pays gas? |
 |---|---|---|---|
-| โปรแกรม throw / เงินไม่พอ | `true` | ✅ มี status `throw` | ✅ เสีย |
-| nonce ผิด / เกินโควตา / ส่งถี่ / simulate ไม่ผ่าน / หมดเวลา / หมดอายุในคิว | `false` | ✅ อยู่ในรายการ **rejected** ของ block (ไม่ได้รัน) | ❌ ไม่เสีย ไม่กิน nonce |
+| program throws / insufficient funds | `true` | ✅ with status `throw` | ✅ pays |
+| wrong nonce / over quota / sent too often / simulate failed / timed out / expired in queue | `false` | ✅ in the block's **rejected** list (not executed) | ❌ does not pay, nonce not consumed |
 
-แบบที่สอง (ผ่านการตรวจลายเซ็นแล้ว) ถูกผู้ผลิตบันทึกไว้ใน block ถัดไป: `GET /tx/:hash` → `{ status: "rejected", block, reason, stage, … }`
-(`block: null` = ยังรอ block ถัดไป) · `stage`: `sendtx` (ตอนส่ง) · `block` (ตอนปิด block) · `expired` (ค้างในคิวเกินเวลา)
-ลายเซ็นผิดไม่ถูกบันทึก (hash / ผู้ส่งเชื่อไม่ได้) · แสดงเป็น "Rejected" + เหตุผล ไม่ใช่ "Failed"
+The second kind (already passed signature checks) is recorded by the producer in the next block: `GET /tx/:hash` → `{ status: "rejected", block, reason, stage, … }`
+(`block: null` = still waiting for the next block) · `stage`: `sendtx` (at submission) · `block` (at block sealing) · `expired` (sat in the queue too long)
+Invalid signatures are not recorded (hash / sender cannot be trusted) · display as "Rejected" + reason, not "Failed"
 
-### 2.4 เหรียญหลักเก็บเป็น 3 ช่องสะสม
+### 2.4 The native coin is stored as 3 cumulative fields
 
 ```
-ยอดคงเหลือ = received - sended - consumed
+balance = received - sended - consumed
 ```
 
-ทุกช่องเพิ่มอย่างเดียว ไม่เคยลด `consumed` คือค่าแก๊สสะสมที่จ่ายไปทั้งชีวิต
-แสดงทั้ง 3 ค่าได้เลยเป็นสถิติที่ EVM ไม่มี
+Every field only ever increases. `consumed` is the lifetime total of gas paid
+You can show all 3 values as a statistic EVM chains do not have
 
-### 2.5 address พิเศษ
+### 2.5 Special address
 
-`0x0000000000000000000000000000000000000000` คือที่เก็บค่าแก๊สส่วนที่ถูกเผา
-ยอด `received` ของมันคือจำนวนเหรียญที่หายออกจากระบบทั้งหมด — เหมาะทำเป็นตัวเลขหน้าแรก
+`0x0000000000000000000000000000000000000000` holds the burned portion of gas fees
+Its `received` total is the amount of coins removed from the system overall — good as a home-page number
 
 ---
 
 ## 3. API
 
-ทุก endpoint คืน JSON, `limit` สูงสุด 100, เวลาเป็น unix milliseconds
+Every endpoint returns JSON, `limit` is at most 100, times are unix milliseconds
 
-### อ่านอย่างเดียว (เปิดสาธารณะได้)
+### Read-only (safe to expose publicly)
 
-| endpoint | คืนอะไร |
+| endpoint | Returns |
 |---|---|
-| `GET /blocks?limit=20` | header ของ block ล่าสุด ใหม่ไปเก่า |
-| `GET /block/latest` | header ล่าสุด |
-| `GET /block/:number` | header ของ block นั้น |
-| `GET /block/:number?full=1` | **receipt เต็ม** — tx ทุกใบพร้อม input, result, trace, stateChanges, events |
-| `GET /tx/:hash` | ตำแหน่งและสถานะของ tx (รับทั้ง hash และ digest) · ยังรอในคิว → `{ status: "pending" }` · ถูกแทนที่ → `{ status: "replaced", hash, replacedBy }` (จำถาวรแบบมีเพดาน อยู่รอด restart) · ถูกปฏิเสธ → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` |
-| `GET /rejected?address=&limit=&cursor=` | tx ที่ถูกปฏิเสธ ใหม่ไปเก่า `{ items, next }` (ส่ง `next` กลับมาเป็น `cursor`) · ไม่ระบุ address = ทั้งเชน · `GET /address/:a/rejected` = ของผู้ส่งคนนั้น |
-| `GET /program/:a/interactions?limit=&cursor=` | tx / call ที่เข้ามาหาโปรแกรม แบบ cursor `{ items, next }` (ไม่นับทั้งรายการ ไม่มีเพดาน) |
-| `GET /program/:a/events?limit=&cursor=&name=` | event แบบ cursor `{ items, next }` (ส่ง `cursor` ว่างได้ = หน้าแรก) · ไม่ส่ง `cursor` = แบบเลขหน้า `?page=` เดิม · `/address/:a/incoming?cursor=` ก็เช่นกัน |
-| `GET /program/:a/events?name=Transfer&to=0x…&from=0x…` | ค้นด้วยดัชนีของ field ที่ emit แบบ indexed (หลาย field = AND · ต้องมี `name` ไม่งั้น 400) → `{ items, next, limit }` ใหม่ไปเก่า · `cursor` / `limit` ใช้ได้ · field ที่ไม่ได้ indexed = ว่าง |
-| `GET /program/:a/abi` | `{ address, abi, evmAbi }` — `abi` = `metadata.abi` ที่โปรแกรมประกาศ (null = ไม่มี) · `evmAbi` = JSON ABI แบบ Ethereum |
-| `GET /program/:a/groups?scan=&cursor=` | นับ key ของ storage ตามชื่อ key แรก ทีละช่วง (`scan` ≤ 50,000 ต่อ request) → `{ total, groups, scanned, next, complete }` · ยังไม่ครบ → ส่ง `cursor=next` แล้วบวกผลเอง |
-| `GET /tx/:hash/receipt` | receipt ของ tx ใบเดียว |
-| `GET /address/:address` | ยอดเงิน, nonce, metadata, เป็นโปรแกรมหรือไม่, tx ล่าสุด |
-| `GET /program/:address` | โค้ด, ผู้สร้าง, metadata, ยอดเงิน, storage, `token` / `collection` (NFT ERC-721 / multi-token ERC-1155 มาตรฐาน · ไม่ใช่ = null) |
-| `GET /address/:address/nfts` | NFT / multi-token ที่ถือ `[{ program, standard, name, symbol, tokenId, amount, uri }]` |
-| `GET /events?program=&name=&limit=` | event ที่โปรแกรม emit ใหม่ไปเก่า |
-| `GET /name/:namespace` | ชื่อ → address |
-| `GET /state/:address?block=42` | storage ของโปรแกรม ณ block นั้น |
-| `GET /nonce/:address` | nonce ถัดไปที่ควรใช้ (นับ tx ที่รออยู่ในคิวด้วย) |
-| `GET /pending` | tx ที่รออยู่ในคิว ยังไม่เข้า block · `rejectedPending` = tx ที่ถูกปฏิเสธที่รอลง block |
-| `POST /query` | เรียกฟังก์ชันของโปรแกรมแบบอ่านอย่างเดียว ไม่เสียค่าแก๊ส |
+| `GET /blocks?limit=20` | latest block headers, newest first |
+| `GET /block/latest` | latest header |
+| `GET /block/:number` | header of that block |
+| `GET /block/:number?full=1` | **full receipt** — every tx with input, result, trace, stateChanges, events |
+| `GET /tx/:hash` | position and status of the tx (accepts both hash and digest) · still in the queue → `{ status: "pending" }` · replaced → `{ status: "replaced", hash, replacedBy }` (remembered persistently with a cap, survives restarts) · rejected → `{ status: "rejected", block, blockNumber, index, reason, code, stage, sender, nonce, action, to, gasPrice, timestamp }` |
+| `GET /rejected?address=&limit=&cursor=` | rejected txs, newest first `{ items, next }` (pass `next` back as `cursor`) · no address = whole chain · `GET /address/:a/rejected` = that sender's |
+| `GET /program/:a/interactions?limit=&cursor=` | txs / calls into the program, cursor-based `{ items, next }` (does not count the whole list, no cap) |
+| `GET /program/:a/events?limit=&cursor=&name=` | events, cursor-based `{ items, next }` (an empty `cursor` is allowed = first page) · no `cursor` = the old page-number mode `?page=` · `/address/:a/incoming?cursor=` works the same |
+| `GET /program/:a/events?name=Transfer&to=0x…&from=0x…` | search by the index of fields emitted as indexed (multiple fields = AND · `name` is required, otherwise 400) → `{ items, next, limit }` newest first · `cursor` / `limit` work · non-indexed field = empty |
+| `GET /program/:a/abi` | `{ address, abi, evmAbi }` — `abi` = the `metadata.abi` the program declares (null = none) · `evmAbi` = Ethereum-style JSON ABI |
+| `GET /program/:a/groups?scan=&cursor=` | counts storage keys by first key name, in ranges (`scan` ≤ 50,000 per request) → `{ total, groups, scanned, next, complete }` · not complete → send `cursor=next` and add up the results yourself |
+| `GET /tx/:hash/receipt` | receipt of a single tx |
+| `GET /address/:address` | balance, nonce, metadata, whether it is a program, latest txs |
+| `GET /program/:address` | code, creator, metadata, balance, storage, `token` / `collection` (standard NFT ERC-721 / multi-token ERC-1155 · otherwise = null) |
+| `GET /address/:address/nfts` | NFTs / multi-tokens held `[{ program, standard, name, symbol, tokenId, amount, uri }]` |
+| `GET /events?program=&name=&limit=` | events emitted by programs, newest first |
+| `GET /name/:namespace` | name → address |
+| `GET /state/:address?block=42` | program storage as of that block |
+| `GET /nonce/:address` | next nonce to use (counts txs waiting in the queue too) |
+| `GET /pending` | txs waiting in the queue, not yet in a block · `rejectedPending` = rejected txs waiting to be recorded in a block |
+| `POST /query` | call a program function read-only, no gas charged |
 
-### เขียน
+### Write
 
-| endpoint | หมายเหตุ |
+| endpoint | Notes |
 |---|---|
-| `POST /sendtx` | `{ tx, signature }` — ตอบ 400 พร้อม `simulation` ถ้าจะล้ม · action: `call` `transfer` (value 0 ได้ = ยกเลิกใบที่ค้างด้วยการโอน 0 ให้ตัวเอง) `deploy` (`upgrader` ไม่บังคับ อยู่ในข้อมูลที่เซ็น) `init` `reject` `metadata` `upgrade` (`code` + `input` = migrate input) `setUpgrader` (`input: { upgrader: "0x…" \| null }`) `initUpgrade` `rejectUpgrade` `setGasConfig` (admin เท่านั้น · ไม่มี `to` · `input: { minBaseFee: "<wei>" \| null }` · null = กลับไปใช้ค่าใน genesis · มีผลตั้งแต่ block ถัดไป) |
+| `POST /sendtx` | `{ tx, signature }` — returns 400 with `simulation` if it would fail · action: `call` `transfer` (value 0 allowed = cancel a stuck tx by sending 0 to yourself) `deploy` (`upgrader` optional, part of the signed data) `init` `reject` `metadata` `upgrade` (`code` + `input` = migrate input) `setUpgrader` (`input: { upgrader: "0x…" \| null }`) `initUpgrade` `rejectUpgrade` `setGasConfig` (admin only · no `to` · `input: { minBaseFee: "<wei>" \| null }` · null = revert to the genesis value · takes effect from the next block) |
 
-**`POST /query`** สำคัญมากสำหรับ explorer เพราะใช้อ่านค่าจากโปรแกรมได้โดยไม่ต้องส่ง tx
+**`POST /query`** is very important for the explorer because it reads values from programs without sending a tx
 
 ```json
 POST /query
@@ -122,7 +122,7 @@ POST /query
 
 ---
 
-## 4. รูปแบบข้อมูล
+## 4. Data formats
 
 ### block header — `GET /block/:number`
 
@@ -142,21 +142,21 @@ POST /query
 }
 ```
 
-`rejectedCount` / `rejectedRoot` มีเฉพาะ block ที่มี tx ถูกปฏิเสธ (อยู่ใน hash ของ block) · รายการอยู่ใน `?full=1` → `rejected: [{ hash, sender, nonce, action, to, gasPrice, reason, code, stage }]`
+`rejectedCount` / `rejectedRoot` appear only on blocks that contain rejected txs (part of the block hash) · the list is in `?full=1` → `rejected: [{ hash, sender, nonce, action, to, gasPrice, reason, code, stage }]`
 
-`stateRoot` = root ของ Merkle Patricia Trie ของ state ทั้งหมดหลัง block นี้ (ตรวจค่าใดค่าหนึ่งได้ด้วย `GET /proof?key=` · `cardianal_getProof`) · `writesRoot` = hash ของ writes ของ state ใน block นี้ · `parentStateRoot` = stateRoot ของ block ก่อนหน้า (ไม่อยู่ใน hash)
+`stateRoot` = root of the Merkle Patricia Trie of the whole state after this block (any single value can be verified with `GET /proof?key=` · `cardianal_getProof`) · `writesRoot` = hash of this block's state writes · `parentStateRoot` = stateRoot of the previous block (not part of the hash)
 
-`baseFeePerGas` (EIP-1559 · คำนวณจาก block ก่อนหน้า) · `receiptsRoot` (hash ของ receipt ย่อทุกใบ) · `logsBloom` (bloom ของ log แบบ EVM) **อยู่ใน hash ของ block**
-`burnedFee` / `producerFee` = ค่าแก๊สส่วนที่เผา / ส่วนที่ `feeRecipient` ได้ (tip + base fee ส่วนที่ไม่เผา) · explorer แสดงเป็น Base fee + Fee split
-`?full=1` มี `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` `receiptsRoot` `logsBloom` เหมือนกัน
+`baseFeePerGas` (EIP-1559 · computed from the previous block) · `receiptsRoot` (hash of every condensed receipt) · `logsBloom` (EVM-style log bloom) **are part of the block hash**
+`burnedFee` / `producerFee` = the burned portion of gas / the portion `feeRecipient` receives (tip + unburned base fee) · the explorer shows them as Base fee + Fee split
+`?full=1` includes `baseFeePerGas` `gasTarget` `burnedFee` `producerFee` `receiptsRoot` `logsBloom` as well
 
-### receipt เต็ม — `GET /block/:number?full=1`
+### full receipt — `GET /block/:number?full=1`
 
 ```json
 {
   "number": 42, "hash": "0x…", "time": "2025-01-01T00:00:05.000Z",
   "txCount": 2, "gasUsed": 4210,
-  "transactions": [ /* ดูด้านล่าง */ ],
+  "transactions": [ /* see below */ ],
   "events": [{ "name": "Transfer", "data": {…}, "depth": 0, "program": "0x…", "txIndex": 0, "txHash": "0x…" }],
   "stateChanges": [{ "program": "0x…", "key": ["balances", "0x…"], "after": "970n" }],
   "nativeChanges": [{ "address": "0x…", "field": "consumed", "after": 813 }]
@@ -183,11 +183,11 @@ POST /query
 }
 ```
 
-`signedOnChainId` = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (หน้าเว็บใส่จาก `eth_chainId` · ไม่ส่ง = เชนนี้ · อยู่ในลายเซ็นแต่ไม่ใช่หลักฐาน) · หน้า tx แสดงเป็นแถว "Signed on"
+`signedOnChainId` = the chain the wallet was on when signing (the page fills it from `eth_chainId` · omitted = this chain · part of the signature but not proof) · the tx page shows it as a "Signed on" row
 
-**`trace` คือจุดขายของ chain นี้** เพราะเห็นการเรียกโปรแกรมซ้อนกันทุกชั้นโดยไม่ต้องเปิดโหมด debug
-`depth` 0 คือ user เรียก, depth 1 คือโปรแกรมเรียกโปรแกรมอื่นต่อ
-`from` คือผู้เรียกชั้นนั้น (เป็น address ของโปรแกรมได้), `origin` คือ user ที่เริ่ม tx เสมอ
+**`trace` is this chain's selling point** because it shows every level of nested program calls without enabling a debug mode
+`depth` 0 is the user's call, depth 1 is a program calling another program
+`from` is the caller at that level (can be a program address), `origin` is always the user who started the tx
 
 ### address — `GET /address/:address`
 
@@ -202,7 +202,7 @@ POST /query
 }
 ```
 
-`metadata.type === "program"` บอกว่าเป็นโปรแกรม ส่วน `namespace` คือชื่อที่ไม่ซ้ำทั้งระบบ **ควรแสดงชื่อแทน address เมื่อมี**
+`metadata.type === "program"` means it is a program, and `namespace` is a system-wide unique name. **Show the name instead of the address when available**
 
 ### program — `GET /program/:address`
 
@@ -217,7 +217,7 @@ POST /query
 }
 ```
 
-`code` ถูกเก็บเป็นบรรทัดเดียวโดยขึ้นบรรทัดใหม่เป็น `\n` แบบ escape **ต้องแปลงกลับก่อนแสดง**
+`code` is stored as a single line with newlines escaped as `\n`. **Convert it back before displaying**
 
 ```js
 const source = JSON.parse(`"${code}"`);
@@ -225,39 +225,39 @@ const source = JSON.parse(`"${code}"`);
 
 ---
 
-## 5. หน้าที่ควรมี
+## 5. Pages to have
 
-| หน้า | ใช้ endpoint | จุดที่ควรเน้น |
+| Page | Endpoints | What to highlight |
 |---|---|---|
-| หน้าแรก | `/blocks`, `/block/latest`, `/pending` | จำนวน block, tx ต่อวินาที, เหรียญที่ถูกเผา, tx ที่รออยู่ในคิว |
-| block | `/block/:number?full=1` | รายการ tx, ค่าแก๊สรวม, ผู้ปิด block, ลิงก์ไป block ก่อน/หลัง |
-| tx | `/tx/:hash/receipt` | **trace แบบต้นไม้**, event, การเปลี่ยนแปลง storage, ค่าแก๊ส |
-| address | `/address/:address` | ยอด 3 ช่อง, ประวัติ tx, ชื่อ namespace |
-| program | `/program/:address`, `/events?program=`, `POST /query` | โค้ดพร้อมไฮไลต์, ฟีด event, **ปุ่มเรียกฟังก์ชันแบบอ่านอย่างเดียว** |
-| ค้นหา | ทุก endpoint | รับได้ทั้ง block number, tx hash, digest, address, namespace |
+| Home | `/blocks`, `/block/latest`, `/pending` | block count, tx per second, burned coins, txs waiting in the queue |
+| block | `/block/:number?full=1` | tx list, total gas, block sealer, links to previous/next block |
+| tx | `/tx/:hash/receipt` | **tree-style trace**, events, storage changes, gas |
+| address | `/address/:address` | the 3 balance fields, tx history, namespace name |
+| program | `/program/:address`, `/events?program=`, `POST /query` | highlighted code, event feed, **read-only function call buttons** |
+| Search | every endpoint | accepts block number, tx hash, digest, address, namespace |
 
-**ฟีเจอร์ที่ chain นี้ทำได้และ explorer ทั่วไปไม่มี**
+**Features this chain supports that typical explorers lack**
 
-1. **ย้อนดู state ณ block ใด ๆ** ด้วย `/state/:address?block=42` — ทำเป็น slider เลื่อนดูข้อมูลของโปรแกรมย้อนหลังได้
-2. **เรียกฟังก์ชันอ่านค่าได้ฟรี** ด้วย `POST /query` — ทำเป็นหน้า "ทดลองเรียก" ได้เลย
-3. **trace ทุก tx โดยไม่ต้องตั้งค่าอะไร**
-
----
-
-## 6. ข้อควรระวัง
-
-1. **`?full=1` ต้องรันทั้ง block ใหม่** ใช้เวลาหลักสิบมิลลิวินาที อย่าเรียกในหน้ารายการ ให้เรียกเฉพาะตอนผู้ใช้กดเข้าไปดู
-2. **`GET /block/:number?full=1` อาจตอบ 409** ถ้า chain ไม่ได้เปิดเก็บประวัติ ให้ fallback ไปแสดง header อย่างเดียว
-3. **`timestamp` ของ block มาจากผู้ผลิต block** ไม่ใช่เวลาที่ผู้ใช้ส่ง tx
-4. **`method` เป็นสตริงว่างสำหรับ deploy/init/transfer/metadata** อย่าแสดงเป็น "undefined"
-5. **`input` ของ deploy ไม่มี `code`** เพราะโค้ดอยู่ในฟิลด์แยก
-6. **tx ที่รออยู่ในคิว (`/pending`) ยังไม่มี block และอาจไม่เข้าเลย** ให้แสดงสถานะเป็น "รอดำเนินการ" และ poll ซ้ำ
-7. **event ของกิ่งที่ล้มแล้วถูก catch จะหายไป** ตัวเลขที่เห็นจึงเป็นเฉพาะกิ่งที่สำเร็จจริง
-8. **อย่า cache `/pending` และ `/block/latest`** ส่วน block ที่ปิดแล้วไม่มีวันเปลี่ยน cache ได้ถาวร
+1. **View state as of any block** with `/state/:address?block=42` — build a slider to scroll back through a program's data
+2. **Call read functions for free** with `POST /query` — makes a "Try it" page easy
+3. **Trace for every tx with no configuration**
 
 ---
 
-## 7. ตัวอย่าง client
+## 6. Caveats
+
+1. **`?full=1` re-executes the whole block** and takes tens of milliseconds; don't call it on list pages, only when the user opens a detail view
+2. **`GET /block/:number?full=1` may return 409** if the chain does not keep history; fall back to showing only the header
+3. **A block's `timestamp` comes from the block producer**, not from when the user sent the tx
+4. **`method` is an empty string for deploy/init/transfer/metadata**; don't display it as "undefined"
+5. **A deploy's `input` has no `code`** because the code is in a separate field
+6. **Txs waiting in the queue (`/pending`) have no block yet and may never get one**; show the status as "Pending" and poll again
+7. **Events from a branch that failed and was caught disappear**, so the numbers you see come only from branches that actually succeeded
+8. **Don't cache `/pending` and `/block/latest`**; sealed blocks never change and can be cached forever
+
+---
+
+## 7. Client example
 
 ```js
 const api = (path, options) => fetch(`${BASE}${path}`, options).then((r) => r.json());
@@ -279,9 +279,9 @@ console.log(toBigInt(balance.result));
 
 ---
 
-## 8. ถ้า endpoint ยังไม่ครบ
+## 8. If an endpoint is missing
 
-ฝั่ง VM มีฟังก์ชันเหล่านี้ให้เรียกตรง ๆ ถ้าจะเพิ่ม endpoint เอง
+The VM has these functions you can call directly if you want to add endpoints yourself
 
 ```js
 vm.listBlocks({ limit, reverse })        vm.getBlock(n)          vm.getBlockBody(n)
@@ -294,18 +294,18 @@ vm.query({ programUuid, functionName, input, context })
 
 ---
 
-## 9. สไตล์หน้าเว็บ (ธีมม่วง)
+## 9. Page style (purple theme)
 
-อ้างอิงภาพ `design/explorer-style-ref.png` (แนว data app แบบ Space and Time) · ธีมมืดธีมเดียว ไม่มีโหมดสว่าง
+Reference image `design/explorer-style-ref.png` (a Space and Time–style data app) · a single dark theme, no light mode
 
-- **หัวเว็บ**: แถบดำเกือบสนิท โลโก้หกเหลี่ยมซ้าย · ปุ่ม pill (`.pill` ตัวที่เลือก = ม่วงทึบ `#6d28d9`) · ช่องค้นหา `#q` · Deploy · ปุ่ม wallet เป็นชิปบัญชีมีวงกลมสีเขียว (ขวาสุด)
-- **แถบข้าง** `#side`: หมวดพับได้ (`<details>`) Explorer / Programs / Wallet / Recent programs · ไอคอนวงกลมสีเล็ก ๆ · ตัวเลขเป็นชิป
-  รายการโปรแกรมล่าสุดดึงจาก `/programs/approved?limit=8` · `markNav()` ใส่ `.on` ให้ `[data-nav]` ตามหน้าที่เปิด (เรียกในทุก `render()`)
-  จอ ≤960px แถบข้างกลายเป็น drawer เปิดด้วยปุ่ม ☰ (`#menu-btn`) กดเลือกหรือกดพื้นหลัง / Esc แล้วปิด · ปุ่ม pill ในหัวเว็บซ่อน
-- **พื้นหลัง**: ไล่สีวงกลม ม่วงเข้ม → ม่วงแดง (`#2a0a4a → #6b1a9a`) + เส้นกริดจาง ๆ + กริดพื้นแบบ perspective (`.canvas` fixed ไม่เลื่อนตาม)
-- **การ์ด** (`.panel`): ป้ายชื่อเล็กสีดำอยู่เหนือการ์ด (`h2` ตัวพิมพ์ใหญ่ monospace · ตัวเลขใน "(N)" เป็นชิป `.cnt` โดยข้อความยังเหมือนเดิม)
-  ตัวการ์ดม่วงโปร่งแสง ขอบบาง + เรืองแสง · หัวตารางแถบม่วงอ่อน · แถวแน่น · ชื่อแถวของตาราง `kv` ตัวพิมพ์ใหญ่มีไอคอนข้าวหลามตัด
-  ใต้รายการมีชิป "● Showing …" แบบ footer · จอกว้างมีเส้นเชื่อมสีม่วงบาง ๆ ด้านซ้ายโยงการ์ดต่อกัน
-- **แท็บ / ปุ่ม**: แท็บอยู่ในแถบดำหัวการ์ด ตัวที่เลือก = ม่วงทึบ · `.btn` ม่วงโปร่ง · `.btn.solid` ม่วงทึบเรืองแสง
-- สีหลักอยู่ใน `:root` (`--card` `--head` `--violet` `--line-2` `--glow` `--mono`) · กล่อง JSON ยังเป็น `#04050d` (เทสต์ตรวจ)
-- ห้ามเปลี่ยน id / data-* / ข้อความปุ่มที่เทสต์ e2e ใช้ · เทสต์ "ธีมม่วง" ตรวจแถบข้าง / drawer / หัวตาราง
+- **Header**: near-black bar, hexagon logo on the left · pill buttons (`.pill`, selected = solid purple `#6d28d9`) · search box `#q` · Deploy · the wallet button is an account chip with a green circle (far right)
+- **Sidebar** `#side`: collapsible sections (`<details>`) Explorer / Programs / Wallet / Recent programs · small colored circle icons · counts as chips
+  The recent programs list comes from `/programs/approved?limit=8` · `markNav()` adds `.on` to `[data-nav]` for the open page (called in every `render()`)
+  At ≤960px the sidebar becomes a drawer opened with the ☰ button (`#menu-btn`); picking an item, tapping the backdrop, or Esc closes it · the header pill buttons are hidden
+- **Background**: radial gradient, deep purple → magenta (`#2a0a4a → #6b1a9a`) + faint grid lines + a perspective floor grid (`.canvas` fixed, does not scroll)
+- **Cards** (`.panel`): a small black label above the card (`h2` uppercase monospace · the number in "(N)" is a `.cnt` chip while the text stays the same)
+  The card body is translucent purple with a thin glowing border · table headers are a light purple bar · dense rows · `kv` table row names are uppercase with a diamond icon
+  Below lists there is a "● Showing …" chip as a footer · on wide screens a thin purple line on the left links the cards together
+- **Tabs / buttons**: tabs sit in the black bar at the top of the card, selected = solid purple · `.btn` translucent purple · `.btn.solid` solid glowing purple
+- Main colors are in `:root` (`--card` `--head` `--violet` `--line-2` `--glow` `--mono`) · JSON boxes remain `#04050d` (checked by tests)
+- Do not change ids / data-* / button text used by the e2e tests · the "purple theme" test checks the sidebar / drawer / table headers

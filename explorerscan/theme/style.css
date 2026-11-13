@@ -1,5 +1,5 @@
-/* explorerscan/theme/style.css [แก้ได้ · หน้าตา] — พื้นหลัง, แถบบน, เมนูข้าง, ตาราง, การ์ด, ฟอร์ม, มือถือ (@media)
-   ใช้สีจาก colors.css (var(--…)) · ชื่อ class ตรงกับ HTML ใน ui/ */
+/* explorerscan/theme/style.css [editable · look] — background, top bar, sidebar, tables, cards, forms, mobile (@media)
+   Uses colors from colors.css (var(--…)) · class names match the HTML in ui/ */
 
 *{box-sizing:border-box}
 html{background:var(--bg)}

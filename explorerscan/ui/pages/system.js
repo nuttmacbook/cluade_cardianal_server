@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/system.js [แก้ได้ · หน้าตา]
-   หน้าโปรแกรมกลางของเชน (#system): รายชื่อจาก EXPLORER.systemPrograms (config.js) → หา address จากชื่อด้วย /name/<ชื่อ> */
+/* explorerscan/ui/pages/system.js [editable · look]
+   Chain system programs page (#system): list from EXPLORER.systemPrograms (config.js) → address looked up by name via /name/<name> */
 
 // ---------- system programs: multicall · wrapped coin · factory · templates ----------
 async function systemPage(draw = el) {

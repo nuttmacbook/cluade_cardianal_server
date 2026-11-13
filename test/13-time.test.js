@@ -10,11 +10,11 @@ beforeEach(() => {
 });
 
 const T = Date.UTC(2024, 5, 1, 12, 0, 0); // 2024-06-01T12:00:00.000Z
-/** ค่าตัวเลขที่ออกจากโปรแกรมเป็น "123n" */
+/** numbers coming out of a program look like "123n" */
 const n = (value) => `${value}n`;
 const now = (programUuid = "clock") => ({ programUuid, functionName: "now", context: user("a") });
 
-test("เวลาในโปรแกรม: Date.now / new Date / Date() / params.block.timestamp เท่ากับเวลาที่กำหนด", () => {
+test("time in programs: Date.now / new Date / Date() / params.block.timestamp equal the given time", () => {
   const res = ok(vm.call(now(), { timestamp: T }));
   assert.equal(res.timestamp, T);
   assert.deepEqual(res.result, {
@@ -22,7 +22,7 @@ test("เวลาในโปรแกรม: Date.now / new Date / Date() / pa
     dateNow: n(T),
     newDate: n(T),
     iso: "2024-06-01T12:00:00.000Z",
-    // QuickJS ไม่ต่อท้ายชื่อเขตเวลา "(Coordinated Universal Time)" แบบ V8
+    // QuickJS does not append the time zone name "(Coordinated Universal Time)" like V8
     asString: new Date(T).toString().replace(/ \(.*\)$/, ""),
     isDate: true,
     epoch: "0n",
@@ -32,7 +32,7 @@ test("เวลาในโปรแกรม: Date.now / new Date / Date() / pa
   });
 });
 
-test("block: ทุก tx เห็นเวลาเดียวกันเป๊ะ แม้รันห่างกัน", async () => {
+test("block: every tx sees exactly the same time, even when run apart", async () => {
   const block = vm.createBlock({ timestamp: T });
   const first = block.call(now());
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -44,7 +44,7 @@ test("block: ทุก tx เห็นเวลาเดียวกันเป
   assert.ok(block.results().every((r) => r.timestamp === T));
 });
 
-test("block: ไม่ส่ง timestamp → ใช้ Date.now() ครั้งเดียวตอนสร้าง block", async () => {
+test("block: no timestamp → Date.now() is taken once when the block is created", async () => {
   const before = Date.now();
   const block = vm.createBlock();
   const after = Date.now();
@@ -54,7 +54,7 @@ test("block: ไม่ส่ง timestamp → ใช้ Date.now() ครั้�
   assert.equal(res.result.dateNow, n(block.timestamp));
 });
 
-test("call เดี่ยว: ไม่ส่ง timestamp → ใช้เวลาตอนเรียก call", () => {
+test("single call: no timestamp → uses the time of the call", () => {
   const before = Date.now();
   const res = ok(vm.call(now()));
   const after = Date.now();
@@ -62,12 +62,12 @@ test("call เดี่ยว: ไม่ส่ง timestamp → ใช้เว�
   assert.equal(res.result.dateNow, n(res.timestamp));
 });
 
-test("โปรแกรมที่เรียกต่อกัน (runProgram) เห็นเวลาเดียวกัน", () => {
+test("chained programs (runProgram) see the same time", () => {
   const res = ok(vm.call({ programUuid: "clock", functionName: "nowNested", input: { target: "clock2" }, context: user("a") }, { timestamp: T }));
   assert.deepEqual(res.result, [n(T), n(T)]);
 });
 
-test("init: initialization เห็นเวลาของ block", () => {
+test("init: initialization sees the block time", () => {
   const block = vm.createBlock({ timestamp: T });
   block.deploy({ programUuid: "clock3", code: CLOCK, context: user("a") });
   block.init({ programUuid: "clock3" });
@@ -76,7 +76,7 @@ test("init: initialization เห็นเวลาของ block", () => {
   assert.equal(stored("clock3", "createdAtBlock"), n(T));
 });
 
-test("writes เหมือนเดิมทุกครั้งเมื่อใช้ timestamp เดียวกัน และต่างกันเมื่อ timestamp ต่างกัน", () => {
+test("writes are identical with the same timestamp and differ with a different timestamp", () => {
   const run = (timestamp) => {
     const block = vm.createBlock({ timestamp });
     block.call({ programUuid: "clock", functionName: "stamp", input: { id: 1 }, context: user("a") });
@@ -87,18 +87,18 @@ test("writes เหมือนเดิมทุกครั้งเมื่�
   assert.notEqual(run(T), run(T + 1));
 });
 
-test("Date ในโปรแกรมไม่เดิน: รอด้วย Date.now() → TIMEOUT", () => {
+test("Date in programs does not advance: waiting on Date.now() → TIMEOUT", () => {
   vm.timeoutMs = 100;
   fails(vm.call({ programUuid: "clock", functionName: "waitWithDate", context: user("a") }), "TIMEOUT");
 });
 
-test("Date ของโปรแกรมไม่กระทบ Date ของระบบ", () => {
+test("program Date does not affect the system Date", () => {
   ok(vm.call(now(), { timestamp: 0 }));
   assert.ok(Date.now() > T);
   assert.ok(new Date().getTime() > T);
 });
 
-test("timestamp ไม่ถูกต้อง → INVALID_REQUEST", () => {
+test("invalid timestamp → INVALID_REQUEST", () => {
   for (const timestamp of [-1, 1.5, "1", NaN, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => vm.createBlock({ timestamp }), { code: "INVALID_REQUEST" });
     assert.throws(() => vm.call(now(), { timestamp }), { code: "INVALID_REQUEST" });

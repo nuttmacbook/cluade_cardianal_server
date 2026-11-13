@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import { TOKEN, WALLET, SHOP, COUNTER, FAULTY } from "./programs.js";
 
-/* receipt ของแต่ละ tx (vm.buildReceipt) และของทั้ง block (block.receipt) */
+/* receipts per tx (vm.buildReceipt) and for the whole block (block.receipt) */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -29,16 +29,16 @@ function setup(options = {}, balances = { alice: 100_000 }) {
   return vm;
 }
 
-/** ยิง request แล้วได้ receipt เลย */
+/** sends a request and returns its receipt directly */
 function receiptOf(vm, action, request, index = 0) {
   return vm.buildReceipt(request, vm[action](request, { timestamp: T }), { index, action });
 }
 
 // ---------------------------------------------------------------------------
-//  แบบง่าย
+//  simple cases
 // ---------------------------------------------------------------------------
 
-test("receipt: transfer ระหว่าง wallet", () => {
+test("receipt: transfer between wallets", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "transfer", { from: "ALICE", to: "0xBoB", amount: 500, nonce: 0 });
 
@@ -55,12 +55,12 @@ test("receipt: transfer ระหว่าง wallet", () => {
     to: "0xbob",
     method: "transfer",
     input: null,
-    value: "500n",   // ยอด native ใน receipt เป็น "123n" (BigInt ส่งเป็น JSON)
+    value: "500n",   // native amounts in the receipt look like "123n" (BigInt sent as JSON)
     result: { from: "alice", to: "0xbob", amount: "500n" },
     error: null,
     gasUsed: GAS.call + 2 * (GAS.read + GAS.write),
     gasPrice: null,
-    // EIP-1559: ไม่ส่งราคามา = จ่ายเท่า base fee (ไม่มี tip) · ไม่มี feeRecipient → เผาทั้งหมด
+    // EIP-1559: no price given = pays the base fee (no tip) · no feeRecipient → everything burned
     type: 0,
     effectiveGasPrice: "1n",
     baseFeePerGas: "1n",
@@ -76,14 +76,14 @@ test("receipt: transfer ระหว่าง wallet", () => {
       { address: "alice", field: "sended", after: "500n" },
       { address: "0xbob", field: "received", after: "500n" },
       { address: "alice", field: "consumed", after: receipt.fee },
-      { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // ไม่ได้ตั้ง feeRecipient → เผาทั้งหมด
+      { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // no feeRecipient set → everything burned
     ],
     stateChanges: [],
     programChanges: [],
   });
 });
 
-test("receipt: call ธรรมดา (อ่าน อย่างเดียว)", () => {
+test("receipt: plain call (read only)", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("alice"), nonce: 0 });
 
@@ -94,11 +94,11 @@ test("receipt: call ธรรมดา (อ่าน อย่างเดีย
   assert.equal(receipt.gasUsed, GAS.call + GAS.read);
   assert.deepEqual(receipt.nativeChanges, [
     { address: "alice", field: "consumed", after: receipt.fee },
-    { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // ไม่ได้ตั้ง feeRecipient → เผาทั้งหมด
+    { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // no feeRecipient set → everything burned
   ]);
 });
 
-test("receipt: call ที่เปลี่ยนข้อมูล", () => {
+test("receipt: call that changes data", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 30 }, context: user("alice"), nonce: 0 });
 
@@ -110,7 +110,7 @@ test("receipt: call ที่เปลี่ยนข้อมูล", () => {
   assert.equal(receipt.nonce, 1);
 });
 
-test("receipt: call ที่ล้ม", () => {
+test("receipt: failed call", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 99999 }, context: user("alice"), nonce: 0 });
 
@@ -119,11 +119,11 @@ test("receipt: call ที่ล้ม", () => {
   assert.equal(receipt.result, null);
   assert.deepEqual(receipt.stateChanges, []);
   assert.deepEqual(receipt.trace[0].error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
-  assert.equal(receipt.nonce, 1);                       // ล้มก็กิน nonce
-  assert.ok(num(receipt.fee) > 0);                      // และจ่ายค่าแก๊ส
+  assert.equal(receipt.nonce, 1);                       // failure still consumes the nonce
+  assert.ok(num(receipt.fee) > 0);                      // and pays gas
 });
 
-test("receipt: nonce ผิด → ไม่กิน nonce ไม่เสียค่าแก๊ส", () => {
+test("receipt: wrong nonce → no nonce consumed, no gas paid", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "balanceOf", input: { account: "alice" }, context: user("alice"), nonce: 7 });
 
@@ -144,15 +144,15 @@ test("receipt: deploy / init / reject", () => {
     { address: "alice", field: "sended", after: "250n" },
     { address: "counter", field: "received", after: "250n" },
     { address: "alice", field: "consumed", after: deployed.fee },
-    { address: VM.BURN_ADDRESS, field: "received", after: deployed.fee }, // ไม่ได้ตั้ง feeRecipient → เผาทั้งหมด
+    { address: VM.BURN_ADDRESS, field: "received", after: deployed.fee }, // no feeRecipient set → everything burned
   ]);
-  // receipt ด้านบนไม่ได้ commit ดังนั้น nonce ของ alice ยังเป็น 0
+  // the receipt above was not committed, so alice's nonce is still 0
   vm.commit(vm.deploy({ programUuid: "counter2", code: COUNTER, context: user("alice"), initInput: { start: 3 }, nonce: 0 }, { timestamp: T }).writes);
 
   const initialized = receiptOf(vm, "init", { programUuid: "counter2" });
   assert.equal(initialized.action, "init");
   assert.equal(initialized.method, "init");
-  assert.equal(initialized.from, null);                  // init มาจากทีมงาน ไม่ใช่ user
+  assert.equal(initialized.from, null);                  // init comes from the team, not a user
   assert.equal(initialized.nonce, null);
   assert.deepEqual(initialized.stateChanges, [{ program: "counter2", key: ["count"], after: "3n" }]);
   assert.deepEqual(initialized.programChanges, [
@@ -170,10 +170,10 @@ test("receipt: deploy / init / reject", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  แบบซับซ้อน
+//  complex cases
 // ---------------------------------------------------------------------------
 
-test("receipt: เรียกข้ามโปรแกรม (shop → token) — trace 2 ชั้น", () => {
+test("receipt: cross-program call (shop → token) — 2-level trace", () => {
   const vm = setup();
   vm.commit(vm.call({ programUuid: "token", functionName: "approve", input: { spender: "shop", amount: 500 }, context: user("alice"), nonce: 0 }, { timestamp: T }).writes);
   const receipt = receiptOf(vm, "call", { programUuid: "shop", functionName: "buy", context: user("alice"), nonce: 1 }, 3);
@@ -192,7 +192,7 @@ test("receipt: เรียกข้ามโปรแกรม (shop → token)
   ]);
 });
 
-test("receipt: โปรแกรมที่ถูกเรียกล้มแต่ผู้เรียก catch ไว้ — trace เห็น throw ข้างใน แต่ tx สำเร็จ", () => {
+test("receipt: the callee fails but the caller catches — the trace shows the inner throw, but the tx succeeds", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", { programUuid: "shop", functionName: "buySafe", context: user("alice"), nonce: 0 });
 
@@ -201,10 +201,10 @@ test("receipt: โปรแกรมที่ถูกเรียกล้ม�
     "0 shop.buySafe success",
     "1 token.transferFrom throw",
   ]);
-  assert.deepEqual(receipt.stateChanges.map((c) => c.program), ["shop", "shop"]); // เฉพาะ log ของ shop, ของ token ถูกย้อน
+  assert.deepEqual(receipt.stateChanges.map((c) => c.program), ["shop", "shop"]); // only shop's log, token's was reverted
 });
 
-test("receipt: แนบเงินและส่งต่อ — เงินหลายทอดในใบเดียว", () => {
+test("receipt: attach value and forward it — multi-hop funds in one tx", () => {
   const vm = setup();
   const receipt = receiptOf(vm, "call", {
     programUuid: "wallet", functionName: "forward",
@@ -218,19 +218,19 @@ test("receipt: แนบเงินและส่งต่อ — เงิน
   ]);
   assert.deepEqual(receipt.nativeChanges, [
     { address: "alice", field: "sended", after: "100n" },
-    { address: "wallet", field: "received", after: "140n" }, // รับจาก alice 100 + รับจากตัวเอง 40
+    { address: "wallet", field: "received", after: "140n" }, // 100 from alice + 40 from itself
     { address: "wallet", field: "sended", after: "40n" },
     { address: "alice", field: "consumed", after: receipt.fee },
-    { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // ไม่ได้ตั้ง feeRecipient → เผาทั้งหมด
+    { address: VM.BURN_ADDRESS, field: "received", after: receipt.fee }, // no feeRecipient set → everything burned
   ]);
 });
 
-test("receipt: OUT_OF_GAS และ TIMEOUT", () => {
+test("receipt: OUT_OF_GAS and TIMEOUT", () => {
   const vm = setup({ gas: { ...GAS, price: 1 } }, { alice: 150 });
   const outOfGas = receiptOf(vm, "call", { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice"), nonce: 0 });
   assert.equal(outOfGas.error.code, "OUT_OF_GAS");
   assert.deepEqual(outOfGas.nativeChanges, [
-    { address: "alice", field: "consumed", after: "150n" }, // จ่ายเท่าที่มี
+    { address: "alice", field: "consumed", after: "150n" }, // pays what it has
     { address: VM.BURN_ADDRESS, field: "received", after: "150n" },
   ]);
   assert.deepEqual(outOfGas.stateChanges, []);
@@ -248,7 +248,7 @@ test("receipt: OUT_OF_GAS และ TIMEOUT", () => {
   assert.deepEqual(timeout.trace, [{ depth: 0, program: "faulty", method: "spin", from: "alice", origin: "alice", input: {}, value: "0n", result: null, gasUsed: 150, status: "throw", error: { code: "TIMEOUT", message: "โปรแกรมทำงานเกินเวลาที่กำหนด" } }]);
 });
 
-test("receipt: เดา action เองได้เมื่อไม่ได้ระบุ", () => {
+test("receipt: infers the action when none is given", () => {
   const vm = setup();
   const transfer = vm.transfer({ from: "alice", to: "bob", amount: 10, nonce: 0 }, { timestamp: T });
   assert.equal(vm.buildReceipt({ from: "alice", to: "bob", amount: 10 }, transfer).action, "transfer");
@@ -261,7 +261,7 @@ test("receipt: เดา action เองได้เมื่อไม่ได
 //  block.receipt()
 // ---------------------------------------------------------------------------
 
-test("block.receipt: สรุปทุก tx พร้อมยอดรวม", () => {
+test("block.receipt: summarizes every tx with totals", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "approve", input: { spender: "shop", amount: 500 }, context: user("alice"), nonce: 0 });
@@ -303,7 +303,7 @@ test("block.receipt: สรุปทุก tx พร้อมยอดรวม"
   assert.equal(native["alice:consumed"], num(receipt.fee));
 });
 
-test("block.receipt: nativeChanges ของแต่ละ tx มีค่าก่อน tx นั้น (ไล่ต่อกันใน block) → รู้ว่าเปลี่ยนไปเท่าไร", () => {
+test("block.receipt: each tx's nativeChanges include the value before that tx (chained within the block) → shows how much changed", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.transfer({ from: "alice", to: "carol", amount: 300, nonce: 0 });
@@ -312,14 +312,14 @@ test("block.receipt: nativeChanges ของแต่ละ tx มีค่า�
   const changes = (tx) => Object.fromEntries(tx.nativeChanges.map((c) => [`${c.address}:${c.field}`, num([c.before, c.after])]));
 
   assert.deepEqual(changes(first)["carol:received"], [0, 300]);
-  assert.deepEqual(changes(second)["carol:received"], [300, 500]);          // ต่อจาก tx ก่อนหน้าใน block เดียวกัน
+  assert.deepEqual(changes(second)["carol:received"], [300, 500]);          // continues from the previous tx in the same block
   assert.deepEqual(changes(second)["alice:sended"], [300, 500]);
   const [before, after] = changes(second)["alice:consumed"];
-  assert.equal(after - before, num(second.fee));                                 // ค่าแก๊สของ tx นี้เท่านั้น
+  assert.equal(after - before, num(second.fee));                                 // only this tx's gas
   for (const tx of [first, second]) for (const c of tx.nativeChanges) assert.ok(num(c.after) >= num(c.before), `${c.address}:${c.field}`);
 });
 
-test("block.receipt: ตรงกับ DB จริงหลัง commit", () => {
+test("block.receipt: matches the real DB after commit", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 10 }, context: user("alice"), nonce: 0 });
@@ -340,7 +340,7 @@ test("block.receipt: ตรงกับ DB จริงหลัง commit", () 
   assert.deepEqual(receipt.transactions.map((tx) => tx.action), ["call", "transfer", "deploy", "init"]);
 });
 
-test("block.receipt: block ว่าง และ block ที่ทุก tx ล้ม", () => {
+test("block.receipt: an empty block and a block where every tx fails", () => {
   const vm = setup();
   const empty = vm.createBlock({ timestamp: T }).receipt({ number: 1 });
   assert.deepEqual([empty.txCount, empty.successCount, empty.failedCount, empty.gasUsed, empty.fee, empty.writeCount], [0, 0, 0, 0, "0n", 0]);
@@ -352,10 +352,10 @@ test("block.receipt: block ว่าง และ block ที่ทุก tx �
   const receipt = failed.receipt({ number: 2 });
   assert.deepEqual([receipt.txCount, receipt.successCount, receipt.failedCount], [2, 0, 2]);
   assert.deepEqual(receipt.stateChanges, []);
-  assert.deepEqual(receipt.nativeChanges.map((c) => c.address), ["alice", VM.BURN_ADDRESS]); // ไม่ได้ตั้ง feeRecipient → เผาทั้งหมดไปที่ 0x000…000
+  assert.deepEqual(receipt.nativeChanges.map((c) => c.address), ["alice", VM.BURN_ADDRESS]); // no feeRecipient set → everything burned to 0x000…000
 });
 
-test("block.receipt: แปลงเป็น JSON ส่งให้ explorer ได้", () => {
+test("block.receipt: converts to JSON for the explorer", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice"), nonce: 0 });
@@ -366,7 +366,7 @@ test("block.receipt: แปลงเป็น JSON ส่งให้ explorer �
   assert.equal(json.transactions[0].trace[0].method, "transfer");
 });
 
-test("block.receipt: ข้อมูลของ block ไม่เปลี่ยนแม้แก้ receipt ที่ได้ไป", () => {
+test("block.receipt: block data is unchanged even if the returned receipt is modified", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T });
   block.transfer({ from: "alice", to: "bob", amount: 10, nonce: 0 });
@@ -376,7 +376,7 @@ test("block.receipt: ข้อมูลของ block ไม่เปลี่�
   assert.equal(block.receipt().transactions[0].value, "10n");
 });
 
-test("decodeDbKey: อ่าน key ทุกแบบออก", () => {
+test("decodeDbKey: parses every key type", () => {
   assert.deepEqual(VM.decodeDbKey("pending:0xabc"), { kind: "pending", address: "0xabc" });
   assert.deepEqual(VM.decodeDbKey("0xabc:code"), { kind: "code", address: "0xabc" });
   assert.deepEqual(VM.decodeDbKey("0xabc:context"), { kind: "context", address: "0xabc" });

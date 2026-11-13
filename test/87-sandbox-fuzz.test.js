@@ -3,25 +3,25 @@ import assert from "node:assert/strict";
 import { runFuzz, fuzzOnce, fuzzDecoder, random, guestProgram } from "../dev/fuzz-sandbox.js";
 
 /*
- * ระยะ 2.1: fuzz เขตแดน sandbox ↔ host (dev/fuzz-sandbox.js · รันยาวด้วย npm run fuzz -- --iterations 20000)
- *   ค่าแปลก (วน / getter / Proxy / toJSON / prototype / Symbol / ซ้อนลึก / ใหญ่) เข้า API ทุกตัว + คืนจากฟังก์ชัน + input จาก host
- *   ต้องไม่ INTERNAL · ไม่ throw ถึงผู้เรียก · deterministic · host ไม่ถูกแตะ · sandbox ใช้ต่อได้
- * seed คงที่ → CI ได้ชุดเดิมทุกครั้ง
+ * Phase 2.1: fuzz the sandbox ↔ host boundary (dev/fuzz-sandbox.js · long run with npm run fuzz -- --iterations 20000)
+ *   odd values (cyclic / getter / Proxy / toJSON / prototype / Symbol / deeply nested / huge) into every API + returned from functions + input from the host
+ *   must not be INTERNAL · must not throw to the caller · deterministic · host untouched · sandbox still usable
+ * fixed seed → CI gets the same set every time
  */
 
-test("fuzz 150 รอบ (seed คงที่): ไม่มีรอบไหนผิดกติกา", () => {
+test("fuzz 150 rounds (fixed seed): no round breaks the rules", () => {
   const result = runFuzz({ seed: 20261024, iterations: 150 });
   assert.deepEqual(result.failures.map((f) => `${f.seed}: ${f.problem}`), []);
   assert.deepEqual(result.decoder, []);
 });
 
-test("ตัวสุ่มทำซ้ำได้: seed เดิม = โปรแกรมเดิม · ผลของรอบเดิมเหมือนเดิม", () => {
+test("the generator is reproducible: same seed = same program · the same round gives the same result", () => {
   assert.equal(guestProgram(random(7)), guestProgram(random(7)));
   assert.notEqual(guestProgram(random(7)), guestProgram(random(8)));
   assert.equal(fuzzOnce(7), null);
 });
 
-test("ตัวถอดข้อความจากโปรแกรม: ป้ายแปลก / __proto__ ไม่แก้ prototype ของ host", () => {
+test("the program message decoder: odd labels / __proto__ do not modify the host prototype", () => {
   assert.deepEqual(fuzzDecoder(1, 2000), []);
   assert.equal(({}).polluted, undefined);
 });

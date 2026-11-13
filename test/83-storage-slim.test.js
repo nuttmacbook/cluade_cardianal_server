@@ -6,11 +6,11 @@ import { createEvmRpc } from "../src/node/evm-rpc.js";
 import { pageTransactionsOf, pageTransactionsTo, cursorTransactionsTo } from "../src/node/explorer-api.js";
 
 /*
- * ลดข้อมูลซ้ำโดยไม่เสียความสามารถ
- *   - ดัชนี (tx / txn / txto / sigtx / event / eventidx / eventsig / holding / rejected) ไม่มี history และไม่อยู่ใน blockundo
- *   - rebuildFrom ลบดัชนีทั้งหมดแล้วให้ replay สร้างใหม่ → ได้ดัชนีเหมือนเชนที่สร้างถึง block นั้นตรง ๆ
- *   - txn ไม่เก็บ signature / digest (อยู่ใน blockbody / ดัชนี tx แล้ว) แต่ยังอ่านได้ครบ
- *   - txto ไม่เก็บ blockNumber / index (อยู่ใน key) และ timestamp (อยู่ใน header) แต่ API ได้ field ครบ
+ * remove duplicated data without losing features
+ *   - indexes (tx / txn / txto / sigtx / event / eventidx / eventsig / holding / rejected) have no history and are not in blockundo
+ *   - rebuildFrom deletes all indexes and lets replay recreate them → same indexes as a chain built straight to that block
+ *   - txn does not store signature / digest (already in blockbody / the tx index) but everything is still readable
+ *   - txto does not store blockNumber / index (in the key) or timestamp (in the header) but the API returns every field
  */
 
 const T = Date.parse("2026-01-01T00:00:00Z");
@@ -32,7 +32,7 @@ const TOKEN = `function program() {
   return { transfer }
 }`;
 
-/** เชน: block 1 deploy + init · block 2.. โอน token ด้วย tx ที่เซ็นแล้ว */
+/** Chain: block 1 deploy + init · block 2.. token transfers with signed txs */
 function buildChain(blocks = 5) {
   const vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS);
   vm.db.load({ [`${alice}:native:received`]: "1000000n" });
@@ -56,7 +56,7 @@ function buildChain(blocks = 5) {
 const INDEX_PATTERN = /^(tx|sigtx|txto|event|eventidx|eventsig|holding|rejtx|rejfrom|blockrejected):|:txn:/;
 const indexes = (vm) => Object.fromEntries(Object.entries(vm.db.snapshot()).filter(([key]) => INDEX_PATTERN.test(key)));
 
-test("ดัชนีไม่มี history และไม่อยู่ใน blockundo · state ยังมีครบ", () => {
+test("indexes have no history and are not in blockundo · state is complete", () => {
   const { vm } = buildChain();
   const historyOf = vm.db.listKeys("history:").map((key) => VM.decodeDbKey(key).dbKey);
   assert.ok(historyOf.length > 0);
@@ -67,32 +67,32 @@ test("ดัชนีไม่มี history และไม่อยู่ใ�
     assert.ok(undo.length > 0);
     assert.deepEqual(undo.filter((key) => VM.isIndexKey(key)), [], `block ${n}`);
   }
-  // ดัชนียังถูกเขียนครบทุกชนิด
+  // every index type is still written
   for (const kind of ["tx:", "sigtx:", "txto:", "event:", "eventidx:", "eventsig:", "holding:"]) assert.ok(vm.db.listKeys(kind).length > 0, kind);
   assert.ok(vm.db.listKeys(`${alice}:txn:`).length > 0);
 });
 
-test("isIndexKey: แยกดัชนีกับ state", () => {
+test("isIndexKey: tells indexes from state", () => {
   for (const key of ["tx:0xab", "sigtx:0xab", "txto:0xa:000000000001:0000:0000", "event:p:E:000000000001:0000:0000", "eventidx:p:E:f:t:000000000001:0000:0000",
     "eventsig:0xt:p:E", "holding:0xa:p", "0xa:txn:0:0xab", "rejtx:0xab", "rejfrom:0xa:000000000001:000000", "blockrejected:000000000001"]) assert.equal(VM.isIndexKey(key), true, key);
   for (const key of ["token:storage:balances:0xa", "0xa:nonce", "0xa:native:received", "token:code", "pending:token", "block:000000000001"]) assert.equal(VM.isIndexKey(key), false, key);
 });
 
-test("rebuildFrom: ดัชนีหลัง rebuild = ดัชนีของเชนที่สร้างถึง block นั้นตรง ๆ", () => {
+test("rebuildFrom: indexes after rebuild = indexes of a chain built straight to that block", () => {
   const { vm } = buildChain(5);
   const { vm: short } = buildChain(3);
   vm.rebuildFrom(3);
   assert.equal(vm.latestBlockNumber(), 3);
-  // ลายเซ็นสุ่มคนละชุด → เทียบชื่อ key ของดัชนีที่ไม่ขึ้นกับ hash + ค่าของดัชนีที่เป็น state ของ explorer
+  // signatures are random per run → compare index key names that do not depend on hashes + index values that are explorer state
   const shape = (vm) => Object.keys(indexes(vm)).map((key) => key.replace(/0x[0-9a-f]{64}/g, "<hash>")).sort();
   assert.deepEqual(shape(vm), shape(short));
-  assert.equal(vm.db.listKeys("tx:").length, 4);       // block 1 มี 2 ใบ + block 2, 3
+  assert.equal(vm.db.listKeys("tx:").length, 4);       // block 1 has 2 txs + blocks 2, 3
   assert.equal(vm.db.listKeys("event:").length, 2);
   assert.equal(vm.listTransactionsOf(alice).length, 3);
   assert.deepEqual(vm.listHoldings(BOB).map((h) => h.lastBlock), [3]);
 });
 
-test("rebuildFrom(0): ดัชนีหายหมด · state กลับไปเป็น genesis", () => {
+test("rebuildFrom(0): all indexes gone · state back to genesis", () => {
   const { vm } = buildChain(4);
   vm.rebuildFrom(0);
   assert.deepEqual(indexes(vm), {});
@@ -100,7 +100,7 @@ test("rebuildFrom(0): ดัชนีหายหมด · state กลับไ
   assert.equal(vm.db.readKeys([`${alice}:native:received`])[0], "1000000n");
 });
 
-test("txn ไม่เก็บ signature / digest ซ้ำ แต่ยังอ่านได้ครบ (tx page · wallet list · /evm)", () => {
+test("txn does not duplicate signature / digest but everything is still readable (tx page · wallet list · /evm)", () => {
   const { vm, signatures } = buildChain(3);
   const [{ hash, signature, digest }] = signatures;
   const raw = vm.db.listEntries(`${alice}:txn:`).map((entry) => entry.value);
@@ -110,14 +110,14 @@ test("txn ไม่เก็บ signature / digest ซ้ำ แต่ยัง�
   assert.equal(found.record.signature, signature);
   assert.equal(found.record.digest, digest);
   assert.equal(sign.recoverSigner({ chainId: 1, action: "call", from: alice, to: "token", method: "transfer", input: { to: BOB, amount: "10n" }, value: 0, nonce: 1, gasLimit: 0, gasPrice: 0 }, found.record.signature), alice);
-  assert.equal(vm.getTransaction(hash).record.signature, undefined);   // ไม่ขอ → ไม่อ่าน blockbody
-  assert.deepEqual(vm.getTransaction(digest, { signature: true }), found);   // ค้นจาก digest ได้เหมือนเดิม
+  assert.equal(vm.getTransaction(hash).record.signature, undefined);   // not requested → blockbody is not read
+  assert.deepEqual(vm.getTransaction(digest, { signature: true }), found);   // lookup by digest works as before
 
-  // wallet list: digest เติมจากดัชนี tx
+  // wallet list: digest filled in from the tx index
   assert.equal(vm.listTransactionsOf(alice).find((r) => r.hash === hash).digest, digest);
   assert.equal(pageTransactionsOf(vm, alice, { page: 1, limit: 20 }).items.find((r) => r.hash === hash).digest, digest);
 
-  // /evm: v r s มาจากลายเซ็นใน blockbody
+  // /evm: v r s come from the signature in blockbody
   const rpc = createEvmRpc({ vm });
   const tx = rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionByHash", params: [hash] }).result;
   const hex = signature.slice(2);
@@ -125,7 +125,7 @@ test("txn ไม่เก็บ signature / digest ซ้ำ แต่ยัง�
   assert.equal(tx.s, `0x${hex.slice(64, 128)}`);
 });
 
-test("txto ไม่เก็บ blockNumber / index / timestamp แต่ API ได้ field ครบ", () => {
+test("txto does not store blockNumber / index / timestamp but the API returns every field", () => {
   const { vm, signatures } = buildChain(3);
   const raw = vm.db.listEntries("txto:token:").map((entry) => entry.value);
   assert.ok(raw.length > 0);
@@ -138,11 +138,11 @@ test("txto ไม่เก็บ blockNumber / index / timestamp แต่ API �
   assert.deepEqual(vm.listTransactionsTo("token").map((t) => [t.blockNumber, t.timestamp]), [[3, T + 3000], [2, T + 2000], [1, T], [1, T]]);
 });
 
-test("replayBlock / stateAt / snapshotAt ยังได้ผลเดิม", () => {
+test("replayBlock / stateAt / snapshotAt still give the same results", () => {
   const { vm } = buildChain(4);
   for (let n = 1; n <= 4; n += 1) assert.equal(vm.replayBlock(n).hash, vm.getBlock(n).hash);
   assert.equal(vm.stateAt(2, `token:storage:balances:${BOB}`), "10n");
   assert.equal(vm.stateAt(1, `token:storage:balances:${BOB}`), undefined);
   assert.deepEqual(vm.snapshotAt(3, "token:storage:"), { [`token:storage:balances:${alice}`]: "980n", [`token:storage:balances:${BOB}`]: "20n" });
-  assert.deepEqual(Object.keys(vm.snapshotAt(2)).filter((key) => VM.isIndexKey(key)), []);   // ดัชนีไม่ใช่ state ณ block
+  assert.deepEqual(Object.keys(vm.snapshotAt(2)).filter((key) => VM.isIndexKey(key)), []);   // indexes are not state at a block
 });

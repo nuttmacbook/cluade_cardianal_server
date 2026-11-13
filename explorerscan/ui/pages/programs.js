@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/programs.js [แก้ได้ · หน้าตา]
-   หน้ารายชื่อโปรแกรม (#programs): อนุมัติแล้ว / รออนุมัติ */
+/* explorerscan/ui/pages/programs.js [editable · look]
+   Program list page (#programs): approved / pending approval */
 
 // ---------- programs: approved / awaiting approval ----------
 const openPrograms = (id) => { tabState["#programs"] = id; go("#programs"); };

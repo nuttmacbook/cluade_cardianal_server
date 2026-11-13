@@ -1,6 +1,6 @@
 /**
- * ชุดทดสอบโปรแกรมในเครื่อง — รันบน VM ตัวจริง ไม่ใช่ของจำลอง
- * พฤติกรรมที่เห็นตรงนี้จึงเหมือนกับตอนรันบน chain จริงทุกอย่าง
+ * Local program test kit — runs on the real VM, not a simulation
+ * so the behavior seen here is identical to running on the real chain
  */
 import { VirtualMachine } from "programvm";
 import { MemoryDB } from "programvm/db.js";
@@ -8,9 +8,9 @@ import { MemoryDB } from "programvm/db.js";
 let counter = 0;
 
 /**
- * สร้าง chain จำลองไว้ทดสอบ
- * ตัวเลขในโปรแกรมเป็น BigInt เสมอ: ค่าที่ call() คืนมาเป็น "123n" และ state() ก็เก็บแบบเดียวกัน
- * @param {{ chargeGas?: boolean, timestamp?: number, balances?: Record<string, bigint | number> }} [options]  ยอด native (wei)
+ * Creates a simulated chain for testing
+ * Numbers in programs are always BigInt: values returned by call() are "123n", and state() stores them the same way
+ * @param {{ chargeGas?: boolean, timestamp?: number, balances?: Record<string, bigint | number> }} [options]  native balances (wei)
  */
 export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01-01T00:00:00Z"), balances = {} } = {}) {
   const vm = new VirtualMachine(new MemoryDB(), { chargeGas, recordBlocks: true, recordHistory: true });
@@ -19,7 +19,7 @@ export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01
   let now = timestamp;
   const context = (sender) => ({ sender, origin: sender });
 
-  /** รัน 1 tx ใน block ของตัวเอง แล้วบันทึกทันที */
+  /** Runs 1 tx in its own block and commits immediately */
   const run = (method, request) => {
     now += 1000;
     const block = vm.createBlock({ timestamp: now, feeRecipient: "miner" });
@@ -31,46 +31,46 @@ export function createChain({ chargeGas = false, timestamp = Date.parse("2024-01
   return {
     vm,
 
-    /** ติดตั้งโปรแกรม (deploy + init) แล้วคืนตัวช่วยเรียกใช้งาน */
+    /** Installs a program (deploy + init) and returns a helper for using it */
     deploy(program, { as = "owner", initInput = {}, value = 0, id } = {}) {
       const code = typeof program === "function" ? String(program) : program;
       const programUuid = id ?? `program-${++counter}`;
 
       const deployed = run("deploy", { programUuid, code, context: context(as), initInput, value });
-      if (deployed.status !== "success") throw new Error(`deploy ล้มเหลว: ${deployed.error.message}`);
+      if (deployed.status !== "success") throw new Error(`deploy failed: ${deployed.error.message}`);
       const initialized = run("init", { programUuid });
-      if (initialized.status !== "success") throw new Error(`initialization ล้มเหลว: ${initialized.error.message}`);
+      if (initialized.status !== "success") throw new Error(`initialization failed: ${initialized.error.message}`);
 
       return {
         address: programUuid,
-        /** เรียกฟังก์ชันที่ return ไว้ — คืน result ถ้าสำเร็จ, throw ถ้าโปรแกรม throw */
+        /** Calls a returned function — returns result on success, throws if the program throws */
         call(functionName, input = {}, { as: sender = "alice", value: sent = 0 } = {}) {
           const result = run("call", { programUuid, functionName, input, context: context(sender), value: sent });
           if (result.status !== "success") throw Object.assign(new Error(result.error.message), { code: result.error.code, result });
           return result.result;
         },
-        /** เหมือน call แต่คืนผลดิบ (ดู gasUsed / writes / trace ได้) */
+        /** Like call but returns the raw result (gasUsed / writes / trace visible) */
         callRaw(functionName, input = {}, { as: sender = "alice", value: sent = 0 } = {}) {
           return run("call", { programUuid, functionName, input, context: context(sender), value: sent });
         },
-        /** ข้อมูลที่โปรแกรมเก็บไว้ทั้งหมด: { "balances/alice": "70n" } */
+        /** All data the program stores: { "balances/alice": "70n" } */
         state() {
           return Object.fromEntries(vm.listProgramStorage(programUuid).map(({ key, value }) => [key.join("/"), value]));
         },
       };
     },
 
-    /** โอน native ระหว่าง address */
+    /** Transfers native between addresses */
     transfer(from, to, amount) {
       return run("transfer", { from, to, amount });
     },
 
-    /** ยอด native (BigInt): { received, sended, consumed, balance } */
+    /** Native balance (BigInt): { received, sended, consumed, balance } */
     balanceOf(address) {
       return vm.nativeBalanceOf(address);
     },
 
-    /** เวลาปัจจุบันของ chain จำลอง (โปรแกรมเห็นค่านี้ผ่าน Date.now()) */
+    /** Current time of the simulated chain (programs see this via Date.now()) */
     setTime(value) {
       now = value;
     },

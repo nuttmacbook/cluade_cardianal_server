@@ -1,5 +1,5 @@
-/* explorerscan/core/actions.js [ระบบ · ไม่ต้องแก้]
-   เซ็น + ส่ง + รอผลจาก block แล้วเขียนสถานะลงกล่องผลลัพธ์ (signedAction / waitForTx) · อ่าน JSON ที่ผู้ใช้พิมพ์ */
+/* explorerscan/core/actions.js [system · no need to edit]
+   Sign + send + wait for the block result, then write the status into the result box (signedAction / waitForTx) · parses JSON typed by the user */
 
 // ---------- signed actions with a status box: send, wait for the block, report ----------
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

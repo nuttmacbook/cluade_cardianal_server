@@ -1,6 +1,6 @@
 /**
- * ตัวช่วยแปลงข้อมูลที่ไม่พึ่ง VM / sandbox (ใช้ทั้งฝั่ง node และ SDK ฝั่ง client — ดู client-sdk/index.js)
- * virtualmachine.js export ตัวเดียวกันนี้ต่อ (ของเดิม import จากที่นั่นได้เหมือนเดิม)
+ * Data conversion helpers that do not depend on the VM / sandbox (used by both the node and the client-side SDK; see client-sdk/index.js)
+ * virtualmachine.js re-exports these same helpers (existing imports from there keep working)
  */
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -9,13 +9,13 @@ export const HEX_PATTERN = /^0x[0-9a-f]+$/i;
 
 export const keccak256Hex = (text) => `0x${bytesToHex(keccak_256(utf8ToBytes(text)))}`;
 
-/** address ของ wallet / program เป็นตัวพิมพ์เล็กเสมอ */
+/** wallet / program addresses are always lowercase */
 export const normalizeAddress = (value) => (typeof value === "string" ? value.toLowerCase() : value);
 
-/** string รูปแบบ 0x… hex → ตัวพิมพ์เล็ก, string อื่นไม่เปลี่ยน */
+/** 0x… hex strings → lowercase; other strings unchanged */
 export const normalizeHex = (value) => (typeof value === "string" && HEX_PATTERN.test(value) ? value.toLowerCase() : value);
 
-/** เดินทั้ง object / array: ค่าและชื่อ key ที่เป็น 0x… hex → ตัวพิมพ์เล็ก */
+/** walks a whole object / array: values and key names that are 0x… hex → lowercase */
 export function normalizeHexDeep(value) {
   if (Array.isArray(value)) return value.map(normalizeHexDeep);
   if (value !== null && typeof value === "object") {
@@ -25,8 +25,8 @@ export function normalizeHexDeep(value) {
 }
 
 /**
- * แปลงข้อมูลเป็น string แบบเดียวกันทุกเครื่อง (เรียงชื่อ key, ไม่มีช่องว่าง)
- * ใช้ทำ hash ของ tx จึงต้องไม่ขึ้นกับลำดับที่ user ใส่ field มา
+ * Serialize data to a string identically on every machine (sorted keys, no whitespace)
+ * Used for tx hashes, so it must not depend on the order in which the user supplied fields
  */
 export function canonicalJson(value) {
   if (typeof value === "bigint") return JSON.stringify(`${value}n`);
@@ -42,23 +42,23 @@ export function canonicalJson(value) {
     const json = JSON.stringify(value === undefined ? null : value);
     return json === undefined ? JSON.stringify(String(value)) : json; // function / symbol
   } catch {
-    return JSON.stringify(String(value)); // bigint ฯลฯ — ค่าจริงจะถูกปฏิเสธตอนตรวจ input อยู่แล้ว
+    return JSON.stringify(String(value)); // bigint etc.: real values are already rejected during input validation
   }
 }
 
 /**
- * ข้อมูลที่ hash เป็น hash ของ block (จาก field ของ header) — VM.hashHeader และ client-sdk (ตรวจ header ที่ได้มา) ใช้ตัวเดียวกัน
- *   hash ของ block = keccak256(canonicalJson(headerFields(header, chainId)))
+ * The data hashed into a block hash (from header fields); VM.hashHeader and client-sdk (verifying received headers) use the same one
+ *   block hash = keccak256(canonicalJson(headerFields(header, chainId)))
  */
 export function headerFields({ number, parentHash, timestamp, feeRecipient, burnPercent, txCount, txRoot, stateRoot, writesRoot,
   baseFeePerGas = null, gasUsed = 0, receiptsRoot = null, logsBloom = null, rejectedCount = 0, rejectedRoot = null, producer = null }, chainId) {
   return {
     chainId, number, parentHash: parentHash ?? null, timestamp,
     feeRecipient: feeRecipient ?? null, burnPercent, txCount, txRoot, stateRoot, writesRoot,
-    // EIP-1559 + receipt: base fee ของ block / แก๊สที่ใช้ (ใช้คำนวณ base fee ของ block ถัดไป) / root ของ receipt / bloom ของ log
+    // EIP-1559 + receipt: block base fee / gas used (used to compute the next block's base fee) / receipt root / log bloom
     baseFeePerGas, gasUsed, receiptsRoot, logsBloom,
     ...(rejectedRoot ? { rejectedCount, rejectedRoot } : {}),
-    // ผู้ผลิต: อยู่ใน hash เฉพาะ block ที่มี · ลายเซ็นของผู้ผลิตเซ็น hash นี้ จึงอยู่นอก hash
+    // producer: in the hash only for blocks that have one · the producer signature signs this hash, so it sits outside the hash
     ...(producer ? { producer } : {}),
   };
 }

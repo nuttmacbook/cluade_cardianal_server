@@ -7,7 +7,7 @@ import { MULTITOKEN_PROGRAM } from "../src/standards/multitoken.js";
 import { TOKEN_PROGRAM } from "../src/standards/token.js";
 import { createEvmRpc, EVM_ERROR } from "../src/node/evm-rpc.js";
 
-/* /evm: event ของ NFT มาตรฐาน → log ERC-721 · ของ multi-token มาตรฐาน → log ERC-1155 · eth_call อ่านแบบ ERC-721 / ERC-1155 (ถอดด้วย ethers) */
+/* /evm: standard NFT events → ERC-721 logs · standard multi-token events → ERC-1155 logs · ERC-721 / ERC-1155 style eth_call reads (decoded with ethers) */
 
 const N = "0x00000000000000000000000000000000000000f2";
 const G = "0x00000000000000000000000000000000000000f3";
@@ -76,7 +76,7 @@ const ask = (rpc, method, ...params) => {
 const logsOf = (rpc, vm, number) => vm.getBlock(number).txHashes.flatMap((hash) => ask(rpc, "eth_getTransactionReceipt", hash).logs);
 const lower = (value) => String(value).toLowerCase();
 
-test("evm: mint / transferFrom ของ NFT → log Transfer แบบ ERC-721 (4 topic, tokenId indexed, data ว่าง) · ethers ถอดได้", () => {
+test("evm: mint / transferFrom of an NFT → ERC-721 Transfer log (4 topics, tokenId indexed, empty data) · ethers can decode it", () => {
   const { vm, rpc } = chain();
   const [mint1, mint2] = logsOf(rpc, vm, 2);
   assert.equal(mint1.address, N);
@@ -91,7 +91,7 @@ test("evm: mint / transferFrom ของ NFT → log Transfer แบบ ERC-721 
   assert.deepEqual([all.name, lower(all.args.owner), lower(all.args.operator), all.args.approved], ["ApprovalForAll", BOB, OWNER, true]);
 });
 
-test("evm: TransferSingle / TransferBatch / ApprovalForAll / URI ของ multi-token → log แบบ ERC-1155 · Transfer ของ ERC-20 ยังเป็น 3 topic", () => {
+test("evm: TransferSingle / TransferBatch / ApprovalForAll / URI of a multi-token → ERC-1155 logs · ERC-20 Transfer still has 3 topics", () => {
   const { vm, rpc } = chain();
   const logs = logsOf(rpc, vm, 4);
   const [single, batch, moved, all, uri] = logs.slice(0, 5).map((log) => ERC1155.parseLog(log));
@@ -103,14 +103,14 @@ test("evm: TransferSingle / TransferBatch / ApprovalForAll / URI ของ multi
   assert.deepEqual([uri.name, uri.args.value, uri.args.id], ["URI", "ipfs://seven", 7n]);
   const erc20 = logs.at(-1);
   assert.deepEqual([erc20.address, erc20.topics.length, BigInt(erc20.data)], [T, 3, 3n]);
-  // eth_getLogs กรองด้วย topic ของ ERC-1155 ได้
+  // eth_getLogs can filter by ERC-1155 topics
   const filtered = ask(rpc, "eth_getLogs", { fromBlock: "0x1", toBlock: "latest", topics: [ERC1155.getEvent("TransferSingle").topicHash] });
   assert.deepEqual(filtered.map((log) => log.address), [G, G]);
   const nftTransfers = ask(rpc, "eth_getLogs", { fromBlock: "0x1", address: N, topics: [ERC721.getEvent("Transfer").topicHash, null, null, `0x${"0".repeat(63)}1`] });
-  assert.equal(nftTransfers.length, 2);   // mint #1 + โอน #1
+  assert.equal(nftTransfers.length, 2);   // mint #1 + transfer #1
 });
 
-test("evm: event ชื่อเดียวกันจากโปรแกรมที่ไม่ใช่มาตรฐาน → topic0 = keccak(ชื่อ) + JSON เหมือนเดิม", () => {
+test("evm: same-named events from a non-standard program → topic0 = keccak(name) + JSON as before", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true, recordTransactions: true, recordHistory: true });
   const fake = `function program() {
   function poke(params) {
@@ -148,12 +148,12 @@ test("evm: eth_call ERC-721 (name / symbol / totalSupply / balanceOf / ownerOf /
   const missing = rpc.handle({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: N, data: ERC721.encodeFunctionData("ownerOf", [99n]) }] });
   assert.equal(missing.error.code, EVM_ERROR.SERVER);
   assert.match(missing.error.message, /token does not exist/);
-  // ย้อนดู ณ block 2: ชิ้นที่ 1 ยังเป็นของ BOB
+  // looking back at block 2: token 1 still belongs to BOB
   const before = ERC721.decodeFunctionResult("ownerOf", ask(rpc, "eth_call", { to: N, data: ERC721.encodeFunctionData("ownerOf", [1n]) }, "0x2"))[0];
   assert.equal(lower(before), BOB);
 });
 
-test("evm: eth_call ERC-1155 (balanceOf(account,id) / uri / totalSupply / isApprovedForAll / supportsInterface) · selector อื่น → error", () => {
+test("evm: eth_call ERC-1155 (balanceOf(account,id) / uri / totalSupply / isApprovedForAll / supportsInterface) · other selectors → error", () => {
   const { rpc } = chain();
   const read = (fn, args = []) => ERC1155.decodeFunctionResult(fn, ask(rpc, "eth_call", { to: G, data: ERC1155.encodeFunctionData(fn, args) }, "latest"))[0];
   assert.equal(read("balanceOf", [BOB, 7n]), 45n);

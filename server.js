@@ -1,40 +1,40 @@
 /**
- * server จริง — node server.js    (ใช้ node:http ล้วน ไม่มี dependency เพิ่ม)
- *   PORT=3000 DATA=./data PRODUCER_KEY=0x… ADMINS=0x… node server.js      (ช่วงพัฒนา: DEV=1 node server.js หรือ npm run dev)
- *   HOST=127.0.0.1    ฟังเฉพาะในเครื่อง (อยู่หลัง nginx · คนนอกเข้าพอร์ตตรงไม่ได้) · ไม่ตั้ง = ทุก interface · ตั้งค่าใช้งานจริงดู deploy/README.md
- *   EXPLORER_DIR=./my-explorer   โฟลเดอร์หน้า explorer ที่ fork ไปแต่งเอง (ค่าเริ่ม explorerscan/ · โครงสร้างดู explorerscan/README.md)
- *   DEV=1             ช่วงพัฒนา: ไม่บังคับ ADMINS / PRODUCER_KEY (ไม่ตั้ง ADMINS = ใครก็อนุมัติ deploy / upgrade ได้)
- *   GENESIS=genesis.json   ไฟล์ genesis · config ในไฟล์ล็อกค่าที่ทุกเครื่องต้องเหมือนกัน (src/node/genesis.js) — env ตั้งต่างจาก genesis = ไม่ยอมเริ่ม
- *   PRODUCER_KEY=0x…  key ของผู้ผลิต block (เซ็น hash ของทุก block · node ผู้อ่านตรวจกับ config.producers ใน genesis)
- *   MINER=0x…         ผู้รับค่าแก๊สของ block (ค่าเริ่ม = address ของ PRODUCER_KEY)
- *   TIMEOUT_MS=5000   เวลาสูงสุดที่โปรแกรมรันได้ต่อ tx / query (ms) — ตัวกันสุดท้าย ลูปไม่รู้จบหมดแก๊สก่อน
- *   MEMORY_LIMIT_MB=32   หน่วยความจำของ sandbox (QuickJS) ต่อ tx รวมทุกโปรแกรมในสายการเรียก — เกิน = OUT_OF_MEMORY (1–1024)
- *   STACK_LIMIT_KB=256   stack ของ sandbox ต่อ tx (เรียกฟังก์ชันซ้อนลึกเกิน = RangeError ที่ catch ได้) (16–256)
- *   GAS_PRICE=10000000000000 base fee ต่ำสุด (wei ต่อแก๊ส · native มี 18 ทศนิยม · ค่าเริ่มต้น 10,000 gwei) — EIP-1559: base fee ของแต่ละ block ไม่ต่ำกว่านี้
- *   BLOCK_MS=2000          เวลาต่อ block (ms) · ปิด block เฉพาะตอนมี tx รอ
- *   MAX_BLOCK_GAS=5000000  แก๊สรวมสูงสุดต่อ block (genesis config ล็อกได้) · MAX_TX_GAS=<MAX_BLOCK_GAS> แก๊สสูงสุดต่อ tx · MAX_TX_PER_BLOCK=500
- *   GAS_TARGET=2500000     แก๊สเป้าหมายต่อ block (ค่าเริ่มต้น = maxBlockGas / 2) · ใช้มากกว่า → base fee ขึ้น ใช้น้อยกว่า → ลง
- *   BASE_FEE_DENOMINATOR=8 base fee เปลี่ยนได้ไม่เกิน 1/ค่านี้ ต่อ block (8 = 12.5% แบบ Ethereum)
- *   BURN_PERCENT=100       ส่วนของ base fee ที่เผาทิ้ง (tip เข้าผู้ปิด block เสมอ) — ทุกเครื่องในเครือข่ายต้องตั้งเหมือนกัน
- *   RATE_LIMIT=120    จำนวน POST (/sendtx, /query) ต่อ IP ต่อนาที — 0 = ไม่จำกัด
- *   TRUST_PROXY=0     จำนวนชั้นของ reverse proxy ข้างหน้า (nginx / Caddy = 1) → rate limit ใช้ IP จาก X-Forwarded-For (src/node/client-ip.js)
- *   EVM_RATE_LIMIT=600  จำนวน request ของ /evm ต่อ IP ต่อนาที (นับแยกจาก RATE_LIMIT: กระเป๋า EVM ถามถี่ ไม่ให้ไปกินโควตาของ /sendtx)
- *                     batch นับทุกคำขอในชุด · ws นับทุก frame (eth_sendRawTransaction ผ่าน ws นับ RATE_LIMIT ด้วยเหมือน HTTP)
- *   EVM_MAX_BATCH=1000  คำขอสูงสุดต่อ batch ของ /evm (HTTP และ ws) · เท่า geth · indexer เช่น Blockscout ส่ง batch ถึง 500
- *   MAX_BODY_BYTES=1048576  ขนาด body สูงสุดของ POST (/sendtx, /query, /evm) · เกิน = 413 (โค้ดโปรแกรมใหญ่สุด 64 KB)
- *   EVM_DECIMALS=0    ทศนิยมที่ /evm เติมให้ยอด native (native เป็น wei 18 ทศนิยมอยู่แล้ว จึงเป็น 0)
- *   EVM_NAME=Bluewolfchain EVM_SYMBOL=BWSC   ชื่อ / สัญลักษณ์เหรียญใน GET /evm (ค่าสำหรับ wallet_addEthereumChain)
- *   UPGRADE_DELAY_BLOCKS=0   timelock ของการอัปเกรดโปรแกรม: โค้ดใหม่เริ่มใช้ที่ block (ที่อนุมัติ + N) · 0 = ทันที
- *   REJECTED_PER_BLOCK=1000  tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแต่ไม่ได้รัน) ที่บันทึกลง block ได้ต่อ block (ที่เกินยกไป block ถัดไป)
- *   REPLACED_LOG_MAX=100000  ใบที่ถูกแทนที่ที่จำไว้ (off-chain · มี DATA = เก็บในไฟล์ <DATA>/replaced-tx.jsonl อยู่รอด restart)
- *   REPLACED_LOG_DAYS=30     อายุสูงสุดของบันทึกใบที่ถูกแทนที่
- *   VERIFY_WORKERS=N         worker thread ที่ตรวจลายเซ็นของ /sendtx (ค่าเริ่มต้น = จำนวน CPU − 1 ไม่เกิน 4) · 0 = ตรวจบน thread หลัก
- *   HISTORY_KEEP_BLOCKS=N    pruning: เก็บ history (ค่าก่อนแก้ของ state) แค่ N block ล่าสุด → ย้อนดู state / replay / rebuild ได้แค่ช่วงนั้น · ไม่ตั้ง = เก็บทั้งหมด (archive)
- *   SNAPSHOT_EVERY=N         ถ่าย snapshot ของ state ทุก N block (GET /snapshot · node ใหม่เริ่มจาก snapshot ได้ — src/node/snapshot.js) · 0 = ปิด
- *   SNAPSHOT_DIR=<DATA>/snapshots   ที่เก็บไฟล์ snapshot · SNAPSHOT_KEEP=2 จำนวนไฟล์ที่เก็บไว้
- *   FOLLOW=<url>             เครื่องสำรอง: ซิงก์ block จากผู้ผลิตตลอด ไม่ผลิต block ไม่รับ tx (/sendtx = 503) · ไม่ต้องมี PRODUCER_KEY
- *   FOLLOW_SNAPSHOT=1        เครื่องสำรองที่ DB ว่าง: เริ่มจาก snapshot ของต้นทาง (GET /snapshot) แทนซิงก์ตั้งแต่ block 1
- *   FAILOVER_FROM=<url>      ย้ายมาผลิตแทนเครื่องเดิม: ถามเครื่องเดิมก่อน — ยังผลิตอยู่ = ไม่ยอมเริ่ม · ไม่ผลิตแล้ว = ซิงก์ที่ขาดก่อน (src/node/failover.js)
+ * The real server — node server.js    (plain node:http, no extra dependencies)
+ *   PORT=3000 DATA=./data PRODUCER_KEY=0x… ADMINS=0x… node server.js      (development: DEV=1 node server.js or npm run dev)
+ *   HOST=127.0.0.1    listen on localhost only (behind nginx · outsiders can't hit the port directly) · unset = all interfaces · for production setup see deploy/README.md
+ *   EXPLORER_DIR=./my-explorer   a forked, customized explorer folder (default explorerscan/ · layout in explorerscan/README.md)
+ *   DEV=1             development: ADMINS / PRODUCER_KEY not required (no ADMINS = anyone can approve deploy / upgrade)
+ *   GENESIS=genesis.json   genesis file · its config locks values every machine must share (src/node/genesis.js) — env differing from genesis = refuses to start
+ *   PRODUCER_KEY=0x…  the block producer key (signs every block hash · reader nodes check it against config.producers in genesis)
+ *   MINER=0x…         recipient of block gas fees (default = the PRODUCER_KEY address)
+ *   TIMEOUT_MS=5000   max time a program may run per tx / query (ms) — the last line of defense; infinite loops run out of gas first
+ *   MEMORY_LIMIT_MB=32   sandbox (QuickJS) memory per tx across every program in the call chain — exceeded = OUT_OF_MEMORY (1–1024)
+ *   STACK_LIMIT_KB=256   sandbox stack per tx (calls nested too deep = a catchable RangeError) (16–256)
+ *   GAS_PRICE=10000000000000 minimum base fee (wei per gas · native has 18 decimals · default 10,000 gwei) — EIP-1559: no block's base fee goes below this
+ *   BLOCK_MS=2000          time per block (ms) · blocks are sealed only when txs are waiting
+ *   MAX_BLOCK_GAS=5000000  max total gas per block (lockable in genesis config) · MAX_TX_GAS=<MAX_BLOCK_GAS> max gas per tx · MAX_TX_PER_BLOCK=500
+ *   GAS_TARGET=2500000     target gas per block (default = maxBlockGas / 2) · used more → base fee rises, used less → falls
+ *   BASE_FEE_DENOMINATOR=8 base fee changes by at most 1/this per block (8 = 12.5%, like Ethereum)
+ *   BURN_PERCENT=100       share of the base fee that is burned (the tip always goes to the block sealer) — must match on every machine in the network
+ *   RATE_LIMIT=120    POSTs (/sendtx, /query) per IP per minute — 0 = unlimited
+ *   TRUST_PROXY=0     number of reverse proxy hops in front (nginx / Caddy = 1) → rate limiting uses the IP from X-Forwarded-For (src/node/client-ip.js)
+ *   EVM_RATE_LIMIT=600  /evm requests per IP per minute (counted separately from RATE_LIMIT: EVM wallets poll often and shouldn't eat the /sendtx quota)
+ *                     a batch counts every request in it · ws counts every frame (eth_sendRawTransaction over ws also counts toward RATE_LIMIT, like HTTP)
+ *   EVM_MAX_BATCH=1000  max requests per /evm batch (HTTP and ws) · same as geth · indexers like Blockscout send batches of up to 500
+ *   MAX_BODY_BYTES=1048576  max POST body size (/sendtx, /query, /evm) · exceeded = 413 (the largest program code is 64 KB)
+ *   EVM_DECIMALS=0    decimals /evm adds to native amounts (native is already 18-decimal wei, so 0)
+ *   EVM_NAME=Bluewolfchain EVM_SYMBOL=BWSC   coin name / symbol in GET /evm (values for wallet_addEthereumChain)
+ *   UPGRADE_DELAY_BLOCKS=0   program upgrade timelock: new code takes effect at block (approval + N) · 0 = immediately
+ *   REJECTED_PER_BLOCK=1000  rejected txs (signature OK but not executed) recorded per block (the excess carries over to the next block)
+ *   REPLACED_LOG_MAX=100000  replaced txs remembered (off-chain · with DATA = stored in <DATA>/replaced-tx.jsonl, survives restarts)
+ *   REPLACED_LOG_DAYS=30     max age of replaced-tx records
+ *   VERIFY_WORKERS=N         worker threads verifying /sendtx signatures (default = CPU count − 1, at most 4) · 0 = verify on the main thread
+ *   HISTORY_KEEP_BLOCKS=N    pruning: keep history (pre-write state values) for only the last N blocks → state lookback / replay / rebuild only within that range · unset = keep everything (archive)
+ *   SNAPSHOT_EVERY=N         take a state snapshot every N blocks (GET /snapshot · new nodes can start from a snapshot — src/node/snapshot.js) · 0 = off
+ *   SNAPSHOT_DIR=<DATA>/snapshots   where snapshot files are kept · SNAPSHOT_KEEP=2 number of files kept
+ *   FOLLOW=<url>             standby machine: keeps syncing blocks from the producer, doesn't produce blocks or accept txs (/sendtx = 503) · no PRODUCER_KEY needed
+ *   FOLLOW_SNAPSHOT=1        standby with an empty DB: start from the source's snapshot (GET /snapshot) instead of syncing from block 1
+ *   FAILOVER_FROM=<url>      take over production from the old machine: asks it first — still producing = refuses to start · no longer producing = syncs what's missing first (src/node/failover.js)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -63,82 +63,82 @@ import { storageLayout, storageMap, storageGet, programFlags, tokenInfo, tokenHo
   storageGroups, pageRejected, indexedFilterOf, cursorIndexedEvents, programAbi } from "./src/node/explorer-api.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const HOST = process.env.HOST || undefined;   // undefined = ทุก interface
+const HOST = process.env.HOST || undefined;   // undefined = all interfaces
 export const DEV = ["1", "true", "yes", "on"].includes(String(process.env.DEV ?? "").toLowerCase());
-// genesis: ยอดเริ่มต้น + ค่าที่ทุกเครื่องต้องเหมือนกัน (config) — env ที่ตั้งต่างจาก genesis = ไม่ยอมเริ่ม (ดู startupProblems)
+// genesis: initial balances + values every machine must share (config) — env set differently from genesis = refuses to start (see startupProblems)
 const GENESIS_FILE = process.env.GENESIS ?? "genesis.json";
 export const genesis = fs.existsSync(GENESIS_FILE) ? JSON.parse(fs.readFileSync(GENESIS_FILE, "utf8")) : null;
 export const { settings, errors: settingErrors } = resolveSettings(genesis ?? {}, process.env);
-// ผู้ผลิต block: เซ็น hash ของ block ทุกอันด้วย key นี้ (key อยู่ในเครื่องนี้เท่านั้น ไม่มี endpoint ไหนรับ / ส่ง key)
+// block producer: signs every block hash with this key (the key lives only on this machine; no endpoint accepts / returns keys)
 const PRODUCER_KEY = process.env.PRODUCER_KEY || null;
 export const producer = PRODUCER_KEY
   ? { address: addressOf(PRODUCER_KEY), sign: (hash) => signTypedDataDigest(hash, PRODUCER_KEY) }
   : null;
-// เครื่องสำรอง (FOLLOW) ซิงก์ตามผู้ผลิต · ย้ายมาผลิตแทน (FAILOVER_FROM) ต้องผ่าน prepareFailover ก่อนเปิด miner
+// standby (FOLLOW) syncs from the producer · taking over production (FAILOVER_FROM) must pass prepareFailover before the miner starts
 export const FOLLOW = process.env.FOLLOW || null;
 const FAILOVER_FROM = process.env.FAILOVER_FROM || null;
 const MINER = process.env.MINER ?? producer?.address ?? "0x1111111111111111111111111111111111111111";
 const BLOCK_MS = settings.blockMs;
 const MAX_TX_PER_BLOCK = Number(process.env.MAX_TX_PER_BLOCK ?? 500);
-const MAX_TX_GAS = Math.min(Number(process.env.MAX_TX_GAS ?? settings.maxBlockGas), settings.maxBlockGas);   // แก๊สสูงสุดต่อ tx (ไม่เกิน maxBlockGas)
-// โปรแกรมทำงานแบบ sync ใน thread เดียวกับ HTTP → ระหว่างรัน server ตอบใครไม่ได้เลย จึงต้องสั้น
-// (ลูปหมดแก๊สเองแล้ว ดู src/core/gasmeter.js — เวลานี้เป็นตัวกันสุดท้าย)
+const MAX_TX_GAS = Math.min(Number(process.env.MAX_TX_GAS ?? settings.maxBlockGas), settings.maxBlockGas);   // max gas per tx (at most maxBlockGas)
+// programs run synchronously on the same thread as HTTP → the server can't answer anyone while one runs, so this must be short
+// (loops run out of gas on their own, see src/core/gasmeter.js — this time limit is the last line of defense)
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 5000);
 export const verifyPool = new VerifyPool({ size: process.env.VERIFY_WORKERS ?? DEFAULT_VERIFY_WORKERS });
 const RATE_LIMIT = Number(process.env.RATE_LIMIT ?? 120);
-// sandbox ของโปรแกรม (ดู src/core/sandbox.js): ทุกเครื่องในเครือข่ายต้องตั้งค่าเดียวกัน ไม่งั้นผลของ tx ที่ใช้หน่วยความจำมากจะต่างกัน
+// program sandbox (see src/core/sandbox.js): every machine in the network must use the same values, otherwise memory-heavy txs give different results
 const MEMORY_LIMIT_MB = settings.memoryLimitMb;
 const STACK_LIMIT_KB = settings.stackLimitKb;
-const GAS_PRICE = settings.minBaseFee;   // wei ต่อแก๊ส (ค่าเริ่มต้น 10,000 gwei)
-// ตรวจโค้ดอัตโนมัติ (src/core/autoreview.js) ตอน /sendtx deploy / upgrade · AUTO_REVIEW=0 = ปิด (sandbox + แก๊สยังคุมอยู่)
+const GAS_PRICE = settings.minBaseFee;   // wei per gas (default 10,000 gwei)
+// automatic code review (src/core/autoreview.js) on /sendtx deploy / upgrade · AUTO_REVIEW=0 = off (sandbox + gas still apply)
 export const AUTO_REVIEW = !["0", "false", "off", "no"].includes(String(process.env.AUTO_REVIEW ?? "1").toLowerCase());
 
-// LMDB จองพื้นที่ได้สูงสุดเท่านี้ (เต็ม = เขียนไม่ได้ เชนหยุด) · ค่าเริ่ม 1T · ดูที่ใช้ไปแล้วที่ /health
+// the most LMDB may reserve (full = writes fail, the chain stops) · default 1T · usage is shown at /health
 const LMDB_MAP_SIZE = process.env.LMDB_MAP_SIZE ? parseSize(process.env.LMDB_MAP_SIZE) : DEFAULT_MAP_SIZE;
 export const vm = new VirtualMachine(process.env.DATA ? new DB(process.env.DATA, { mapSize: LMDB_MAP_SIZE }) : new MemoryDB(), {
   chainId: settings.chainId,
   requireNonce: true, chargeGas: true, deriveProgramAddress: true,
   recordTransactions: true, recordBlocks: true, recordHistory: true,
-  // EIP-1559: base fee (ปรับตามความเต็มของ block) เผาทิ้ง · tip (maxPriorityFeePerGas) เข้าผู้ปิด block
+  // EIP-1559: base fee (adjusted by block fullness) is burned · tip (maxPriorityFeePerGas) goes to the block sealer
   feeRecipient: MINER, burnPercent: settings.burnPercent, timeoutMs: TIMEOUT_MS,
   minBaseFee: GAS_PRICE, gasTarget: settings.gasTarget,
   baseFeeChangeDenominator: settings.baseFeeDenominator,
   producer,
   memoryLimitBytes: MEMORY_LIMIT_MB * 1024 * 1024, maxStackBytes: STACK_LIMIT_KB * 1024,
-  gas: { price: GAS_PRICE },   // native 18 ทศนิยม (wei) · ราคาแก๊สขั้นต่ำจาก genesis (ค่าเริ่มต้น 10,000 gwei)
-  // block 1 วิ · 1M แก๊ส · 500 tx (ผลวัด: block-time-sim.md) — เพดาน tx ต่อ block / แก๊สต่อ tx ไม่ใช่ค่าที่ node อื่นตรวจ ตั้งต่างกันได้
+  gas: { price: GAS_PRICE },   // native 18 decimals (wei) · min gas price from genesis (default 10,000 gwei)
+  // 1 s blocks · 1M gas · 500 txs (measured: block-time-sim.md) — the per-block tx cap / per-tx gas aren't checked by other nodes and may differ
   maxTransactions: MAX_TX_PER_BLOCK, maxTransactionsPerSender: 16, maxBlockGas: settings.maxBlockGas, maxTxGas: MAX_TX_GAS,
   admins: settings.admins,
-  upgradeDelayBlocks: settings.upgradeDelayBlocks,   // timelock ของการอัปเกรด (0 = ใช้โค้ดใหม่ทันทีที่อนุมัติ)
-  forks: settings.forks,   // genesis.json "forks": กติกาใหม่ตั้งแต่ block ที่กำหนด (ชื่อที่โค้ดไม่รู้จัก = ไม่ยอมเริ่ม)
+  upgradeDelayBlocks: settings.upgradeDelayBlocks,   // upgrade timelock (0 = new code applies as soon as approved)
+  forks: settings.forks,   // genesis.json "forks": new rules from a given block (names the code doesn't know = refuses to start)
   historyKeep: process.env.HISTORY_KEEP_BLOCKS ? Number(process.env.HISTORY_KEEP_BLOCKS) : null,   // pruning (null = archive)
 });
-// snapshot ของ state ทุก SNAPSHOT_EVERY block (ถ่ายแบบไม่หยุดเชน · ต้องมี DATA หรือ SNAPSHOT_DIR)
+// state snapshot every SNAPSHOT_EVERY blocks (taken without stopping the chain · requires DATA or SNAPSHOT_DIR)
 const SNAPSHOT_EVERY = Number(process.env.SNAPSHOT_EVERY ?? 0);
 const SNAPSHOT_DIR = process.env.SNAPSHOT_DIR || (process.env.DATA ? path.join(process.env.DATA, "snapshots") : null);
 export const snapshots = SNAPSHOT_EVERY > 0 && SNAPSHOT_DIR
   ? createSnapshotter(vm, { dir: SNAPSHOT_DIR, every: SNAPSHOT_EVERY, keep: Number(process.env.SNAPSHOT_KEEP ?? 2) })
   : null;
-// ใบที่ถูกแทนที่ (replace-by-fee): จำแบบ off-chain มีเพดาน · มี DATA = ไฟล์ JSON lines ข้าง LMDB → /tx ตอบ "replaced" ได้แม้ restart
+// replaced txs (replace-by-fee): remembered off-chain, bounded · with DATA = a JSON lines file next to LMDB → /tx can answer "replaced" even after restart
 export const replacedLog = new TxLog({
   file: process.env.DATA ? path.join(process.env.DATA, "replaced-tx.jsonl") : null,
   maxEntries: Number(process.env.REPLACED_LOG_MAX ?? 100_000),
   maxAgeMs: Number(process.env.REPLACED_LOG_DAYS ?? 30) * 24 * 60 * 60_000,
 });
-// tx ที่ถูกปฏิเสธ (ผ่านลายเซ็นแล้ว) ถูกบันทึกลง block ถัดไป (block.recordRejected) — ดู src/node/mempool.js
+// rejected txs (signature passed) are recorded in the next block (block.recordRejected) — see src/node/mempool.js
 export const mempool = new Mempool(vm, { replacedLog, maxRejectedPerBlock: Number(process.env.REJECTED_PER_BLOCK ?? 1000) });
-// POST ทุกตัวอาจรันโปรแกรม → จำกัดต่อ IP (ส่วน /sendtx ยังมี rate limit ต่อ address ใน mempool อีกชั้น)
+// every POST may run a program → limited per IP (/sendtx also has a per-address rate limit in the mempool)
 export const postLimiter = new RateLimiter({ limit: RATE_LIMIT, windowMs: 60_000 });
-// ตัวแปลงสำหรับกระเป๋า / เครื่องมือ EVM (อ่านอย่างเดียว ไม่เปลี่ยนอะไรในเชน) — ดู src/node/evm-rpc.js
+// adapter for EVM wallets / tools (read-only, changes nothing on the chain) — see src/node/evm-rpc.js
 export const evmLimiter = new RateLimiter({ limit: Number(process.env.EVM_RATE_LIMIT ?? 600), windowMs: 60_000 });
 const EVM_MAX_BATCH = Math.max(1, Number(process.env.EVM_MAX_BATCH ?? 1000));
 const MAX_BODY_BYTES = Math.max(1024, Number(process.env.MAX_BODY_BYTES ?? 1024 * 1024));
-// eth_sendRawTransaction → intake เดียวกับ /sendtx (ประกาศ function ไว้ด้านล่าง ใช้ได้เพราะ hoist)
+// eth_sendRawTransaction → the same intake as /sendtx (the function is declared below; works thanks to hoisting)
 export const evmRpc = createEvmRpc({ vm, mempool, decimals: Number(process.env.EVM_DECIMALS ?? 0),
-  submit: (verified) => intake({ tx: verified.tx, signature: verified.request.signature }, verified) });   // native เป็น wei (18 ทศนิยม) อยู่แล้ว
+  submit: (verified) => intake({ tx: verified.tx, signature: verified.request.signature }, verified) });   // native is already wei (18 decimals)
 if (genesis) vm.applyGenesis(genesis);
 
-// มีแค่ tx ที่ถูกปฏิเสธ → พักไว้ให้ติดไปกับ block ที่มี tx จริง หรือปิด block เมื่อใบที่รอนานสุดครบ REJECTED_HOLD_MS (0 = ปิดทันที)
+// only rejected txs → hold them to ride along with a block that has real txs, or seal when the oldest has waited REJECTED_HOLD_MS (0 = seal immediately)
 export const REJECTED_HOLD_MS = Number(process.env.REJECTED_HOLD_MS ?? 60_000);
 export function shouldMine(now = Date.now()) {
   if (mempool.size > 0) return true;
@@ -146,44 +146,44 @@ export function shouldMine(now = Date.now()) {
   return now - (mempool.oldestRejectionAt ?? now) >= REJECTED_HOLD_MS;
 }
 
-// รายชื่อผู้ผลิตของ block n (config.producers แล้วเปลี่ยนตาม producerSchedule) · null = genesis ไม่กำหนด
+// producer list for block n (config.producers, then changed per producerSchedule) · null = genesis doesn't define one
 export const producersOf = settings.producers?.length ? (number) => producersAt(settings, number) : null;
-/** key ของ node นี้ผลิต block ถัดไปได้ไหม (ถูกถอดออกด้วย producerSchedule = ไม่ได้) */
+/** can this node's key produce the next block? (removed via producerSchedule = no) */
 export function canProduce(number = (vm.latestBlockNumber() ?? 0) + 1) {
   const allowed = producersOf?.(number);
   return !allowed || (producer !== null && allowed.includes(producer.address));
 }
-// false = ไม่ผลิต block (FOLLOW / รอ prepareFailover ตอนเริ่ม)
+// false = don't produce blocks (FOLLOW / waiting for prepareFailover at startup)
 export let miningEnabled = !FOLLOW && !(FAILOVER_FROM && process.argv[1]?.endsWith("server.js"));
 
 let mining = false;
-// ผลการปิด block ล่าสุด (ให้ /health บอกได้ว่าเชนหยุดเพราะปิด block ล้มเหลวติดกัน)
+// result of the latest block seal (lets /health tell whether the chain stopped due to repeated seal failures)
 export const minerState = { failures: 0, lastError: null, lastErrorAt: null, idleAt: null };
 const STARTED_AT = Date.now();
-/** ปิด block 1 รอบ (miner เรียกทุก BLOCK_MS) → block ที่ปิด | null (ไม่มีอะไรต้องปิด / ปิดไม่ได้) */
+/** seal one block (the miner calls this every BLOCK_MS) → the sealed block | null (nothing to seal / can't seal) */
 export function mineOnce(now = Date.now()) {
   if (mining || !miningEnabled || !shouldMine(now)) return null;
   mining = true;
   try {
     const next = (vm.latestBlockNumber() ?? 0) + 1;
-    if (!canProduce(next)) {   // producerSchedule ถอด key นี้ออกตั้งแต่ block นี้ → หยุดผลิต (block ที่ผลิตไป node อื่นก็ไม่รับ)
-      throw new Error(`PRODUCER_KEY (${producer?.address ?? "ไม่มี"}) ไม่อยู่ในรายชื่อผู้ผลิตของ block ${next} (${producersOf(next).join(", ")})`);
+    if (!canProduce(next)) {   // producerSchedule removed this key from this block on → stop producing (other nodes would reject its blocks)
+      throw new Error(`PRODUCER_KEY (${producer?.address ?? "none"}) is not in the producer list for block ${next} (${producersOf(next).join(", ")})`);
     }
     const block = vm.createBlock({ timestamp: now, feeRecipient: MINER });
     const included = mempool.take(block);
-    // ไม่มีอะไรเข้า block (ใบที่รอติด nonce ที่ขาด ฯลฯ) และ base fee ลงถึงขั้นต่ำแล้ว → ไม่ปิด block ว่าง (block ว่างช่วยแค่ลด base fee)
+    // nothing can enter the block (waiting txs blocked on a missing nonce etc.) and the base fee is already at the minimum → don't seal an empty block (empty blocks only lower the base fee)
     if (included.length === 0 && block.rejectedTransactions().length === 0 && BigInt(String(block.baseFee ?? vm.minBaseFee).replace(/n$/, "")) <= vm.minBaseFeeNow()) {
-      minerState.idleAt = now;   // miner ยังทำงาน แค่ไม่มีใบที่เข้า block ได้ (/health ไม่นับเป็น stalled)
+      minerState.idleAt = now;   // the miner is still running, there's just nothing that fits (/health doesn't count it as stalled)
       return null;
     }
     block.commit();
     snapshots?.onBlock(block.number);
     const rejected = block.rejectedTransactions().length;
-    console.log(`block ${block.number} ปิดแล้ว (${included.length} tx${rejected ? ` · ปฏิเสธ ${rejected}` : ""})`);
+    console.log(`block ${block.number} sealed (${included.length} tx${rejected ? ` · rejected ${rejected}` : ""})`);
     minerState.failures = 0;
     return block;
   } catch (error) {
-    console.error("ปิด block ล้มเหลว:", error.message);
+    console.error("block seal failed:", error.message);
     Object.assign(minerState, { failures: minerState.failures + 1, lastError: error.message, lastErrorAt: now });
     return null;
   } finally { mining = false; }
@@ -193,16 +193,16 @@ miner.unref?.();
 
 const lower = (value) => String(value ?? "").toLowerCase();
 
-// /health: เชนหยุด = มี tx รอแต่ไม่มี block ใหม่นานกว่านี้ · พื้นที่ LMDB เกินนี้ = เตือน
-// เครื่องสำรอง: สถานะการซิงก์ (/health บอกได้ว่าซิงก์ค้าง / หยุดเพราะ block ไม่ตรง)
+// /health: chain stalled = txs waiting but no new block for longer than this · LMDB usage above this = warning
+// standby: sync status (lets /health tell whether syncing is stuck / stopped due to a block mismatch)
 export const followState = { url: FOLLOW, lastSyncAt: null, error: null, errorAt: null };
 export let stopFollow = null;
 if (FOLLOW) {
   stopFollow = startSync(vm, { url: FOLLOW, producers: producersOf, intervalMs: Math.max(BLOCK_MS, 1000),
     snapshot: ["1", "true", "yes", "on"].includes(String(process.env.FOLLOW_SNAPSHOT ?? "").toLowerCase()),
     onBlock: (number) => { followState.lastSyncAt = Date.now(); snapshots?.onBlock(number); },
-    onSnapshot: (loaded) => console.log(`เริ่มจาก snapshot block ${loaded.number ?? loaded}`),
-    onError: (error) => { Object.assign(followState, { error: error.message, errorAt: Date.now() }); console.error("ซิงก์หยุด:", error.message); } });
+    onSnapshot: (loaded) => console.log(`started from snapshot block ${loaded.number ?? loaded}`),
+    onError: (error) => { Object.assign(followState, { error: error.message, errorAt: Date.now() }); console.error("sync stopped:", error.message); } });
 }
 
 export const STALL_MS = Number(process.env.HEALTH_STALL_MS ?? Math.max(BLOCK_MS * 10, 30_000));
@@ -214,7 +214,7 @@ export function role() {
   return miningEnabled ? "producer" : "standby";
 }
 
-/** สถานะของ node → { ok, problems, ... } · มีปัญหา = HTTP 503 (load balancer / ตัวเฝ้าระบบดูได้ทันที) */
+/** node status → { ok, problems, ... } · problems = HTTP 503 (load balancers / monitors see it immediately) */
 export function health(now = Date.now()) {
   const latest = vm.latestBlockNumber();
   const latestAt = latest === null ? null : vm.getBlock(latest)?.timestamp ?? null;
@@ -222,16 +222,16 @@ export function health(now = Date.now()) {
   const db = typeof vm.db.stats === "function" ? vm.db.stats() : null;
   const waiting = mempool.size + (shouldMine(now) ? mempool.rejectedPending : 0);
   const problems = [];
-  const idle = minerState.idleAt !== null && now - minerState.idleAt < Math.max(BLOCK_MS * 3, 5_000);   // ใบที่รอเข้า block ไม่ได้ (เช่น nonce ขาด) ≠ เชนหยุด
-  if (waiting > 0 && !idle && now - since > STALL_MS) problems.push(`stalled: มี ${waiting} tx รอ แต่ไม่มี block ใหม่ ${Math.round((now - since) / 1000)} วิ`);
-  if (followState.error) problems.push(`follow: ซิงก์จาก ${FOLLOW} หยุด (${followState.error})`);
-  if (minerState.failures > 0) problems.push(`miner: ปิด block ล้มเหลว ${minerState.failures} ครั้งติดกัน (${minerState.lastError})`);
-  if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB ใช้ไป ${db.usedPercent}% ของ mapSize`);
+  const idle = minerState.idleAt !== null && now - minerState.idleAt < Math.max(BLOCK_MS * 3, 5_000);   // txs that can't enter a block (e.g. missing nonce) ≠ chain stalled
+  if (waiting > 0 && !idle && now - since > STALL_MS) problems.push(`stalled: ${waiting} tx waiting but no new block for ${Math.round((now - since) / 1000)} s`);
+  if (followState.error) problems.push(`follow: sync from ${FOLLOW} stopped (${followState.error})`);
+  if (minerState.failures > 0) problems.push(`miner: block seal failed ${minerState.failures} times in a row (${minerState.lastError})`);
+  if (db && db.usedPercent >= DISK_WARN_PERCENT) problems.push(`disk: LMDB has used ${db.usedPercent}% of mapSize`);
   return {
     ok: problems.length === 0, problems,
     latest, latestAt, blockAgeMs: latestAt === null ? null : now - latestAt, blockMs: BLOCK_MS,
     historyFrom: vm.historyFrom(), pending: mempool.size, rejectedPending: mempool.rejectedPending,
-    // role: producer = ผลิต block อยู่ · follower = เครื่องสำรอง (FOLLOW) · retired = key ถูกถอดจากรายชื่อ · standby = รอ prepareFailover
+    // role: producer = producing blocks · follower = standby (FOLLOW) · retired = key removed from the list · standby = waiting for prepareFailover
     role: role(), producer: producer?.address ?? null, miner: { ...minerState }, follow: FOLLOW ? { ...followState } : null, db,
   };
 }
@@ -246,32 +246,32 @@ const ROUTES = {
     for (let n = from; n > 0 && list.length < limitOf(query); n -= 1) { const b = vm.getBlock(n); if (b) list.push(b); }
     return list;
   },
-  // แบบแบ่งหน้า: ?page=<เลขหน้า>&limit=<ต่อหน้า> → { items, total, page, pages, limit, truncated }
+  // paginated: ?page=<page number>&limit=<per page> → { items, total, page, pages, limit, truncated }
   "/blocks/page": (query) => pageBlocks(vm, pageOf(query)),
   "/block/latest": () => vm.getBlock(vm.latestBlockNumber()) ?? { error: "No blocks yet" },
   "/pending": () => ({ size: mempool.size, transactions: mempool.list(), rejectedPending: mempool.rejectedPending, rejectedHoldMs: REJECTED_HOLD_MS }),
-  // tx ที่ถูกปฏิเสธ (บันทึกใน block) ใหม่ไปเก่า: ?address=<ผู้ส่ง>&limit=&cursor= → { items, next }
+  // rejected txs (recorded in blocks) newest to oldest: ?address=<sender>&limit=&cursor= → { items, next }
   "/rejected": (query) => pageRejected(vm, { address: query.get("address") || undefined, ...cursorOf(query) }),
-  // โปรแกรม: จำนวนที่อนุมัติแล้ว / รออนุมัติ + รายการแบบแบ่งหน้า
+  // programs: approved / pending counts + paginated lists
   "/programs": () => programCounts(vm),
   "/programs/pending": (query) => pagePendingPrograms(vm, pageOf(query)),
   "/programs/approved": (query) => pageApprovedPrograms(vm, pageOf(query)),
   "/events": (query) => vm.listEvents({ program: query.get("program") ?? undefined, name: query.get("name") ?? "", limit: limitOf(query) }),
   "/is-program": (query) => programFlags(vm, (query.get("addresses") ?? "").split(",").filter(Boolean)),
-  // สถานะของ node: block ล่าสุด · ย้อนดูได้ตั้งแต่ block ไหน · พื้นที่ LMDB ที่ใช้ไป (เกิน mapSize = เขียนไม่ได้)
+  // node status: latest block · earliest block available for lookback · LMDB space used (beyond mapSize = writes fail)
   "/health": () => {
     const body = health();
     return body.ok ? body : { status: 503, body };
   },
   "/genesis": () => ({ hash: vm.genesisHash(), chainId: vm.chainId, latest: vm.latestBlockNumber(), pending: mempool.size,
-    gasPrice: vm.minBaseFeeNow(), decimals: 18,   // base fee ต่ำสุดที่ใช้อยู่ (wei · ค่าใน genesis หรือที่ admin ตั้งด้วย setGasConfig) · native มี 18 ทศนิยม
+    gasPrice: vm.minBaseFeeNow(), decimals: 18,   // current minimum base fee (wei · from genesis or set by an admin via setGasConfig) · native has 18 decimals
     minBaseFee: vm.minBaseFeeNow(), genesisMinBaseFee: vm.minBaseFee,
-    gasConfig: vm.gasConfig(), gas: vm.gasAt(), admins: settings.admins,   // ค่าที่ admin ตั้งบนเชน (null = ยังไม่เคยตั้ง) · ตารางราคาต่อหน่วยของ block ถัดไป
-    baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: base fee ของ block ถัดไป
+    gasConfig: vm.gasConfig(), gas: vm.gasAt(), admins: settings.admins,   // values set on-chain by admins (null = never set) · per-unit price table for the next block
+    baseFee: vm.currentBaseFee(), gasTarget: vm.gasTarget, maxBlockGas: vm.maxBlockGas, burnPercent: vm.burnPercent,   // EIP-1559: next block's base fee
     burned: vm.nativeBalanceOf("0x0000000000000000000000000000000000000000").balance,
-    forks: vm.forkSchedule(),   // [{ name, block, active, description }] กติกาใหม่ตั้งแต่ block ที่กำหนด
-    // ผู้ผลิต block ของ node นี้ + รายชื่อผู้ผลิตที่ genesis อนุญาต (node ผู้อ่านส่งให้ startSync({ producers }))
-    // producers = รายชื่อของ block ถัดไป · producerSchedule = [{ fromBlock, producers }] เปลี่ยนรายชื่อตั้งแต่ block ที่กำหนด
+    forks: vm.forkSchedule(),   // [{ name, block, active, description }] new rules from a given block
+    // this node's block producer + the producers genesis allows (reader nodes pass them to startSync({ producers }))
+    // producers = the list for the next block · producerSchedule = [{ fromBlock, producers }] changes the list from a given block
     producer: producer?.address ?? null, role: role(),
     producers: producersOf?.((vm.latestBlockNumber() ?? 0) + 1) ?? settings.producers, baseProducers: settings.producers,
     producerSchedule: settings.producerSchedule }),
@@ -294,9 +294,9 @@ const DYNAMIC = [
     const found = vm.getTransaction(m[1], { signature: true });
     if (found) return found;
     if (mempool.has(m[1])) return { status: "pending", hash: m[1] };
-    const replacedBy = mempool.replacedBy(m[1]);   // ถูกแทนที่ด้วยใบ nonce เดิมที่ราคาแก๊สสูงกว่า (off-chain · มี DATA = อยู่รอด restart)
+    const replacedBy = mempool.replacedBy(m[1]);   // replaced by a tx with the same nonce and higher gas price (off-chain · with DATA = survives restarts)
     if (replacedBy) return { status: "replaced", hash: m[1], replacedBy };
-    // ถูกปฏิเสธ (ไม่ได้รัน): บันทึกอยู่ใน block แล้ว หรือยังรอ block ถัดไป (block: null)
+    // rejected (not executed): already recorded in a block, or still waiting for the next block (block: null)
     const rejected = vm.getRejectedTransaction(m[1]);
     if (rejected) return { status: "rejected", ...rejected, block: rejected.blockNumber };
     const waiting = mempool.pendingRejection(m[1]);
@@ -313,13 +313,13 @@ const DYNAMIC = [
   [/^\/program\/([^/]+)$/, (m, query) => {
     const code = vm.read(`${lower(m[1])}:code`);
     if (!code) return { status: 404, body: { error: "Program not found (it may not be initialized yet)" } };
-    return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: withSystemAbi(vm.getMetadata(m[1]), (dbKey) => vm.read(dbKey), m[1]),   // โปรแกรมแถม: abi จากโค้ด
-      // อัปเกรด: รอรีวิว / อนุมัติแล้วรอ timelock (ไม่มี = null)
+    return { address: lower(m[1]), code, context: vm.read(`${lower(m[1])}:context`), metadata: withSystemAbi(vm.getMetadata(m[1]), (dbKey) => vm.read(dbKey), m[1]),   // bundled programs: abi from code
+      // upgrade: pending review / approved and waiting for the timelock (none = null)
       pendingUpgrade: vm.read(`pending-upgrade:${lower(m[1])}`) ?? null, scheduledUpgrade: vm.read(`scheduled-upgrade:${lower(m[1])}`) ?? null,
       native: vm.nativeBalanceOf(m[1]), storage: vm.listProgramStorage(m[1], { limit: 50 }),
       interactions: vm.listTransactionsTo(m[1], { limit: limitOf(query) }),
       events: vm.listEvents({ program: m[1], limit: limitOf(query) }), token: tokenInfo(vm, m[1]),
-      collection: collectionInfo(vm, m[1]) };   // NFT (ERC-721) / multi-token (ERC-1155) มาตรฐาน · ไม่ใช่ = null
+      collection: collectionInfo(vm, m[1]) };   // standard NFT (ERC-721) / multi-token (ERC-1155) · otherwise = null
   }],
   [/^\/program\/([^/]+)\/storage$/, (m, query) => {
     const address = lower(m[1]);
@@ -328,7 +328,7 @@ const DYNAMIC = [
     const base = `${address}:storage:`;
     const start = query.get("start") || undefined;
 
-    // key ที่เป็นใบเดี่ยว (เช่น "owner") ไม่มีลูก จึงต้องอ่านตรง ๆ ไม่ใช่ค้นด้วย prefix
+    // single-part keys (e.g. "owner") have no children, so read directly rather than by prefix
     const leaf = group && !start ? vm.read(base + group) : undefined;
     const head = leaf === undefined ? [] : [{ key: [group], value: leaf }];
 
@@ -338,24 +338,24 @@ const DYNAMIC = [
       .map(({ dbKey, value }) => ({ key: dbKey.slice(base.length).split(":"), value }))];
     return { items, next: hasMore ? rows[limit - head.length].dbKey : null, prefix: group };
   }],
-  // โค้ดทุกเวอร์ชันของโปรแกรมที่เคยอัปเกรด [{ version, code, blockNumber, timestamp }]
+  // every code version of a program that has been upgraded [{ version, code, blockNumber, timestamp }]
   [/^\/program\/([^/]+)\/versions$/, (m) => vm.listCodeVersions(m[1])],
-  // ABI ที่โปรแกรมประกาศใน metadata.abi (ไม่มี = null) + แบบ JSON ABI ของ Ethereum
+  // the ABI the program declares in metadata.abi (none = null) + the Ethereum JSON ABI form
   [/^\/program\/([^/]+)\/abi$/, (m) => programAbi(vm, m[1])],
-  // นับ key ตามชื่อ key แรก ทีละช่วง ?scan=<key ต่อครั้ง ≤ 50,000>&cursor=<next> → { total, groups, scanned, next, complete }
+  // count keys by first key part, chunk by chunk ?scan=<keys per call ≤ 50,000>&cursor=<next> → { total, groups, scanned, next, complete }
   [/^\/program\/([^/]+)\/groups$/, (m, query) => storageGroups(vm, m[1], { cursor: query.get("cursor") || undefined, scan: query.get("scan") })],
-  // แบบ cursor (ไม่นับทั้งรายการ): ?limit=&cursor=<next> → { items, next }
+  // cursor-based (no full count): ?limit=&cursor=<next> → { items, next }
   [/^\/program\/([^/]+)\/interactions$/, (m, query) => cursorTransactionsTo(vm, m[1], cursorOf(query))],
-  // แถบ "ข้อมูล" ของ explorer: variable (key 1 ชั้น) / contract (2 ชั้น) / get storage (3 ชั้นขึ้นไป)
-  // เหรียญที่ address ถือ (นับจาก event Transfer) / ข้อมูล token ตามมาตรฐาน
+  // the explorer's "data" tab: variables (1-part keys) / contract (2 parts) / get storage (3+ parts)
+  // coins an address holds (counted from Transfer events) / standard token info
   [/^\/address\/([^/]+)\/tokens$/, (m) => tokenHoldings(vm, m[1])],
-  // NFT / multi-token ที่ address ถือ (โปรแกรมจากดัชนี holding: · ชิ้นจาก storage ของโปรแกรม)
+  // NFTs / multi-tokens an address holds (programs from the holding: index · items from the program's storage)
   [/^\/address\/([^/]+)\/nfts$/, (m) => nftHoldings(vm, m[1])],
   [/^\/token\/([^/]+)$/, (m) => tokenInfo(vm, m[1]) ?? { status: 404, body: { error: "Not a standard token" } }],
   [/^\/address\/([^/]+)\/txs$/, (m, query) => pageTransactionsOf(vm, m[1], pageOf(query))],
   [/^\/address\/([^/]+)\/incoming$/, (m, query) => (query.has("cursor") ? cursorTransactionsTo(vm, m[1], cursorOf(query)) : pageTransactionsTo(vm, m[1], pageOf(query)))],
-  // ?page= → เลขหน้า (นับรวมไม่เกิน 50,000) · ?cursor= (ว่างได้ = หน้าแรก) → แบบ cursor ไม่มีเพดาน
-  // ?name=<event>&<field>=<ค่า> → ค้นด้วยดัชนีของ field ที่ emit แบบ indexed (cursor) — ดู indexedEventsQuery
+  // ?page= → page number (counts up to 50,000) · ?cursor= (may be empty = first page) → cursor-based, no cap
+  // ?name=<event>&<field>=<value> → searches via the index of a field emitted as indexed (cursor) — see indexedEventsQuery
   [/^\/program\/([^/]+)\/events$/, (m, query) => (indexedFilterOf(query) ? cursorIndexedEvents(vm, m[1], query.get("name") ?? "", indexedFilterOf(query), cursorOf(query))
     : query.has("cursor") ? cursorEvents(vm, m[1], cursorOf(query), query.get("name") ?? "")
     : pageEvents(vm, m[1], pageOf(query), query.get("name") ?? ""))],
@@ -371,23 +371,23 @@ const DYNAMIC = [
     const block = Number(query.get("block"));
     if (!Number.isInteger(block)) return vm.listProgramStorage(m[1]);
     const prefix = `${lower(m[1])}:storage:`;
-    // ?limit=&cursor= → { items: { dbKey: value }, next } (ต้นทุนตามจำนวน key ที่ขอ ไม่ใช่ความยาวเชน) · ไม่ส่ง = ทั้งหมดแบบเดิม
+    // ?limit=&cursor= → { items: { dbKey: value }, next } (cost scales with keys requested, not chain length) · omitted = everything, as before
     try {
       if (!query.has("limit") && !query.has("cursor")) return vm.snapshotAt(block, prefix);
       const page = vm.pageSnapshotAt(block, prefix, { limit: limitOf(query), after: query.get("cursor") || undefined });
       return { items: Object.fromEntries(page.items), next: page.next };
     } catch (error) { return { status: 409, body: { error: error.message } }; }
   }],
-  // หลักฐาน Merkle ของ key ใน state ล่าสุด: ?key=<dbKey>&key=… → { blockNumber, blockHash, stateRoot, proofs } (ตรวจด้วย verifyProof ของ client-sdk)
+  // Merkle proofs of keys in the latest state: ?key=<dbKey>&key=… → { blockNumber, blockHash, stateRoot, proofs } (verify with client-sdk's verifyProof)
   [/^\/proof$/, (m, query) => {
     const keys = query.getAll("key");
-    if (!keys.length || keys.length > 100) return { status: 400, body: { error: "ต้องส่ง key 1–100 ตัว" } };
+    if (!keys.length || keys.length > 100) return { status: 400, body: { error: "send 1–100 keys" } };
     return vm.getProof(keys);
   }],
   [/^\/sync$/, (m, query) => {
     const from = Math.max(1, Number(query.get("from")) || 1);
     const blocks = [];
-    // rejected = tx ที่ถูกปฏิเสธที่บันทึกใน block (อยู่ใน hash ของ block ผู้ซิงก์ต้องใส่ครบตามลำดับ)
+    // rejected = rejected txs recorded in the block (part of the block hash; syncing nodes must include all of them in order)
     for (let n = from; n <= Math.min(vm.latestBlockNumber() ?? 0, from + 49); n += 1) {
       blocks.push({ header: vm.getBlock(n), body: vm.getBlockBody(n), rejected: vm.getBlockRejected(n) });
     }
@@ -396,27 +396,27 @@ const DYNAMIC = [
 ];
 
 /**
- * รับ tx ที่ตรวจลายเซ็นแล้วเข้า mempool (/sendtx และ /evm eth_sendRawTransaction ใช้ร่วมกัน)
- * ตรวจโค้ด + simulate (ส่วนที่แพง) ทำหลัง mempool ตรวจ rate limit / โควตา / nonce แล้วเท่านั้น
+ * Admit signature-verified txs into the mempool (shared by /sendtx and /evm eth_sendRawTransaction)
+ * code review + simulate (the expensive part) run only after the mempool has checked rate limit / quota / nonce
  */
 function intake({ tx, signature, sponsorSignature }, verified) {
-  if (FOLLOW) return { ok: false, follower: true, error: `node นี้เป็นเครื่องสำรอง (ไม่รับ tx) — ส่งที่ ${FOLLOW}` };
+  if (FOLLOW) return { ok: false, follower: true, error: `this node is a standby (doesn't accept txs) — send to ${FOLLOW}` };
   const check = (item) => {
-    if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // โค้ดใหม่ของการอัปเกรดผ่านการตรวจเดียวกับ deploy
+    if (AUTO_REVIEW && (tx.action === "deploy" || tx.action === "upgrade")) {   // new upgrade code goes through the same review as deploy
       const reviewed = reviewProgram(tx.code);
-      if (!reviewed.ok) return { ok: false, error: "โค้ดไม่ผ่านการตรวจ", issues: reviewed.issues };
+      if (!reviewed.ok) return { ok: false, error: "code failed review", issues: reviewed.issues };
     }
     return simulate(vm, item);
   };
-  return mempool.add({ tx, signature, sponsorSignature }, { simulate: check, verified });   // ตรวจลายเซ็นแล้ว → ไม่ recover ซ้ำ
+  return mempool.add({ tx, signature, sponsorSignature }, { simulate: check, verified });   // signature already verified → no second recover
 }
 
 async function handlePost(url, body) {
   if (url === "/sendtx") {
-    const { tx, signature, sponsorSignature } = body ?? {};   // sponsorSignature: ผู้จ่ายแก๊สแทน (tx.sponsor) เซ็น digest เดียวกัน
-    if (FOLLOW) return { status: 503, body: { queued: false, error: `node นี้เป็นเครื่องสำรอง (ไม่รับ tx) — ส่งที่ ${FOLLOW}` } };
+    const { tx, signature, sponsorSignature } = body ?? {};   // sponsorSignature: the gas sponsor (tx.sponsor) signs the same digest
+    if (FOLLOW) return { status: 503, body: { queued: false, error: `this node is a standby (doesn't accept txs) — send to ${FOLLOW}` } };
     let verified;
-    try { verified = await verifyPool.verify({ tx, signature, sponsorSignature }); }   // recover ลายเซ็นใน worker → thread หลักรับ request อื่นต่อได้
+    try { verified = await verifyPool.verify({ tx, signature, sponsorSignature }); }   // recover the signature in a worker → the main thread keeps serving other requests
     catch (error) { return { status: 400, body: { queued: false, error: error.message } }; }
 
     const queued = intake({ tx, signature, sponsorSignature }, verified);
@@ -438,11 +438,11 @@ const send = (response, status, data) => {
 };
 
 /**
- * /evm — JSON-RPC แบบ EVM (POST) · ค่าสำหรับเพิ่มเชนใน MetaMask (GET /evm)
- * /evm/explorer/{tx,address,token,block}/:id — ลิงก์ "ดูใน explorer" ของกระเป๋า (EIP-3091) → หน้า explorer เดิม
- * /evm/explorer — หน้าแรกของ explorer (URL ที่ลงทะเบียนใน chainlist · CI ของ ethereum-lists เปิดจริง ต้องได้ 2xx หลัง redirect)
+ * /evm — EVM-style JSON-RPC (POST) · values for adding the chain to MetaMask (GET /evm)
+ * /evm/explorer/{tx,address,token,block}/:id — wallets' "view in explorer" links (EIP-3091) → the existing explorer pages
+ * /evm/explorer — the explorer home page (the URL registered in chainlist · ethereum-lists CI really opens it and needs a 2xx after redirects)
  */
-/** อ่าน body ของ POST ไม่เกิน MAX_BODY_BYTES · เกิน → null (หยุดอ่านทันที ไม่เก็บทั้งก้อนไว้ในหน่วยความจำ) */
+/** read a POST body up to MAX_BODY_BYTES · exceeded → null (stops reading immediately, never buffers the whole thing) */
 async function readBody(request) {
   if (Number(request.headers["content-length"] ?? 0) > MAX_BODY_BYTES) return null;
   const chunks = [];
@@ -454,7 +454,7 @@ async function readBody(request) {
   }
   return Buffer.concat(chunks);
 }
-const TOO_LARGE = { error: `body ใหญ่เกิน ${MAX_BODY_BYTES} ไบต์` };
+const TOO_LARGE = { error: `body exceeds ${MAX_BODY_BYTES} bytes` };
 
 async function handleEvm(request, response, url) {
   if (url.pathname === "/evm/explorer" || url.pathname === "/evm/explorer/") {
@@ -464,13 +464,13 @@ async function handleEvm(request, response, url) {
   const explorerLink = /^\/evm\/explorer\/(tx|address|token|block)\/([^/]+)$/.exec(url.pathname);
   if (explorerLink) {
     const [, kind, raw] = explorerLink;
-    // EIP-3091: block/<hash หรือเลข> · หน้า block ของ explorer รับแต่เลข
+    // EIP-3091: block/<hash or number> · the explorer's block page accepts only numbers
     const id = kind === "block" && /^0x[0-9a-f]{64}$/i.test(raw) ? (vm.getBlockByHash(raw.toLowerCase())?.number ?? raw) : raw;
     response.writeHead(302, { location: `/#${kind === "token" ? "address" : kind}/${encodeURIComponent(id)}` });
     return response.end();
   }
   if (url.pathname !== "/evm") return send(response, 404, { error: "Endpoint not found" });
-  if (request.method === "OPTIONS") {   // dApp ในเบราว์เซอร์ส่ง content-type: application/json → ต้องตอบ preflight
+  if (request.method === "OPTIONS") {   // browser dApps send content-type: application/json → a preflight must be answered
     response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type" });
     return response.end();
@@ -490,7 +490,7 @@ async function handleEvm(request, response, url) {
   }
   let body;
   try { body = JSON.parse(raw.toString("utf8")); } catch { return send(response, 200, parseError()); }
-  // batch: จำกัดจำนวน + นับทุกคำขอในชุดกับ EVM_RATE_LIMIT (ครั้งแรกนับไปแล้วข้างบน)
+  // batch: capped in size + every request in it counts against EVM_RATE_LIMIT (the first was already counted above)
   if (Array.isArray(body) && body.length > EVM_MAX_BATCH) {
     return send(response, 200, { jsonrpc: "2.0", id: null, error: { code: -32600, message: `batch too large (max ${EVM_MAX_BATCH})` } });
   }
@@ -499,7 +499,7 @@ async function handleEvm(request, response, url) {
     response.setHeader("retry-after", String(evmLimiter.retryAfter(ip)));
     return send(response, 429, { jsonrpc: "2.0", id: null, error: { code: -32005, message: "Too many requests, try again later" } });
   }
-  // ส่ง tx ผ่าน /evm นับโควตาเดียวกับ POST /sendtx (RATE_LIMIT) ไม่ใช่โควตาอ่านของ /evm
+  // sending txs via /evm counts against the same quota as POST /sendtx (RATE_LIMIT), not the /evm read quota
   const sends = (Array.isArray(body) ? body : [body]).filter((item) => item?.method === "eth_sendRawTransaction").length;
   for (let i = 0; i < sends; i += 1) {
     if (postLimiter.allow(ip)) continue;
@@ -511,26 +511,26 @@ async function handleEvm(request, response, url) {
 }
 
 /**
- * GET /snapshot → { number, hash, stateRoot, size, file } ของ snapshot ล่าสุด · GET /snapshot/<N> → ไฟล์ (gzip JSON lines)
- * ผู้ดาวน์โหลดตรวจเองทั้งหมด (src/node/snapshot.js loadSnapshot) จึงส่งได้โดยไม่ต้องเชื่อ node นี้
+ * GET /snapshot → { number, hash, stateRoot, size, file } of the latest snapshot · GET /snapshot/<N> → the file (gzip JSON lines)
+ * downloaders verify everything themselves (src/node/snapshot.js loadSnapshot), so it can be served without trusting this node
  */
 function handleSnapshot(response, url) {
   const latest = snapshots?.latest();
-  if (!latest) return send(response, 404, { error: "node นี้ไม่มี snapshot (ตั้ง SNAPSHOT_EVERY)" });
+  if (!latest) return send(response, 404, { error: "this node has no snapshots (set SNAPSHOT_EVERY)" });
   if (url.pathname === "/snapshot") {
     const header = vm.getBlock(latest.number);
     return send(response, 200, { number: latest.number, hash: header?.hash ?? null, stateRoot: header?.stateRoot ?? null, size: latest.size, file: `/snapshot/${latest.number}` });
   }
   const number = Number(url.pathname.slice("/snapshot/".length));
   const file = Number.isSafeInteger(number) ? snapshots.fileOf(number) : null;
-  if (!file || !fs.existsSync(file)) return send(response, 404, { error: "ไม่มี snapshot ของ block นี้" });
+  if (!file || !fs.existsSync(file)) return send(response, 404, { error: "no snapshot for this block" });
   response.writeHead(200, { "content-type": "application/gzip", "content-length": fs.statSync(file).size, "access-control-allow-origin": "*" });
   return fs.createReadStream(file).pipe(response);
 }
 
 /**
- * หน้า explorer = ไฟล์ในโฟลเดอร์ explorerscan/ (หรือ EXPLORER_DIR = โฟลเดอร์ที่ fork ไปแต่งเอง) เสิร์ฟที่ /explorerscan/*
- * "/" เสิร์ฟ index.html เดียวกันโดยเติม <base href="/explorerscan/"> ให้ path แบบ relative ในไฟล์ชี้ถูกที่
+ * explorer pages = files in the explorerscan/ folder (or EXPLORER_DIR = a forked, customized folder) served at /explorerscan/*
+ * "/" serves the same index.html with <base href="/explorerscan/"> added so relative paths in the file resolve correctly
  */
 const EXPLORER_DIR = path.resolve(process.env.EXPLORER_DIR ?? path.join(import.meta.dirname, "explorerscan"));
 const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -553,7 +553,7 @@ export const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   if (url.pathname === "/evm" || url.pathname.startsWith("/evm/")) return handleEvm(request, response, url);
   if (request.method === "GET" && (url.pathname === "/snapshot" || url.pathname.startsWith("/snapshot/"))) return handleSnapshot(response, url);
-  if (request.method === "OPTIONS") {   // explorer ที่โฮสต์แยกโดเมน (EXPLORER.api) ส่ง POST แบบ JSON → ต้องตอบ preflight
+  if (request.method === "OPTIONS") {   // explorers hosted on another domain (EXPLORER.api) send JSON POSTs → a preflight must be answered
     response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type" });
     return response.end();
@@ -588,33 +588,33 @@ export const server = http.createServer(async (request, response) => {
   }
 });
 
-// ws://host/evm: eth_subscribe newHeads / logs (นับ rate limit ร่วมกับ POST /evm)
+// ws://host/evm: eth_subscribe newHeads / logs (rate limit shared with POST /evm)
 export const evmWs = attachEvmWebSocket(server, { rpc: evmRpc, vm, allow: (ip) => evmLimiter.allow(ip), allowSend: (ip) => postLimiter.allow(ip),
   maxBatch: EVM_MAX_BATCH });
 
 if (process.argv[1]?.endsWith("server.js")) {
   const problems = startupProblems({ settings, errors: settingErrors, dev: DEV, producer: producer?.address ?? null,
-    follow: Boolean(FOLLOW), nextBlock: FAILOVER_FROM ? null : (vm.latestBlockNumber() ?? 0) + 1 });   // failover: ตรวจรายชื่อหลังซิงก์
-  if (FOLLOW && FAILOVER_FROM) problems.push("ตั้ง FOLLOW กับ FAILOVER_FROM พร้อมกันไม่ได้ (เครื่องสำรอง / ผู้ผลิตแทน เลือกอย่างเดียว)");
+    follow: Boolean(FOLLOW), nextBlock: FAILOVER_FROM ? null : (vm.latestBlockNumber() ?? 0) + 1 });   // failover: check the list after syncing
+  if (FOLLOW && FAILOVER_FROM) problems.push("FOLLOW and FAILOVER_FROM can't both be set (standby / replacement producer: pick one)");
   if (problems.length) {
-    console.error(`server ไม่เริ่ม:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
+    console.error(`server not starting:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
     process.exit(1);
   }
-  if (DEV) console.warn("DEV=1: โหมดพัฒนา (ไม่บังคับ ADMINS / PRODUCER_KEY) — ห้ามใช้กับเครือข่ายจริง");
-  for (const warning of startupWarnings({ settings, dev: DEV })) console.warn(`เตือน: ${warning}`);
-  if (FOLLOW) console.log(`เครื่องสำรอง: ซิงก์จาก ${FOLLOW} (ไม่ผลิต block ไม่รับ tx)`);
+  if (DEV) console.warn("DEV=1: development mode (ADMINS / PRODUCER_KEY not required) — never use on a real network");
+  for (const warning of startupWarnings({ settings, dev: DEV })) console.warn(`warning: ${warning}`);
+  if (FOLLOW) console.log(`standby: syncing from ${FOLLOW} (doesn't produce blocks or accept txs)`);
   if (FAILOVER_FROM) {
     try {
       const result = await prepareFailover(vm, { url: FAILOVER_FROM, producers: producersOf });
-      if (result.warning) console.warn(`เตือน: ${result.warning}`);
-      else console.log(`failover: ซิงก์จาก ${FAILOVER_FROM} เพิ่ม ${result.synced} block แล้ว`);
+      if (result.warning) console.warn(`warning: ${result.warning}`);
+      else console.log(`failover: synced ${result.synced} blocks from ${FAILOVER_FROM}`);
       const next = (vm.latestBlockNumber() ?? 0) + 1;
-      if (!canProduce(next)) throw new Error(`PRODUCER_KEY (${producer?.address ?? "ไม่มี"}) ไม่อยู่ในรายชื่อผู้ผลิตของ block ${next}`);
+      if (!canProduce(next)) throw new Error(`PRODUCER_KEY (${producer?.address ?? "none"}) is not in the producer list for block ${next}`);
       miningEnabled = true;
     } catch (error) {
-      console.error(`server ไม่เริ่ม (failover):\n  - ${error.message}`);
+      console.error(`server not starting (failover):\n  - ${error.message}`);
       process.exit(1);
     }
   }
-  server.listen(PORT, HOST, () => console.log(`chain ทำงานที่ http://${HOST ?? "localhost"}:${server.address().port}`));
+  server.listen(PORT, HOST, () => console.log(`chain running at http://${HOST ?? "localhost"}:${server.address().port}`));
 }

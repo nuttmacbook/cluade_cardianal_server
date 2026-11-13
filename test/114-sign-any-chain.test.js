@@ -6,9 +6,9 @@ import { Mempool } from "../src/node/mempool.js";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * เซ็นจากกระเป๋าที่เปิดเชน EVM ไหนก็ได้ (ไม่ต้อง add Bluewolfchain) + กัน replay ข้ามเชน
- *   domain ไม่มี chainId (MetaMask บังคับ chainId ของ domain = เชนที่เปิดอยู่) · chainId ของเชนอยู่ใน message → mempool ตรวจ
- *   signedOnChainId = เชนที่กระเป๋าเปิดอยู่ตอนเซ็น (อยู่ในลายเซ็น) → receipt / explorer แสดง
+ * sign from a wallet on any EVM chain (no need to add Bluewolfchain) + cross-chain replay protection
+ *   domain has no chainId (MetaMask forces the domain chainId = the active chain) · the chain's chainId is in the message → mempool checks it
+ *   signedOnChainId = the chain active in the wallet at signing (part of the signature) → shown by receipt / explorer
  */
 
 const CHAIN = 41234;
@@ -24,7 +24,7 @@ function setup() {
 }
 const transfer = (fields = {}) => ({ chainId: CHAIN, action: "transfer", from: alice, to: bob, value: "5", nonce: 0, gasLimit: 100_000, ...fields });
 const signed = (tx) => ({ tx, signature: sign.signTransaction(tx, KEY) });
-/** แบบเดียวกับ GET /tx/:hash/receipt (server.js) */
+/** same as GET /tx/:hash/receipt (server.js) */
 function receiptOf(vm, hash) {
   const found = vm.getTransaction(hash);
   return vm.replayBlock(found.blockNumber).transactions[found.index];
@@ -36,7 +36,7 @@ function mine(vm, pool) {
   return included;
 }
 
-test("replay ข้ามเชน: ลายเซ็นของ chainId อื่น (เช่นเชนทดสอบ 272727) → mempool ปฏิเสธ · ไม่แตะ state", () => {
+test("cross-chain replay: a signature for another chainId (e.g. test chain 272727) → mempool rejects · state untouched", () => {
   const { vm, pool } = setup();
   const res = pool.add(signed(transfer({ chainId: 272727 })));
   assert.equal(res.ok, false);
@@ -45,7 +45,7 @@ test("replay ข้ามเชน: ลายเซ็นของ chainId อ�
   assert.equal(BigInt(vm.nativeBalanceOf(bob).balance), 0n);
 });
 
-test("เซ็นตอนกระเป๋าเปิด BSC (56) อยู่: ผ่าน · receipt มี signedOnChainId 56", () => {
+test("signed while the wallet is on BSC (56): accepted · receipt has signedOnChainId 56", () => {
   const { vm, pool } = setup();
   const res = pool.add(signed(transfer({ signedOnChainId: 56 })));
   assert.equal(res.ok, true, res.reason);
@@ -56,7 +56,7 @@ test("เซ็นตอนกระเป๋าเปิด BSC (56) อยู�
   assert.equal(BigInt(vm.nativeBalanceOf(bob).balance), 5n);
 });
 
-test("ไม่ส่ง signedOnChainId (สคริปต์ / SDK) = เซ็นบนเชนนี้", () => {
+test("no signedOnChainId (script / SDK) = signed on this chain", () => {
   const { vm, pool } = setup();
   const res = pool.add(signed(transfer()));
   assert.equal(res.ok, true, res.reason);
@@ -64,7 +64,7 @@ test("ไม่ส่ง signedOnChainId (สคริปต์ / SDK) = เซ�
   assert.equal(receiptOf(vm, res.hash).signedOnChainId, CHAIN);
 });
 
-test("ลายเซ็นจาก wallet มาตรฐาน (ethers = อัลกอริทึมเดียวกับ MetaMask) ที่ไม่มี chainId ใน domain → ตรวจผ่าน", async () => {
+test("signature from a standard wallet (ethers = same algorithm as MetaMask) with no chainId in the domain → verifies", async () => {
   const wallet = new ethers.Wallet(KEY);
   const tx = sign.normalizeTransaction(transfer({ signedOnChainId: 1 }));
   const typed = sign.buildTypedData(tx);

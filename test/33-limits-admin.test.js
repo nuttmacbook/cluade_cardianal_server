@@ -4,7 +4,7 @@ import { VM, MemoryDB, API_GAS_ONLY, num } from "./helpers.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN, COUNTER } from "./programs.js";
 
-/* เพดานของ block (ต่อ block / ต่อ address / แก๊สรวม) และ init-reject ที่ทีมงานเซ็นมา */
+/* block limits (per block / per address / total gas) and team-signed init-reject */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -35,10 +35,10 @@ function setup(options = {}) {
 const send = (sender, nonce) => ({ programUuid: "token", functionName: "transfer", input: { to: "carol", amount: 1 }, context: user(sender), nonce });
 
 // ---------------------------------------------------------------------------
-//  เพดานต่อ block
+//  per-block limits
 // ---------------------------------------------------------------------------
 
-test("เพดาน: จำนวน tx ต่อ block", () => {
+test("limit: txs per block", () => {
   const vm = setup({ maxTransactions: 3 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
 
@@ -49,10 +49,10 @@ test("เพดาน: จำนวน tx ต่อ block", () => {
 
   block.commit();
   assert.equal(vm.getBlock(1).txCount, 3);
-  assert.equal(vm.db.readKeys(["alice:nonce"])[0], 3); // ใบที่เกินไม่กิน nonce
+  assert.equal(vm.db.readKeys(["alice:nonce"])[0], 3); // excess txs don't consume a nonce
 });
 
-test("เพดาน: จำนวน tx ต่อ address ใน block เดียว", () => {
+test("limit: txs per address in a single block", () => {
   const vm = setup({ maxTransactionsPerSender: 2 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
 
@@ -62,13 +62,13 @@ test("เพดาน: จำนวน tx ต่อ address ใน block เด�
   assert.equal(third.error.code, "LIMIT_EXCEEDED");
   assert.match(third.error.message, /โควตาของ block/);
 
-  assert.equal(block.call(send("bob", 0)).status, "success"); // คนอื่นยังส่งได้
+  assert.equal(block.call(send("bob", 0)).status, "success"); // others can still send
   block.commit();
   assert.equal(vm.getBlock(1).txCount, 3);
 });
 
-test("เพดาน: แก๊สรวมของ block", () => {
-  const vm = setup({ maxBlockGas: 250 }); // 1 tx ใช้ 100 gas
+test("limit: total block gas", () => {
+  const vm = setup({ maxBlockGas: 250 }); // 1 tx uses 100 gas
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
 
   assert.equal(block.call(send("alice", 0)).status, "success");
@@ -81,7 +81,7 @@ test("เพดาน: แก๊สรวมของ block", () => {
   assert.equal(vm.getBlock(1).gasUsed, 200);
 });
 
-test("เพดาน: capacity() บอกโควตาที่เหลือ และ checkTransaction ปฏิเสธก่อนรัน", () => {
+test("limit: capacity() reports remaining quota, and checkTransaction rejects before running", () => {
   const vm = setup({ maxTransactions: 3, maxTransactionsPerSender: 2, maxBlockGas: 1000 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
 
@@ -90,11 +90,11 @@ test("เพดาน: capacity() บอกโควตาที่เหลื�
   assert.deepEqual(block.capacity("alice"), { transactions: 2, perSender: 1, gas: 900 });
 
   block.call(send("alice", 1));
-  assert.equal(block.checkTransaction(send("alice", 2)).ok, false);  // เต็มโควตาของ alice
+  assert.equal(block.checkTransaction(send("alice", 2)).ok, false);  // alice's quota is full
   assert.equal(block.checkTransaction(send("bob", 0)).ok, true);
 });
 
-test("เพดาน: ไม่ตั้งค่า → ไม่จำกัด (ค่าเริ่มต้นเดิม)", () => {
+test("limit: unset → unlimited (the original default)", () => {
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   for (let nonce = 0; nonce < 30; nonce += 1) block.call(send("alice", nonce));
@@ -103,19 +103,19 @@ test("เพดาน: ไม่ตั้งค่า → ไม่จำกั�
 });
 
 // ---------------------------------------------------------------------------
-//  nonce ต่อกันหลายใบใน block เดียว
+//  consecutive nonces within one block
 // ---------------------------------------------------------------------------
 
-test("nonce: ส่งหลายใบต่อกันใน block เดียวได้ แต่ห้ามข้ามเลข", () => {
+test("nonce: several consecutive txs in one block are allowed, but no skipping numbers", () => {
   const vm = setup({ maxTransactionsPerSender: 16 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
 
   for (let nonce = 0; nonce < 5; nonce += 1) assert.equal(block.call(send("alice", nonce)).status, "success");
 
-  const skipped = block.call(send("alice", 6)); // ข้าม 5
+  const skipped = block.call(send("alice", 6)); // skips 5
   assert.equal(skipped.accepted, false);
   assert.match(skipped.error.message, /nonce ไม่ถูกต้อง: ต้องเป็น 5/);
-  assert.equal(block.call(send("alice", 5)).status, "success"); // เติมเลขที่ขาดแล้วผ่าน
+  assert.equal(block.call(send("alice", 5)).status, "success"); // filling the gap makes it pass
 
   block.commit();
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], 6);
@@ -123,7 +123,7 @@ test("nonce: ส่งหลายใบต่อกันใน block เดี
 });
 
 // ---------------------------------------------------------------------------
-//  init / reject ที่เซ็นมา
+//  signed init / reject
 // ---------------------------------------------------------------------------
 
 const adminTx = (action, programUuid, nonce) => ({
@@ -135,7 +135,7 @@ function submit(vm, tx, key) {
   return vm[method](request, { timestamp: T });
 }
 
-test("admin: init ที่เซ็นมา — กิน nonce, เสียค่าแก๊ส และมี hash ของตัวเอง", () => {
+test("admin: signed init — consumes a nonce, pays gas, and has its own hash", () => {
   const vm = setup({ admins: [admin] });
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), initInput: { start: 1 }, nonce: 0 }, { timestamp: T }).writes);
 
@@ -150,7 +150,7 @@ test("admin: init ที่เซ็นมา — กิน nonce, เสีย�
   assert.equal(vm.nativeBalanceOf(admin).consumed, VM.readNative(res.fee));
 });
 
-test("admin: reject ที่เซ็นมา คืนเงินให้ผู้ deploy ตามเดิม", () => {
+test("admin: signed reject refunds the deployer as before", () => {
   const vm = setup({ admins: [admin] });
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), value: 500, nonce: 0 }, { timestamp: T }).writes);
 
@@ -160,7 +160,7 @@ test("admin: reject ที่เซ็นมา คืนเงินให้�
   assert.equal(vm.nativeBalanceOf("counter").balance, 0n);
 });
 
-test("admin: คนที่ไม่อยู่ในรายชื่อ init ไม่ได้", () => {
+test("admin: someone not on the list cannot init", () => {
   const vm = setup({ admins: [admin] });
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), nonce: 0 }, { timestamp: T }).writes);
 
@@ -168,17 +168,17 @@ test("admin: คนที่ไม่อยู่ในรายชื่อ ini
   assert.equal(res.error.code, "FORBIDDEN");
   assert.match(res.error.message, /ไม่มีสิทธิ์ init/);
 
-  // เรียกตรงโดยไม่มีลายเซ็นก็ไม่ได้ เมื่อกำหนดรายชื่อ admin ไว้
+  // a direct call without a signature also fails when an admin list is set
   assert.equal(vm.init({ programUuid: "counter" }).error.code, "FORBIDDEN");
 });
 
-test("admin: ไม่กำหนดรายชื่อ → เรียก init ตรงได้เหมือนเดิม", () => {
+test("admin: no list set → init can be called directly as before", () => {
   const vm = setup();
   vm.commit(vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), nonce: 0 }, { timestamp: T }).writes);
   assert.equal(vm.init({ programUuid: "counter" }, { timestamp: T }).status, "success");
 });
 
-test("admin: tx ของ init แต่ละใบมี hash ไม่ซ้ำ และอยู่ใน block ตามปกติ", () => {
+test("admin: each init tx has a unique hash and is in the block as usual", () => {
   const vm = setup({ admins: [admin] });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
   block.deploy({ programUuid: "a", code: COUNTER, context: user("alice"), nonce: 0 });
@@ -195,7 +195,7 @@ test("admin: tx ของ init แต่ละใบมี hash ไม่ซ้�
   assert.equal(new Set(header.txHashes).size, 4);
   assert.deepEqual(vm.listTransactionsOf(admin).map((tx) => tx.nonce), [1, 0]);
   assert.deepEqual(header.txHashes.slice(2), [
-    vm.hashTransaction(first.request, { action: "init" }),   // hash ของ tx (คนละตัวกับ digest ที่เซ็น)
+    vm.hashTransaction(first.request, { action: "init" }),   // the tx hash (different from the signed digest)
     vm.hashTransaction(second.request, { action: "init" }),
   ]);
 });

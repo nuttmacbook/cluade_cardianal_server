@@ -1,72 +1,72 @@
 /**
- * sandbox ของโปรแกรม: รันโค้ดของผู้ใช้ใน QuickJS ที่คอมไพล์เป็น WebAssembly (quickjs-emscripten แบบ sync)
+ * Program sandbox: runs user code in QuickJS compiled to WebAssembly (quickjs-emscripten, sync variant)
  *
  *   const sandbox = new Sandbox(tx, { memoryLimitBytes, maxStackBytes, nodeGas, builtinGas, timestamp, wallClock, map })
  *   sandbox.invoke({ programUuid, source, functionName, params, api, blockNumber })  → outcome
- *   sandbox.dispose()                                                               ← ทุก tx ต้องเรียก (runAction ทำให้)
+ *   sandbox.dispose()                                                               ← required for every tx (runAction does it)
  *
- * โครงสร้าง
- *   QuickJS สำหรับรันโปรแกรมมี instance เดียว (WebAssembly memory ของตัวเอง) และ runtime เดียว
- *   ตอน import: สร้าง runtime + context สำรองไว้ POOL_SIZE ตัว (โหลด prelude แล้ว) → ถ่าย snapshot ของ memory
- *   ต้น tx ชั้นนอกสุด: คืน memory เป็น snapshot (≈ 0.1 ms) → ทุก tx เริ่มจาก heap ที่เหมือนกันทุกไบต์
- *     · หน่วยความจำ / stack / เวลา นับรวมทั้งสายการเรียกของ tx (runProgram ซ้อนรันใน runtime เดียวกัน)
- *     · 1 โปรแกรม (address + โค้ด) = 1 context — โปรแกรมต่างตัวไม่เห็น global ของกันและกัน
- *     · ไม่มีอะไรจาก tx ก่อนหน้าค้างอยู่เลย (global ที่โปรแกรมแก้ / object / ขยะของ GC)
- *   ทุก call รันฟังก์ชัน factory ของโปรแกรมใหม่ → ตัวแปรระดับบนสุดไม่ค้างข้าม call (เหมือนเดิม)
- *   โค้ดในโปรแกรมไม่มีทางได้ object ของ host: ค่าทุกตัวข้ามเขตแดนเป็นข้อความ JSON (BigInt / undefined / ค่าพิเศษติดป้าย)
+ * Structure
+ *   There is a single QuickJS instance for running programs (with its own WebAssembly memory) and a single runtime
+ *   At import: create the runtime + POOL_SIZE spare contexts (prelude loaded) → take a snapshot of memory
+ *   At the start of each outermost tx: restore memory to the snapshot (≈ 0.1 ms) → every tx starts from a byte-identical heap
+ *     · memory / stack / time are counted across the tx's whole call chain (nested runProgram runs in the same runtime)
+ *     · 1 program (address + code) = 1 context; different programs cannot see each other's globals
+ *     · nothing from earlier txs is left over (globals a program modified / objects / GC garbage)
+ *   Every call runs the program's factory function afresh → top-level variables do not persist across calls (as before)
+ *   Program code can never get a host object: every value crosses the boundary as JSON text (BigInt / undefined / special values are tagged)
  *
- * แก๊ส: __gas(n) นับใน sandbox เอง (ตัวนับของแต่ละ call) แล้วส่งยอดค้างให้ host ทุกครั้งที่เรียก API
- *   เกินยอดที่เหลือ → ถาม host ทันที → OUT_OF_GAS ตรงจุดเดียวกับการนับทีละครั้ง (ตัวเลขแก๊สเท่าเดิมทุกหน่วย)
- *   tx ล้มกลางทาง (หน่วยความจำเกิน) → ยอดค้างส่งกลับใน "f<n>|" ให้ host คิดด้วย
+ * Gas: __gas(n) is counted inside the sandbox (per-call counter), and the pending total is sent to the host on every API call
+ *   exceeding the remaining budget → ask the host immediately → OUT_OF_GAS at exactly the same point as counting one by one (gas figures identical to the unit)
+ *   tx fails midway (memory exceeded) → the pending total is sent back in "f<n>|" for the host to charge too
  *
- * แก๊สตามขนาดข้อมูล (prelude): builtin ต่อหน่วย · 1 หน่วย = 1 สมาชิก / property หรือ 32 ตัวอักษร / byte (ปัดขึ้น)
- *   เมธอดในตัวที่คัดลอก / สร้างข้อมูลถูกห่อไว้ก่อนโค้ดของผู้ใช้รัน (ของจริงอยู่ใน closure เท่านั้น) → เรียกทางไหนก็คิดเท่ากัน
- *   __spread (spread / rest ของ array) · __props (spread / rest ของ object) · __str (string จาก + / +=) — gasmeter.js แทรกให้
- *   iterator ในตัวของ array / string / Set / Map ถูกล็อก → __spread รู้แน่ว่า engine จะคัดลอกกี่สมาชิก (คัดลอกแบบเร็วเหมือนเดิม)
- *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError ถูกห่อด้วย Proxy (global + prototype.constructor)
- *   Proxy ที่โปรแกรมสร้างถูกจดไว้ (ownKeys / length ตอบไม่เหมือนกันได้ทุกครั้ง → คัดลอกเองทีละ property)
+ * Gas by data size (prelude): builtin per unit · 1 unit = 1 element / property or 32 characters / bytes (rounded up)
+ *   built-in methods that copy / create data are wrapped before user code runs (the originals live only in a closure) → charged the same however they are called
+ *   __spread (array spread / rest) · __props (object spread / rest) · __str (strings from + / +=), inserted by gasmeter.js
+ *   built-in iterators of array / string / Set / Map are locked → __spread knows exactly how many elements the engine will copy (fast copy as before)
+ *   ArrayBuffer / typed array / RegExp / Set / Map / WeakSet / WeakMap / AggregateError are wrapped with Proxy (global + prototype.constructor)
+ *   Proxies created by the program are tracked (ownKeys / length can answer differently every time → copied manually property by property)
  *
- * แก๊สตามงาน CPU ของ BigInt (prelude "BigInt" · เทสต์ 81): operator ที่ gasmeter.js แปลงเป็น __mul / __lt … คิดตามจำนวน word 64 bit
- *   ค่า ≤ 512 bit ไม่คิดเพิ่ม · งานที่รู้ขนาดล่วงหน้า (** / << / * / แปลง string) คิดก่อนทำ · ผลเกิน BIGINT_MAX_BITS (8192 bit) = RangeError
- *   (เพดานกันงานที่ engine ทำเองโดยไม่ผ่านตัวนับ: แปลง BigInt เป็น string ข้างในเมธอดในตัว ≈ W² — 8192 bit ≈ 0.4 ms ต่อครั้ง)
- *   ทุกทางที่ engine แปลง BigInt ↔ string ถูกคิดก่อน: operator / ชื่อ property / ค่าที่ฟังก์ชันคืน / เมธอดในตัวที่รับหรือคืน BigInt
- * regular expression ปิดทั้งหมด (RegExp / match / matchAll / search / exec / test …) — backtrack แบบ exponential คิดแก๊สล่วงหน้าไม่ได้
+ * Gas by BigInt CPU work (prelude "BigInt" · test 81): operators that gasmeter.js rewrites to __mul / __lt … are charged by number of 64-bit words
+ *   values ≤ 512 bits cost nothing extra · work whose size is known up front (** / << / * / string conversion) is charged before running · results above BIGINT_MAX_BITS (8192 bits) = RangeError
+ *   (the ceiling bounds work the engine does on its own without the counter: converting BigInt to string inside built-in methods ≈ W²; 8192 bits ≈ 0.4 ms per call)
+ *   every path where the engine converts BigInt ↔ string is charged first: operators / property names / function return values / built-in methods that take or return BigInt
+ * regular expressions are fully disabled (RegExp / match / matchAll / search / exec / test …): exponential backtracking cannot be charged up front
  *
- * หน่วยความจำ: memory limit ในตัว QuickJS ใช้ไม่ได้บน emscripten (นับแค่ 8 ไบต์ต่อก้อน) จึงคุมที่ heap ของ WebAssembly แทน
- *   ต้น tx (หลังคืน snapshot): จองก้อน "ลูกโป่ง" ให้เหลือที่ว่างพอดี memoryLimitBytes + สำรองของ host แล้วล็อกไม่ให้ memory โต
- *   → malloc ล้มที่จุดเดียวกันทุกเครื่อง (ไม่ขึ้นกับขนาด memory ที่เคยโตไว้) · ล็อกโดนแตะเมื่อไร = OUT_OF_MEMORY (catch ไม่ได้)
+ * Memory: QuickJS's built-in memory limit does not work on emscripten (it counts only 8 bytes per block), so the WebAssembly heap is controlled instead
+ *   At tx start (after restoring the snapshot): allocate a "balloon" block so that exactly memoryLimitBytes + the host reserve stays free, then lock memory from growing
+ *   → malloc fails at the same point on every machine (independent of how far memory had grown) · touching the lock = OUT_OF_MEMORY (cannot be caught)
  */
 import { getQuickJS, newQuickJSWASMModuleFromVariant, newVariant, RELEASE_SYNC } from "quickjs-emscripten";
 import { BIGINT_MAX_BITS } from "./gasmeter.js";
 
 export const SANDBOX_DEFAULTS = {
-  memoryLimitBytes: 32 * 1024 * 1024,   // หน่วยความจำต่อ tx (รวมทุกโปรแกรมในสายการเรียก)
-  maxStackBytes: 256 * 1024,            // stack ของ QuickJS ต่อ tx (≈ 1,400 ชั้นของการเรียกฟังก์ชันซ้อน) — มากกว่านี้เสี่ยง stack ของ Node เอง
+  memoryLimitBytes: 32 * 1024 * 1024,   // memory per tx (across all programs in the call chain)
+  maxStackBytes: 256 * 1024,            // QuickJS stack per tx (≈ 1,400 levels of nested function calls); more than this risks overflowing Node's own stack
 };
 
-/** ช่วงที่ตั้งได้: stack ของ QuickJS ใช้ stack จริงของ Node ด้วย — 512 KB ทำให้ Node stack ล้นจน WebAssembly พัง */
+/** allowed range: the QuickJS stack also uses Node's real stack; 512 KB overflows Node's stack and breaks WebAssembly */
 export const SANDBOX_LIMITS = {
   memoryLimitBytes: [1024 * 1024, 1024 * 1024 * 1024],
   maxStackBytes: [16 * 1024, 256 * 1024],
 };
 
 const PAGE = 64 * 1024;
-const HOST_RESERVE = 2 * 1024 * 1024;   // ที่สำรองให้ host ใช้ต่อหลังโปรแกรมใช้หน่วยความจำจนเต็ม
-const HOST_HEADROOM = 256 * 1024;       // host ตรวจว่ายังมีที่ว่างเท่านี้ก่อนทำงานทุกครั้ง (ไม่มี = OUT_OF_MEMORY)
-const POOL_SIZE = 8;                    // context ที่เตรียมไว้ใน snapshot (tx ที่ใช้โปรแกรมมากกว่านี้สร้างเพิ่มเอง ช้ากว่า)
-const LOW_REGION = 1024 * 1024;         // ส่วนล่างของ memory: ข้อมูล static ของ QuickJS / malloc (~90 KB) ที่เหลือคือ stack ของ C
-const MAX_MEMORY_PAGES = 32768;         // 2 GB (เพดานของ wasm32)
+const HOST_RESERVE = 2 * 1024 * 1024;   // reserve left for the host to keep working after a program fills memory
+const HOST_HEADROOM = 256 * 1024;       // the host checks that at least this much is free before every operation (otherwise = OUT_OF_MEMORY)
+const POOL_SIZE = 8;                    // contexts prepared in the snapshot (txs that use more programs than this create extra ones, which is slower)
+const LOW_REGION = 1024 * 1024;         // bottom of memory: QuickJS / malloc static data (~90 KB); the rest is the C stack
+const MAX_MEMORY_PAGES = 32768;         // 2 GB (the wasm32 ceiling)
 
 // ---------------------------------------------------------------------------
-//  instance ของ QuickJS
+//  QuickJS instance
 // ---------------------------------------------------------------------------
 
 const realGrow = WebAssembly.Memory.prototype.grow;
 const executorMemory = new WebAssembly.Memory({ initial: 256, maximum: MAX_MEMORY_PAGES });
 let memoryLocked = false;
-let current = null;   // sandbox ที่กำลังถือ heap (มีได้ทีละตัว)
+let current = null;   // the sandbox currently holding the heap (only one at a time)
 
-// emscripten ขยาย memory ผ่าน grow เท่านั้น → ระหว่าง tx ห้ามโต (malloc ล้ม = เกินกำหนด)
+// emscripten grows memory only via grow → no growing during a tx (malloc fails = limit exceeded)
 executorMemory.grow = function grow(delta) {
   if (memoryLocked) {
     current?.flagOutOfMemory();
@@ -75,22 +75,22 @@ executorMemory.grow = function grow(delta) {
   return realGrow.call(this, delta);
 };
 
-/** QuickJS สำหรับรันโปรแกรม (heap แยกจากตัวตรวจ syntax) */
+/** QuickJS for running programs (heap separate from the syntax checker) */
 const executor = await newQuickJSWASMModuleFromVariant(newVariant(RELEASE_SYNC, { wasmMemory: executorMemory }));
-/** QuickJS สำหรับตรวจ syntax ตอนคอมไพล์ (ไม่รันโค้ด) */
+/** QuickJS for checking syntax at compile time (does not run code) */
 const checker = await getQuickJS();
 const checkerContext = checker.newContext();
 const heap = executor.module;   // emscripten module: _malloc / _free
 
-let brokenReason = null;   // WebAssembly พัง (ไม่ควรเกิด) → ทุก tx ล้มเป็น INTERNAL แทนที่จะรันต่อบน heap ที่เสีย
+let brokenReason = null;   // WebAssembly broke (should never happen) → every tx fails as INTERNAL instead of running on a corrupted heap
 
-/** สถิติสำหรับทดสอบว่าไม่มีของค้าง: sandbox ที่ถือ heap / context ที่สร้างเพิ่ม / handle ที่ยังไม่คืน */
+/** stats for testing that nothing leaks: sandbox holding the heap / extra contexts created / handles not yet released */
 export const sandboxStats = { active: 0, extraContexts: 0, handles: 0, transactions: 0 };
 export const sandboxMemoryBytes = () => executorMemory.buffer.byteLength;
 
 /**
- * ตรวจ syntax ด้วย QuickJS (V8 กับ QuickJS รับ syntax ไม่ตรงกันทุกข้อ) — คืนข้อความ error หรือ null
- * compileOnly: ไม่มีโค้ดของผู้ใช้ถูกรัน
+ * Check syntax with QuickJS (V8 and QuickJS do not accept exactly the same syntax); returns the error message or null
+ * compileOnly: no user code is executed
  */
 export function checkGuestSyntax(source) {
   const result = checkerContext.evalCode(source, "program", { compileOnly: true });
@@ -104,13 +104,13 @@ export function checkGuestSyntax(source) {
 }
 
 // ---------------------------------------------------------------------------
-//  ข้อตกลงระหว่าง host ↔ โปรแกรม
+//  host ↔ program contract
 // ---------------------------------------------------------------------------
 
 /**
- * API ที่เรียกข้ามไป host: [ชื่อ, ชนิดของ argument แต่ละตัว]
- *   k = key (string / map(...))   p = ค่าเดี่ยว (object ถูกส่งเป็น "ไม่ใช่ข้อมูล")   d = ข้อมูลทั้งก้อน
- *   R = options ของ runProgram ({ value, readonly })   C = options ของ cloneProgram ({ salt, value })
+ * APIs that call across to the host: [name, kind of each argument]
+ *   k = key (string / map(...))   p = single value (objects are sent as "not data")   d = whole data structure
+ *   R = runProgram options ({ value, readonly })   C = cloneProgram options ({ salt, value })
  */
 export const API_OPS = [
   ["readDB", "k"], ["writeDB", "kd"], ["deleteDB", "k"],
@@ -124,9 +124,9 @@ export const API_OPS = [
 ];
 const OP = { sync: 0, random: 1, clock: 2, check: 3, api: 10 };
 
-const TAG = "\u0000";   // ป้ายของค่าที่ JSON ไม่มี: { "\u0000": "b", v: "123" } = 123n
+const TAG = "\u0000";   // tags for values JSON lacks: { "\u0000": "b", v: "123" } = 123n
 
-/** ค่าจากโปรแกรมที่ไม่ใช่ข้อมูล (function / symbol / Date / class ...) — host เห็นเป็น object ที่ไม่ใช่ plain object */
+/** non-data values from a program (function / symbol / Date / class ...); the host sees them as an object that is not a plain object */
 export class GuestValue {
   constructor(type) {
     this.type = type;
@@ -151,10 +151,10 @@ function hostReplacer(key, value) {
   }
 }
 
-/** ค่าของ host → ข้อความ (BigInt / undefined / NaN ติดป้าย) */
+/** host value → text (BigInt / undefined / NaN tagged) */
 export const encodeForGuest = (value) => JSON.stringify(value, hostReplacer);
 
-/** ข้อความจากโปรแกรม → ค่าของ host (object / array ใหม่ทั้งหมด ไม่มี reference ข้ามฝั่ง) */
+/** text from a program → host value (all new objects / arrays, no references across the boundary) */
 export function decodeFromGuest(text, makeMap) {
   const revive = (node) => {
     if (typeof node !== "object" || node === null) return node;
@@ -180,8 +180,8 @@ export function decodeFromGuest(text, makeMap) {
 }
 
 // ---------------------------------------------------------------------------
-//  โค้ดฝั่งโปรแกรม (prelude): รันก่อนโค้ดของผู้ใช้ในทุก context
-//  ฟังก์ชันนี้ถูกแปลงเป็นข้อความ (toString) — ห้ามอ้างอะไรนอกตัวมันเอง
+//  program-side code (prelude): runs before user code in every context
+//  this function is converted to text (toString); it must not reference anything outside itself
 // ---------------------------------------------------------------------------
 
 /* eslint-disable no-new-func */
@@ -1600,13 +1600,13 @@ const HOST_CALL = Symbol("host call");
 const INTERRUPT = Symbol("interrupt");
 
 // ---------------------------------------------------------------------------
-//  runtime + context สำรอง + snapshot (สร้างครั้งเดียวตอน import)
+//  runtime + spare contexts + snapshot (created once at import)
 // ---------------------------------------------------------------------------
 
-/** context ใหม่ที่โหลด prelude แล้ว: { ctx, configure } (configure(configText) → invoke) */
+/** new context with the prelude loaded: { ctx, configure } (configure(configText) → invoke) */
 function createContext(rt) {
   const ctx = rt.newContext();
-  // ฟังก์ชันเดียวที่โปรแกรมเรียกออกมาได้: ส่งต่อให้ sandbox ของ tx ที่กำลังรัน (ไม่มี tx = tx ล้มแล้ว)
+  // the only function a program can call out to: forwarded to the sandbox of the running tx (no tx = the tx has already failed)
   const host = ctx.newFunction("host", (op, pending, payload) =>
     (current ? current[HOST_CALL](ctx, op, pending, payload) : ctx.newString("f")));
   const opHandle = ctx.newString(OP_TEXT);
@@ -1630,7 +1630,7 @@ function createContext(rt) {
   return { ctx, configure };
 }
 
-/** error ที่ QuickJS throw ออกมาถึง host → { name, message } (คืน handle เสมอ) */
+/** error thrown out of QuickJS to the host → { name, message } (always releases the handle) */
 function readError(ctx, errorHandle) {
   try {
     const error = ctx.dump(errorHandle);
@@ -1644,14 +1644,14 @@ function readError(ctx, errorHandle) {
 }
 
 /**
- * ตำแหน่งใน memory ที่ malloc (dlmalloc) เก็บต้นของก้อนว่างก้อนสุดท้าย ("top") — เหนือ top ขึ้นไปไม่มีข้อมูลที่ใช้อยู่
- * หาจากการทดลอง: malloc ก้อนใหญ่ (ตัดจาก top เสมอ) แล้วดูว่าค่าไหนขยับจากต้นก้อนไปท้ายก้อนพอดี
- * หาไม่เจอ = null (snapshot จะเก็บ memory ทั้งก้อน: ถูกต้องแต่ช้ากว่า)
+ * The memory location where malloc (dlmalloc) stores the start of the last free block ("top"); nothing in use lies above top
+ * Found by experiment: malloc a large block (always carved from top) and see which value moves from the block start to exactly the block end
+ * Not found = null (the snapshot will store the whole memory: correct but slower)
  */
 function findTopAddress() {
   const scan = () => new Uint32Array(executorMemory.buffer, 0, LOW_REGION / 4).slice();
   const before = scan();
-  const size = SANDBOX_DEFAULTS.memoryLimitBytes + HOST_RESERVE + 2 * PAGE;   // ขยาย memory ไว้ก่อนด้วยในตัว
+  const size = SANDBOX_DEFAULTS.memoryLimitBytes + HOST_RESERVE + 2 * PAGE;   // grow memory up front with the built-in
   const block = heap._malloc(size);
   if (!block) return null;
   const after = scan();
@@ -1666,7 +1666,7 @@ function findTopAddress() {
 const engine = (() => {
   const firstBlock = heap._malloc(16);
   heap._free(firstBlock);
-  const heapStart = Math.max(LOW_REGION, firstBlock - PAGE);   // ใต้ heap คือ stack ของ C (ไม่ต้องเก็บ)
+  const heapStart = Math.max(LOW_REGION, firstBlock - PAGE);   // below the heap is the C stack (no need to store)
   const topAddress = findTopAddress();
 
   const rt = executor.newRuntime();
@@ -1690,8 +1690,8 @@ const engine = (() => {
 })();
 
 /**
- * ภาพ memory ตอนนี้ (ส่วนล่าง + heap ถึงก้อนว่างก้อนสุดท้าย)
- * reuse = ภาพเก่าที่ถูกไล่ออกจากที่เก็บ: คัดลอกทับ buffer เดิมถ้าพอ (จอง buffer ใหม่ 3 MB ช้ากว่าคัดลอกทับ ~10 เท่า)
+ * Image of the current memory (lower region + heap up to the last free block)
+ * reuse = an old image evicted from the store: copy over its existing buffer if large enough (allocating a new 3 MB buffer is ~10× slower than copying over)
  */
 function captureMemory(reuse = null) {
   const view = new Uint8Array(executorMemory.buffer);
@@ -1706,7 +1706,7 @@ function captureMemory(reuse = null) {
   return { low, high: store.subarray(0, length), store };
 }
 
-/** memory ของ QuickJS กลับเป็นภาพที่เก็บไว้ (ค่าเริ่ม = ตอนเพิ่งสร้าง pool) — ห้ามเรียกระหว่างอยู่ใน QuickJS */
+/** restore QuickJS memory to the stored image (default = right after the pool was created); must not be called while inside QuickJS */
 function restoreSnapshot(image = engine) {
   const view = new Uint8Array(executorMemory.buffer);
   view.set(image.low, 0);
@@ -1714,31 +1714,31 @@ function restoreSnapshot(image = engine) {
 }
 
 /**
- * snapshot "อุ่น" ต่อโปรแกรม: ภาพ memory = snapshot ตั้งต้น + factory ของโปรแกรมที่คอมไพล์แล้วใน context ช่องแรก
- *   tx ที่โปรแกรมแรกคือ source นี้เริ่มจากภาพนี้แทน → ไม่ต้องคอมไพล์ซ้ำทุก tx (คอมไพล์ ≈ 1/3 ของเวลาของ token transfer)
- * deterministic: ภาพเป็นผลของ (snapshot ตั้งต้น, source) อย่างเดียว — มีใน cache หรือสร้างใหม่ได้ heap เดียวกันทุกไบต์
- *   ทุกเครื่องจึงเริ่ม tx จาก heap เดียวกันเสมอ ไม่ว่า cache ของเครื่องจะเคยเห็นโปรแกรมนี้หรือไม่ (เทสต์ 89 คุม)
- *   source ที่คอมไพล์ไม่ผ่าน = เริ่มจาก snapshot ตั้งต้นแบบเดิม (ก็เป็นผลของ source อย่างเดียวเช่นกัน)
- * factory เก็บเป็น property ของฟังก์ชัน configure ของช่องแรก (โค้ดของผู้ใช้เข้าไม่ถึง configure)
+ * Per-program "warm" snapshot: memory image = base snapshot + the program's compiled factory in the first context slot
+ *   a tx whose first program is this source starts from this image instead → no recompiling every tx (compiling ≈ 1/3 of a token transfer's time)
+ * deterministic: the image is a function of (base snapshot, source) only; cached or freshly built, the heap is byte-identical
+ *   so every machine always starts a tx from the same heap, whether or not its cache has seen this program before (test 89 covers this)
+ *   source that fails to compile = start from the base snapshot as before (also a function of the source alone)
+ * the factory is stored as a property of the first slot's configure function (user code cannot reach configure)
  *
- * ภาพละ ~3.3 MB (heap ทั้งก้อนถึงก้อนว่างก้อนสุดท้าย) → ค่าเริ่ม 32 ภาพ ≈ 105 MB RAM
- * ไม่มีในที่เก็บ: คืน snapshot ตั้งต้น → คอมไพล์ → memory ตอนนี้ "คือ" ภาพอุ่นแล้ว ใช้ต่อได้เลย (ไม่คืนภาพซ้ำ)
- *   ถ่ายเก็บเฉพาะเมื่อที่เก็บมีที่ (SANDBOX_WARM_CACHE > 0) · 0 = ไม่เก็บ ไม่คัดลอก memory เลย (ต้นทุนเท่าคอมไพล์ทุก tx แบบเดิม)
- *   heap ตอนเริ่ม tx เหมือนกันทุกไบต์ทั้งสามทาง (มีภาพ / เพิ่งคอมไพล์แล้วเก็บ / เพิ่งคอมไพล์ไม่เก็บ) → ตั้งค่าต่างกันข้ามเครื่องได้
+ * ~3.3 MB per image (the whole heap up to the last free block) → default 32 images ≈ 105 MB RAM
+ * not in the store: restore the base snapshot → compile → current memory "is" the warm image already and can be used directly (no second restore)
+ *   stored only when the store has room (SANDBOX_WARM_CACHE > 0) · 0 = never store, never copy memory (same cost as compiling every tx as before)
+ *   the heap at tx start is byte-identical on all three paths (image present / just compiled and stored / just compiled, not stored) → settings may differ across machines
  */
 export const WARM_FACTORY_KEY = "\u0000factory";
-const warmImages = new Map();   // source → ภาพ memory | null (คอมไพล์ไม่ผ่าน) · เรียงตามที่ใช้ล่าสุด (LRU)
+const warmImages = new Map();   // source → memory image | null (compile failed) · ordered by most recent use (LRU)
 export const warmStats = { hits: 0, misses: 0, size: 0, limit: Number(process.env.SANDBOX_WARM_CACHE ?? 32) };
 
-/** ล้างภาพอุ่นทั้งหมด (เทสต์ / เครื่องมือ) — ผลของ tx ไม่เปลี่ยน แค่ต้องสร้างภาพใหม่ */
+/** clear all warm images (tests / tools); tx results do not change, images just have to be rebuilt */
 export function clearWarmCache() {
   warmImages.clear();
   warmStats.size = 0;
 }
 
 /**
- * เตรียม memory ให้เป็นภาพอุ่นของ source (หรือ snapshot ตั้งต้นถ้าคอมไพล์ไม่ผ่าน)
- * คืน true = memory อยู่ในสภาพภาพอุ่นแล้ว (factory อยู่ในช่องแรก) · false = snapshot ตั้งต้น
+ * Prepare memory as the warm image of source (or the base snapshot if it fails to compile)
+ * returns true = memory is in the warm image state (factory in the first slot) · false = base snapshot
  */
 function enterWarm(source) {
   const limit = Math.max(0, warmStats.limit);
@@ -1756,7 +1756,7 @@ function enterWarm(source) {
   const result = ctx.evalCode(source, "program");
   if (result.error) {
     result.error.dispose();
-    restoreSnapshot();   // evalCode ที่ล้มทิ้งขยะไว้ใน heap → กลับเป็น snapshot ตั้งต้นให้เหมือนเครื่องที่จำว่า "ไม่มีภาพ"
+    restoreSnapshot();   // a failed evalCode leaves garbage in the heap → restore the base snapshot, matching a machine that remembered "no image"
     if (limit > 0) remember(source, null, limit);
     return false;
   }
@@ -1766,7 +1766,7 @@ function enterWarm(source) {
   return true;
 }
 
-/** เก็บภาพ (เต็ม = ไล่ตัวที่ใช้นานที่สุด แล้วให้ภาพใหม่ใช้ buffer ของมันต่อ) */
+/** store an image (full = evict the least recently used one and let the new image reuse its buffer) */
 function remember(source, makeImage, limit) {
   let spare = null;
   while (warmImages.size >= limit) {
@@ -1779,8 +1779,8 @@ function remember(source, makeImage, limit) {
 }
 
 /**
- * ตรวจตอน import ว่า snapshot คืนสถานะได้ครบจริง (โครงสร้าง memory ของ quickjs-emscripten ตรงกับที่คาด)
- * รันโปรแกรมทดสอบ → ทำให้ heap สกปรก → คืน snapshot → รันซ้ำ: ผลและตำแหน่ง malloc ต้องตรงกันทุกอย่าง
+ * At import, check that the snapshot really restores state completely (quickjs-emscripten's memory layout matches expectations)
+ * run a test program → dirty the heap → restore the snapshot → run again: the result and malloc positions must match exactly
  */
 function selfCheck() {
   const { ctx, configure } = engine.pool[0];
@@ -1818,7 +1818,7 @@ function selfCheck() {
   dirty.dispose();
   const second = run();
   restoreSnapshot();
-  // แก๊สค้าง (v<n>|) = ค่าของ "x".repeat(i) ที่คิดตามขนาดข้อมูล — ต้องเท่ากันทั้งสองรอบ
+  // pending gas (v<n>|) = the cost of "x".repeat(i) charged by data size; must be equal in both runs
   if (first !== second || !/^v\d+\|\[200,"y","undefined",0,\{"\\u0000":"b","v":"597"\}\]/.test(first)) {
     throw new Error(`sandbox self-check ไม่ผ่าน: ${first} / ${second}`);
   }
@@ -1826,7 +1826,7 @@ function selfCheck() {
 selfCheck();
 
 // ---------------------------------------------------------------------------
-//  Sandbox: 1 ตัวต่อ tx ชั้นนอกสุด
+//  Sandbox: 1 per outermost tx
 // ---------------------------------------------------------------------------
 
 export class Sandbox {
@@ -1836,14 +1836,14 @@ export class Sandbox {
   #active = false;
   #disposed = false;
   #programs = new Map();   // programUuid → Map(source → { ctx, invoke, factory, error })
-  #owned = [];             // handle ที่อยู่ตลอด tx (invoke / factory) — คืนตอน dispose
-  #extra = [];             // context ที่สร้างเพิ่มเมื่อ pool ไม่พอ
+  #owned = [];             // handles that live for the whole tx (invoke / factory), released at dispose
+  #extra = [];             // contexts created on demand when the pool runs short
   #nextSlot = 0;
-  #errors = new Map();     // เลขอ้างอิง → error ของ host ที่ส่งเข้าโปรแกรม
+  #errors = new Map();     // reference number → host error passed into the program
   #nextErrorId = 1;
-  #stack = [];             // call ที่กำลังรัน (ตัวท้ายคือผู้เรียก API)
+  #stack = [];             // calls currently running (the last one is the API caller)
   #reserve = 0;
-  #warmSource = null;      // source ที่ factory อยู่ในภาพอุ่นแล้ว (context ช่องแรก)
+  #warmSource = null;      // source whose factory is already in the warm image (first context slot)
   outOfMemory = false;
   timedOut = false;
 
@@ -1862,20 +1862,20 @@ export class Sandbox {
     });
   }
 
-  /** ถูกเรียกจาก grow ของ memory (อยู่ระหว่าง malloc — ห้ามแตะ heap ที่นี่) */
+  /** called from memory grow (in the middle of malloc; must not touch the heap here) */
   flagOutOfMemory() {
     this.outOfMemory = true;
   }
 
   // ---------- heap ----------
 
-  /** เริ่ม tx: คืน snapshot → ตั้ง stack → ลูกโป่ง + ที่สำรอง → ล็อก memory */
+  /** start tx: restore snapshot → set stack → balloon + reserve → lock memory */
   #begin(source) {
     if (this.#disposed) throw new Error("sandbox ถูกปิดไปแล้ว");
     if (this.#active) return;
     if (brokenReason) throw new Error(`QuickJS ใช้งานไม่ได้: ${brokenReason}`);
     if (current) throw new Error("sandbox ถูกใช้โดย tx อื่นที่ยังไม่จบ");
-    // โปรแกรมแรกของ tx คอมไพล์ไว้แล้วในภาพอุ่น (ดู enterWarm) · ไม่มี = snapshot ตั้งต้น
+    // the tx's first program is already compiled in the warm image (see enterWarm) · none = base snapshot
     this.#warmSource = enterWarm(source) ? source : null;
     current = this;
     this.#active = true;
@@ -1888,11 +1888,11 @@ export class Sandbox {
     const capacity = this.#options.memoryLimitBytes + HOST_RESERVE;
     const target = probe + capacity + PAGE;
     if (executorMemory.buffer.byteLength < target) {
-      const grow = heap._malloc(target - probe);   // ให้ emscripten ขยาย memory เอง (ต้องอัปเดต view ของ heap ด้วย)
+      const grow = heap._malloc(target - probe);   // let emscripten grow memory itself (the heap view must be updated too)
       if (!grow) throw new Error("ขยายหน่วยความจำของ QuickJS ไม่ได้");
       heap._free(grow);
     }
-    // ลูกโป่ง: เหลือที่ว่างหลัง probe พอดี capacity เสมอ ไม่ว่า memory จะเคยโตไปเท่าไร (คืนเองตอนคืน snapshot)
+    // balloon: always leaves exactly capacity free after the probe, however far memory has grown (released automatically on snapshot restore)
     if (!heap._malloc(executorMemory.buffer.byteLength - (probe + capacity))) throw new Error("จองหน่วยความจำของ QuickJS ไม่ได้");
     this.#reserve = heap._malloc(HOST_RESERVE);
     memoryLocked = true;
@@ -1903,7 +1903,7 @@ export class Sandbox {
     this.#reserve = 0;
   }
 
-  /** host จะทำงาน: ต้องมีที่ว่างพอ ไม่งั้นถือว่าโปรแกรมใช้หน่วยความจำเกิน */
+  /** the host is about to work: there must be enough free space, otherwise the program is treated as exceeding memory */
   #hasHeadroom() {
     if (!this.outOfMemory) {
       const probe = heap._malloc(HOST_HEADROOM);
@@ -1918,7 +1918,7 @@ export class Sandbox {
     return false;
   }
 
-  /** QuickJS ถามเป็นระยะระหว่างรัน: true = หยุดทันที (catch ไม่ได้) */
+  /** QuickJS asks periodically while running: true = stop immediately (cannot be caught) */
   [INTERRUPT]() {
     if (this.outOfMemory || this.#tx.fatal) return true;
     if (Date.now() > this.#tx.deadline) {
@@ -1936,7 +1936,7 @@ export class Sandbox {
     return handle;
   }
 
-  /** handle ชั่วคราวของ 1 call */
+  /** temporary handles of 1 call */
   static #temp(handle) {
     sandboxStats.handles += 1;
     return handle;
@@ -1947,7 +1947,7 @@ export class Sandbox {
     sandboxStats.handles -= 1;
   }
 
-  // ---------- context ของแต่ละโปรแกรม ----------
+  // ---------- per-program contexts ----------
 
   #context(programUuid, source) {
     let bySource = this.#programs.get(programUuid);
@@ -1992,7 +1992,7 @@ export class Sandbox {
     return entry;
   }
 
-  // ---------- โปรแกรมเรียก host ----------
+  // ---------- program calls the host ----------
 
   #reply(kind, value) {
     return JSON.stringify([kind, this.#tx.gasLimit - this.#tx.gasUsed, value], hostReplacer);
@@ -2001,7 +2001,7 @@ export class Sandbox {
   [HOST_CALL](ctx, opHandle, pendingHandle, payloadHandle) {
     const op = ctx.getNumber(opHandle);
     if (!this.#hasHeadroom()) return ctx.newString("f");
-    if (Date.now() > this.#tx.deadline) {   // interrupt handler อาจถูกเรียกห่างเมื่อโปรแกรมเรียก host ถี่ → ตรวจที่นี่ด้วย
+    if (Date.now() > this.#tx.deadline) {   // the interrupt handler may be called rarely when the program calls the host frequently → check here too
       this.timedOut = true;
       return ctx.newString("f");
     }
@@ -2038,7 +2038,7 @@ export class Sandbox {
     }
   }
 
-  // ---------- รัน 1 call ----------
+  // ---------- run 1 call ----------
 
   /**
    * @returns {{ kind: "value", value } | { kind: "throw", hostError } | { kind: "throw", guestError: { name, message, stack } }
@@ -2081,20 +2081,20 @@ export class Sandbox {
       if (this.outOfMemory) return this.#fatal();
       if (tx.fatal) return { kind: "fatal" };
       if (this.timedOut || (error.name === "InternalError" && error.message === "interrupted")) return this.#timeout();
-      return { kind: "throw", guestError: { ...error, stack: null } };   // error ใน prelude เอง (เช่น stack ล้นตอนส่งผล)
+      return { kind: "throw", guestError: { ...error, stack: null } };   // error in the prelude itself (e.g. stack overflow while sending the result)
     }
     const text = ctx.getString(result.value);
     result.value.dispose();
     const bar = text.indexOf("|");
     const pending = Number(text.slice(1, bar));
     if (this.outOfMemory || text[0] === "f") {
-      // tx ล้มทั้งใบ: ยังคิดแก๊สของงานที่ทำไปแล้ว (หน่วยความจำเกิน = เสียค่าแก๊สเท่าที่ใช้จริง ไม่ใช่แค่ส่วนที่ส่งมาก่อนหน้า)
+      // whole tx fails: still charge gas for work already done (memory exceeded = pay the gas actually used, not just the part reported earlier)
       if (pending > 0) tx.gasUsed = Math.min(tx.gasLimit, tx.gasUsed + pending);
       if (this.outOfMemory) return this.#fatal();
       if (!tx.fatal) tx.abort(this.timedOut ? "timeout" : "memory");
       return { kind: "fatal" };
     }
-    if (pending > 0) tx.useGas(pending);   // ไม่เกินยอดที่เหลือเสมอ (เกินถูกส่งมาให้ตรวจทันทีแล้ว)
+    if (pending > 0) tx.useGas(pending);   // never exceeds the remaining budget (overruns were already sent for immediate checking)
     const body = text.slice(bar + 1);
     switch (text[0]) {
       case "v": return { kind: "value", value: decodeFromGuest(body, this.#options.map) };
@@ -2121,7 +2121,7 @@ export class Sandbox {
       case "e": {
         let name = decodeFromGuest(JSON.stringify(desc.name), this.#options.map);
         const message = decodeFromGuest(JSON.stringify(desc.message), this.#options.map);
-        // ข้อความของ QuickJS → ชื่อแบบเดียวกับ V8 (ข้อความจริงของ engine ไม่ถูกส่งออกอยู่แล้ว)
+        // QuickJS message → the same name as V8 (the engine's actual message is never exposed anyway)
         if (name === "InternalError" && (message === "stack overflow" || message === "string too long")) name = "RangeError";
         return { kind: "throw", guestError: { name, message, stack: desc.stack } };
       }
@@ -2129,9 +2129,9 @@ export class Sandbox {
     }
   }
 
-  // ---------- เก็บกวาด ----------
+  // ---------- cleanup ----------
 
-  /** คืน handle / context ที่สร้างใน tx แล้วปล่อย heap (memory จริงถูกล้างตอน tx ถัดไปคืน snapshot) */
+  /** release the handles / contexts created in the tx, then release the heap (real memory is reset when the next tx restores the snapshot) */
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;

@@ -7,7 +7,7 @@ import { VM } from "./helpers.js";
 import { DB } from "../src/storage/db.js";
 import { TOKEN } from "./programs.js";
 
-/* DB จริง (LMDB) ใช้กับ VM ได้เหมือน MemoryDB ทุกอย่าง */
+/* the real DB (LMDB) works with the VM exactly like MemoryDB */
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vm-db-"));
 const db = new DB(path.join(dir, "data"));
@@ -20,7 +20,7 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("DB: deploy → init → block → commit แล้วอ่านกลับได้", () => {
+test("DB: deploy → init → block → commit, then read back", () => {
   vm.commit(vm.deploy({ programUuid: "token", code: TOKEN, context: user("alice"), initInput: { supply: 1000 }, nonce: 0 }).writes);
   vm.commit(vm.init({ programUuid: "token" }).writes);
 
@@ -37,7 +37,7 @@ test("DB: deploy → init → block → commit แล้วอ่านกลั
   assert.equal(vm.getBlockByHash(header.hash).number, 1);
 });
 
-test("DB: listKeys / explorer ทำงานเหมือน MemoryDB", () => {
+test("DB: listKeys / explorer work like MemoryDB", () => {
   assert.deepEqual(vm.listProgramStorage("token").map((entry) => entry.key.join("/")), ["balances/alice", "balances/bob", "owner", "totalSupply"]);
   assert.deepEqual(vm.listTransactionsOf("alice").map((tx) => tx.nonce), [2, 1, 0]);
   assert.deepEqual(vm.listTransactionsOf("alice", { limit: 1 }).map((tx) => tx.nonce), [2]);
@@ -45,16 +45,16 @@ test("DB: listKeys / explorer ทำงานเหมือน MemoryDB", () =>
   assert.equal(vm.getTransaction(vm.getBlock(1).txHashes[1]).status, "throw");
 });
 
-test("DB: writeKeys เป็น atomic — รายการผิดแม้อันเดียวก็ไม่บันทึกอะไรเลย", () => {
+test("DB: writeKeys is atomic — a single bad entry means nothing is saved", () => {
   const before = db.readKeys(["token:storage:balances:bob"])[0];
   assert.throws(() => db.writeKeys([
     { type: "put", dbKey: "token:storage:balances:bob", value: 999 },
-    { type: "put", dbKey: "เสีย" },
+    { type: "put", dbKey: "bad" },
   ]), /write ไม่ถูกต้อง/);
   assert.equal(db.readKeys(["token:storage:balances:bob"])[0], before);
 });
 
-test("DB: del ลบข้อมูลจริง และ snapshot / tree ใช้ดูได้", () => {
+test("DB: del really deletes data, and snapshot / tree can be used to inspect it", () => {
   db.writeKeys([{ type: "put", dbKey: "tmp:x", value: 1 }]);
   assert.equal(db.has("tmp:x"), true);
   db.writeKeys([{ type: "del", dbKey: "tmp:x" }]);
@@ -65,22 +65,22 @@ test("DB: del ลบข้อมูลจริง และ snapshot / tree ใ
   assert.ok(db.size > 5);
 });
 
-test("DB: ข้อมูลยังอยู่หลังเปิดใหม่ (เขียนลงดิสก์จริง)", () => {
+test("DB: data survives reopening (really written to disk)", () => {
   const reopened = new DB(path.join(dir, "data"));
   assert.equal(reopened.readKeys(["token:storage:balances:bob"])[0], "30n");
   assert.equal(reopened.readKeys(["latestblock"])[0], 1);
   reopened.close();
 });
 
-test("DB: path เต็ม (absolute) ใช้ตามนั้น ไม่กลายเป็น path ใต้โฟลเดอร์ที่รัน", () => {
+test("DB: an absolute path is used as given, not turned into a path under the working directory", () => {
   const target = path.join(dir, "absolute");
   const other = new DB(target);
   other.writeKeys([{ type: "put", dbKey: "k", value: "v" }]);
   other.close();
-  assert.ok(fs.existsSync(target), "ไฟล์ DB ต้องอยู่ที่ path ที่ส่งมา");
-  assert.equal(fs.existsSync(path.join(process.cwd(), target)), false, "ต้องไม่สร้างไว้ใต้โฟลเดอร์ที่รัน");
+  assert.ok(fs.existsSync(target), "the DB file must be at the given path");
+  assert.equal(fs.existsSync(path.join(process.cwd(), target)), false, "must not be created under the working directory");
   const reopened = new DB(target);
   assert.equal(reopened.readKeys(["k"])[0], "v");
-  assert.equal(reopened.basekey, new DB(target).basekey);   // basekey คิดจาก path ที่ส่งมาเหมือนเดิม
+  assert.equal(reopened.basekey, new DB(target).basekey);   // basekey is still derived from the given path
   reopened.close();
 });

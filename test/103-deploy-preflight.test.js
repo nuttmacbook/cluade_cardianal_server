@@ -7,9 +7,9 @@ import { spawnSync, spawn } from "node:child_process";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * deploy/: ไฟล์ตัวอย่างสำหรับเปิดเชนสาธารณะเครื่องเดียว
- *   scripts/preflight.js ตรวจ genesis + env ก่อนเปิด: ค่าตัวอย่างที่ลืมแก้ / genesis ของช่วงพัฒนา = ไม่ผ่าน · กรอกครบ = ผ่าน
- *   HOST=127.0.0.1 → server ฟังเฉพาะในเครื่อง
+ * deploy/: example files for launching a single-machine public chain
+ *   scripts/preflight.js checks genesis + env before launch: unedited example values / dev genesis = fail · fully filled in = pass
+ *   HOST=127.0.0.1 → server listens on localhost only
  */
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -27,7 +27,7 @@ function filled() {
   return { dir, genesis: path.join(dir, "genesis.json"), key: keys[3] };
 }
 
-test("preflight: ไฟล์ตัวอย่างที่ยังไม่แก้ / genesis ของช่วงพัฒนา / DEV = ไม่ผ่าน · กรอกครบ = ผ่าน", () => {
+test("preflight: unedited example files / dev genesis / DEV = fail · fully filled in = pass", () => {
   const example = preflight({ GENESIS: "deploy/genesis.mainnet.example.json", PRODUCER_KEY: sign.randomPrivateKey() });
   assert.equal(example.status, 1);
   assert.match(example.stdout, /config\.admins มีค่าที่ไม่ใช่ address/);
@@ -37,21 +37,21 @@ test("preflight: ไฟล์ตัวอย่างที่ยังไม่
   const dev = preflight({ GENESIS: "genesis.json" });
   assert.equal(dev.status, 1);
   assert.match(dev.stdout, /ไม่มี config/);
-  assert.doesNotMatch(dev.stdout, /chainId = 1 ชนกับ Ethereum/);   // genesis.json ของ repo ใช้ chainId 41234 (Bluewolfchain)
+  assert.doesNotMatch(dev.stdout, /chainId = 1 ชนกับ Ethereum/);   // the repo's genesis.json uses chainId 41234 (Bluewolfchain)
 
   const { genesis, key } = filled();
   const ok = preflight({ GENESIS: genesis, PRODUCER_KEY: key, DATA: "/tmp/x", HOST: "127.0.0.1", TRUST_PROXY: "1" });
   assert.equal(ok.status, 0, ok.stdout);
   assert.match(ok.stdout, /chainId 41234 · block 2000 ms · maxBlockGas 5000000 · gasTarget 2500000 · upgradeDelayBlocks 3600/);
   assert.doesNotMatch(ok.stdout, /เตือน/);
-  assert.equal(preflight({ GENESIS: genesis, PRODUCER_KEY: key, DEV: "1" }).status, 1);   // DEV ห้ามใช้กับเชนจริง
+  assert.equal(preflight({ GENESIS: genesis, PRODUCER_KEY: key, DEV: "1" }).status, 1);   // DEV must never be used on a real chain
   const loose = preflight({ GENESIS: genesis, PRODUCER_KEY: key });
   assert.equal(loose.status, 0);
   assert.match(loose.stdout, /เตือน: TRUST_PROXY/);
   assert.match(loose.stdout, /เตือน: HOST/);
   assert.match(ok.stdout, /forks: bluewolf@0/);
 
-  // ลืม forks → ไม่ผ่าน (เชนจะเปิดด้วยตารางแก๊สเดิม: โอนเหรียญหลัก 1,300 แก๊สแทน 17,300)
+  // forks missing → fail (the chain would launch with the old gas table: a native transfer costs 1,300 gas instead of 17,300)
   const noFork = JSON.parse(fs.readFileSync(genesis, "utf8"));
   delete noFork.forks;
   fs.writeFileSync(genesis, JSON.stringify(noFork));
@@ -60,7 +60,7 @@ test("preflight: ไฟล์ตัวอย่างที่ยังไม่
   assert.match(missing.stdout, /genesis ไม่มี fork "bluewolf"/);
 });
 
-test("server: HOST=127.0.0.1 ฟังเฉพาะในเครื่อง · ไฟล์ตัวอย่างที่กรอกครบเปิด server ได้", async () => {
+test("server: HOST=127.0.0.1 listens on localhost only · a fully filled-in example file starts the server", async () => {
   const { dir, genesis, key } = filled();
   const child = spawn(process.execPath, [path.join(ROOT, "server.js")], {
     cwd: ROOT, env: { PATH: process.env.PATH, GENESIS: genesis, DATA: path.join(dir, "data"), PRODUCER_KEY: key, HOST: "127.0.0.1", PORT: "0" } });
@@ -68,12 +68,12 @@ test("server: HOST=127.0.0.1 ฟังเฉพาะในเครื่อง
     const line = await new Promise((resolve, reject) => {
       let out = "";
       child.stdout.on("data", (chunk) => { out += chunk; if (/ทำงานที่/.test(out)) resolve(out); });
-      child.on("exit", (code) => reject(new Error(`server จบ ${code}: ${out}`)));
+      child.on("exit", (code) => reject(new Error(`server exited ${code}: ${out}`)));
     });
     const port = Number(line.match(/127\.0\.0\.1:(\d+)/)[1]);
     assert.ok(port > 0);
     assert.equal((await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json())).role, "producer");
-    // interface อื่นของเครื่อง (ถ้ามี) ต่อไม่ได้
+    // other network interfaces of the machine (if any) cannot connect
     const external = Object.values(os.networkInterfaces()).flat().find((item) => item.family === "IPv4" && !item.internal)?.address;
     if (external) await assert.rejects(fetch(`http://${external}:${port}/health`, { signal: AbortSignal.timeout(2000) }));
   } finally { child.kill(); }

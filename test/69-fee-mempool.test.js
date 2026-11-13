@@ -5,9 +5,9 @@ import { Mempool } from "../src/node/mempool.js";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * mempool + ลายเซ็นกับค่าแก๊สแบบ EIP-1559
- *   เรียงตาม tip ที่ผู้ผลิตได้จริง = min(priority, maxFee - baseFee) · maxFee < baseFee → ยังไม่หยิบ (รอในคิว)
- *   แทนที่ใบเดิมต้องเพิ่มทั้ง maxFee และ priority ≥ 10% (แบบ geth) · tx ที่เซ็นแบบเดิม (gasPrice) ใช้ได้เหมือนเดิม
+ * mempool + signatures with EIP-1559 gas fees
+ *   sorted by the tip the producer actually gets = min(priority, maxFee - baseFee) · maxFee < baseFee → not taken yet (waits in the queue)
+ *   replacing a tx requires raising both maxFee and priority by ≥ 10% (like geth) · legacy-signed txs (gasPrice) work as before
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -35,7 +35,7 @@ function mine(vm, pool) {
   return { block, included, header: vm.getBlock(block.number) };
 }
 
-test("ลายเซ็น: tx แบบ 1559 ใช้ชนิด Transaction ที่มี maxFeePerGas / maxPriorityFeePerGas · แบบเดิมได้ digest เดิม", () => {
+test("signatures: 1559 txs use a Transaction type with maxFeePerGas / maxPriorityFeePerGas · legacy txs keep the same digest", () => {
   const legacy = transferTx(alice, 0, { gasPrice: 5 });
   const typed = transferTx(alice, 0, { maxFeePerGas: "2000", maxPriorityFeePerGas: "3" });
   const legacyData = sign.buildTypedData(legacy);
@@ -44,23 +44,23 @@ test("ลายเซ็น: tx แบบ 1559 ใช้ชนิด Transaction
   assert.deepEqual(typedData.types.Transaction.map((f) => f.name).slice(-4), ["gasLimit", "maxFeePerGas", "maxPriorityFeePerGas", "signedOnChainId"]);
   assert.equal(typedData.message.gasPrice, undefined);
   assert.notEqual(sign.hashTypedData(legacy), sign.hashTypedData(typed));
-  // digest แบบเดิมคำนวณจากชนิดเดิมทุกไบต์ (เทียบกับการคำนวณด้วยมือผ่าน TRANSACTION_TYPE)
+  // the legacy digest is computed from the byte-identical old type (compared with a manual computation via TRANSACTION_TYPE)
   assert.equal(sign.TRANSACTION_TYPE.at(-2).name, "gasPrice");
 
   const verified = sign.verifyTransaction(signed(typed, KEYS[0]));
   assert.equal(verified.sender, alice);
   assert.deepEqual([verified.request.maxFeePerGas, verified.request.maxPriorityFeePerGas, verified.request.gasPrice], ["2000", "3", undefined]);
-  // ลายเซ็นผูกกับค่าแก๊ส: แก้ priority หลังเซ็น → ผู้เซ็นเปลี่ยน
+  // the signature covers gas fees: changing priority after signing → a different signer
   assert.throws(() => sign.verifyTransaction({ tx: { ...typed, maxPriorityFeePerGas: "300" }, signature: signed(typed, KEYS[0]).signature }), /ลายเซ็นไม่ตรงกับ from/);
   assert.throws(() => sign.verifyTransaction(signed({ ...typed, gasPrice: 7 }, KEYS[0])), /gasPrice คู่กับ maxFeePerGas/);
-  // maxFeePerGas 0 = ไม่ระบุ (VM ใช้ baseFee + priority)
+  // maxFeePerGas 0 = unset (the VM uses baseFee + priority)
   assert.equal(sign.verifyTransaction(signed(transferTx(alice, 0, { maxPriorityFeePerGas: "5" }), KEYS[0])).request.maxFeePerGas, undefined);
 });
 
-test("mempool: เรียงตาม tip จริงของ block (ไม่ใช่ maxFee) · maxFee < baseFee ไม่ถูกหยิบแต่ยังรอในคิว", () => {
+test("mempool: sorted by the block's real tip (not maxFee) · maxFee < baseFee is not taken but stays queued", () => {
   const vm = setup({ minBaseFee: 1000n });
   const pool = new Mempool(vm);
-  // base fee 1000: alice tip = min(50, 5000-1000) = 50 · bob tip = min(900, 1100-1000) = 100 · carol แบบเดิม 1080 → tip 80
+  // base fee 1000: alice tip = min(50, 5000-1000) = 50 · bob tip = min(900, 1100-1000) = 100 · carol legacy 1080 → tip 80
   add(pool, alice, 0, { maxFeePerGas: "5000", maxPriorityFeePerGas: "50" });
   add(pool, bob, 0, { maxFeePerGas: "1100", maxPriorityFeePerGas: "900" });
   add(pool, carol, 0, { gasPrice: "1080" });
@@ -78,7 +78,7 @@ test("mempool: เรียงตาม tip จริงของ block (ไม�
   assert.equal(VM.effectiveTip({ gasPrice: "1300" }, 1000n), 300n);
 });
 
-test("mempool: รับใบ maxFee ต่ำ (ไม่มี simulate) → block ที่ base fee สูงข้ามไป · base fee ลงแล้วได้เข้า", () => {
+test("mempool: accepts a low-maxFee tx (no simulate) → skipped while the base fee is high · included once the base fee drops", () => {
   const vm = setup({ gasTarget: 1000, maxBlockGas: 50_000 });
   const pool = new Mempool(vm, { rateLimit: 1000 });
   for (let n = 0; n < 4; n += 1) add(pool, alice, n, {});
@@ -89,15 +89,15 @@ test("mempool: รับใบ maxFee ต่ำ (ไม่มี simulate) → b
   assert.ok(raised > MIN + 100n);
   const skipped = mine(vm, pool);
   assert.equal(skipped.included.length, 0);
-  assert.equal(pool.has(waiting.hash), true);           // ยังรออยู่ ไม่ถูกบันทึกว่าถูกปฏิเสธ
+  assert.equal(pool.has(waiting.hash), true);           // still waiting, not recorded as rejected
   assert.equal(skipped.header.rejectedCount, undefined);
   let rounds = 0;
-  while (pool.has(waiting.hash) && rounds < 20) { mine(vm, pool); rounds += 1; }   // block ว่าง → base fee ลง 12.5% ต่อ block
+  while (pool.has(waiting.hash) && rounds < 20) { mine(vm, pool); rounds += 1; }   // empty blocks → base fee drops 12.5% per block
   assert.equal(pool.has(waiting.hash), false);
   assert.equal(vm.getTransaction(vm.getBlock(vm.latestBlockNumber()).txHashes[0]).from, bob);
 });
 
-test("แทนที่: ต้องเพิ่มทั้ง maxFee และ priority ≥ 10% · แบบเดิม → แบบ 1559 ก็ได้", () => {
+test("replace: must raise both maxFee and priority by ≥ 10% · legacy → 1559 also works", () => {
   const pool = new Mempool(setup());
   const old = add(pool, alice, 0, { maxFeePerGas: "2000", maxPriorityFeePerGas: "100" });
   assert.ok(old.ok);
@@ -110,18 +110,18 @@ test("แทนที่: ต้องเพิ่มทั้ง maxFee แล�
   const both = add(pool, alice, 0, { maxFeePerGas: "2200", maxPriorityFeePerGas: "110" });
   assert.deepEqual([both.ok, both.replaced], [true, old.hash]);
 
-  // แบบเดิม gasPrice 1000 = maxFee 1000 / priority 1000 → ใบใหม่ต้อง ≥ 1100 ทั้งคู่
+  // legacy gasPrice 1000 = maxFee 1000 / priority 1000 → the new tx needs ≥ 1100 for both
   const legacy = add(pool, bob, 0, { gasPrice: "1000" });
   assert.equal(add(pool, bob, 0, { maxFeePerGas: "5000", maxPriorityFeePerGas: "1099" }).ok, false);
   const upgraded = add(pool, bob, 0, { maxFeePerGas: "1100", maxPriorityFeePerGas: "1100" });
   assert.deepEqual([upgraded.ok, upgraded.replaced], [true, legacy.hash]);
   assert.deepEqual(pool.minimumReplacementFees({ gasPrice: "1000" }), { maxFee: 1100n, priority: 1100n });
-  // /pending แสดงค่าแก๊สแบบ 1559
+  // /pending shows 1559 gas fees
   const listed = pool.list().find((item) => item.hash === upgraded.hash);
   assert.deepEqual([listed.maxFeePerGas, listed.maxPriorityFeePerGas], ["1100", "1100"]);
 });
 
-test("แทนที่แบบเดิม (gasPrice ทั้งสองใบ): ข้อความเดิม · ใบที่เข้า block จ่ายตามราคาใหม่", () => {
+test("legacy replace (gasPrice on both txs): same message as before · the included tx pays the new price", () => {
   const vm = setup();
   const pool = new Mempool(vm);
   add(pool, carol, 0, { gasPrice: "1000" });

@@ -1,20 +1,20 @@
 /**
- * โปรแกรม Hello World
+ * Hello World program
  *
- * กติกา 3 ข้อ
- *   1. ทั้งไฟล์ต้องอยู่ใน scope เดียว คือฟังก์ชันครอบตัวเดียว (ชื่ออะไรก็ได้)
- *   2. return ท้ายฟังก์ชัน = รายชื่อฟังก์ชันที่ให้คนอื่นเรียกได้
- *   3. ห้าม import อะไรเข้ามา โปรแกรมต้องอยู่ได้ด้วยตัวเอง
+ * 3 rules
+ *   1. The whole file must be in a single scope, i.e. one wrapping function (any name)
+ *   2. The return at the end of the function = the list of functions others may call
+ *   3. No imports · the program must be self-contained
  */
 export default function program() {
-  // รันครั้งเดียวตอนติดตั้ง — เรียกจากภายนอกไม่ได้
+  // runs once at install — cannot be called from outside
   function initialization(params) {
-    writeDB("greeting", params.input.greeting ?? "สวัสดี");
+    writeDB("greeting", params.input.greeting ?? "Hello");
     writeDB("owner", params.context.sender);
-    writeDB("count", 0n);   // ตัวเลขในโปรแกรมเป็น BigInt เสมอ
+    writeDB("count", 0n);   // numbers in programs are always BigInt
   }
 
-  // ไม่อยู่ใน return = ใช้ภายในโปรแกรมเท่านั้น
+  // not in the return = internal to the program only
   function bump() {
     const next = (readDB("count") ?? 0n) + 1n;
     writeDB("count", next);
@@ -25,11 +25,11 @@ export default function program() {
     const name = params.input.name ?? params.context.sender;
     const times = bump();
     writeDB(map("visits", params.context.sender), times);
-    return `${readDB("greeting")} ${name} (ครั้งที่ ${times})`;
+    return `${readDB("greeting")} ${name} (visit ${times})`;
   }
 
   function setGreeting(params) {
-    if (params.context.sender !== readDB("owner")) throw new Error("เฉพาะเจ้าของเท่านั้น");
+    if (params.context.sender !== readDB("owner")) throw new Error("owner only");
     writeDB("greeting", params.input.greeting);
     return readDB("greeting");
   }
@@ -40,7 +40,7 @@ export default function program() {
       owner: readDB("owner"),
       count: readDB("count") ?? 0n,
       address: ThisAddress(),
-      time: params.block.timestamp,   // BigInt (Date.now() ในโปรแกรมเป็น number → ต้องห่อ BigInt() ก่อนเก็บ / return)
+      time: params.block.timestamp,   // BigInt (Date.now() in programs is a number → wrap in BigInt() before storing / returning)
     };
   }
 

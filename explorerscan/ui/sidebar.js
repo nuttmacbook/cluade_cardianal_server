@@ -1,5 +1,5 @@
-/* explorerscan/ui/sidebar.js [แก้ได้ · หน้าตา]
-   เมนูข้าง: ไฮไลต์หน้าที่เปิดอยู่ + รายชื่อโปรแกรมล่าสุด (สีจุดจาก EXPLORER.sideColors) · เมนูคงที่อยู่ใน index.html */
+/* explorerscan/ui/sidebar.js [editable · look]
+   Sidebar: highlights the open page + latest programs (dot colors from EXPLORER.sideColors) · the fixed menu is in index.html */
 
 // ---------- sidebar (drawer on narrow screens) + highlighted section ----------
 const sideInfo = { polls: 0 };

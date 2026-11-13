@@ -1,10 +1,10 @@
 /*
- * โปรแกรมตัวอย่างสำหรับทดสอบ VM
- * แต่ละตัวออกแบบให้ครอบคลุมพฤติกรรมที่อาจเกิดขึ้นในการใช้งานจริง
- * ตัวเลขในโปรแกรมเป็น BigInt เสมอ (10n) — ค่าที่ออกจากโปรแกรมเป็น "10n"
+ * Sample programs for testing the VM
+ * Each one is designed to cover behavior that can occur in real use
+ * Numbers in programs are always BigInt (10n); values returned from programs are "10n"
  */
 
-/** ตัวนับพื้นฐาน: init, read/write/delete, ฟังก์ชัน internal */
+/** Basic counter: init, read/write/delete, internal functions */
 export const COUNTER = `
 function program() {
   function initialization(params) {
@@ -39,7 +39,7 @@ function program() {
 }
 `;
 
-/** token: balances, approve / transferFrom สำหรับให้โปรแกรมอื่นหักเงิน user */
+/** token: balances, approve / transferFrom so other programs can debit a user */
 export const TOKEN = `
 function program() {
   function initialization(params) {
@@ -92,7 +92,7 @@ function program() {
 }
 `;
 
-/** ร้านค้า: เรียก token.transferFrom เพื่อหักเงินผู้ซื้อ (origin) แล้วบันทึกข้อมูลของตัวเอง */
+/** Shop: calls token.transferFrom to debit the buyer (origin), then saves its own data */
 export const SHOP = `
 function program() {
   function initialization(params) {
@@ -137,7 +137,7 @@ function program() {
 }
 `;
 
-/** เดินทางตาม path: D > E > F > A > B, ทำให้ล้ม / catch ที่โปรแกรมไหนก็ได้ */
+/** Walks a path: D > E > F > A > B, can fail / catch at any program */
 export const HOP = `
 function program() {
   function hop(params) {
@@ -163,7 +163,7 @@ function program() {
 }
 `;
 
-/** เครื่องมือทั่วไปสำหรับทดสอบการเรียกซ้อน */
+/** General tools for testing nested calls */
 export const PROBE = `
 function program() {
   function whoami(params) {
@@ -274,7 +274,7 @@ function program() {
 }
 `;
 
-/** ทะเบียน: เก็บว่าโปรแกรม (sender) ไหนลงทะเบียนในนามของ user (origin) คนไหน */
+/** Registry: records which program (sender) registered on behalf of which user (origin) */
 export const REGISTRY = `
 function program() {
   function register(params) {
@@ -289,7 +289,7 @@ function program() {
 }
 `;
 
-/** initialization ที่เรียกโปรแกรมอื่น */
+/** initialization that calls another program */
 export const INIT_CALLS_REGISTRY = `
 function program() {
   function initialization(params) {
@@ -303,7 +303,7 @@ function program() {
 }
 `;
 
-/** ค่า JSON / error / key ผิดรูปแบบ */
+/** Malformed JSON values / errors / keys */
 export const FAULTY = `
 function program() {
   function throwError() { throw new Error("error message") }
@@ -382,7 +382,7 @@ function program() {
 }
 `;
 
-/** ตัวแปรระดับบนสุดของโปรแกรมต้องไม่ค้างข้าม call */
+/** A program's top-level variables must not persist across calls */
 export const STATEFUL = `
 function program() {
   let hits = 0n
@@ -446,7 +446,7 @@ function program() {
 
 export const NO_EXPORTS = `function hidden() { return 1 }`;
 
-/** โค้ดที่ต้องถูกปฏิเสธตอน deploy */
+/** Code that must be rejected at deploy */
 export const INVALID_CODES = {
   importUsed: "function program() {\n  import fs from \"node:fs\"\n  function hello() {}\n  return { hello }\n}",
   exportDefault: "export default function program() { return {} }",
@@ -454,11 +454,11 @@ export const INVALID_CODES = {
   exportMissing: "function program() {\n  function a() {}\n  return { b }\n}",
   exportInitialization: "function program() {\n  function initialization() {}\n  function hello() { return 1 }\n  return { initialization, hello }\n}",
   exportArrow: "function program() {\n  const arrow = () => 1\n  return { arrow }\n}",
-  exportValue: "function program() {\n  const price = 100\n  return { price }\n}",   // ไม่ใช่ฟังก์ชัน
+  exportValue: "function program() {\n  const price = 100\n  return { price }\n}",   // not a function
   shadowApi: "function program() {\n  function readDB() {}\n  function a() {}\n  return { a }\n}",
 };
 
-/** เวลาในโปรแกรม */
+/** Time inside programs */
 export const CLOCK = `
 function program() {
   function initialization(params) {
@@ -498,7 +498,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ address ตัวพิมพ์เล็ก / ใหญ่ */
+/** For testing lower / upper case addresses */
 export const ADDRESS_BOOK = `
 function program() {
   function initialization(params) {
@@ -534,7 +534,7 @@ function program() {
 }
 `;
 
-/** ใช้ ThisAddress() แทนการรับ address ของตัวเองทาง input */
+/** Uses ThisAddress() instead of taking its own address as input */
 export const SELF_AWARE = `
 function program() {
   function initialization(params) {
@@ -560,7 +560,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ native balance / transferNative */
+/** For testing native balance / transferNative */
 export const TREASURY = `
 function program() {
   function initialization(params) {
@@ -606,7 +606,7 @@ function program() {
 }
 `;
 
-/** รับเงินที่แนบมากับ call และส่งต่อไปโปรแกรมอื่น */
+/** Receives value attached to a call and forwards it to another program */
 export const WALLET = `
 function program() {
   function deposit(params) {
@@ -649,7 +649,7 @@ function program() {
 }
 `;
 
-/** รับเงินตั้งแต่ตอน deploy (แบบ constructor payable) */
+/** Receives value at deploy (like a payable constructor) */
 export const FUNDED = `
 function program() {
   function initialization(params) {
@@ -669,7 +669,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบการสุ่ม */
+/** For testing randomness */
 export const DICE = `
 function program() {
   function roll() {
@@ -695,7 +695,7 @@ function program() {
 }
 `;
 
-/** โปรแกรมที่ตั้ง metadata ของตัวเอง */
+/** A program that sets its own metadata */
 export const PROFILE = `
 function program() {
   function initialization(params) {
@@ -724,7 +724,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ API ที่โปรแกรมเรียกดูข้อมูลของ address อื่น */
+/** For testing APIs that let a program look up another address */
 export const INSPECTOR = `
 function program() {
   function initialization(params) {
@@ -760,7 +760,7 @@ function program() {
 }
 `;
 
-/** ใช้ทดสอบ emit */
+/** For testing emit */
 export const EVENTFUL = `
 function program() {
   function initialization(params) {
@@ -803,7 +803,7 @@ function program() {
 }
 `;
 
-/** ตู้ฝากที่มีช่องโหว่ reentrancy: โอนเงินออกก่อนแล้วค่อยอัปเดตยอด */
+/** Vault with a reentrancy bug: sends funds out before updating the balance */
 export const VULNERABLE_VAULT = `
 function program() {
   function initialization(params) { writeDB("hook", params.input.hook ?? null) }
@@ -850,7 +850,7 @@ function program() {
 }
 `;
 
-/** ผู้โจมตี: พอได้รับเงินก็เรียกถอนซ้ำทันที */
+/** Attacker: calls withdraw again as soon as it receives funds */
 export const ATTACKER = `
 function program() {
   function initialization(params) {

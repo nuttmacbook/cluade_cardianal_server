@@ -8,7 +8,7 @@ import { ZERO_ADDRESS, checkTokenStandard } from "../src/standards/token.js";
 import { checkNftStandard } from "../src/standards/nft.js";
 import { reviewProgram } from "../src/core/autoreview.js";
 
-/* มาตรฐาน multi-token (คล้าย ERC-1155): balanceOf / balanceOfBatch / safeTransferFrom / safeBatchTransferFrom / mint / mintBatch / uri + event */
+/* multi-token standard (like ERC-1155): balanceOf / balanceOfBatch / safeTransferFrom / safeBatchTransferFrom / mint / mintBatch / uri + event */
 
 const G = "0x00000000000000000000000000000000000000f3";
 const W = "0x00000000000000000000000000000000000000e1";
@@ -43,7 +43,7 @@ function chain() {
 const ok = (res) => { assert.equal(res.status, "success", JSON.stringify(res.error)); return res; };
 const fails = (res, message) => { assert.equal(res.status, "throw"); assert.match(res.error.message, message); return res; };
 
-test("MULTITOKEN_PROGRAM ผ่านมาตรฐาน multi-token และ autoreview · ไม่ถูกนับเป็น token / NFT", () => {
+test("MULTITOKEN_PROGRAM meets the multi-token standard and autoreview · not counted as a token / NFT", () => {
   assert.deepEqual(checkMultiTokenStandard(MULTITOKEN_PROGRAM), { ok: true, missing: [] });
   assert.deepEqual(reviewProgram(MULTITOKEN_PROGRAM).issues, []);
   assert.equal(checkTokenStandard(MULTITOKEN_PROGRAM).ok, false);
@@ -51,7 +51,7 @@ test("MULTITOKEN_PROGRAM ผ่านมาตรฐาน multi-token และ
   assert.deepEqual(checkMultiTokenStandard(MULTITOKEN_PROGRAM.replace(/emit\("TransferBatch"[^\n]*\n/, "")).missing, ["event TransferBatch"]);
 });
 
-test("mint / mintBatch: เจ้าของ / minter เท่านั้น · emit TransferSingle / TransferBatch จาก zero address · totalSupply ต่อ id", () => {
+test("mint / mintBatch: owner / minter only · emits TransferSingle / TransferBatch from the zero address · totalSupply per id", () => {
   const { call, read } = chain();
   const single = ok(call(OWNER, "mint", { to: BOB, id: "1n", amount: "100n" }));
   assert.deepEqual(single.events.map((e) => [e.name, e.data]),
@@ -70,7 +70,7 @@ test("mint / mintBatch: เจ้าของ / minter เท่านั้น 
   assert.match(read("balanceOfBatch", { accounts: [BOB], ids: [] }).error.message, /length mismatch/);
 });
 
-test("safeTransferFrom / safeBatchTransferFrom: เจ้าของหรือ operator · ยอดไม่พอ → ล้มทั้งชุด · emit พร้อม operator", () => {
+test("safeTransferFrom / safeBatchTransferFrom: owner or operator · insufficient balance → the whole batch fails · emits with operator", () => {
   const { call, read } = chain();
   ok(call(OWNER, "mintBatch", { to: BOB, ids: ["1n", "2n"], amounts: ["10n", "20n"] }));
   const moved = ok(call(BOB, "safeTransferFrom", { from: BOB, to: CAROL, id: "1n", amount: "4n" }));
@@ -83,13 +83,13 @@ test("safeTransferFrom / safeBatchTransferFrom: เจ้าของหรื�
   assert.deepEqual(approval.events[0].data, { account: BOB, operator: CAROL, approved: true });
   assert.equal(read("isApprovedForAll", { account: BOB, operator: CAROL }).result, true);
   fails(call(CAROL, "safeBatchTransferFrom", { from: BOB, to: CAROL, ids: ["1n", "2n"], amounts: ["1n", "21n"] }), /insufficient balance/);
-  assert.equal(read("balanceOf", { account: BOB, id: "1n" }).result, "6n");   // ตัวแรกในชุดถูกย้อนด้วย
+  assert.equal(read("balanceOf", { account: BOB, id: "1n" }).result, "6n");   // the first item in the batch is reverted too
   const batch = ok(call(CAROL, "safeBatchTransferFrom", { from: BOB, to: CAROL, ids: ["1n", "2n"], amounts: ["6n", "20n"] }));
   assert.deepEqual(batch.events[0].data, { operator: CAROL, from: BOB, to: CAROL, ids: ["1n", "2n"], amounts: ["6n", "20n"] });
   assert.deepEqual(read("balanceOfBatch", { accounts: [BOB, BOB, CAROL, CAROL], ids: ["1n", "2n", "1n", "2n"] }).result, ["0n", "0n", "10n", "20n"]);
 });
 
-test("ปลายทางเป็นโปรแกรม: ต้องตอบ onERC1155Received / onERC1155BatchReceived · ไม่ตอบ → ล้ม (รวมตอน mint)", () => {
+test("program recipient: must answer onERC1155Received / onERC1155BatchReceived · no answer → fails (including on mint)", () => {
   const { call, read } = chain();
   const single = ok(call(OWNER, "mint", { to: W, id: "1n", amount: "3n", data: "hi" }));
   assert.deepEqual(single.calls.find((c) => c.functionName === "onERC1155Received").input,
@@ -101,7 +101,7 @@ test("ปลายทางเป็นโปรแกรม: ต้องตอ
   assert.equal(read("balanceOf", { account: M, id: "1n" }).result, "0n");
 });
 
-test("uri: template ของโปรแกรม หรือ uri ของ id (setURI emit URI) · supportsInterface · burn ลด supply", () => {
+test("uri: the program's template or the id's uri (setURI emits URI) · supportsInterface · burn lowers supply", () => {
   const { call, read } = chain();
   assert.equal(read("uri", { id: "5n" }).result, "https://game.test/{id}.json");
   const set = ok(call(OWNER, "setURI", { id: "5n", uri: "ipfs://five" }));
@@ -118,7 +118,7 @@ test("uri: template ของโปรแกรม หรือ uri ของ id
   assert.equal(read("totalSupply", { id: "5n" }).result, "6n");
 });
 
-test("ดัชนีของที่ถือ: TransferSingle / TransferBatch ทำ holding · ยอดอยู่ที่ balances:<account>:<id>", () => {
+test("holdings index: TransferSingle / TransferBatch create holdings · balance lives at balances:<account>:<id>", () => {
   const { call, vm } = chain();
   ok(call(OWNER, "mintBatch", { to: BOB, ids: ["1n", "2n"], amounts: ["1n", "2n"] }));
   ok(call(BOB, "safeTransferFrom", { from: BOB, to: CAROL, id: "2n", amount: "2n" }));

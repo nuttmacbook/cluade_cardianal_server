@@ -1,5 +1,5 @@
-/* explorerscan/core/start.js [ระบบ · ไม่ต้องแก้]
-   เริ่มทำงาน: วาดหน้าแรก, ฟังการเปลี่ยน hash, ถามสถานะเชนทุก EXPLORER.pollMs · โหลดเป็นไฟล์สุดท้ายเสมอ */
+/* explorerscan/core/start.js [system · no need to edit]
+   Startup: render the first page, listen for hash changes, poll chain status every EXPLORER.pollMs · always loaded last */
 
 addEventListener("keydown", (e) => { if (e.key === "Escape") sideClose(); });
 sidePrograms();

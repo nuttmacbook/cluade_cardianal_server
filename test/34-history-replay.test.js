@@ -6,10 +6,10 @@ import { TOKEN, COUNTER } from "./programs.js";
 
 /*
  * history:<key>:<block> + blockundo:<block>
- *   - stateAt      ค่าของ key ณ block ใดก็ได้ (seek ครั้งเดียว)
- *   - replayBlock  receipt เต็มของ block เก่า โดยไม่แตะ DB จริง
- *   - rebuildFrom  กู้ระบบด้วยการรัน block ใหม่จาก body
- *   - sigtx        ค้น tx จาก hash ที่ผู้ใช้เซ็นได้ด้วย
+ *   - stateAt      a key's value at any block (single seek)
+ *   - replayBlock  full receipts of old blocks without touching the real DB
+ *   - rebuildFrom  recovers the system by re-running blocks from their bodies
+ *   - sigtx        look up txs by the user-signed hash too
  */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
@@ -19,7 +19,7 @@ const OPTIONS = {
   gas: { call: 100, read: 10, write: 50, byte: 1, price: 1 },
 };
 
-/** เชน 5 block: deploy+init แล้วโอน token ทีละ block */
+/** 5-block chain: deploy+init, then one token transfer per block */
 function buildChain(vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS)) {
   vm.db.load({ "alice:native:received": "1000000n" });
 
@@ -39,21 +39,21 @@ function buildChain(vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS)) {
 const BALANCE = "token:storage:balances:alice";
 
 // ---------------------------------------------------------------------------
-//  เก็บ history
+//  recording history
 // ---------------------------------------------------------------------------
 
-test("history: เก็บค่าก่อนเปลี่ยนของทุก key ที่ block แตะ", () => {
+test("history: stores the previous value of every key a block touches", () => {
   const vm = buildChain();
   const undo = vm.getBlockUndo(3);
 
   assert.ok(undo.includes(BALANCE));
   assert.ok(undo.includes("alice:nonce"));
-  assert.equal(undo.some((key) => key.startsWith("block:")), false); // ข้อมูลของ chain เองไม่ต้องเก็บ
+  assert.equal(undo.some((key) => key.startsWith("block:")), false); // chain data itself need not be stored
   assert.deepEqual(vm.db.readKeys([`history:${BALANCE}:000000000003`])[0], { existed: true, before: "990n" });
-  assert.deepEqual(vm.db.readKeys(["history:alice:nonce:000000000001"])[0], { existed: false }); // เพิ่งสร้างใน block 1
+  assert.deepEqual(vm.db.readKeys(["history:alice:nonce:000000000001"])[0], { existed: false }); // just created in block 1
 });
 
-test("history: ปิด recordHistory → ไม่มี key เหล่านี้", () => {
+test("history: recordHistory off → none of these keys", () => {
   const vm = buildChain(new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, recordHistory: false }));
   assert.equal(vm.getBlockUndo(1), null);
   assert.deepEqual(vm.db.listKeys("history:"), []);
@@ -63,36 +63,36 @@ test("history: ปิด recordHistory → ไม่มี key เหล่า�
 //  stateAt
 // ---------------------------------------------------------------------------
 
-test("stateAt: ค่าของ key ย้อนหลังทุก block", () => {
+test("stateAt: a key's historical value at every block", () => {
   const vm = buildChain();
   assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => vm.stateAt(n, BALANCE)), [undefined, "1000n", "990n", "980n", "970n", "960n"]);
   assert.equal(vm.db.readKeys([BALANCE])[0], "960n");
 });
 
-test("stateAt: key ที่เพิ่งสร้าง / ถูกลบ / ไม่เคยถูกแตะ", () => {
+test("stateAt: keys just created / deleted / never touched", () => {
   const vm = buildChain();
-  assert.equal(vm.stateAt(0, "alice:nonce"), undefined);   // ยังไม่มีใน block 0
+  assert.equal(vm.stateAt(0, "alice:nonce"), undefined);   // not present yet at block 0
   assert.equal(vm.stateAt(1, "alice:nonce"), 1);
   assert.equal(vm.stateAt(5, "alice:nonce"), 5);
 
-  assert.equal(vm.stateAt(2, "ไม่มีใครแตะ"), undefined);
-  vm.db.load({ "ของนอกเชน": 7 });
-  assert.equal(vm.stateAt(2, "ของนอกเชน"), 7);            // ไม่อยู่ใน history → ค่าปัจจุบัน
+  assert.equal(vm.stateAt(2, "untouched"), undefined);
+  vm.db.load({ "offchain": 7 });
+  assert.equal(vm.stateAt(2, "offchain"), 7);            // not in history → current value
 
-  // key ที่ถูกลบ: pending ถูกลบตอน init (block 1)
+  // deleted key: pending was deleted at init (block 1)
   assert.deepEqual(vm.stateAt(0, "pending:token"), undefined);
   assert.equal(vm.stateAt(1, "pending:token"), undefined);
 });
 
-test("stateAt: prefix ของ key ไม่ชนกัน", () => {
+test("stateAt: key prefixes do not collide", () => {
   const vm = buildChain();
-  assert.equal(vm.stateAt(2, "alice"), undefined);           // ไม่ใช่ alice:nonce
+  assert.equal(vm.stateAt(2, "alice"), undefined);           // not alice:nonce
   assert.equal(vm.stateAt(2, "alice:nonce"), 2);
 });
 
-test("stateAt: ต้นทุนคงที่ — อ่าน DB จำนวนครั้งเท่ากันไม่ว่าย้อนไกลแค่ไหน", () => {
+test("stateAt: constant cost — the same number of DB reads no matter how far back", () => {
   const vm = buildChain();
-  for (let i = 0; i < 30; i += 1) {   // ต่อเชนให้ยาวขึ้นอีก 30 block
+  for (let i = 0; i < 30; i += 1) {   // extend the chain by 30 more blocks
     const block = vm.createBlock({ timestamp: T + 100_000 + i * 1000, feeRecipient: "miner" });
     block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice"), nonce: 5 + i });
     block.commit();
@@ -110,11 +110,11 @@ test("stateAt: ต้นทุนคงที่ — อ่าน DB จำน�
   const far = counted.reads;
 
   vm.db.readKeys = original;
-  assert.equal(near, far, "ย้อนใกล้กับย้อนไกลต้องอ่านเท่ากัน");
-  assert.ok(far <= 3, `อ่าน ${far} ครั้ง`);
+  assert.equal(near, far, "near and far lookbacks must read the same amount");
+  assert.ok(far <= 3, `${far} reads`);
 });
 
-test("snapshotAt: ดูข้อมูลของโปรแกรม ณ block เก่า", () => {
+test("snapshotAt: view a program's data at an old block", () => {
   const vm = buildChain();
   assert.deepEqual(vm.snapshotAt(2, "token:storage:"), {
     "token:storage:balances:alice": "990n",
@@ -129,7 +129,7 @@ test("snapshotAt: ดูข้อมูลของโปรแกรม ณ blo
 //  replayBlock
 // ---------------------------------------------------------------------------
 
-test("replayBlock: ได้ receipt เต็มของ block เก่า และ DB จริงไม่เปลี่ยน", () => {
+test("replayBlock: returns the full receipts of an old block, and the real DB is unchanged", () => {
   const vm = buildChain();
   const before = vm.db.snapshot();
   const receipt = vm.replayBlock(2);
@@ -146,7 +146,7 @@ test("replayBlock: ได้ receipt เต็มของ block เก่า �
   assert.deepEqual(vm.db.snapshot(), before);
 });
 
-test("replayBlock: block แรกที่มี deploy + init ก็ย้อนดูได้", () => {
+test("replayBlock: the first block with deploy + init can be replayed too", () => {
   const vm = buildChain();
   const receipt = vm.replayBlock(1);
   assert.deepEqual(receipt.transactions.map((tx) => tx.action), ["deploy", "init"]);
@@ -154,21 +154,21 @@ test("replayBlock: block แรกที่มี deploy + init ก็ย้อ�
   assert.equal(receipt.hash, vm.getBlock(1).hash);
 });
 
-test("replayBlock: ทุก block ในเชนย้อนดูได้และ hash ตรงหมด", () => {
+test("replayBlock: every block in the chain replays and every hash matches", () => {
   const vm = buildChain();
   for (let number = 1; number <= vm.latestBlockNumber(); number += 1) {
     assert.equal(vm.replayBlock(number).hash, vm.getBlock(number).hash, `block ${number}`);
   }
 });
 
-test("replayBlock: ข้อมูลเสียหาย → ตรวจจับได้", () => {
+test("replayBlock: corrupted data → detected", () => {
   const vm = buildChain();
   vm.db.writeKeys([{ type: "put", dbKey: `history:${BALANCE}:000000000003`, value: { existed: true, before: 9999 } }]);
   assert.throws(() => vm.replayBlock(3), { code: "INTERNAL", message: /hash ไม่ตรง/ });
-  assert.equal(vm.replayBlock(3, { verify: false }).number, 3); // ปิดการตรวจเพื่อดูว่าเพี้ยนตรงไหนได้
+  assert.equal(vm.replayBlock(3, { verify: false }).number, 3); // turn off verification to see where it diverges
 });
 
-test("replayBlock: block ที่ไม่มี → NOT_FOUND", () => {
+test("replayBlock: missing block → NOT_FOUND", () => {
   const vm = buildChain();
   assert.throws(() => vm.replayBlock(99), { code: "NOT_FOUND" });
 });
@@ -177,10 +177,10 @@ test("replayBlock: block ที่ไม่มี → NOT_FOUND", () => {
 //  rebuildFrom
 // ---------------------------------------------------------------------------
 
-test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้ว state ตรงกับตอนนั้นเป๊ะ", () => {
+test("rebuildFrom: rolls the whole system back to block 2 and the state matches exactly", () => {
   const vm = buildChain();
-  // ดัชนีไม่มี history (สร้างใหม่จาก block) → เทียบเฉพาะ state · ดัชนีตรวจในเทสถัดไป
-  // node ของ trie ไม่มี history (เก็บแค่ของล่าสุด) → ตรวจด้วย stateRoot แทน
+  // indexes have no history (rebuilt from blocks) → compare state only · indexes are checked in the next test
+  // trie nodes have no history (only the latest is kept) → check via stateRoot instead
   const stateKeys = (snapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => VM.isStateKey(key)));
   const expected = stateKeys(vm.snapshotAt(2));
   const stateRoot = vm.getBlock(2).stateRoot;
@@ -188,7 +188,7 @@ test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้�
   const result = vm.rebuildFrom(2);
   assert.deepEqual({ from: result.from, to: result.to, blocks: result.blocks }, { from: 5, to: 2, blocks: 2 });
   assert.equal(result.stateRoot, stateRoot);
-  assert.equal(vm.stateRoot(), stateRoot);   // trie ถูกย้อนตาม state ด้วย
+  assert.equal(vm.stateRoot(), stateRoot);   // the trie is rolled back along with the state
 
   assert.equal(vm.latestBlockNumber(), 2);
   assert.equal(vm.db.readKeys([BALANCE])[0], "990n");
@@ -199,19 +199,19 @@ test("rebuildFrom: ย้อนทั้งระบบไป block 2 แล้�
   assert.deepEqual(stateKeys(vm.db.snapshot()), expected);
 });
 
-test("rebuildFrom: ดัชนีของ explorer ถูกย้อนด้วย", () => {
+test("rebuildFrom: explorer indexes are rolled back too", () => {
   const vm = buildChain();
   const discarded = vm.getBlock(4).txHashes[0];
   const kept = vm.getBlock(2).txHashes[0];
 
   vm.rebuildFrom(2);
-  assert.equal(vm.getTransaction(discarded), null);         // tx ของ block ที่ทิ้งหายไป
+  assert.equal(vm.getTransaction(discarded), null);         // txs of discarded blocks are gone
   assert.equal(vm.getTransaction(kept).blockNumber, 2);
   assert.deepEqual(vm.listTransactionsOf("alice").map((tx) => tx.nonce), [1, 0]);
   assert.equal(vm.db.listKeys("blockhash:").length, 2);
 });
 
-test("rebuildFrom: ย้อนแล้วเดินหน้าต่อได้ และ parentHash ต่อถูกต้อง", () => {
+test("rebuildFrom: can continue after rolling back, with correct parentHash links", () => {
   const vm = buildChain();
   vm.rebuildFrom(2);
 
@@ -225,40 +225,40 @@ test("rebuildFrom: ย้อนแล้วเดินหน้าต่อไ�
   assert.equal(vm.db.readKeys(["token:storage:balances:carol"])[0], "5n");
 });
 
-test("rebuildFrom: ย้อนไป 0 = ล้างผลของทุก block แต่ข้อมูลนอกเชนยังอยู่", () => {
+test("rebuildFrom: rolling back to 0 = clears every block's effects, but off-chain data remains", () => {
   const vm = buildChain();
-  vm.db.load({ "ของนอกเชน": "ยังอยู่" });
+  vm.db.load({ "offchain": "still here" });
   vm.rebuildFrom(0);
 
   assert.equal(vm.latestBlockNumber(), null);
   assert.equal(vm.db.readKeys([BALANCE])[0], undefined);
   assert.equal(vm.db.readKeys(["token:code"])[0], undefined);
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], undefined);
-  assert.equal(vm.db.readKeys(["ของนอกเชน"])[0], "ยังอยู่");
-  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n); // genesis กลับมาเท่าเดิม
+  assert.equal(vm.db.readKeys(["offchain"])[0], "still here");
+  assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n); // genesis is restored
 });
 
-test("rebuildFrom: รันใหม่ไปจุดเดิมให้ผลเหมือนกันทุกครั้ง", () => {
+test("rebuildFrom: re-running to the same point gives the same result every time", () => {
   const first = buildChain();
   first.rebuildFrom(3);
   const second = buildChain();
   second.rebuildFrom(3);
   assert.deepEqual(first.db.snapshot(), second.db.snapshot());
 
-  first.rebuildFrom(3); // ซ้ำอีกรอบ
+  first.rebuildFrom(3); // once more
   assert.deepEqual(first.db.snapshot(), second.db.snapshot());
 });
 
-test("rebuildFrom: เลข block ไม่ถูกต้อง → NOT_FOUND", () => {
+test("rebuildFrom: invalid block number → NOT_FOUND", () => {
   const vm = buildChain();
   for (const target of [6, -1, 1.5]) assert.throws(() => vm.rebuildFrom(target), { code: "NOT_FOUND" });
 });
 
 // ---------------------------------------------------------------------------
-//  ค้น tx จาก hash ที่ผู้ใช้เซ็น
+//  looking up txs by the user-signed hash
 // ---------------------------------------------------------------------------
 
-test("sigtx: ค้นได้ทั้ง hash ของระบบและ hash ที่ผู้ใช้เซ็น", () => {
+test("sigtx: finds txs by both the system hash and the user-signed hash", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), OPTIONS);
   const key = sign.randomPrivateKey();
   const alice = sign.addressOf(key);
@@ -272,29 +272,29 @@ test("sigtx: ค้นได้ทั้ง hash ของระบบและ 
   block.commit();
 
   const vmHash = vm.getBlock(1).txHashes[0];
-  assert.notEqual(vmHash, verified.hash);                          // คนละค่า
+  assert.notEqual(vmHash, verified.hash);                          // different values
   assert.equal(vm.db.readKeys([`sigtx:${verified.hash}`])[0], vmHash);
-  assert.deepEqual(vm.getTransaction(verified.hash), vm.getTransaction(vmHash)); // ค้นได้ทั้งสองทาง
+  assert.deepEqual(vm.getTransaction(verified.hash), vm.getTransaction(vmHash)); // both lookups work
   assert.equal(vm.getTransaction(verified.hash).digest, verified.hash);
   assert.equal(vm.listTransactionsOf(alice)[0].digest, verified.hash);
 });
 
-test("sigtx: tx ที่ไม่มีลายเซ็น → ไม่มีดัชนีนี้ และค้นด้วย hash ของระบบตามปกติ", () => {
+test("sigtx: unsigned tx → no such index, lookup by the system hash as usual", () => {
   const vm = buildChain();
   const hash = vm.getBlock(2).txHashes[0];
   assert.equal(vm.getTransaction(hash).digest, null);
   assert.deepEqual(vm.db.listKeys("sigtx:"), []);
 });
 
-test("replayBlock: ไม่มี history ของ block ที่ใหม่กว่า → บอกตรง ๆ ว่าย้อนไม่ได้ (ไม่ใช่ hash ไม่ตรง)", () => {
+test("replayBlock: no history for newer blocks → says plainly it cannot replay (not a hash mismatch)", () => {
   const vm = buildChain(new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, recordHistory: false }));
   assert.throws(() => vm.replayBlock(1), { code: "NOT_FOUND", message: /recordHistory/ });
 
-  // เปิด history ทีหลัง → block เก่าที่ไม่มี undo ก็ยังย้อนไม่ได้
+  // history enabled later → old blocks without undo still cannot be replayed
   vm.recordHistory = true;
   const block = vm.createBlock({ timestamp: T + 100_000, feeRecipient: "miner" });
   block.call({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 1 }, context: user("alice"), nonce: 5 });
   block.commit();
   assert.throws(() => vm.replayBlock(2), { code: "NOT_FOUND" });
-  assert.equal(vm.replayBlock(vm.latestBlockNumber()).number, vm.latestBlockNumber()); // block ล่าสุดที่มี undo ครบ ย้อนได้
+  assert.equal(vm.replayBlock(vm.latestBlockNumber()).number, vm.latestBlockNumber()); // the latest block, with full undo, replays
 });

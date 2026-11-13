@@ -1,52 +1,52 @@
 /**
- * DEX แบบ Uniswap V2 (AMM สูตร x · y = k) — router/factory 1 โปรแกรม + pair 1 โปรแกรมต่อคู่เหรียญ (clone จากต้นแบบ)
+ * Uniswap V2-style DEX (AMM, x · y = k) — 1 router/factory program + 1 pair program per token pair (cloned from a template)
  *
- * ── Pair (DEX_PAIR_PROGRAM) ── เป็น LP token ตามมาตรฐาน token เต็มตัว (TOKEN_CORE: transfer / approve / transferFrom / permit …)
- *   name "BWSC-LP" · ticker "BWSC-LP" · decimals 18n → explorer แสดงเป็น token และล็อกใน token locker ได้
- *   input ตอน clone: { token0, token1, description? } (token0 < token1 ต้องเรียงแล้ว) · ผู้ clone (router) = factory
- *     deploy ตรงโดยไม่ส่ง token0 / token1 = ต้นแบบเฉย ๆ (inert: mint / burn / swap / skim / sync throw "pair not initialized")
- *   ทุกฟังก์ชันเปิดให้ทุกคนเรียก (permissionless แบบ V2) — ปลอดภัยเพราะคิดยอดจาก balanceOf ของ pair เทียบกับ reserve ที่เก็บไว้
- *   mint({ to }) → liquidity            ส่ง token0 / token1 เข้า pair ก่อน แล้วเรียก → ได้ LP ตามส่วน
- *       ครั้งแรก: sqrt(amount0 × amount1) − 1000 · LP 1000 หน่วย (MINIMUM_LIQUIDITY) ล็อกที่ zero address ตลอดไป
- *       ครั้งต่อไป: min(amount0 × supply / reserve0, amount1 × supply / reserve1) (ปัดลง · ส่วนเกินเป็นของ pool)
- *   burn({ to }) → { amount0, amount1 }  ส่ง LP เข้า pair ก่อน แล้วเรียก → เผา LP ทั้งหมดที่ pair ถือ ได้ token คืนตามส่วน (ปัดลง)
- *   swap({ amount0Out, amount1Out, to }) → true   ส่ง token ขาเข้าก่อน แล้วเรียก · ค่าธรรมเนียม 0.3% (ตรวจ k ด้วย 997/1000)
- *       (balance0×1000 − in0×3) × (balance1×1000 − in1×3) ≥ reserve0 × reserve1 × 1000²   (ไม่มี flash-swap callback)
- *   skim({ to }) → { amount0, amount1 }  ส่งยอดที่เกิน reserve ออกไป · sync() → true  ตั้ง reserve = balance
- *   อ่าน: getReserves() → { reserve0, reserve1, blockTimestampLast } · token0() · token1() · factory()
- *         price0CumulativeLast() · price1CumulativeLast()  (ราคาสะสมแบบ UQ112.112 × วินาที ไม่ wrap)
- *   เพดาน reserve = 2^112 − 1 (แบบ uint112 ของ V2) · กันเรียกซ้อน (lock) ทุกฟังก์ชันที่เปลี่ยน state ของ pool
+ * ── Pair (DEX_PAIR_PROGRAM) ── a full LP token under the token standard (TOKEN_CORE: transfer / approve / transferFrom / permit …)
+ *   name "BWSC-LP" · ticker "BWSC-LP" · decimals 18n → the explorer shows it as a token and it can be locked in the token locker
+ *   input on clone: { token0, token1, description? } (token0 < token1, already sorted) · the cloner (router) = factory
+ *     deploying directly without token0 / token1 = a bare template (inert: mint / burn / swap / skim / sync throw "pair not initialized")
+ *   every function is open to anyone (permissionless, like V2) — safe because amounts come from the pair's balanceOf compared with stored reserves
+ *   mint({ to }) → liquidity            send token0 / token1 to the pair first, then call → receive LP pro rata
+ *       first time: sqrt(amount0 × amount1) − 1000 · 1000 LP units (MINIMUM_LIQUIDITY) locked at the zero address forever
+ *       later: min(amount0 × supply / reserve0, amount1 × supply / reserve1) (rounded down · the excess goes to the pool)
+ *   burn({ to }) → { amount0, amount1 }  send LP to the pair first, then call → burns all LP the pair holds, returns tokens pro rata (rounded down)
+ *   swap({ amount0Out, amount1Out, to }) → true   send the input token first, then call · 0.3% fee (k checked with 997/1000)
+ *       (balance0×1000 − in0×3) × (balance1×1000 − in1×3) ≥ reserve0 × reserve1 × 1000²   (no flash-swap callback)
+ *   skim({ to }) → { amount0, amount1 }  sends out the amount above reserves · sync() → true  sets reserve = balance
+ *   reads: getReserves() → { reserve0, reserve1, blockTimestampLast } · token0() · token1() · factory()
+ *         price0CumulativeLast() · price1CumulativeLast()  (cumulative price as UQ112.112 × seconds, no wrap)
+ *   reserve cap = 2^112 − 1 (V2's uint112) · reentrancy lock on every function that changes pool state
  *   event: Mint { sender, amount0, amount1 } · Burn { sender, amount0, amount1, to }
  *          Swap { sender, amount0In, amount1In, amount0Out, amount1Out, to } · Sync { reserve0, reserve1 } · Transfer (LP)
  *   storage: token0 / token1 / factory / reserve0 / reserve1 / blockTimestampLast / price0CumulativeLast / price1CumulativeLast
  *            locked · name / ticker / decimals / totalSupply · balances:<who> · allowance:<o>:<s> · nonces:<o> (TOKEN_CORE)
  *
- * ── Router / factory (DEX_PROGRAM) ── input ตอน deploy: { pairTemplate, wrapped, namespace?, icon?, url?, contact?, description? }
- *   pairTemplate = ต้นแบบ pair ที่อนุมัติแล้ว · wrapped = WBWSC (WCARD_PROGRAM: deposit แนบ value / withdraw({ amount }))
- *   ไม่มีเจ้าของ / admin / ค่าธรรมเนียมเข้าใคร · แก้ไม่ได้
- *   createPair({ tokenA, tokenB }) → pair    ใครก็สร้างได้ 1 pair ต่อ 1 คู่ · salt = "<token0>:<token1>"
- *       → address = vm.cloneAddressFor(router, salt, โค้ดต้นแบบ) · event PairCreated { token0, token1, pair, index }
+ * ── Router / factory (DEX_PROGRAM) ── input on deploy: { pairTemplate, wrapped, namespace?, icon?, url?, contact?, description? }
+ *   pairTemplate = an approved pair template · wrapped = WBWSC (WCARD_PROGRAM: deposit with attached value / withdraw({ amount }))
+ *   no owner / admin / fee recipient · immutable
+ *   createPair({ tokenA, tokenB }) → pair    anyone can create 1 pair per token pair · salt = "<token0>:<token1>"
+ *       → address = vm.cloneAddressFor(router, salt, template code) · event PairCreated { token0, token1, pair, index }
  *   getPair({ tokenA, tokenB }) → address | null · pairCount() → bigint · allPairs({ start?, limit? }) → [address] (limit ≤ 100)
  *   pairTemplate() · wrapped()
- *   ทุก "deadline" = unix วินาที (bigint) · วินาทีของ block > deadline → "expired"
- *   ผู้ใช้ approve router ที่ token ก่อน → router ดึง (transferFrom) จากผู้ใช้เข้า pair ตรง ๆ แล้วเรียก pair
+ *   every "deadline" = unix seconds (bigint) · block seconds > deadline → "expired"
+ *   users approve the router on the token first → the router pulls (transferFrom) from the user straight into the pair, then calls the pair
  *   addLiquidity({ tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin, to, deadline }) → { amountA, amountB, liquidity }
- *       ยังไม่มี pair = สร้างให้ · ใส่ตามสัดส่วน reserve (quote) ไม่ต่ำกว่า min
- *   addLiquidityNative({ token, amountTokenDesired, amountTokenMin, amountNativeMin, to, deadline }) แนบ value
- *       → { amountToken, amountNative, liquidity } · ห่อเป็น WBWSC · เหรียญหลักที่ไม่ได้ใช้คืนผู้เรียก
- *   removeLiquidity({ tokenA, tokenB, liquidity, amountAMin, amountBMin, to, deadline }) → { amountA, amountB }  (approve LP ให้ router)
- *   removeLiquidityNative({ token, liquidity, amountTokenMin, amountNativeMin, to, deadline }) → { amountToken, amountNative }  (แกะ WBWSC)
+ *       no pair yet = created for you · deposits in reserve ratio (quote), not below the mins
+ *   addLiquidityNative({ token, amountTokenDesired, amountTokenMin, amountNativeMin, to, deadline }) with attached value
+ *       → { amountToken, amountNative, liquidity } · wrapped into WBWSC · unused native coin is refunded to the caller
+ *   removeLiquidity({ tokenA, tokenB, liquidity, amountAMin, amountBMin, to, deadline }) → { amountA, amountB }  (approve LP to the router)
+ *   removeLiquidityNative({ token, liquidity, amountTokenMin, amountNativeMin, to, deadline }) → { amountToken, amountNative }  (unwraps WBWSC)
  *   swapExactTokensForTokens({ amountIn, amountOutMin, path, to, deadline }) → amounts
  *   swapTokensForExactTokens({ amountOut, amountInMax, path, to, deadline }) → amounts
- *   swapExactNativeForTokens({ amountOutMin, path, to, deadline }) แนบ value · path.at(0) = wrapped → amounts
- *   swapNativeForExactTokens({ amountOut, path, to, deadline }) แนบ value · คืนส่วนที่เหลือ → amounts
- *   swapExactTokensForNative({ amountIn, amountOutMin, path, to, deadline }) · path สุดท้าย = wrapped → amounts
+ *   swapExactNativeForTokens({ amountOutMin, path, to, deadline }) with attached value · path.at(0) = wrapped → amounts
+ *   swapNativeForExactTokens({ amountOut, path, to, deadline }) with attached value · refunds the remainder → amounts
+ *   swapExactTokensForNative({ amountIn, amountOutMin, path, to, deadline }) · last in path = wrapped → amounts
  *   swapTokensForExactNative({ amountOut, amountInMax, path, to, deadline }) → amounts
- *   อ่าน: getAmountsOut({ amountIn, path }) · getAmountsIn({ amountOut, path }) · quote({ amountA, reserveA, reserveB })
+ *   reads: getAmountsOut({ amountIn, path }) · getAmountsIn({ amountOut, path }) · quote({ amountA, reserveA, reserveB })
  *         getAmountOut({ amountIn, reserveIn, reserveOut }) · getAmountIn({ amountOut, reserveIn, reserveOut })
  *         getReserves({ tokenA, tokenB }) → { reserveA, reserveB }
- *   path: 2 … DEX_MAX_PATH (4) token = สูงสุด 3 hop · ทุก hop ต้องมี pair อยู่แล้ว
- *   router ไม่เก็บเงินของผู้ใช้ค้างไว้: ฟังก์ชันที่ไม่รับ native แนบ value ไม่ได้ · native ที่ได้จาก WBWSC.withdraw ส่งต่อทันที
+ *   path: 2 … DEX_MAX_PATH (4) tokens = at most 3 hops · every hop must already have a pair
+ *   the router never holds user funds: functions that don't take native can't have value attached · native from WBWSC.withdraw is forwarded immediately
  *   storage: pairTemplate / wrapped / locked / pairCount · pair:<token0>:<token1> · pairs:<index> · isPair:<pair>
  */
 import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
@@ -62,7 +62,7 @@ export const DEX_FUNCTIONS = ["createPair", "addLiquidity", "addLiquidityNative"
 export const DEX_PAIR_EVENTS = ["Mint", "Burn", "Swap", "Sync", "Transfer"];
 export const DEX_EVENTS = ["PairCreated"];
 
-/** salt ที่ router ใช้ clone pair (ไว้คำนวณ address ล่วงหน้า: vm.cloneAddressFor(router, dexPairSalt(a, b), โค้ดต้นแบบ)) */
+/** salt the router uses to clone a pair (to precompute the address: vm.cloneAddressFor(router, dexPairSalt(a, b), template code)) */
 export function dexPairSalt(tokenA, tokenB) {
   const [token0, token1] = [String(tokenA).toLowerCase(), String(tokenB).toLowerCase()].sort();
   return `${token0}:${token1}`;

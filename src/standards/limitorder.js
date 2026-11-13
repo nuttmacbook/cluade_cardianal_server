@@ -1,54 +1,54 @@
 /**
- * Limit order book บนเชน (escrow) — ผู้ขาย (maker) ฝาก token ไว้ในโปรแกรม ผู้ซื้อ (taker) มากินเอง · ไม่มีการจับคู่นอกเชน · ไม่มีค่าธรรมเนียม
- *   ซื้อขายได้เฉพาะ token · เหรียญหลัก (BWSC) ต้องห่อเป็น WBWSC (WCARD_PROGRAM ใน system.js, namespace "wbwsc") ก่อน · แนบ value มา = throw
- *   ไม่มี owner / admin / upgrade · input ตอน deploy: { namespace?, icon?, url?, contact?, description? }
+ * On-chain limit order book (escrow) — sellers (makers) deposit tokens in the program, buyers (takers) fill them directly · no off-chain matching · no fees
+ *   tokens only · the native coin (BWSC) must first be wrapped as WBWSC (WCARD_PROGRAM in system.js, namespace "wbwsc") · attaching value = throw
+ *   no owner / admin / upgrade · input on deploy: { namespace?, icon?, url?, contact?, description? }
  *
- * ฟังก์ชันที่เปลี่ยน state (ทุกตัวมีตัวล็อกกันเรียกซ้อน "reentrant call" · เขียน state ก่อนเรียก token เสมอ ยกเว้นตอนรับเงินฝากของ placeOrder ที่ต้องวัดยอด)
- *   placeOrder({ sellToken, sellAmount, buyToken, buyAmount, expiresAt?, allowPartial? }) → orderId (bigint เริ่ม 0n)
- *       ดึง sellAmount ด้วย sellToken.transferFrom(maker → โปรแกรม) (maker ต้อง approve ก่อน) · ยอดที่ฝากจริง = ยอด balanceOf ของโปรแกรมที่เพิ่มขึ้น
- *       (token หักค่าโอน → order ขายเท่าที่ได้รับจริง แต่ราคารวม buyAmount เท่าเดิม) · ราคา = buyAmount / sellAmount (ของที่ฝากจริง)
- *       expiresAt = unix **วินาที** (0n / ไม่ส่ง = ไม่หมดอายุ) ต้องมากกว่าเวลาของ block · หมดอายุเมื่อ วินาทีของ block ≥ expiresAt
- *       allowPartial (ค่าเริ่ม true) · false = ต้องกินทั้ง order ในครั้งเดียว · sellToken ≠ buyToken · ทั้งคู่ต้องเป็นโปรแกรม
+ * State-changing functions (all have a reentrancy lock "reentrant call" · state is always written before calling tokens, except placeOrder's deposit, which must measure balances)
+ *   placeOrder({ sellToken, sellAmount, buyToken, buyAmount, expiresAt?, allowPartial? }) → orderId (bigint starting at 0n)
+ *       pulls sellAmount via sellToken.transferFrom(maker → program) (maker must approve first) · actual deposit = increase in the program's balanceOf
+ *       (fee-on-transfer token → the order sells only what was received, but the total price buyAmount stays the same) · price = buyAmount / sellAmount (of the actual deposit)
+ *       expiresAt = unix **seconds** (0n / omitted = never expires) must be later than the block time · expired when block seconds ≥ expiresAt
+ *       allowPartial (default true) · false = the whole order must be filled at once · sellToken ≠ buyToken · both must be programs
  *   fillOrder({ orderId, sellAmountToTake, maxBuyAmount? }) → { orderId, sold, paid, remaining }
- *       taker จ่าย paid = ⌈sellAmountToTake × buyAmount / sellAmount⌉ (ปัดขึ้น: maker ไม่ได้น้อยกว่าราคา) ด้วย buyToken.transferFrom(taker → maker)
- *       แล้วได้ sellToken จาก escrow · paid > maxBuyAmount → throw · ห้ามกิน order ของตัวเอง / order ที่หมดอายุ / ยกเลิก / ขายหมดแล้ว
- *       ตรวจยอดจริง: ยอดของ maker ต้องเพิ่ม ≥ paid และยอดของโปรแกรมต้องลดเท่ากับที่จ่ายออกพอดี (token ที่โกหก / หักค่าโอน → throw)
+ *       taker pays paid = ⌈sellAmountToTake × buyAmount / sellAmount⌉ (rounded up: maker never gets less than the price) via buyToken.transferFrom(taker → maker)
+ *       then receives sellToken from escrow · paid > maxBuyAmount → throw · cannot fill your own order / an expired / cancelled / sold-out order
+ *       checks real balances: the maker's balance must rise ≥ paid and the program's must fall by exactly the amount paid out (lying / fee-on-transfer token → throw)
  *   fillOrders({ fills: [{ orderId, sellAmountToTake }, …] (1–20), maxTotalBuy? }) → { count, sold: [..], paid: [..], totalPaid }
- *       ทุกรายการต้องใช้ buyToken เดียวกัน · รวม paid > maxTotalBuy → throw · รายการใดล้ม = ทั้ง tx ล้ม
- *   cancelOrder({ orderId }) → refunded          เฉพาะ maker · คืนยอดที่เหลือ (order ที่หมดอายุแล้วก็ยกเลิกได้)
- *   cancelExpired({ orderId }) → refunded        ใครก็ได้ · เฉพาะ order ที่หมดอายุ · คืนยอดที่เหลือให้ maker
- * อ่าน (ไม่เปลี่ยน state)
+ *       all entries must use the same buyToken · total paid > maxTotalBuy → throw · any entry fails = the whole tx fails
+ *   cancelOrder({ orderId }) → refunded          maker only · refunds the remainder (expired orders can be cancelled too)
+ *   cancelExpired({ orderId }) → refunded        anyone · expired orders only · refunds the remainder to the maker
+ * Reads (no state change)
  *   getOrder({ orderId }) → { orderId, maker, sellToken, buyToken, sellAmount, buyAmount, remaining, filled, paid, expiresAt, allowPartial,
- *       createdAt, status } · status = "open" | "expired" (เปิดอยู่แต่หมดเวลา ยังไม่คืน escrow) | "filled" | "cancelled"
+ *       createdAt, status } · status = "open" | "expired" (still open but timed out, escrow not yet refunded) | "filled" | "cancelled"
  *   orderCount() → bigint
- *   ordersOf({ maker, start?, limit? }) → { total, orders }        order ของ maker ตามลำดับที่วาง (ตำแหน่ง start … start+limit-1)
+ *   ordersOf({ maker, start?, limit? }) → { total, orders }        the maker's orders in placement order (positions start … start+limit-1)
  *   ordersForPair({ sellToken, buyToken, start?, limit?, openOnly? }) → { total, orders }
- *       openOnly = true → เฉพาะ order ที่ยังเปิด (รายการเปิดของคู่นี้ ลำดับไม่คงที่: ปิด order แล้วตัวท้ายย้ายมาแทน) · false = ทุก order ตามลำดับที่วาง
+ *       openOnly = true → open orders only (this pair's open list has no stable order: closing an order moves the last one into its slot) · false = all orders in placement order
  *   bestOrders({ sellToken, buyToken, limit?, start? }) → { totalOpen, scanned, truncated, orders }
- *       ราคาดีสุดก่อน (buyAmount / sellAmount ต่ำสุด · เท่ากันเอา orderId น้อยก่อน) ข้าม order ที่หมดอายุ
- *       ตรวจไม่เกิน 100 order ที่เปิดอยู่ต่อครั้ง (ตำแหน่ง start …) · truncated = ยังมีที่ไม่ได้ตรวจ → เรียกซ้ำด้วย start ถัดไป
- *   quoteFill({ orderId, sellAmountToTake }) → { ok, reason, sold, paid, remainingAfter }   (ไม่ throw ตามสถานะ order · ตรวจเวลาของ block)
- *   limit ของการแบ่งหน้า: 1n … 50n (ค่าเริ่ม 20n) · start ค่าเริ่ม 0n
+ *       best price first (lowest buyAmount / sellAmount · ties go to the lower orderId), skipping expired orders
+ *       checks at most 100 open orders per call (from position start …) · truncated = some were not checked → call again with the next start
+ *   quoteFill({ orderId, sellAmountToTake }) → { ok, reason, sold, paid, remainingAfter }   (doesn't throw on order status · checks the block time)
+ *   pagination limit: 1n … 50n (default 20n) · start defaults to 0n
  * event
- *   OrderPlaced { orderId, maker, sellToken, buyToken, sellAmount, buyAmount, expiresAt, allowPartial }   indexed: orderId, maker, sellToken (EVM ได้ไม่เกิน 3)
+ *   OrderPlaced { orderId, maker, sellToken, buyToken, sellAmount, buyAmount, expiresAt, allowPartial }   indexed: orderId, maker, sellToken (EVM allows at most 3)
  *   OrderFilled { orderId, taker, maker, sold, paid, remaining }                                          indexed: orderId, taker, maker
  *   OrderCancelled { orderId, maker, by, refunded, reason: "cancelled" | "expired" }                      indexed: orderId, maker
  * storage
- *   count · lock (มีเฉพาะระหว่าง tx) · orders:<id> → order (+ openPos = ตำแหน่งในรายการเปิด)
+ *   count · lock (only exists during a tx) · orders:<id> → order (+ openPos = position in the open list)
  *   makerCount:<maker> · makerOrders:<maker>:<i> → id
- *   pairCount:<sell>:<buy> · pairOrders:<sell>:<buy>:<i> → id          ทุก order ของคู่ (เพิ่มอย่างเดียว)
- *   openCount:<sell>:<buy> · openOrders:<sell>:<buy>:<i> → id          order ที่ยังเปิด (ลบแบบสลับตัวท้าย)
- * escrow invariant: ยอด balanceOf(โปรแกรมนี้) ของแต่ละ token = ผลรวม remaining ของ order ที่ยังเปิด (รวมที่หมดอายุแต่ยังไม่คืน) ใน token นั้น
+ *   pairCount:<sell>:<buy> · pairOrders:<sell>:<buy>:<i> → id          every order of the pair (append-only)
+ *   openCount:<sell>:<buy> · openOrders:<sell>:<buy>:<i> → id          open orders (removed by swapping in the last one)
+ * escrow invariant: the balanceOf(this program) of each token = sum of remaining of open orders (including expired but not yet refunded) in that token
  */
 import { SET_METADATA, CHECK_ADDRESS } from "./common.js";
 
-/** จำนวนรายการสูงสุดของ fillOrders ต่อ tx (~50k แก๊สต่อรายการ → 20 รายการ ≈ 1M ต่ำกว่า block 5M) */
+/** max entries in fillOrders per tx (~50k gas per entry → 20 entries ≈ 1M, below the 5M block) */
 export const LIMIT_ORDER_MAX_BATCH = 20;
-/** เพดานของ sellAmount / buyAmount (ไม่ถึง 2^128) */
+/** cap on sellAmount / buyAmount (below 2^128) */
 export const LIMIT_ORDER_MAX_AMOUNT = 1n << 128n;
-/** bestOrders ตรวจ order ที่เปิดอยู่ได้ไม่เกินเท่านี้ต่อครั้ง */
+/** bestOrders checks at most this many open orders per call */
 export const LIMIT_ORDER_BEST_SCAN = 100;
-/** limit สูงสุดของการแบ่งหน้า (ordersOf / ordersForPair / bestOrders) */
+/** max pagination limit (ordersOf / ordersForPair / bestOrders) */
 export const LIMIT_ORDER_MAX_PAGE = 50;
 
 export const LIMIT_ORDER_FUNCTIONS = ["placeOrder", "fillOrder", "fillOrders", "cancelOrder", "cancelExpired"];

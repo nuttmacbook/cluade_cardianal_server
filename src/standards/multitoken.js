@@ -1,28 +1,28 @@
 /**
- * มาตรฐาน multi-token (คล้าย ERC-1155) — 1 โปรแกรมมีหลาย id · แต่ละ id มีจำนวน (id ที่มีชิ้นเดียว = NFT, หลายชิ้น = เหรียญ / ไอเทม)
+ * Multi-token standard (similar to ERC-1155) — 1 program holds many ids · each id has an amount (single-item id = NFT, many = coin / item)
  *
- * ฟังก์ชันที่ต้องมี (อ่านอย่างเดียว)
+ * Required functions (read-only)
  *   balanceOf({ account, id })                       → bigint
- *   balanceOfBatch({ accounts: [..], ids: [..] })    → [bigint]   (ยาวเท่ากัน · คู่ลำดับเดียวกัน)
+ *   balanceOfBatch({ accounts: [..], ids: [..] })    → [bigint]   (same length · paired by position)
  *   isApprovedForAll({ account, operator })          → boolean
- *   uri({ id })                                      → string     uri ของ id นั้น หรือ template ("…/{id}.json" ให้ client แทนค่าเอง)
- * ฟังก์ชันที่เปลี่ยน state
+ *   uri({ id })                                      → string     uri of that id, or a template ("…/{id}.json", the client substitutes it)
+ * State-changing functions
  *   setApprovalForAll({ operator, approved })        → true
- *   safeTransferFrom({ from, to, id, amount, data? })           → true   ผู้เรียก = from หรือ operator ของ from
+ *   safeTransferFrom({ from, to, id, amount, data? })           → true   caller = from or an operator of from
  *   safeBatchTransferFrom({ from, to, ids, amounts, data? })    → true
- *     ปลายทางเป็นโปรแกรม → ต้องตอบ onERC1155Received = "0xf23a6e61" / onERC1155BatchReceived = "0xbc197c81" ไม่งั้นทั้ง tx ล้ม
- * ฟังก์ชันเสริมใน MULTITOKEN_PROGRAM
- *   mint({ to, id, amount, data? }) / mintBatch({ to, ids, amounts, data? })   เจ้าของโปรแกรม / minter เท่านั้น
+ *     program recipient → must return onERC1155Received = "0xf23a6e61" / onERC1155BatchReceived = "0xbc197c81" or the whole tx fails
+ * Extra functions in MULTITOKEN_PROGRAM
+ *   mint({ to, id, amount, data? }) / mintBatch({ to, ids, amounts, data? })   program owner / minter only
  *   burn({ from, id, amount }) · setURI({ id, uri }) · setMinter({ minter, allowed }) · totalSupply({ id }) · name() · symbol() · owner()
  *   supportsInterface({ interfaceId })
- * event ที่ต้อง emit
+ * Events that must be emitted
  *   TransferSingle { operator, from, to, id, amount }     mint from = ZERO_ADDRESS · burn to = ZERO_ADDRESS
  *   TransferBatch  { operator, from, to, ids, amounts }
  *   ApprovalForAll { account, operator, approved }
- *   URI            { value, id }                          (เฉพาะตอน setURI)
+ *   URI            { value, id }                          (only on setURI)
  *
- * id / amount เป็น bigint · storage: balances:<account>:<id> (explorer ไล่ของที่ address ถือได้จาก prefix) · supply:<id>
- * /evm แปลง TransferSingle / TransferBatch → log ERC-1155 — ดู src/node/evm-rpc.js
+ * id / amount are bigint · storage: balances:<account>:<id> (the explorer lists an address's holdings by prefix) · supply:<id>
+ * /evm maps TransferSingle / TransferBatch → ERC-1155 logs — see src/node/evm-rpc.js
  */
 import { ZERO_ADDRESS, checkStandard } from "./token.js";
 import { ERC1155_RECEIVED, ERC1155_BATCH_RECEIVED } from "./wallet.js";
@@ -30,15 +30,15 @@ import { ERC1155_RECEIVED, ERC1155_BATCH_RECEIVED } from "./wallet.js";
 export const MULTITOKEN_FUNCTIONS = ["balanceOf", "balanceOfBatch", "isApprovedForAll", "uri",
   "setApprovalForAll", "safeTransferFrom", "safeBatchTransferFrom"];
 export const MULTITOKEN_EVENTS = ["TransferSingle", "TransferBatch", "ApprovalForAll"];
-/** interface id แบบ ERC-165: ERC-165 / ERC-1155 / ERC-1155 Metadata URI */
+/** ERC-165 interface ids: ERC-165 / ERC-1155 / ERC-1155 Metadata URI */
 export const MULTITOKEN_INTERFACES = ["0x01ffc9a7", "0xd9b67a26", "0x0e89341c"];
 
-/** โค้ดนี้ทำตามมาตรฐาน multi-token ไหม → { ok, missing: [] } */
+/** does this code follow the multi-token standard? → { ok, missing: [] } */
 export const checkMultiTokenStandard = (code) => checkStandard(code, MULTITOKEN_FUNCTIONS, MULTITOKEN_EVENTS);
 
 /**
- * โปรแกรม multi-token ตามมาตรฐาน — input ตอน deploy: { name?, symbol?, uri, owner?, namespace?, icon?, url?, contact?, description? }
- * owner (ไม่ส่ง = ผู้ deploy) (mint / setURI / ตั้ง minter)
+ * Standard multi-token program — input on deploy: { name?, symbol?, uri, owner?, namespace?, icon?, url?, contact?, description? }
+ * owner (omitted = the deployer) (mint / setURI / set minters)
  */
 export const MULTITOKEN_PROGRAM = `function program() {
   const ZERO = "${ZERO_ADDRESS}"

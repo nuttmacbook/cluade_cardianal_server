@@ -1,5 +1,5 @@
-/* explorerscan/ui/tabs/interact.js [แก้ได้ · หน้าตา]
-   แท็บ Interact: ฟอร์มเรียกฟังก์ชัน (ช่องกรอกเดาจาก core/interact.js หรือพิมพ์ JSON) + กล่องผลลัพธ์ */
+/* explorerscan/ui/tabs/interact.js [editable · look]
+   Interact tab: function call form (fields guessed by core/interact.js, or type JSON) + result box */
 
 let ix = { program: null, code: "", fn: "", mode: "fields", values: {}, json: "{}", extra: {} };
 try { if (localStorage.getItem("ix-mode") === "json") ix.mode = "json"; } catch {}

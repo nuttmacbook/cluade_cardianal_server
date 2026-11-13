@@ -1,17 +1,17 @@
 /**
- * multicall — เรียกหลายโปรแกรม / หลายฟังก์ชันใน tx (หรือ query) เดียว
+ * multicall — call several programs / functions in a single tx (or query)
  *
- *   aggregate({ calls: [{ target, fn, input? }, …], readonly? })   → [ผลของแต่ละ call] ตามลำดับ
- *       ทำทีละ call ตามลำดับ · call ไหน throw → ทั้งหมดล้ม (all-or-nothing: การเขียนของทุก call ถูกย้อน)
+ *   aggregate({ calls: [{ target, fn, input? }, …], readonly? })   → [result of each call] in order
+ *       runs calls one by one in order · any call throws → everything fails (all-or-nothing: writes of every call are reverted)
  *   tryAggregate({ calls, readonly?, requireSuccess? })            → [{ success: true, result } | { success: false, error, code }]
- *       call ที่ล้มถูกย้อนเฉพาะตัวมันเอง (savepoint ของ runProgram) ที่เหลือทำต่อ · requireSuccess: true = ล้มตัวเดียวล้มหมด
- *   readonly: true → ทุก call เป็น runProgram(..., { readonly: true }) (STATICCALL): ปลายทางแก้ state ไม่ได้ทุกชั้น
- *       ใช้กับ vm.query / POST /query เพื่ออ่านหลายค่าในรอบเดียว และรับประกันว่าไม่มี call ไหนเขียนอะไร
- *   getBlockNumber() / getChainId() / getNativeBalance({ who }) → ตัวช่วยอ่านค่าของเชนใน aggregate เดียวกัน
+ *       a failed call reverts only itself (runProgram savepoint), the rest continue · requireSuccess: true = one failure fails all
+ *   readonly: true → every call is runProgram(..., { readonly: true }) (STATICCALL): targets cannot modify state at any depth
+ *       use with vm.query / POST /query to read many values in one round trip, guaranteeing no call writes anything
+ *   getBlockNumber() / getChainId() / getNativeBalance({ who }) → helpers to read chain values in the same aggregate
  *
- * ข้อควรรู้ (เหมือน Multicall3): ปลายทางเห็น sender = address ของ multicall ไม่ใช่ผู้ส่ง tx
- *   → ใช้รวม "อ่าน" หรือรวม call ที่ไม่ขึ้นกับว่าใครเรียก · โอนเหรียญของตัวเองหลายรายการให้ใช้ multiTransfer ของ token
- *   หรือ execute ของกระเป๋าโปรแกรม (src/standards/wallet.js) แทน
+ * Caveat (same as Multicall3): targets see sender = the multicall's address, not the tx sender
+ *   → use it to batch "reads" or calls that don't depend on the caller · to transfer your own coins to many recipients use the token's multiTransfer
+ *   or the program wallet's execute (src/standards/wallet.js) instead
  */
 
 export const MULTICALL_FUNCTIONS = ["aggregate", "tryAggregate"];

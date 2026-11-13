@@ -4,7 +4,7 @@ import { VM, MemoryDB } from "./helpers.js";
 import { applyBlock, syncOnce } from "../src/node/sync.js";
 import { TOKEN } from "./programs.js";
 
-/* node ผู้อ่าน: ดึง block มารันเอง แล้วเทียบ hash */
+/* reader node: fetches blocks, runs them itself, then compares hashes */
 
 const T = Date.parse("2025-01-01T00:00:00Z");
 const user = (name) => ({ sender: name, origin: name });
@@ -40,7 +40,7 @@ const reader = () => {
   return vm;
 };
 
-test("sync: ดึง block มารันแล้วได้ state เหมือนผู้ผลิตทุกตัวอักษร", async () => {
+test("sync: fetching and running blocks gives state identical to the producer, byte for byte", async () => {
   const source = producer();
   const target = reader();
   assert.equal(await syncOnce(target, feed(source)), 4);
@@ -49,7 +49,7 @@ test("sync: ดึง block มารันแล้วได้ state เหม
   assert.deepEqual(target.db.snapshot(), source.db.snapshot());
 });
 
-test("sync: ซิงก์ต่อจากที่ค้างไว้", async () => {
+test("sync: resumes syncing from where it stopped", async () => {
   const source = producer();
   const target = reader();
   await syncOnce(target, async (from, limit) => (await feed(source)(from, limit)).slice(0, 2));
@@ -59,26 +59,26 @@ test("sync: ซิงก์ต่อจากที่ค้างไว้", as
   assert.deepEqual(target.db.snapshot(), source.db.snapshot());
 });
 
-test("sync: block ที่ถูกแก้ → หยุดทันที ไม่บันทึก", () => {
+test("sync: tampered block → stops immediately, saves nothing", () => {
   const source = producer();
   const target = reader();
   const item = { header: { ...source.getBlock(1) }, body: source.getBlockBody(1) };
-  item.body[0].request.initInput = { supply: 999 };       // แก้ tx ระหว่างทาง
+  item.body[0].request.initInput = { supply: 999 };       // tamper with a tx in transit
 
   assert.throws(() => applyBlock(target, item), /ไม่ตรงกับผู้ผลิต/);
   assert.equal(target.latestBlockNumber(), null);
 });
 
-test("genesis: ต่างกัน → ปฏิเสธตั้งแต่ยังไม่ซิงก์", () => {
+test("genesis: mismatch → rejected before syncing", () => {
   const vm = reader();
   assert.equal(vm.genesisHash(), vm.hashData(GENESIS));
-  assert.deepEqual(vm.applyGenesis(GENESIS), { hash: vm.genesisHash(), applied: false });   // ซ้ำได้ ไม่เปลี่ยนอะไร
+  assert.deepEqual(vm.applyGenesis(GENESIS), { hash: vm.genesisHash(), applied: false });   // repeatable, changes nothing
   assert.throws(() => vm.applyGenesis({ chainId: 1, balances: { alice: 999 } }), { code: "INTERNAL", message: /genesis ไม่ตรงกัน/ });
   assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n);
 });
 
-test("timeout: tx ที่หมดเวลาไม่เข้า block (ผลจึงไม่ขึ้นกับความเร็วเครื่อง)", () => {
-  const vm = new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, chargeGas: false, timeoutMs: 50, maxTxGas: Infinity });   // ไม่จำกัดแก๊ส → หยุดด้วยเวลา (มีแก๊สจะหมดแก๊สก่อน ดู 53-gas-meter)
+test("timeout: a timed-out tx does not enter the block (so results do not depend on machine speed)", () => {
+  const vm = new VM.VirtualMachine(new MemoryDB(), { ...OPTIONS, chargeGas: false, timeoutMs: 50, maxTxGas: Infinity });   // no gas cap → stopped by time (with gas it runs out of gas first, see 53-gas-meter)
   vm.applyGenesis(GENESIS);
   const code = "function program() {\n  function spin() { while (true) {} }\n  return { spin }\n}";
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner" });
@@ -88,17 +88,17 @@ test("timeout: tx ที่หมดเวลาไม่เข้า block (ผ
   block.commit();
 
   assert.equal(timedOut.error.code, "TIMEOUT");
-  assert.equal(timedOut.accepted, false);        // ไม่เข้า block
-  assert.deepEqual(timedOut.writes, []);         // ไม่กิน nonce ไม่เสียค่าแก๊ส
-  assert.equal(vm.getBlock(1).txCount, 2);       // มีแต่ deploy กับ init
+  assert.equal(timedOut.accepted, false);        // not in the block
+  assert.deepEqual(timedOut.writes, []);         // uses no nonce, pays no gas
+  assert.equal(vm.getBlock(1).txCount, 2);       // only deploy and init
   assert.equal(vm.db.readKeys(["alice:nonce"])[0], 1);
 });
 
-test("error จาก V8 ถูกแทนด้วยข้อความคงที่ (ผลเหมือนกันทุกเวอร์ชัน Node)", () => {
+test("V8 errors are replaced with a fixed message (same result on every Node version)", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { recordBlocks: true });
   const code = `function program() {
   function typeError() { return null.x }
-  function ownError() { throw new Error("ข้อความของโปรแกรม") }
+  function ownError() { throw new Error("the program's own message") }
   return { typeError, ownError }
 }`;
   vm.commit(vm.deploy({ programUuid: "p", code, context: user("alice") }, { timestamp: T }).writes);
@@ -106,5 +106,5 @@ test("error จาก V8 ถูกแทนด้วยข้อความค�
 
   const call = (fn) => vm.call({ programUuid: "p", functionName: fn, context: user("alice") }, { timestamp: T });
   assert.equal(call("typeError").error.message, "โปรแกรมทำงานผิดพลาด (TypeError)");
-  assert.equal(call("ownError").error.message, "ข้อความของโปรแกรม");   // ของโปรแกรมเองยังเหมือนเดิม
+  assert.equal(call("ownError").error.message, "the program's own message");   // the program's own errors are unchanged
 });

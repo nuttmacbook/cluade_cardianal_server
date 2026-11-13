@@ -1,5 +1,5 @@
-/* explorerscan/ui/tabs/metadata.js [แก้ได้ · หน้าตา]
-   แท็บแก้ metadata ของ address ตัวเอง (ชื่อ, ไอคอน, ลิงก์) · เซ็นด้วยกระเป๋า */
+/* explorerscan/ui/tabs/metadata.js [editable · look]
+   Tab for editing your own address metadata (name, icon, links) · signed with your wallet */
 
 // ---------- edit metadata (signed by the wallet) ----------
 //   only the connected wallet's own address can be edited (the VM always uses the signer as the address)

@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import * as sign from "../src/crypto/signature.js";
 
 /*
- * ลงทะเบียน chainlist (ethereum-lists) ด้วย explorer = https://<host>/evm/explorer · standard EIP3091
- *   CI ของ ethereum-lists เปิด URL นี้จริง → ต้องได้ 2xx (fetch / okhttp ตาม redirect)
- *   กระเป๋าต่อ path ตาม EIP-3091: /tx/<hash> · /address/<addr> · /token/<addr> · /block/<เลข หรือ hash>
+ * chainlist (ethereum-lists) registration uses explorer = https://<host>/evm/explorer · standard EIP3091
+ *   ethereum-lists CI really opens this URL → must get 2xx (fetch / okhttp follow redirects)
+ *   wallets append paths per EIP-3091: /tx/<hash> · /address/<addr> · /token/<addr> · /block/<number or hash>
  */
 
 let server, vm, mempool, mineOnce, url;
 before(async () => {
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   ({ server, vm, mempool, mineOnce } = await import("../server.js"));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${server.address().port}`;
@@ -22,14 +22,14 @@ const location = async (path) => {
   return { status: res.status, location: res.headers.get("location") };
 };
 
-test("/evm/explorer: หน้าแรกของ explorer (redirect แล้วได้ 200 HTML)", async () => {
+test("/evm/explorer: explorer home page (redirect, then 200 HTML)", async () => {
   for (const path of ["/evm/explorer", "/evm/explorer/"]) assert.deepEqual(await location(path), { status: 302, location: "/" });
   const res = await fetch(`${url}/evm/explorer`);
   assert.equal(res.status, 200);
   assert.match(res.headers.get("content-type"), /text\/html/);
 });
 
-test("EIP-3091: tx / address / token / block (เลข และ hash) → หน้าเดิมของ explorer", async () => {
+test("EIP-3091: tx / address / token / block (number and hash) → existing explorer pages", async () => {
   const key = sign.randomPrivateKey();
   const from = sign.addressOf(key);
   vm.db.load({ [`${from}:native:received`]: "1000000000000000000n" });
@@ -46,6 +46,6 @@ test("EIP-3091: tx / address / token / block (เลข และ hash) → ห�
   assert.equal((await location(`/evm/explorer/block/${header.number}`)).location, `/#block/${header.number}`);
   assert.equal((await location(`/evm/explorer/block/${header.hash}`)).location, `/#block/${header.number}`);
   assert.equal((await location(`/evm/explorer/block/${header.hash.toUpperCase().replace("0X", "0x")}`)).location, `/#block/${header.number}`);
-  assert.equal((await location(`/evm/explorer/block/0x${"0".repeat(64)}`)).location, `/#block/0x${"0".repeat(64)}`);   // ไม่รู้จัก → หน้า block บอก not found
+  assert.equal((await location(`/evm/explorer/block/0x${"0".repeat(64)}`)).location, `/#block/0x${"0".repeat(64)}`);   // unknown → block page shows not found
   assert.equal((await location("/evm/explorer/nope/1")).status, 404);
 });

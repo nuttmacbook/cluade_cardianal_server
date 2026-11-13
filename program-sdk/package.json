@@ -2,7 +2,7 @@
   "name": "my-vm-program",
   "version": "1.0.0",
   "type": "module",
-  "description": "เขียนโปรแกรมสำหรับรันบน Program VM",
+  "description": "Write programs that run on the Program VM",
   "scripts": {
     "test": "node --test \"**/*.test.js\"",
     "deploy": "node deploy.js hello-world/hello.program.js"

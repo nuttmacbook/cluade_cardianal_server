@@ -1,5 +1,5 @@
-/* explorerscan/ui/pages/block.js [แก้ได้ · หน้าตา]
-   หน้า block (#block/<เลข>): header, ค่าแก๊ส EIP-1559, tx ใน block, tx ที่ถูกปฏิเสธ */
+/* explorerscan/ui/pages/block.js [editable · look]
+   Block page (#block/<number>): header, EIP-1559 gas fees, txs in the block, rejected txs */
 
 // ---------- block ----------
 async function block(number, draw = el) {

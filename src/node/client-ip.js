@@ -1,14 +1,14 @@
 /**
- * IP ของผู้ใช้สำหรับ rate limit
+ * The client's IP for rate limiting
  *
- *   TRUST_PROXY=0   (ค่าเริ่ม) ใช้ IP ของ socket ตรง ๆ — server รับ request จากผู้ใช้เอง
- *   TRUST_PROXY=1   มี reverse proxy (nginx / Caddy) 1 ชั้นข้างหน้า → ใช้ IP ที่ proxy เติมท้าย X-Forwarded-For
- *   TRUST_PROXY=N   proxy N ชั้น (เช่น CDN + nginx = 2)
+ *   TRUST_PROXY=0   (default) use the socket IP directly — the server receives requests from users itself
+ *   TRUST_PROXY=1   one reverse proxy (nginx / Caddy) in front → use the IP the proxy appends to X-Forwarded-For
+ *   TRUST_PROXY=N   N proxy hops (e.g. CDN + nginx = 2)
  *
- * ไม่ตั้งทั้งที่อยู่หลัง proxy = ทุกคนได้ IP ของ proxy → ใช้โควตาร่วมกันทั้งเครือข่าย
- * นับจากขวา: ผู้ใช้ปลอม X-Forwarded-For ได้แค่ส่วนซ้ายที่ proxy ไม่ได้เติม
- *   nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   Caddy: reverse_proxy เติมให้เอง
- * ⚠️ ตั้ง TRUST_PROXY > 0 ทั้งที่ไม่มี proxy = ผู้ใช้ปลอม IP ได้ (เปิด port ของ server ให้เฉพาะ proxy)
+ * Not set while behind a proxy = everyone gets the proxy's IP → the whole network shares one quota
+ * Counted from the right: users can only forge the left part that the proxy didn't append
+ *   nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   Caddy: reverse_proxy appends it itself
+ * ⚠️ Setting TRUST_PROXY > 0 without a proxy = users can spoof their IP (expose the server port only to the proxy)
  */
 export const TRUST_PROXY = Math.max(0, Math.floor(Number(process.env.TRUST_PROXY ?? 0) || 0));
 

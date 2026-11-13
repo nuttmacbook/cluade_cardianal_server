@@ -5,9 +5,9 @@ import { programAbi } from "../src/node/explorer-api.js";
 import { createEvmRpc } from "../src/node/evm-rpc.js";
 
 /*
- * metadata.abi: คำอธิบายฟังก์ชัน / event ของโปรแกรม (ไม่บังคับ)
+ * metadata.abi: description of a program's functions / events (optional)
  *   { functions: [{ name, inputs: [{ name, type }], outputs, readonly?, payable?, description? }], events: [{ name, fields: [{ name, type, indexed? }] }] }
- *   ส่งตอน deploy หรือ setMetadata("abi", ...) ในโปรแกรม · ตรวจด้วย checkAbi · explorer สร้างฟอร์ม / อ่าน event · /evm คืนเป็น JSON ABI
+ *   sent at deploy or via setMetadata("abi", ...) in the program · checked by checkAbi · the explorer builds forms / decodes events · /evm returns it as a JSON ABI
  */
 
 const OWNER = "0x00000000000000000000000000000000000000a1";
@@ -16,7 +16,7 @@ const as = (who) => ({ sender: who, origin: who });
 
 const ABI = {
   functions: [
-    { name: "set", inputs: [{ name: "value", type: "uint" }, { name: "to", type: "address" }], description: "ตั้งค่า" },
+    { name: "set", inputs: [{ name: "value", type: "uint" }, { name: "to", type: "address" }], description: "set the value" },
     { name: "get", inputs: [], outputs: [{ type: "uint" }], readonly: true },
     { name: "fund", payable: true },
   ],
@@ -37,7 +37,7 @@ const save = (vm, res) => {
   return res;
 };
 
-test("checkAbi: ABI ที่ถูกต้องผ่าน · ผิด schema → INVALID_REQUEST พร้อมบอกจุดที่ผิด", () => {
+test("checkAbi: a valid ABI passes · schema errors → INVALID_REQUEST naming the bad spot", () => {
   assert.equal(VM.checkAbi(ABI), ABI);
   assert.deepEqual(VM.checkAbi({}), {});
   const field = (extra) => ({ functions: [{ name: "f", inputs: [{ name: "a", type: "uint", ...extra }] }] });
@@ -50,7 +50,7 @@ test("checkAbi: ABI ที่ถูกต้องผ่าน · ผิด sche
     [{ functions: [{ name: "f", readonly: true, payable: true }] }, /readonly กับ payable/],
     [{ functions: [{ name: "f", readonly: "yes" }] }, /readonly ต้องเป็น true/],
     [field({ type: "uint8" }), /type ต้องเป็นหนึ่งใน/],
-    [field({ indexed: true }), /ไม่รู้จัก 'indexed'/],              // indexed มีได้เฉพาะ field ของ event
+    [field({ indexed: true }), /ไม่รู้จัก 'indexed'/],              // indexed is allowed only on event fields
     [{ functions: [{ name: "f", inputs: [{ name: "a", type: "uint" }, { name: "a", type: "bool" }] }] }, /'a' ซ้ำ/],
     [{ functions: [{ name: "f", description: "x".repeat(201) }] }, /description/],
     [{ functions: Array.from({ length: 65 }, (_, i) => ({ name: `f${i}` })) }, /ไม่เกิน 64/],
@@ -63,7 +63,7 @@ test("checkAbi: ABI ที่ถูกต้องผ่าน · ผิด sche
   }
 });
 
-test("deploy พร้อม metadata.abi: เก็บไว้ · ABI ผิด schema / ประกาศฟังก์ชันที่ไม่ได้ export → ปฏิเสธ", () => {
+test("deploy with metadata.abi: stored · invalid schema / declaring non-exported functions → rejected", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   const bad = vm.deploy({ programUuid: P, code: CODE, context: as(OWNER), metadata: { abi: { functions: [{ name: "nope" }] } } });
   assert.equal(bad.error.code, "INVALID_REQUEST");
@@ -76,7 +76,7 @@ test("deploy พร้อม metadata.abi: เก็บไว้ · ABI ผิ�
   assert.deepEqual(programAbi(vm, P).abi, ABI);
 });
 
-test("setMetadata(\"abi\") จากในโปรแกรม: ตรวจ schema เหมือนกัน · null = ลบ", () => {
+test("setMetadata(\"abi\") from inside a program: same schema check · null = remove", () => {
   const vm = new VM.VirtualMachine(new MemoryDB());
   save(vm, vm.deploy({ programUuid: P, code: CODE, context: as(OWNER) }));
   save(vm, vm.init({ programUuid: P }));
@@ -91,7 +91,7 @@ test("setMetadata(\"abi\") จากในโปรแกรม: ตรวจ sc
   assert.equal(vm.getMetadata(P).abi, undefined);
 });
 
-test("toEvmAbi / programAbi / cardianal_getAbi: แปลงเป็น JSON ABI แบบ Ethereum", () => {
+test("toEvmAbi / programAbi / cardianal_getAbi: convert to an Ethereum JSON ABI", () => {
   const evm = VM.toEvmAbi(ABI);
   assert.deepEqual(evm, [
     { type: "function", name: "set", inputs: [{ name: "value", type: "uint256" }, { name: "to", type: "address" }], outputs: [], stateMutability: "nonpayable" },
@@ -107,7 +107,7 @@ test("toEvmAbi / programAbi / cardianal_getAbi: แปลงเป็น JSON AB
   const ask = (address) => rpc.handle({ jsonrpc: "2.0", id: 1, method: "cardianal_getAbi", params: [address] }).result;
   assert.deepEqual(ask(P), evm);
   assert.equal(ask(OWNER), null);
-  // event ที่ emit แบบ indexed ตรงกับ ABI → topic0 = keccak("Set(address,uint256)") เหมือนเครื่องมือ EVM คำนวณ
+  // an indexed event matching the ABI → topic0 = keccak("Set(address,uint256)"), as EVM tools compute it
   const res = vm.call({ programUuid: P, functionName: "set", input: { to: OWNER, value: "9n" }, context: as(OWNER) });
   assert.equal(VM.eventLog(res.events[0]).topics[0], VM.keccak256Hex("Set(address,uint256)"));
 });

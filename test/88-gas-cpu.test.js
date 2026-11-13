@@ -4,11 +4,11 @@ import { VM, MemoryDB } from "./helpers.js";
 import { measure, WORKLOADS, MAX_TX_GAS } from "../dev/bench-gas.js";
 
 /*
- * ระยะ 2.2: แก๊สตามงาน CPU (วัดด้วย npm run bench:gas — dev/bench-gas.js)
- * งานที่เคย "ถูกแต่ช้า" (เวลาต่อแก๊สเกิน baseline หลายสิบเท่า) ถูกคิดเพิ่ม:
- *   JSON.stringify ซ้อนลึก (เดิม 275 เท่า: tx 3M แก๊สใช้ 47 วิ) · Map / Set ที่ key เป็น string ยาว (68 เท่า) · switch / === / < กับ string ยาว (13–16 เท่า)
- *   sort ปริยาย (14) · flat ลึก (12) · normalize (11) · JSON.parse
- * เทสต์นี้คุมสูตรแก๊ส (ค่าแน่นอน) + เวลาแบบหลวม ๆ ของงานที่แย่ที่สุด (tx เต็ม 3M แก๊สต้องจบในไม่กี่วินาที)
+ * Phase 2.2: gas by CPU work (measured with npm run bench:gas, dev/bench-gas.js)
+ * work that used to be "cheap but slow" (time per gas tens of times over baseline) now costs more:
+ *   deeply nested JSON.stringify (was 275×: a 3M-gas tx took 47 s) · Map / Set with long string keys (68×) · switch / === / < on long strings (13–16×)
+ *   default sort (14) · deep flat (12) · normalize (11) · JSON.parse
+ * this test pins the gas formulas (exact values) + loose timings for the worst cases (a full 3M-gas tx must finish in a few seconds)
  */
 
 const T = Date.parse("2026-01-01T00:00:00Z");
@@ -35,23 +35,23 @@ function setup() {
   return { run };
 }
 
-test("string ยาว: === / < / == / switch คิดตามความยาว · string สั้นแก๊สเท่าเดิม", () => {
+test("long strings: === / < / == / switch cost by length · short strings keep the same gas", () => {
   const { run } = setup();
   const S = "const K = 'k'.repeat(32000); const J = 'k'.repeat(32000); let x";
   const SHORT = "const K = 'k'.repeat(32); const J = 'k'.repeat(32); let x";
-  // 32,000 ตัวอักษร = 1,000 หน่วย · 32 ตัวแรกรวมใน operator → คิดเพิ่ม 999
+  // 32,000 characters = 1,000 units · the first 32 are included in the operator → 999 extra
   const extra = 999;
   assert.equal(run("x = K === J", S) - run("x = K === J", SHORT), extra);
   assert.equal(run("x = K !== J", S) - run("x = K !== J", SHORT), extra);
   assert.equal(run("x = K < J", S) - run("x = K < J", SHORT), extra);
   assert.equal(run("x = K == J", S) - run("x = K == J", SHORT), extra);
   assert.equal(run("switch (K) { case J: x = 1; break; case 'a': x = 2 }", S) - run("switch (K) { case J: x = 1; break; case 'a': x = 2 }", SHORT), 2 * extra);
-  // ความยาวต่างกัน: === รู้ทันที ไม่คิดเพิ่ม · ข้างหนึ่งเป็นค่าคงที่: ไม่ครอบเลย
+  // different lengths: === knows at once, no extra cost · one side a constant: not wrapped at all
   assert.equal(run("x = K === J + 'z'", S) - run("x = K === J + 'z'", SHORT), run("const t = J + 'z'", S) - run("const t = J + 'z'", SHORT));
   assert.equal(run("x = K === 'abc'", S), run("x = K === 'abc'", SHORT));
 });
 
-test("Map / Set: key string ยาวคิดตามความยาว (get / has / delete × 1 · set / add × 2)", () => {
+test("Map / Set: long string keys cost by length (get / has / delete × 1 · set / add × 2)", () => {
   const { run } = setup();
   const S = "const K = 'k'.repeat(32000); const m = new Map(); const s = new Set()";
   const SHORT = "const K = 'k'.repeat(32); const m = new Map(); const s = new Set()";
@@ -61,19 +61,19 @@ test("Map / Set: key string ยาวคิดตามความยาว (ge
   assert.equal(diff("m.delete(K)"), 999);
   assert.equal(diff("m.set(K, 1n)"), 2 * 999);
   assert.equal(diff("s.add(K)"), 2 * 999);
-  assert.equal(diff("Map.prototype.get.call(m, K)") - diff("const g = Map.prototype.get"), 999);   // ทุกทางที่เรียกคิดเท่ากัน
-  assert.equal(run("m.set(1n, 2n); m.get(1n)", S), run("m.set(1n, 2n); m.get(1n)", SHORT));   // key ไม่ใช่ string: เท่าเดิม
+  assert.equal(diff("Map.prototype.get.call(m, K)") - diff("const g = Map.prototype.get"), 999);   // every way of calling costs the same
+  assert.equal(run("m.set(1n, 2n); m.get(1n)", S), run("m.set(1n, 2n); m.get(1n)", SHORT));   // non-string key: unchanged
 });
 
-test("JSON.stringify ซ้อนลึกคิดตามความลึก · flat คิดทุกชั้นที่ไล่ · sort ปริยายคิดต่อการเทียบ · ผลลัพธ์เหมือน engine", () => {
+test("deeply nested JSON.stringify costs by depth · flat costs every level walked · default sort costs per comparison · results match the engine", () => {
   const { run } = setup();
   const deep = (n) => run("JSON.stringify(o)", `let o = 1n; for (let i = 0; i < ${n}; i++) o = [o]`) ;
-  // 2 + ⌊ชั้น / 8⌋ ต่อ array · ยิ่งลึกยิ่งแพงแบบกำลังสอง
+  // 2 + ⌊depth / 8⌋ per array · cost grows quadratically with depth
   assert.ok(deep(400) - deep(200) > 2 * (deep(200) - deep(100)));
   const flat = (n) => run("x.flat(Infinity)", `let x = [1n]; for (let i = 0; i < ${n}; i++) x = [x]`);
-  assert.equal(flat(200) - flat(100), 100 * 9);   // 8 + 1 สมาชิก ต่อ array ที่ไล่
+  assert.equal(flat(200) - flat(100), 100 * 9);   // 8 + 1 element per array walked
 
-  // ผลเหมือน engine: replacer แบบ array (ลำดับตามรายชื่อ · ซ้ำ / ชนิดอื่นถูกข้าม) · replacer แบบ function · space · toJSON
+  // same as the engine: array replacer (order follows the list · duplicates / other types skipped) · function replacer · space · toJSON
   const vm = new VM.VirtualMachine(new MemoryDB(), {});
   const code = `function program() {
     function initialization() {}
@@ -102,8 +102,8 @@ test("JSON.stringify ซ้อนลึกคิดตามความลึ�
   ]);
 });
 
-test("งานที่เคยแย่ที่สุด: tx เต็ม 3M แก๊สจบในไม่กี่วินาที (เดิม 12–47 วินาที)", () => {
-  for (const name of ["JSON.stringify ซ้อนลึก", "Map set string ยาว", "Map key ยาว", "switch string ยาว", "string < ยาว", "array sort default"]) {
+test("former worst cases: a full 3M-gas tx finishes in a few seconds (was 12–47 seconds)", () => {
+  for (const name of ["JSON.stringify deeply nested", "Map set long string", "Map long key", "switch string long", "string < long", "array sort default"]) {
     const row = measure(name, WORKLOADS[name], { repeat: 1 });
     assert.equal(row.code, "OUT_OF_GAS", name);
     assert.ok(row.ms < 4000, `${name}: ${row.ms.toFixed(0)} ms`);

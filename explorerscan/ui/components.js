@@ -1,6 +1,6 @@
-/* explorerscan/ui/components.js [แก้ได้ · หน้าตา]
-   ชิ้นส่วนที่ใช้ซ้ำทุกหน้า: panel, ตาราง, key/value, ลิงก์ address / tx, ไอคอน, tag สถานะ, กล่อง JSON, ตัวแบ่งหน้า, แท็บ
-   แก้ HTML ที่นี่ = เปลี่ยนทุกหน้าพร้อมกัน · สีและขนาดอยู่ใน theme/style.css (ชื่อ class ตรงกัน) */
+/* explorerscan/ui/components.js [editable · look]
+   Pieces reused on every page: panel, table, key/value, address / tx links, icons, status tags, JSON box, pager, tabs
+   Edit the HTML here = every page changes at once · colors and sizes are in theme/style.css (class names match) */
 
 /** every address and hash is clickable and copyable */
 const copy = (value) => `<button class="copy" title="Copy" onclick="event.stopPropagation();copyText('${value}')">⧉</button>`;

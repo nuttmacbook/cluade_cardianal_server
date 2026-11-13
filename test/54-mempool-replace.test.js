@@ -5,7 +5,7 @@ import { Mempool } from "../src/node/mempool.js";
 import * as sign from "../src/crypto/signature.js";
 import { TOKEN } from "./programs.js";
 
-/* แทนที่ tx ที่ยังรอในคิว (nonce เดิม + gasPrice สูงกว่าเดิม ≥ 10%) · ยกเลิกด้วยการโอน 0 ให้ตัวเอง (แบบ EVM) */
+/* replace a tx still in the queue (same nonce + gasPrice ≥ 10% higher) · cancel by sending 0 to yourself (EVM style) */
 
 const T = Date.parse("2024-06-01T10:00:00Z");
 const ALICE_KEY = sign.randomPrivateKey();
@@ -27,12 +27,12 @@ function setup(options = {}) {
 const callTx = (from, nonce, gasPrice, amount = 1) =>
   ({ chainId: 1, action: "call", from, to: "token", method: "transfer", input: { to: "0xcarol", amount }, value: 0, nonce, gasLimit: 0, gasPrice });
 const cancelTx = (from, nonce, gasPrice) =>
-  ({ chainId: 1, action: "transfer", from, to: from, value: 0, nonce, gasLimit: 0, gasPrice });   // ยกเลิก = โอน 0 ให้ตัวเอง
+  ({ chainId: 1, action: "transfer", from, to: from, value: 0, nonce, gasLimit: 0, gasPrice });   // cancel = send 0 to yourself
 const signed = (tx, key = ALICE_KEY) => ({ tx, signature: sign.signTransaction(tx, key) });
 
 // ---------------------------------------------------------------------------
 
-test("แทนที่: gasPrice +10% → แทนที่ได้, ใบเดิมหายจากคิว และจำ replacedBy ไว้", () => {
+test("replace: gasPrice +10% → replaced, the old tx leaves the queue, and replacedBy is recorded", () => {
   const pool = new Mempool(setup());
   const old = pool.add(signed(callTx(alice, 0, 100)), { now: T });
   const next = pool.add(signed(callTx(alice, 0, 110, 2)), { now: T + 1 });
@@ -41,10 +41,10 @@ test("แทนที่: gasPrice +10% → แทนที่ได้, ใบ�
   assert.equal(pool.has(old.hash), false);
   assert.equal(pool.has(next.hash), true);
   assert.equal(pool.replacedBy(old.hash, { now: T + 2 }), next.hash);
-  assert.equal(pool.nextNonce(alice), 1);                         // แทนที่ไม่ขยับ nonce ถัดไป
+  assert.equal(pool.nextNonce(alice), 1);                         // replacing does not advance the next nonce
 });
 
-test("แทนที่: gasPrice +9% → ปฏิเสธ และใบเดิมยังอยู่", () => {
+test("replace: gasPrice +9% → rejected, and the old tx stays", () => {
   const pool = new Mempool(setup());
   const old = pool.add(signed(callTx(alice, 0, 100)), { now: T });
   const res = pool.add(signed(callTx(alice, 0, 109, 2)), { now: T });
@@ -54,26 +54,26 @@ test("แทนที่: gasPrice +9% → ปฏิเสธ และใบเ
   assert.equal(pool.size, 1);
 });
 
-test("แทนที่: ขอบพอดี (wei ใหญ่ เป็น string) และปัดขึ้น · ไม่ระบุ gasPrice = ราคาตั้งต้นของ VM", () => {
+test("replace: exact boundary (large wei as a string) and rounding up · no gasPrice = the VM's default price", () => {
   const pool = new Mempool(setup({ gas: { price: 1_000_000_000n } }));
   pool.add(signed(callTx(alice, 0, "1000000000")), { now: T });
   assert.equal(pool.add(signed(callTx(alice, 0, "1099999999n")), { now: T }).ok, false);
-  assert.equal(pool.add(signed(callTx(alice, 0, "1100000000n")), { now: T }).ok, true);   // = เดิม × 1.1 พอดี
+  assert.equal(pool.add(signed(callTx(alice, 0, "1100000000n")), { now: T }).ok, true);   // = old × 1.1 exactly
 
-  // ใบที่ไม่ระบุ gasPrice นับเป็นราคาตั้งต้นของ VM (1 gwei)
+  // a tx without gasPrice counts as the VM's default price (1 gwei)
   const { gasPrice, ...noPrice } = callTx(alice, 1, 0);
   assert.equal(pool.add(signed(noPrice), { now: T }).ok, true);
   assert.match(pool.add(signed(callTx(alice, 1, 1_000_000_000)), { now: T }).reason, /ต้องอย่างน้อย 1100000000\)/);
   assert.equal(pool.add(signed(callTx(alice, 1, 1_100_000_000)), { now: T }).ok, true);
 
-  // ราคาเล็ก: 10% ของ 1 ปัดขึ้น → ต้องเป็น 2
+  // small price: 10% of 1 rounds up → must be 2
   const small = new Mempool(setup());
   small.add(signed(callTx(alice, 0, 1)), { now: T });
   assert.match(small.add(signed(callTx(alice, 0, 1, 3)), { now: T }).reason, /ต้องอย่างน้อย 2\)/);
   assert.equal(small.add(signed(callTx(alice, 0, 2)), { now: T }).ok, true);
 });
 
-test("ยกเลิก: แทนที่ call ด้วยการโอน 0 ให้ตัวเอง → block มีแค่ใบยกเลิก (กิน nonce + จ่ายแค่ค่าแก๊ส)", () => {
+test("cancel: replace a call with a 0 transfer to yourself → the block has only the cancel tx (uses the nonce + pays only gas)", () => {
   const vm = setup();
   const pool = new Mempool(vm);
   const call = pool.add(signed(callTx(alice, 0, 10)), { now: T });
@@ -88,15 +88,15 @@ test("ยกเลิก: แทนที่ call ด้วยการโอน
   assert.equal(vm.getTransaction(cancel.hash).status, "success");
   assert.ok(!vm.getTransaction(call.hash));
   assert.equal(vm.checkTransaction({ from: alice, nonce: -1 }).expectedNonce, 1);
-  assert.equal(pool.add(signed(callTx(alice, 0, 10)), { now: T }).reason, "tx นี้ถูกส่งมาแล้ว");   // ส่งใบเดิมกลับเข้ามาไม่ได้
+  assert.equal(pool.add(signed(callTx(alice, 0, 10)), { now: T }).reason, "tx นี้ถูกส่งมาแล้ว");   // the old tx cannot be resent
 });
 
-test("แทนที่: simulate ไม่ผ่าน → ใบเดิมยังอยู่ (แต่นับ rate limit)", () => {
+test("replace: simulate fails → the old tx stays (but it counts toward the rate limit)", () => {
   const pool = new Mempool(setup(), { rateLimit: 3 });
   const old = pool.add(signed(callTx(alice, 0, 10)), { now: T });
-  const failing = () => ({ ok: false, error: "ยอดไม่พอ" });
+  const failing = () => ({ ok: false, error: "insufficient balance" });
   const res = pool.add(signed(callTx(alice, 0, 20)), { now: T, simulate: failing });
-  assert.deepEqual([res.ok, res.reason], [false, "ยอดไม่พอ"]);
+  assert.deepEqual([res.ok, res.reason], [false, "insufficient balance"]);
   assert.equal(pool.has(old.hash), true);
   assert.equal(pool.replacedBy(old.hash, { now: T }), null);
 
@@ -105,7 +105,7 @@ test("แทนที่: simulate ไม่ผ่าน → ใบเดิม�
   assert.equal(pool.has(old.hash), true);
 });
 
-test("แทนที่: ใบกลางคิว → block ยังหยิบตามลำดับ nonce", () => {
+test("replace: a tx mid-queue → the block still takes txs in nonce order", () => {
   const vm = setup();
   const pool = new Mempool(vm);
   const first = pool.add(signed(callTx(alice, 0, 10)), { now: T });
@@ -122,7 +122,7 @@ test("แทนที่: ใบกลางคิว → block ยังหย�
   assert.equal(vm.checkTransaction({ from: alice, nonce: -1 }).expectedNonce, 3);
 });
 
-test("nonce: ข้ามเลขยังถูกปฏิเสธ · nonce ที่เข้า block ไปแล้วแทนที่ไม่ได้", () => {
+test("nonce: gaps are still rejected · a nonce already in a block cannot be replaced", () => {
   const vm = setup();
   const pool = new Mempool(vm);
   pool.add(signed(callTx(alice, 0, 10)), { now: T });
@@ -136,7 +136,7 @@ test("nonce: ข้ามเลขยังถูกปฏิเสธ · nonce 
   assert.deepEqual([late.ok, late.reason], [false, "nonce ต้องเป็น 1"]);
 });
 
-test("โควตา: การแทนที่ไม่กิน maxPerSender / maxSize", () => {
+test("quota: replacing does not use up maxPerSender / maxSize", () => {
   const pool = new Mempool(setup(), { maxPerSender: 2, maxSize: 2 });
   pool.add(signed(callTx(alice, 0, 10)), { now: T });
   pool.add(signed(callTx(alice, 1, 10)), { now: T });
@@ -153,7 +153,7 @@ test("โควตา: การแทนที่ไม่กิน maxPerSende
   assert.equal(perSender.countOf(alice), 2);
 });
 
-test("replacedBy: ลืมเมื่อพ้น ttlMs · clear() ล้าง", () => {
+test("replacedBy: forgotten after ttlMs · clear() wipes it", () => {
   const pool = new Mempool(setup(), { ttlMs: 1000 });
   const old = pool.add(signed(callTx(alice, 0, 10)), { now: T });
   const next = pool.add(signed(callTx(alice, 0, 11)), { now: T });
@@ -164,15 +164,15 @@ test("replacedBy: ลืมเมื่อพ้น ttlMs · clear() ล้า�
 });
 
 // ---------------------------------------------------------------------------
-//  server.js: GET /tx/:hash ตอบ status "replaced"
+//  server.js: GET /tx/:hash returns status "replaced"
 
 let server, vm, mempool, url;
 
 before(async () => {
   let miner;
-  process.env.GAS_PRICE ??= "1000000000";   // เทสต์นี้ใช้ราคาแก๊สช่วงพัฒนา 1 gwei (ค่าตั้งต้นของเชน 10,000 gwei ทดสอบใน 107)
+  process.env.GAS_PRICE ??= "1000000000";   // this test uses the dev gas price of 1 gwei (the chain default of 10,000 gwei is tested in 107)
   ({ server, vm, mempool, miner } = await import("../server.js"));
-  clearInterval(miner);                                           // ไม่ให้ปิด block ระหว่างเทสต์
+  clearInterval(miner);                                           // do not close blocks during the test
   vm.db.load({ [`${alice}:native:received`]: "1000000000000000000n" });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   url = `http://127.0.0.1:${server.address().port}`;
@@ -184,7 +184,7 @@ const post = (path, body) => fetch(url + path, { method: "POST", headers: { "con
   .then((r) => r.json());
 const get = (path) => fetch(url + path).then(async (r) => ({ status: r.status, body: await r.json() }));
 
-test("server: แทนที่ผ่าน /sendtx → /tx เดิมตอบ replaced, /nonce ไม่ขยับ, txpool เห็นแค่ใบใหม่", async () => {
+test("server: replace via /sendtx → the old /tx returns replaced, /nonce does not move, txpool shows only the new tx", async () => {
   const chainId = vm.chainId;
   const old = await post("/sendtx", signed({ ...cancelTx(alice, 0, 1_000_000_000), chainId }));
   assert.equal(old.queued, true, JSON.stringify(old));

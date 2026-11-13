@@ -5,7 +5,7 @@ import { COUNTER, PROFILE } from "./programs.js";
 
 const nativeOf = (vm, address) => num(vm.nativeBalanceOf(address));
 
-/* เงินที่ถูกเผา → 0x000…000  และ metadata ของแต่ละ address */
+/* burned funds → 0x000…000  and per-address metadata */
 
 const T = 1_700_000_000_000;
 const user = (name) => ({ sender: name, origin: name });
@@ -24,10 +24,10 @@ const save = (vm, res) => {
 };
 
 // ---------------------------------------------------------------------------
-//  เงินที่ถูกเผา
+//  burned funds
 // ---------------------------------------------------------------------------
 
-test("burn: ค่าแก๊สที่เผาเข้าไปที่ 0x000…000 ไม่ได้หายไปเฉย ๆ", () => {
+test("burn: burned gas goes to 0x000…000 rather than vanishing", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 10_000 });
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 100 }));
 
@@ -35,7 +35,7 @@ test("burn: ค่าแก๊สที่เผาเข้าไปที่ 0
   assert.deepEqual(nativeOf(vm, VM.BURN_ADDRESS), { received: 100, sended: 0, consumed: 0, balance: 100 });
 });
 
-test("burn: แบ่งให้ผู้ปิด block ที่เหลือเข้า 0x000…000", () => {
+test("burn: the block sealer gets a share, the rest goes to 0x000…000", () => {
   const vm = setup({ chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 30 }, { alice: 10_000 });
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 100 }));
 
@@ -44,7 +44,7 @@ test("burn: แบ่งให้ผู้ปิด block ที่เหลื�
   assert.equal(nativeOf(vm, "alice").consumed, 100);
 });
 
-test("burn: ยอดรวมทั้งระบบคงที่เสมอ (รวมกระเป๋าเผา)", () => {
+test("burn: the system-wide total stays constant (including the burn address)", () => {
   const vm = setup({ chargeGas: true, gas: GAS, feeRecipient: "miner", burnPercent: 50 }, { alice: 10_000 });
   const block = vm.createBlock({ timestamp: T, feeRecipient: "miner", burnPercent: 50 });
   block.transfer({ from: "alice", to: "bob", amount: 300 });
@@ -56,19 +56,19 @@ test("burn: ยอดรวมทั้งระบบคงที่เสม�
   assert.equal(total, 10_000);
 });
 
-test("burn: เงินในกระเป๋าเผาเอาออกไม่ได้ (ไม่มีใครมี key ของ 0x000…000)", () => {
+test("burn: funds at the burn address cannot be taken out (nobody holds the key of 0x000…000)", () => {
   const vm = setup({ chargeGas: true, gas: GAS }, { alice: 1000 });
   save(vm, vm.transfer({ from: "alice", to: "bob", amount: 10 }));
   assert.ok(nativeOf(vm, VM.BURN_ADDRESS).balance > 0);
-  // ยังโอนออกได้ทางทฤษฎี แต่ต้องมีลายเซ็นของ 0x000…000 ซึ่งไม่มีใครทำได้
+  // transferring out is possible in theory, but needs a signature from 0x000…000, which nobody can produce
   assert.equal(vm.transfer({ from: VM.BURN_ADDRESS, to: "alice", amount: 999_999 }).error.code, "PROGRAM_ERROR");
 });
 
 // ---------------------------------------------------------------------------
-//  metadata ของโปรแกรม
+//  program metadata
 // ---------------------------------------------------------------------------
 
-test("metadata: init ใส่ type / creator / createdAt ให้อัตโนมัติ", () => {
+test("metadata: init fills in type / creator / createdAt automatically", () => {
   const vm = setup();
   save(vm, vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice") }, { timestamp: T }));
   save(vm, vm.init({ programUuid: "counter" }, { timestamp: T }));
@@ -76,36 +76,36 @@ test("metadata: init ใส่ type / creator / createdAt ให้อัตโ�
   assert.deepEqual(vm.getMetadata("counter"), { type: "program", creator: "alice", createdAt: T });
 });
 
-test("metadata: deploy แนบ metadata มาได้ และถูกบันทึกตอน init", () => {
+test("metadata: deploy can attach metadata, which is saved at init", () => {
   const vm = setup();
-  const metadata = { namespace: "MyCounter", description: "ตัวนับ", tags: ["demo", "counter"], url: "https://example.com" };
+  const metadata = { namespace: "MyCounter", description: "A counter", tags: ["demo", "counter"], url: "https://example.com" };
   save(vm, vm.deploy({ programUuid: "counter", code: COUNTER, context: user("alice"), metadata }, { timestamp: T }));
   save(vm, vm.init({ programUuid: "counter" }, { timestamp: T }));
 
   assert.deepEqual(vm.getMetadata("counter"), {
-    namespace: "mycounter", // ชื่อถูกทำเป็นตัวพิมพ์เล็ก
-    description: "ตัวนับ",
+    namespace: "mycounter", // the name is lowercased
+    description: "A counter",
     tags: ["demo", "counter"],
     url: "https://example.com",
     type: "program",
     creator: "alice",
     createdAt: T,
   });
-  assert.equal(vm.resolveNamespace("MyCounter"), "counter"); // ค้นจากชื่อได้
+  assert.equal(vm.resolveNamespace("MyCounter"), "counter"); // lookup by name works
 });
 
-test("metadata: deploy ที่แนบฟิลด์ของระบบ → ถูกปฏิเสธ", () => {
+test("metadata: deploy attaching system fields → rejected", () => {
   const vm = setup();
   for (const field of ["type", "creator", "createdAt"]) {
     const res = vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: { [field]: "x" } });
     assert.equal(res.error.code, "FORBIDDEN");
     assert.match(res.error.message, /เป็นฟิลด์ของระบบ/);
   }
-  assert.equal(vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: { "ชื่อผิด!": 1 } }).error.code, "INVALID_REQUEST");
+  assert.equal(vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: { "bad name!": 1 } }).error.code, "INVALID_REQUEST");
   assert.equal(vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: "x" }).error.code, "INVALID_REQUEST");
 });
 
-test("metadata: โปรแกรมตั้ง metadata ของตัวเองได้ด้วย setMetadata()", () => {
+test("metadata: a program can set its own metadata with setMetadata()", () => {
   const vm = setup();
   save(vm, vm.deploy({ programUuid: "profile", code: PROFILE, context: user("alice"), initInput: { name: "Shop" } }, { timestamp: T }));
   save(vm, vm.init({ programUuid: "profile" }, { timestamp: T }));
@@ -119,7 +119,7 @@ test("metadata: โปรแกรมตั้ง metadata ของตัวเ
   assert.equal(vm.getMetadata("profile").icon, undefined);
 });
 
-test("metadata: โปรแกรมแก้ฟิลด์ของระบบไม่ได้", () => {
+test("metadata: a program cannot change system fields", () => {
   const vm = setup();
   save(vm, vm.deploy({ programUuid: "profile", code: PROFILE, context: user("alice"), initInput: { name: "shop2" } }));
   save(vm, vm.init({ programUuid: "profile" }));
@@ -130,30 +130,30 @@ test("metadata: โปรแกรมแก้ฟิลด์ของระบ�
 });
 
 // ---------------------------------------------------------------------------
-//  metadata ของ wallet (vm.setMetadata)
+//  wallet metadata (vm.setMetadata)
 // ---------------------------------------------------------------------------
 
-test("setMetadata: user ตั้ง metadata ของ address ตัวเอง", () => {
+test("setMetadata: a user sets metadata for their own address", () => {
   const vm = setup({ requireNonce: true });
   const res = save(vm, vm.setMetadata({
-    metadata: { namespace: "Alice", description: "ผู้ใช้คนแรก", icon: "👩" },
+    metadata: { namespace: "Alice", description: "first user", icon: "👩" },
     context: user("0xA1"), nonce: 0,
   }, { timestamp: T }));
 
   assert.deepEqual(res.result, { address: "0xa1", metadata: ["namespace", "description", "icon"] });
-  assert.deepEqual(vm.getMetadata("0xA1"), { namespace: "alice", description: "ผู้ใช้คนแรก", icon: "👩" });
+  assert.deepEqual(vm.getMetadata("0xA1"), { namespace: "alice", description: "first user", icon: "👩" });
   assert.equal(vm.resolveNamespace("alice"), "0xa1");
-  assert.equal(vm.db.readKeys(["0xa1:nonce"])[0], 1); // กิน nonce เหมือน tx อื่น
+  assert.equal(vm.db.readKeys(["0xa1:nonce"])[0], 1); // consumes a nonce like other txs
 });
 
-test("setMetadata: ตั้งได้เฉพาะของตัวเอง (address มาจาก sender)", () => {
+test("setMetadata: only your own can be set (address comes from sender)", () => {
   const vm = setup();
   save(vm, vm.setMetadata({ metadata: { namespace: "bob" }, context: { sender: "bob", origin: "carol" } }));
-  assert.equal(vm.resolveNamespace("bob"), "bob"); // ใช้ sender ไม่ใช่ origin
+  assert.equal(vm.resolveNamespace("bob"), "bob"); // uses sender, not origin
   assert.deepEqual(vm.getMetadata("carol"), {});
 });
 
-test("namespace: ห้ามซ้ำ และเปลี่ยนชื่อแล้วชื่อเดิมถูกปล่อย", () => {
+test("namespace: must be unique, and renaming releases the old name", () => {
   const vm = setup();
   save(vm, vm.setMetadata({ metadata: { namespace: "shop" }, context: user("alice") }));
 
@@ -161,14 +161,14 @@ test("namespace: ห้ามซ้ำ และเปลี่ยนชื่�
   assert.equal(taken.error.code, "FORBIDDEN");
   assert.match(taken.error.message, /ถูกใช้โดย alice/);
 
-  save(vm, vm.setMetadata({ metadata: { namespace: "market" }, context: user("alice") })); // เปลี่ยนชื่อ
-  assert.equal(vm.resolveNamespace("shop"), null);   // ชื่อเดิมถูกปล่อย
+  save(vm, vm.setMetadata({ metadata: { namespace: "market" }, context: user("alice") })); // rename
+  assert.equal(vm.resolveNamespace("shop"), null);   // old name released
   assert.equal(vm.resolveNamespace("market"), "alice");
-  save(vm, vm.setMetadata({ metadata: { namespace: "shop" }, context: user("bob") })); // bob ใช้ชื่อเดิมได้แล้ว
+  save(vm, vm.setMetadata({ metadata: { namespace: "shop" }, context: user("bob") })); // bob can now use the old name
   assert.equal(vm.resolveNamespace("shop"), "bob");
 });
 
-test("namespace: ตั้งเป็น null เพื่อยกเลิกชื่อ", () => {
+test("namespace: set to null to drop the name", () => {
   const vm = setup();
   save(vm, vm.setMetadata({ metadata: { namespace: "alice" }, context: user("alice") }));
   save(vm, vm.setMetadata({ metadata: { namespace: null }, context: user("alice") }));
@@ -176,14 +176,14 @@ test("namespace: ตั้งเป็น null เพื่อยกเลิก
   assert.deepEqual(vm.getMetadata("alice"), {});
 });
 
-test("namespace: รูปแบบไม่ถูกต้อง", () => {
+test("namespace: invalid format", () => {
   const vm = setup();
-  for (const namespace of ["", "มี:โคลอน", "x".repeat(65), 123]) {
+  for (const namespace of ["", "has:colon", "x".repeat(65), 123]) {
     assert.equal(vm.setMetadata({ metadata: { namespace }, context: user("alice") }).error.code, "INVALID_REQUEST");
   }
 });
 
-test("metadata: ใช้ใน block และมีใน writes / receipt", () => {
+test("metadata: used in a block and present in writes / receipt", () => {
   const vm = setup({ requireNonce: true, recordTransactions: true });
   const block = vm.createBlock({ timestamp: T, number: 1 });
   block.setMetadata({ metadata: { namespace: "alice" }, context: user("alice"), nonce: 0 });
@@ -199,7 +199,7 @@ test("metadata: ใช้ใน block และมีใน writes / receipt", (
   assert.equal(vm.resolveNamespace("alice"), "alice");
 });
 
-test("metadata: decodeDbKey อ่าน key ของ metadata และ namespace ออก", () => {
+test("metadata: decodeDbKey parses metadata and namespace keys", () => {
   assert.deepEqual(VM.decodeDbKey("0xabc:metadata:namespace"), { kind: "metadata", address: "0xabc", field: "namespace" });
   assert.deepEqual(VM.decodeDbKey("namespace:alice"), { kind: "namespace", name: "alice" });
 });
