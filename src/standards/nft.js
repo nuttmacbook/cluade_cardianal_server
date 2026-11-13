@@ -47,7 +47,7 @@ export const NFT_PROGRAM = `function program() {
     writeDB("name", params.input.name)
     writeDB("symbol", params.input.symbol)
     writeDB("baseURI", params.input.baseURI || "")
-    const owner = params.input.owner || params.context.sender   // โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง
+    const owner = params.input.owner || params.context.sender   // a factory cloning the template passes owner = the creator
     if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
     writeDB("owner", owner)
     writeDB("totalSupply", 0n)

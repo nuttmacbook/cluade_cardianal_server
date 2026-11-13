@@ -148,7 +148,7 @@ export const TOKEN_CORE_EXPORTS = "name, ticker, decimals, totalSupply, balanceO
  */
 export const TOKEN_PROGRAM = `function program() {
   function initialization(params) {
-    // owner ส่งมาได้ (โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง) · ไม่ส่ง = ผู้ deploy
+    // owner may be passed (a factory cloning the template passes owner = the creator) · omitted = the deployer
     const owner = params.input.owner || params.context.sender
     if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
     writeDB("name", params.input.name)
@@ -158,7 +158,7 @@ export const TOKEN_PROGRAM = `function program() {
     writeDB("owner", owner)
     writeDB(map("balances", owner), params.input.supply)
     if (params.input.namespace) setMetadata("namespace", params.input.namespace)
-    // metadata ของโปรแกรมตั้งได้จากโค้ดเท่านั้น: icon / url / contact / description ส่งมาตอน deploy ได้
+    // program metadata can only be set from code: icon / url / contact / description may be passed at deploy
     if (params.input.icon) setMetadata("icon", params.input.icon)
     if (params.input.url) setMetadata("url", params.input.url)
     if (params.input.contact) setMetadata("contact", params.input.contact)

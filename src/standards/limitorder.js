@@ -55,7 +55,7 @@ export const LIMIT_ORDER_FUNCTIONS = ["placeOrder", "fillOrder", "fillOrders", "
 export const LIMIT_ORDER_EVENTS = ["OrderPlaced", "OrderFilled", "OrderCancelled"];
 
 export const LIMIT_ORDER_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const MAX_BATCH = ${LIMIT_ORDER_MAX_BATCH}
   const BEST_SCAN = ${LIMIT_ORDER_BEST_SCAN}n
@@ -68,7 +68,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     writeDB("count", 0n)
   }
 
-  // ---------- ตัวช่วย ----------
+  // ---------- helpers ----------
   function enter(params) {
     if (readDB("lock") === true) throw new Error("reentrant call")
     if (params.value !== undefined && params.value !== 0n) throw new Error("native coin not accepted: wrap it as WBWSC first")
@@ -78,7 +78,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
   function nowSeconds(params) { return params.block.timestamp / 1000n }
   function checkAmount(value, label) {
     if (typeof value !== "bigint" || value <= 0n) throw new Error(label + " must be a bigint greater than 0")
-    // เพดาน 2^128: ตัวเลขใหญ่เกินทำให้การเทียบราคา (คูณไขว้) ใน bestOrders เกินขนาด BigInt ของ sandbox → ทั้งคู่เทรดอ่านไม่ได้
+    // cap of 2^128: larger numbers make the price comparison (cross-multiplication) in bestOrders exceed the sandbox BigInt size → the whole pair becomes unreadable
     if (value >= ${LIMIT_ORDER_MAX_AMOUNT}n) throw new Error(label + " is too large (max 2^128 - 1)")
     return value
   }
@@ -116,9 +116,9 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     if (typeof value !== "bigint" || value < 0n) throw new Error("token balanceOf returned an invalid value")
     return value
   }
-  // ⌈take × buyAmount / sellAmount⌉ คิดจากยอดตั้งต้นของ order ทุกครั้ง (ไม่สะสมเศษ)
+  // ⌈take × buyAmount / sellAmount⌉ always computed from the order's original amounts (no accumulated rounding)
   function priceFor(order, take) { return (take * order.buyAmount + order.sellAmount - 1n) / order.sellAmount }
-  // ส่ง token ออกจาก escrow · ยอดของโปรแกรมต้องลดเท่ากับ amount พอดี (กัน token ที่โกหกหรือหักเกิน → ไม่กระทบ escrow ของ order อื่น)
+  // send tokens out of escrow · the program's balance must drop by exactly amount (guards against tokens that lie or overcharge → other orders' escrow is unaffected)
   function payOut(token, to, amount) {
     const self = ThisAddress()
     const before = balanceOfToken(token, self)
@@ -131,7 +131,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     writeDB(countKey, n + 1n)
     return n
   }
-  // เอา order ออกจากรายการเปิดของคู่ (ย้ายตัวท้ายมาแทนที่) · เรียกก่อนเขียน order ของตัวเอง
+  // remove the order from the pair's open list (move the last entry into its slot) · call before writing the order itself
   function removeOpen(order) {
     const countKey = map("openCount", order.sellToken, order.buyToken)
     const last = readDB(countKey) - 1n
@@ -147,7 +147,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     order.openPos = -1n
   }
 
-  // ---------- เปลี่ยน state ----------
+  // ---------- state changes ----------
   function placeOrder(params) {
     enter(params)
     const input = params.input
@@ -165,7 +165,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     const allowPartial = input.allowPartial === undefined || input.allowPartial === null ? true : input.allowPartial
     if (typeof allowPartial !== "boolean") throw new Error("allowPartial must be a boolean")
 
-    // รับเงินฝาก: วัดจากยอดจริงของโปรแกรม (ไม่เชื่อค่าที่ token ตอบ)
+    // take the deposit: measured from the program's actual balance (does not trust the token's return value)
     const self = ThisAddress()
     const before = balanceOfToken(sellToken, self)
     runProgram(sellToken, "transferFrom", { from: maker, to: self, amount: sellAmount })
@@ -186,7 +186,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     return id
   }
 
-  // ตรวจ + คำนวณ + เขียนผลของการกิน 1 order (ยังไม่โอน) → รายการที่ต้องโอน
+  // validate + compute + write the result of filling one order (no transfers yet) → list of transfers to make
   function takeEffects(params, id, take) {
     const order = checkId(id)
     const taker = params.context.sender
@@ -210,7 +210,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
       { indexed: ["orderId", "taker", "maker"] })
     return { maker: order.maker, sellToken: order.sellToken, buyToken: order.buyToken, take: take, pay: pay, remaining: order.remaining }
   }
-  // โอนจริง: taker จ่าย maker (วัดยอดที่ maker ได้) แล้วโปรแกรมส่ง sellToken ให้ taker
+  // actual transfers: taker pays maker (measuring what maker received), then the program sends sellToken to taker
   function settle(taker, item) {
     const before = balanceOfToken(item.buyToken, item.maker)
     runProgram(item.buyToken, "transferFrom", { from: taker, to: item.maker, amount: item.pay })
@@ -289,7 +289,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     return refunded
   }
 
-  // ---------- อ่าน ----------
+  // ---------- reads ----------
   function getOrder(params) { rejectValue(params);
     const id = params.input.orderId
     return view(id, checkId(id), nowSeconds(params))
@@ -316,7 +316,7 @@ export const LIMIT_ORDER_PROGRAM = `function program() {
     if (params.input.openOnly === true) return listIds(params, map("openCount", sellToken, buyToken), (i) => map("openOrders", sellToken, buyToken, i), page)
     return listIds(params, map("pairCount", sellToken, buyToken), (i) => map("pairOrders", sellToken, buyToken, i), page)
   }
-  // a ราคาดีกว่า b (จ่ายต่อหน่วยน้อยกว่า · เท่ากัน → orderId น้อยกว่า)
+  // a has a better price than b (pays less per unit · tie → lower orderId)
   function better(a, b) {
     const left = a.buyAmount * b.sellAmount
     const right = b.buyAmount * a.sellAmount

@@ -47,7 +47,7 @@ export const MULTITOKEN_PROGRAM = `function program() {
     writeDB("name", params.input.name || "")
     writeDB("symbol", params.input.symbol || "")
     writeDB("uri", params.input.uri || "")
-    const owner = params.input.owner || params.context.sender   // โรงงานที่ clone ต้นแบบส่ง owner = ผู้สร้าง
+    const owner = params.input.owner || params.context.sender   // a factory cloning the template passes owner = the creator
     if (params.input.owner !== undefined && (typeof owner !== "string" || owner.length !== 42)) throw new Error("owner must be an address")
     writeDB("owner", owner)
     if (params.input.namespace) setMetadata("namespace", params.input.namespace)
@@ -81,7 +81,7 @@ export const MULTITOKEN_PROGRAM = `function program() {
     if (sender !== readDB("owner") && readDB(map("minters", sender)) !== true) throw new Error("only owner or minter")
   }
 
-  /** ย้ายยอด 1 id: from = ZERO คือ mint · to = ZERO คือ burn */
+  /** move the balance of one id: from = ZERO is a mint · to = ZERO is a burn */
   function move(from, to, id, amount) {
     if (from !== ZERO) {
       const have = balance(from, id)

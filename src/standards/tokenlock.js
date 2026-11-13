@@ -54,7 +54,7 @@ export const TOKEN_LOCK_READS = ["getLock", "lockCount", "locksOf", "locksForTok
 export const TOKEN_LOCK_EVENTS = ["Locked", "Unlocked", "LockExtended", "LockIncreased", "LockOwnerChanged"];
 
 export const TOKEN_LOCK_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const BPS = 10000n
@@ -129,7 +129,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     if (typeof balance !== "bigint" || balance < 0n) throw new Error("token balanceOf must return a bigint")
     return balance
   }
-  // ดึง token เข้ามาแล้วคืนยอดที่ได้รับจริง
+  // pull tokens in and return the amount actually received
   function pull(token, from, amount) {
     const before = tokenBalance(token)
     const ok = runProgram(token, "transferFrom", { from: from, to: ThisAddress(), amount: amount })
@@ -156,7 +156,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return item.amount * bps / BPS
   }
   function withdrawableNow(item, now) {
-    if (item.owner === ZERO) return 0n   // สละสิทธิ์แล้ว = ไม่มีใครถอนได้ (หน้า UI / ตัวตรวจ lock ต้องไม่เห็นเป็นถอนได้)
+    if (item.owner === ZERO) return 0n   // renounced = nobody can withdraw (UIs / lock checkers must not see it as withdrawable)
     const unlocked = unlockedAmount(item, now)
     return unlocked > item.withdrawn ? unlocked - item.withdrawn : 0n
   }
@@ -328,7 +328,7 @@ export const TOKEN_LOCK_PROGRAM = `function program() {
     return true
   }
 
-  // ⚠️ ไม่มีใครถอนได้อีก — token ในล็อกนี้ติดอยู่ตลอดไป
+  // ⚠️ nobody can withdraw anymore — the tokens in this lock are stuck forever
   function renounceLockOwnership(params) { rejectValue(params);
     enter()
     const item = load(params.input.id)

@@ -169,7 +169,7 @@ export function instrument(body) {
       } else if (body.startsWith(token, i)) return i;
       else break;
     }
-    throw new SyntaxError(`แปลงโค้ดไม่ได้ (หา '${token}' ไม่พบ)`);
+    throw new SyntaxError(`cannot transform code ('${token}' not found)`);
   };
   /** a OP b → __op(a , b) */
   const binary = (node, fn) => {
@@ -203,7 +203,7 @@ export function instrument(body) {
       return;
     }
     if (target.type !== "MemberExpression" || target.property.type === "PrivateIdentifier") {
-      throw new SyntaxError(`${node.operator} กับเป้าหมายแบบนี้ใช้ไม่ได้ (เขียนเป็น x = x ${symbol} y แทน)`);
+      throw new SyntaxError(`${node.operator} cannot be used with this kind of target (write x = x ${symbol} y instead)`);
     }
     // f().p += y → __opm(f(), "p", "+", () => (y)) · a[i++] += y → __opm(a, i++, "+", () => (y))
     open(node.start, `${OPM_FN}(`, span, PRIORITY.op);
@@ -221,13 +221,13 @@ export function instrument(body) {
 
   const visit = (node, parent) => {
     if (node.type === "Identifier" && RESERVED.has(node.name)) {
-      throw new SyntaxError(`ชื่อ ${node.name} สงวนไว้สำหรับ VM`);
+      throw new SyntaxError(`the name ${node.name} is reserved for the VM`);
     }
     if (node.type === "Literal" && node.regex) {
-      throw new SyntaxError("regular expression ใช้ในโปรแกรมไม่ได้ (เวลาทำงานไม่แน่นอน — ใช้ indexOf / includes / split แทน)");
+      throw new SyntaxError("regular expressions are not allowed in programs (unbounded run time — use indexOf / includes / split instead)");
     }
     if (node.type === "Literal" && node.bigint !== undefined && bitLength(BigInt(node.bigint)) > BIGINT_MAX_BITS) {
-      throw new SyntaxError(`BigInt ใหญ่เกิน ${BIGINT_MAX_BITS} bit`);
+      throw new SyntaxError(`BigInt exceeds ${BIGINT_MAX_BITS} bits`);
     }
     if (FUNCTION_TYPES.has(node.type)) {
       region(node.body);
@@ -257,8 +257,8 @@ export function instrument(body) {
       allowedRest.add(node.left);
       wrap(node.right, node.left.type === "ObjectPattern" ? PROPS_FN : SPREAD_FN, PRIORITY.props);
     } else if ((hasObjectRest(node) || hasArrayRest(node)) && !allowedRest.has(node)) {
-      throw new SyntaxError("...rest ใน pattern ใช้ได้เฉพาะ const { a, ...rest } = ค่า / const [a, ...rest] = ค่า หรือ ({ a, ...rest } = ค่า) / ([a, ...rest] = ค่า) "
-        + "(ตำแหน่งอื่น เช่น พารามิเตอร์ / for…of / catch / ซ้อนใน pattern คิดแก๊สตามขนาดที่คัดลอกไม่ได้)");
+      throw new SyntaxError("...rest in a pattern is allowed only as const { a, ...rest } = value / const [a, ...rest] = value or ({ a, ...rest } = value) / ([a, ...rest] = value) "
+        + "(elsewhere, such as parameters / for…of / catch / nested patterns, gas cannot be charged for the copied size)");
     }
     // BigInt: operator / property name / return value (separate from above; one node can get both kinds)
     if (node.type === "BinaryExpression" && OPERATOR_FNS[node.operator] && node.left.type !== "PrivateIdentifier"

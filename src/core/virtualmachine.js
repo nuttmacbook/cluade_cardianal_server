@@ -237,96 +237,96 @@ const { INVALID_REQUEST, NOT_FOUND, FORBIDDEN, LIMIT_EXCEEDED, TIMEOUT, OUT_OF_G
 
 /** all errors: code + message (message may be a function) */
 export const ERRORS = {
-  invalidProgramUuid: [INVALID_REQUEST, "programUuid ต้องเป็น string ที่ไม่ว่างและไม่มี ':'"],
-  invalidContext: [INVALID_REQUEST, "context ต้องมี sender และ origin"],
-  valueTooLarge: [INVALID_REQUEST, (max, size) => `ค่าใหญ่เกินกำหนด (${size} > ${max} ไบต์)`],
-  reviewFailed: [INVALID_REQUEST, (detail) => `โค้ดไม่ผ่านการตรวจอัตโนมัติ:\n${detail}`],
-  keyTooLong: [INVALID_REQUEST, (max, size) => `key ของ storage ยาวเกินกำหนด (${size} > ${max} ไบต์)`],
-  codeTooLong: [INVALID_REQUEST, (max, size) => `โค้ดยาวเกินกำหนด (${size} > ${max} ไบต์)`],
-  invalidCode: [INVALID_REQUEST, "code ต้องเป็น string"],
-  invalidKey: [INVALID_REQUEST, "key ต้องเป็น string หรือ map(...)"],
-  invalidKeyPart: [INVALID_REQUEST, "แต่ละส่วนของ key ต้องเป็น string ที่ไม่ว่าง จำนวนเต็ม หรือ BigInt"],
-  notJson: [INVALID_REQUEST, (label) => `${label} ต้องเป็นข้อมูล JSON`],
-  programWrapperMissing: [INVALID_REQUEST, "โปรแกรมต้องอยู่ในรูป 'function program() { ... }' ทั้งไฟล์"],
-  importNotAllowed: [INVALID_REQUEST, "โปรแกรมใช้ import / export ไม่ได้ (ต้องอยู่ใน scope เดียวทั้งหมด)"],
-  exportMissing: [INVALID_REQUEST, (name) => `export '${name}' แต่ไม่มีฟังก์ชันนี้ในระดับบนสุด`],
-  exportInit: [INVALID_REQUEST, (name) => `ห้าม export '${name}'`],
+  invalidProgramUuid: [INVALID_REQUEST, "programUuid must be a non-empty string without ':'"],
+  invalidContext: [INVALID_REQUEST, "context must have sender and origin"],
+  valueTooLarge: [INVALID_REQUEST, (max, size) => `value too large (${size} > ${max} bytes)`],
+  reviewFailed: [INVALID_REQUEST, (detail) => `code failed automatic review:\n${detail}`],
+  keyTooLong: [INVALID_REQUEST, (max, size) => `storage key too long (${size} > ${max} bytes)`],
+  codeTooLong: [INVALID_REQUEST, (max, size) => `code too long (${size} > ${max} bytes)`],
+  invalidCode: [INVALID_REQUEST, "code must be a string"],
+  invalidKey: [INVALID_REQUEST, "key must be a string or map(...)"],
+  invalidKeyPart: [INVALID_REQUEST, "each key part must be a non-empty string, an integer or a BigInt"],
+  notJson: [INVALID_REQUEST, (label) => `${label} must be JSON data`],
+  programWrapperMissing: [INVALID_REQUEST, "the whole program must be a single 'function program() { ... }'"],
+  importNotAllowed: [INVALID_REQUEST, "programs cannot use import / export (everything must be in one scope)"],
+  exportMissing: [INVALID_REQUEST, (name) => `export '${name}' has no matching top-level function`],
+  exportInit: [INVALID_REQUEST, (name) => `cannot export '${name}'`],
   syntaxError: [INVALID_REQUEST, (detail) => `syntax error: ${detail}`],
-  programUuidUsed: [INVALID_REQUEST, (id) => `programUuid '${id}' ถูกใช้แล้ว`],
-  writeUndefined: [INVALID_REQUEST, "writeDB ห้ามใช้ undefined (ใช้ deleteDB)"],
-  programNotFound: [NOT_FOUND, (id) => `ไม่พบโปรแกรม '${id}'`],
-  pendingNotFound: [NOT_FOUND, "ไม่พบโปรแกรมที่รอรีวิว"],
-  notCallable: [FORBIDDEN, (name) => `เรียก '${name}' ไม่ได้ (ไม่มีหรือไม่ได้ export)`],
-  callDepthExceeded: [LIMIT_EXCEEDED, (max) => `เรียกโปรแกรมซ้อนได้ไม่เกิน ${max} ชั้น`],
-  asyncNotSupported: [PROGRAM_ERROR, "ไม่รองรับ async"],
-  timeout: [TIMEOUT, "โปรแกรมทำงานเกินเวลาที่กำหนด"],
-  dbReadFailed: [INTERNAL, (detail) => `อ่านข้อมูลจาก DB ไม่สำเร็จ: ${detail}`],
-  invalidTimestamp: [INVALID_REQUEST, "timestamp ต้องเป็นจำนวนเต็มมิลลิวินาทีที่ไม่ติดลบ"],
-  invalidNonce: [INVALID_REQUEST, (expected, got) => `nonce ไม่ถูกต้อง: ต้องเป็น ${expected} แต่ได้ ${got}`],
-  invalidAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มบวก"],
-  invalidTransferAmount: [INVALID_REQUEST, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ"],   // native transfer (tx); transferring 0 is allowed, as in the EVM
-  invalidRejected: [INVALID_REQUEST, (field) => `tx ที่ถูกปฏิเสธ: ${field} ไม่ถูกต้อง`],
-  invalidAddress: [INVALID_REQUEST, "address ต้องเป็น string ที่ไม่ว่าง"],
-  invalidValue: [INVALID_REQUEST, "value ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
-  invalidGasLimit: [INVALID_REQUEST, "gasLimit ต้องเป็นจำนวนเต็มบวก"],
-  invalidGasPrice: [INVALID_REQUEST, (min) => `gasPrice ต้องเป็นจำนวนเต็มและไม่ต่ำกว่า ${min}`],
-  invalidBurnPercent: [INVALID_REQUEST, "burnPercent ต้องเป็นจำนวนเต็ม 0-100"],
-  invalidFeeFields: [INVALID_REQUEST, "ใช้ gasPrice คู่กับ maxFeePerGas / maxPriorityFeePerGas ไม่ได้ (เลือกแบบเดียว)"],
-  invalidFeeValue: [INVALID_REQUEST, (field) => `${field} ต้องเป็นจำนวนเต็มไม่ติดลบ`],
-  priorityAboveMax: [INVALID_REQUEST, "maxPriorityFeePerGas ต้องไม่มากกว่า maxFeePerGas"],
-  feeBelowBaseFee: [INVALID_REQUEST, (maxFee, baseFee) => `maxFeePerGas (${maxFee}) ต่ำกว่า base fee ของ block (${baseFee})`],
-  invalidBaseFeeOption: [INVALID_REQUEST, (name) => `${name} ไม่ถูกต้อง`],
-  invalidIndexed: [INVALID_REQUEST, (detail) => `emit: indexed ไม่ถูกต้อง — ${detail}`],
-  invalidAbi: [INVALID_REQUEST, (detail) => `metadata.abi ไม่ถูกต้อง: ${detail}`],
-  invalidDb: [INTERNAL, "db ต้องมี readKeys(keys) และ writeKeys(writes)"],
-  numberNotAllowed: [INVALID_REQUEST, (label) => `${label}: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)`],
-  invalidSignature: [INVALID_REQUEST, "signature ต้องเป็น hex 65 byte (r + s + v)"],
-  invalidDigest: [INVALID_REQUEST, "digest ต้องเป็น hex 32 byte (\"0x\" + 64 ตัว)"],
-  invalidBytes: [INVALID_REQUEST, (label) => `${label}: ต้องเป็น hex string "0x…" จำนวนไบต์เต็ม`],
+  programUuidUsed: [INVALID_REQUEST, (id) => `programUuid '${id}' is already in use`],
+  writeUndefined: [INVALID_REQUEST, "writeDB cannot store undefined (use deleteDB)"],
+  programNotFound: [NOT_FOUND, (id) => `program '${id}' not found`],
+  pendingNotFound: [NOT_FOUND, "no program pending review"],
+  notCallable: [FORBIDDEN, (name) => `cannot call '${name}' (missing or not exported)`],
+  callDepthExceeded: [LIMIT_EXCEEDED, (max) => `nested program calls cannot exceed ${max} levels`],
+  asyncNotSupported: [PROGRAM_ERROR, "async is not supported"],
+  timeout: [TIMEOUT, "program exceeded its time limit"],
+  dbReadFailed: [INTERNAL, (detail) => `failed to read from DB: ${detail}`],
+  invalidTimestamp: [INVALID_REQUEST, "timestamp must be a non-negative integer number of milliseconds"],
+  invalidNonce: [INVALID_REQUEST, (expected, got) => `invalid nonce: expected ${expected} but got ${got}`],
+  invalidAmount: [INVALID_REQUEST, "amount must be a positive integer"],
+  invalidTransferAmount: [INVALID_REQUEST, "amount must be a non-negative integer"],   // native transfer (tx); transferring 0 is allowed, as in the EVM
+  invalidRejected: [INVALID_REQUEST, (field) => `rejected tx: invalid ${field}`],
+  invalidAddress: [INVALID_REQUEST, "address must be a non-empty string"],
+  invalidValue: [INVALID_REQUEST, "value must be a non-negative integer"],
+  invalidGasLimit: [INVALID_REQUEST, "gasLimit must be a positive integer"],
+  invalidGasPrice: [INVALID_REQUEST, (min) => `gasPrice must be an integer of at least ${min}`],
+  invalidBurnPercent: [INVALID_REQUEST, "burnPercent must be an integer from 0 to 100"],
+  invalidFeeFields: [INVALID_REQUEST, "gasPrice cannot be combined with maxFeePerGas / maxPriorityFeePerGas (choose one)"],
+  invalidFeeValue: [INVALID_REQUEST, (field) => `${field} must be a non-negative integer`],
+  priorityAboveMax: [INVALID_REQUEST, "maxPriorityFeePerGas must not exceed maxFeePerGas"],
+  feeBelowBaseFee: [INVALID_REQUEST, (maxFee, baseFee) => `maxFeePerGas (${maxFee}) is below the block base fee (${baseFee})`],
+  invalidBaseFeeOption: [INVALID_REQUEST, (name) => `${name} is invalid`],
+  invalidIndexed: [INVALID_REQUEST, (detail) => `emit: invalid indexed — ${detail}`],
+  invalidAbi: [INVALID_REQUEST, (detail) => `invalid metadata.abi: ${detail}`],
+  invalidDb: [INTERNAL, "db must have readKeys(keys) and writeKeys(writes)"],
+  numberNotAllowed: [INVALID_REQUEST, (label) => `${label}: numbers in programs must be BigInt (e.g. 10n)`],
+  invalidSignature: [INVALID_REQUEST, "signature must be 65 bytes of hex (r + s + v)"],
+  invalidDigest: [INVALID_REQUEST, "digest must be 32 bytes of hex (\"0x\" + 64 characters)"],
+  invalidBytes: [INVALID_REQUEST, (label) => `${label}: must be a hex string "0x…" of whole bytes`],
   invalidTypedData: [INVALID_REQUEST, (detail) => `EIP-712: ${detail}`],
-  invalidEventName: [INVALID_REQUEST, "ชื่อ event ต้องเป็นตัวอักษรภาษาอังกฤษขึ้นต้น ยาวไม่เกิน 32"],
-  invalidMetadata: [INVALID_REQUEST, "metadata ต้องเป็น object ของ field → ค่า"],
-  invalidMetadataField: [INVALID_REQUEST, (field) => `ชื่อ field ไม่ถูกต้อง: '${field}'`],
-  reservedMetadata: [FORBIDDEN, (field) => `'${field}' เป็นฟิลด์ของระบบ แก้ไม่ได้`],
-  invalidNamespace: [INVALID_REQUEST, "namespace ต้องเป็น string ที่ไม่ว่าง ไม่มี ':' และยาวไม่เกิน 64"],
-  namespaceTaken: [FORBIDDEN, (name, owner) => `namespace '${name}' ถูกใช้โดย ${owner} แล้ว`],
-  listNotSupported: [INTERNAL, "DB ตัวนี้ไม่มี listKeys(prefix) จึงไล่ดูข้อมูลไม่ได้"],
-  nativeInsufficient: [PROGRAM_ERROR, (address) => `ยอด native ของ '${address}' ไม่พอ`],
-  outOfGas: [OUT_OF_GAS, (used, limit) => `แก๊สไม่พอ: ใช้ ${used} แต่จ่ายได้ ${limit}`],
-  outOfMemory: [OUT_OF_MEMORY, (limit) => `โปรแกรมใช้หน่วยความจำเกินกำหนด (${limit} ไบต์ต่อ tx)`],
-  blockCommitted: [INVALID_REQUEST, "block นี้ commit ไปแล้ว"],
-  blockExists: [INVALID_REQUEST, (number) => `block ${number} ถูกบันทึกไปแล้ว`],
-  blockFull: [LIMIT_EXCEEDED, (max) => `block เต็มแล้ว (สูงสุด ${max} tx)`],
-  senderLimit: [LIMIT_EXCEEDED, (max) => `address นี้ส่งครบโควตาของ block แล้ว (สูงสุด ${max} tx)`],
-  blockGasFull: [LIMIT_EXCEEDED, (max) => `แก๊สของ block เต็มแล้ว (สูงสุด ${max})`],
-  notAdmin: [FORBIDDEN, (address) => `'${address}' ไม่มีสิทธิ์ init / reject`],
-  gasConfigNeedsAdmins: [FORBIDDEN, "ปรับค่าแก๊สได้เฉพาะเชนที่ตั้ง admins ไว้ (genesis config.admins)"],
-  notGasAdmin: [FORBIDDEN, (address) => `'${address}' ไม่มีสิทธิ์ปรับค่าแก๊ส (ต้องอยู่ใน admins)`],
+  invalidEventName: [INVALID_REQUEST, "event name must start with an English letter and be at most 32 characters"],
+  invalidMetadata: [INVALID_REQUEST, "metadata must be an object of field → value"],
+  invalidMetadataField: [INVALID_REQUEST, (field) => `invalid field name: '${field}'`],
+  reservedMetadata: [FORBIDDEN, (field) => `'${field}' is a system field and cannot be changed`],
+  invalidNamespace: [INVALID_REQUEST, "namespace must be a non-empty string without ':', at most 64 characters"],
+  namespaceTaken: [FORBIDDEN, (name, owner) => `namespace '${name}' is already taken by ${owner}`],
+  listNotSupported: [INTERNAL, "this DB has no listKeys(prefix), so its data cannot be enumerated"],
+  nativeInsufficient: [PROGRAM_ERROR, (address) => `insufficient native balance for '${address}'`],
+  outOfGas: [OUT_OF_GAS, (used, limit) => `out of gas: used ${used} but the limit is ${limit}`],
+  outOfMemory: [OUT_OF_MEMORY, (limit) => `program exceeded the memory limit (${limit} bytes per tx)`],
+  blockCommitted: [INVALID_REQUEST, "this block is already committed"],
+  blockExists: [INVALID_REQUEST, (number) => `block ${number} is already recorded`],
+  blockFull: [LIMIT_EXCEEDED, (max) => `block is full (max ${max} tx)`],
+  senderLimit: [LIMIT_EXCEEDED, (max) => `this address has used its per-block quota (max ${max} tx)`],
+  blockGasFull: [LIMIT_EXCEEDED, (max) => `block gas is full (max ${max})`],
+  notAdmin: [FORBIDDEN, (address) => `'${address}' is not authorized to init / reject`],
+  gasConfigNeedsAdmins: [FORBIDDEN, "gas settings can be changed only on chains that set admins (genesis config.admins)"],
+  notGasAdmin: [FORBIDDEN, (address) => `'${address}' is not authorized to change gas settings (must be in admins)`],
   invalidGasConfig: [INVALID_REQUEST, (detail) => `setGasConfig: ${detail}`],
-  historyMissing: [NOT_FOUND, (number) => `ไม่มีข้อมูลย้อนหลังของ block ${number} (ต้องเปิด recordHistory ตั้งแต่ตอนสร้าง block นั้น)`],
-  genesisMismatch: [INTERNAL, (current, given) => `genesis ไม่ตรงกัน (ของ node นี้ ${current} / ที่ส่งมา ${given})`],
-  blockMissing: [NOT_FOUND, (number) => `ไม่พบ block ${number}`],
-  replayMismatch: [INTERNAL, (number) => `รัน block ${number} ใหม่แล้วได้ hash ไม่ตรงกับที่บันทึกไว้`],
-  trieStale: [INTERNAL, "trie ของ state เปลี่ยนระหว่างปิด block (มีการ commit อื่นแทรก) — สร้าง block ใหม่"],
-  invalidHistoryKeep: [INVALID_REQUEST, "historyKeep ต้องเป็นจำนวนเต็ม ≥ 1 หรือ null"],
-  unknownFork: [INVALID_REQUEST, (name) => `ไม่รู้จัก fork '${name}' — โปรแกรมของ node นี้เก่ากว่า genesis (อัปเดตโปรแกรมก่อนเริ่ม)`],
+  historyMissing: [NOT_FOUND, (number) => `no history for block ${number} (recordHistory must have been enabled when that block was created)`],
+  genesisMismatch: [INTERNAL, (current, given) => `genesis mismatch (this node: ${current} / given: ${given})`],
+  blockMissing: [NOT_FOUND, (number) => `block ${number} not found`],
+  replayMismatch: [INTERNAL, (number) => `replaying block ${number} produced a hash that does not match the recorded one`],
+  trieStale: [INTERNAL, "state trie changed while closing the block (another commit intervened) — create a new block"],
+  invalidHistoryKeep: [INVALID_REQUEST, "historyKeep must be an integer ≥ 1 or null"],
+  unknownFork: [INVALID_REQUEST, (name) => `unknown fork '${name}' — this node's software is older than the genesis (update it before starting)`],
   invalidFork: [INVALID_REQUEST, (name, detail) => `fork '${name}': ${detail}`],
-  blockTimestampOrder: [INVALID_REQUEST, (timestamp, previous) => `timestamp ของ block ต้องมากกว่า block ก่อนหน้า (${timestamp} <= ${previous})`],
-  immutableProgram: [FORBIDDEN, (id) => `โปรแกรม '${id}' อัปเกรดไม่ได้ (ไม่มี upgrader)`],
-  notUpgrader: [FORBIDDEN, (address) => `'${address}' ไม่ใช่ upgrader ของโปรแกรมนี้`],
-  invalidUpgrader: [INVALID_REQUEST, "upgrader ต้องเป็น address (string ที่ไม่ว่าง) หรือ null"],
-  upgradePending: [INVALID_REQUEST, (id) => `โปรแกรม '${id}' มีการอัปเกรดที่รออยู่แล้ว`],
-  upgradeNotFound: [NOT_FOUND, "ไม่พบการอัปเกรดที่รอรีวิว"],
-  upgradeNeedsBlock: [INVALID_REQUEST, "upgradeDelayBlocks > 0: ต้องอนุมัติการอัปเกรดใน block ที่มีเลข block"],
-  invalidUpgradeDelay: [INVALID_REQUEST, "upgradeDelayBlocks ต้องเป็นจำนวนเต็มที่ไม่ติดลบ"],
-  invalidSandboxLimit: [INVALID_REQUEST, (name, [min, max]) => `${name} ต้องเป็นจำนวนเต็มระหว่าง ${min} ถึง ${max}`],
-  templateNotActive: [NOT_FOUND, (id) => `โปรแกรมต้นแบบ '${id}' ไม่มีอยู่หรือยังไม่ได้รับอนุมัติ`],
-  invalidSalt: [INVALID_REQUEST, "salt ต้องเป็น string ที่ไม่ว่าง หรือ BigInt"],
-  invalidReadonly: [INVALID_REQUEST, "readonly ต้องเป็น true / false"],
-  readonlyCall: [FORBIDDEN, (name) => `${name}() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว (runProgram แบบ { readonly: true } ห้ามแก้ state ทุกชั้น)`],
-  readonlyValue: [INVALID_REQUEST, "การเรียกแบบอ่านอย่างเดียว (readonly) แนบ value ไม่ได้"],
-  invalidBlockNumber: [INVALID_REQUEST, "เลข block ต้องเป็น BigInt ที่ไม่ติดลบ"],
-  invalidModexp: [INVALID_REQUEST, (max) => `modexp: base / exponent / modulus ต้องเป็น BigInt ที่ไม่ติดลบ และยาวไม่เกิน ${max} ไบต์`],
+  blockTimestampOrder: [INVALID_REQUEST, (timestamp, previous) => `block timestamp must be greater than the previous block's (${timestamp} <= ${previous})`],
+  immutableProgram: [FORBIDDEN, (id) => `program '${id}' cannot be upgraded (no upgrader)`],
+  notUpgrader: [FORBIDDEN, (address) => `'${address}' is not the upgrader of this program`],
+  invalidUpgrader: [INVALID_REQUEST, "upgrader must be an address (a non-empty string) or null"],
+  upgradePending: [INVALID_REQUEST, (id) => `program '${id}' already has a pending upgrade`],
+  upgradeNotFound: [NOT_FOUND, "no upgrade pending review"],
+  upgradeNeedsBlock: [INVALID_REQUEST, "upgradeDelayBlocks > 0: upgrades must be approved in a block that has a block number"],
+  invalidUpgradeDelay: [INVALID_REQUEST, "upgradeDelayBlocks must be a non-negative integer"],
+  invalidSandboxLimit: [INVALID_REQUEST, (name, [min, max]) => `${name} must be an integer between ${min} and ${max}`],
+  templateNotActive: [NOT_FOUND, (id) => `template program '${id}' does not exist or is not approved yet`],
+  invalidSalt: [INVALID_REQUEST, "salt must be a non-empty string or a BigInt"],
+  invalidReadonly: [INVALID_REQUEST, "readonly must be true / false"],
+  readonlyCall: [FORBIDDEN, (name) => `${name}() cannot be used in a read-only call (runProgram with { readonly: true } must not change state at any depth)`],
+  readonlyValue: [INVALID_REQUEST, "a read-only (readonly) call cannot carry value"],
+  invalidBlockNumber: [INVALID_REQUEST, "block number must be a non-negative BigInt"],
+  invalidModexp: [INVALID_REQUEST, (max) => `modexp: base / exponent / modulus must be non-negative BigInts of at most ${max} bytes`],
 };
 
 // ============================================================================
@@ -401,7 +401,7 @@ export class VMError extends Error {
     // V8 messages (TypeError etc.) can differ across Node versions → replaced with fixed messages
     if (err instanceof Error) {
       const name = err.constructor?.name ?? "Error";
-      const error = new VMError(PROGRAM_ERROR, name === "Error" ? err.message : `โปรแกรมทำงานผิดพลาด (${name})`);
+      const error = new VMError(PROGRAM_ERROR, name === "Error" ? err.message : `program error (${name})`);
       // the real details are for debugging only; not stored in the DB and not part of any hash
       error.detail = { name, message: err.message, at: locateInProgram(err) };
       return error;
@@ -411,7 +411,7 @@ export class VMError extends Error {
 
   /** error a program throws inside the sandbox (received as name + message); same rules as fromProgram */
   static fromGuest({ name, message, stack }) {
-    const error = new VMError(PROGRAM_ERROR, name === "Error" ? message : `โปรแกรมทำงานผิดพลาด (${name})`);
+    const error = new VMError(PROGRAM_ERROR, name === "Error" ? message : `program error (${name})`);
     error.detail = { name, message, at: locateInGuest(stack) };
     return error;
   }
@@ -472,7 +472,7 @@ export function encodeBigints(value) {
 }
 
 /** "123n" → BigInt, and integers from JSON → BigInt (used when passing values into a program) */
-export function decodeBigints(value, label = "ค่า") {
+export function decodeBigints(value, label = "value") {
   if (typeof value === "string") return BIGINT_TEXT.test(value) ? BigInt(value.slice(0, -1)) : value;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) fail(ERRORS.numberNotAllowed, label);
@@ -737,11 +737,11 @@ export function checkProgramUuid(programUuid) {
  *   per-unit prices (gas) cannot be adjusted on-chain (setting 0 would make txs free = machines overwhelmed) → use a fork
  */
 export function checkGasConfigChange({ minBaseFee, gas } = {}) {
-  if (gas !== undefined) fail(ERRORS.invalidGasConfig, "ราคาต่อหน่วย (gas) ปรับบนเชนไม่ได้ · เปลี่ยนผ่าน fork (FORKS ใน virtualmachine.js)");
-  if (minBaseFee === undefined) fail(ERRORS.invalidGasConfig, "ต้องส่ง minBaseFee (wei ต่อแก๊ส) หรือ null = กลับไปใช้ค่าใน genesis");
+  if (gas !== undefined) fail(ERRORS.invalidGasConfig, "per-unit prices (gas) cannot be changed on-chain · change them through a fork (FORKS in virtualmachine.js)");
+  if (minBaseFee === undefined) fail(ERRORS.invalidGasConfig, "minBaseFee is required (wei per gas), or null = revert to the genesis value");
   if (minBaseFee === null) return { minBaseFee: null };
   const parsed = parseNative(minBaseFee);
-  if (parsed === null || parsed < 1n) fail(ERRORS.invalidGasConfig, "minBaseFee ต้องเป็นจำนวนเต็ม wei ≥ 1 (เช่น \"100000000\" = 0.1 gwei)");
+  if (parsed === null || parsed < 1n) fail(ERRORS.invalidGasConfig, "minBaseFee must be an integer wei ≥ 1 (e.g. \"100000000\" = 0.1 gwei)");
   return { minBaseFee: parsed.toString() };
 }
 
@@ -984,33 +984,33 @@ const ABI_NAME = /^[A-Za-z_$][\w$]{0,31}$/;
  */
 export function checkAbi(abi) {
   const bad = (detail) => fail(ERRORS.invalidAbi, detail);
-  if (abi === null || typeof abi !== "object" || Array.isArray(abi)) bad("ต้องเป็น object { functions, events }");
+  if (abi === null || typeof abi !== "object" || Array.isArray(abi)) bad("must be an object { functions, events }");
   const unknown = Object.keys(abi).find((key) => !["functions", "events"].includes(key));
-  if (unknown) bad(`ไม่รู้จัก '${unknown}'`);
-  if (valueSize(abi) > ABI_LIMITS.size) bad(`ใหญ่เกิน ${ABI_LIMITS.size} ไบต์`);
+  if (unknown) bad(`unknown '${unknown}'`);
+  if (valueSize(abi) > ABI_LIMITS.size) bad(`larger than ${ABI_LIMITS.size} bytes`);
   const list = (value, label, max) => {
     if (value === undefined) return [];
-    if (!Array.isArray(value)) bad(`${label} ต้องเป็น array`);
-    if (value.length > max) bad(`${label} มีได้ไม่เกิน ${max} รายการ`);
+    if (!Array.isArray(value)) bad(`${label} must be an array`);
+    if (value.length > max) bad(`${label} can have at most ${max} entries`);
     return value;
   };
   const description = (item, label) => {
     if (item.description !== undefined && (typeof item.description !== "string" || item.description.length > ABI_LIMITS.description)) {
-      bad(`${label}.description ต้องเป็น string ยาวไม่เกิน ${ABI_LIMITS.description}`);
+      bad(`${label}.description must be a string of at most ${ABI_LIMITS.description} characters`);
     }
   };
   const fields = (value, label, { named = true, allowIndexed = false } = {}) => {
     const names = new Set();
     for (const [i, field] of list(value, label, ABI_LIMITS.fields).entries()) {
       const where = `${label}[${i}]`;
-      if (field === null || typeof field !== "object" || Array.isArray(field)) bad(`${where} ต้องเป็น { name, type }`);
+      if (field === null || typeof field !== "object" || Array.isArray(field)) bad(`${where} must be { name, type }`);
       const extra = Object.keys(field).find((key) => !["name", "type", "description", ...(allowIndexed ? ["indexed"] : [])].includes(key));
-      if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
-      if ((named || field.name !== undefined) && (typeof field.name !== "string" || !ABI_NAME.test(field.name))) bad(`${where}.name ไม่ถูกต้อง`);
-      if (field.name !== undefined && names.has(field.name)) bad(`${where}.name '${field.name}' ซ้ำ`);
+      if (extra) bad(`${where}: unknown '${extra}'`);
+      if ((named || field.name !== undefined) && (typeof field.name !== "string" || !ABI_NAME.test(field.name))) bad(`${where}.name is invalid`);
+      if (field.name !== undefined && names.has(field.name)) bad(`${where}.name '${field.name}' is duplicated`);
       names.add(field.name);
-      if (!ABI_TYPES.includes(field.type)) bad(`${where}.type ต้องเป็นหนึ่งใน ${ABI_TYPES.join(" / ")}`);
-      if (field.indexed !== undefined && typeof field.indexed !== "boolean") bad(`${where}.indexed ต้องเป็น true / false`);
+      if (!ABI_TYPES.includes(field.type)) bad(`${where}.type must be one of ${ABI_TYPES.join(" / ")}`);
+      if (field.indexed !== undefined && typeof field.indexed !== "boolean") bad(`${where}.indexed must be true / false`);
       description(field, where);
     }
     return value ?? [];
@@ -1018,28 +1018,28 @@ export function checkAbi(abi) {
   const seen = new Set();
   for (const [i, fn] of list(abi.functions, "functions", ABI_LIMITS.functions).entries()) {
     const where = `functions[${i}]`;
-    if (fn === null || typeof fn !== "object" || Array.isArray(fn)) bad(`${where} ต้องเป็น object`);
+    if (fn === null || typeof fn !== "object" || Array.isArray(fn)) bad(`${where} must be an object`);
     const extra = Object.keys(fn).find((key) => !["name", "inputs", "outputs", "readonly", "payable", "description"].includes(key));
-    if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
-    if (typeof fn.name !== "string" || !ABI_NAME.test(fn.name)) bad(`${where}.name ไม่ถูกต้อง`);
-    if (seen.has(`f:${fn.name}`)) bad(`ฟังก์ชัน '${fn.name}' ซ้ำ`);
+    if (extra) bad(`${where}: unknown '${extra}'`);
+    if (typeof fn.name !== "string" || !ABI_NAME.test(fn.name)) bad(`${where}.name is invalid`);
+    if (seen.has(`f:${fn.name}`)) bad(`function '${fn.name}' is duplicated`);
     seen.add(`f:${fn.name}`);
-    for (const flag of ["readonly", "payable"]) if (fn[flag] !== undefined && typeof fn[flag] !== "boolean") bad(`${where}.${flag} ต้องเป็น true / false`);
-    if (fn.readonly && fn.payable) bad(`${where}: readonly กับ payable ใช้คู่กันไม่ได้`);
+    for (const flag of ["readonly", "payable"]) if (fn[flag] !== undefined && typeof fn[flag] !== "boolean") bad(`${where}.${flag} must be true / false`);
+    if (fn.readonly && fn.payable) bad(`${where}: readonly and payable cannot be combined`);
     fields(fn.inputs, `${where}.inputs`);
     fields(fn.outputs, `${where}.outputs`, { named: false });
     description(fn, where);
   }
   for (const [i, event] of list(abi.events, "events", ABI_LIMITS.events).entries()) {
     const where = `events[${i}]`;
-    if (event === null || typeof event !== "object" || Array.isArray(event)) bad(`${where} ต้องเป็น object`);
+    if (event === null || typeof event !== "object" || Array.isArray(event)) bad(`${where} must be an object`);
     const extra = Object.keys(event).find((key) => !["name", "fields", "description"].includes(key));
-    if (extra) bad(`${where}: ไม่รู้จัก '${extra}'`);
-    if (typeof event.name !== "string" || !METADATA_FIELD_PATTERN.test(event.name)) bad(`${where}.name ไม่ถูกต้อง`);
-    if (seen.has(`e:${event.name}`)) bad(`event '${event.name}' ซ้ำ`);
+    if (extra) bad(`${where}: unknown '${extra}'`);
+    if (typeof event.name !== "string" || !METADATA_FIELD_PATTERN.test(event.name)) bad(`${where}.name is invalid`);
+    if (seen.has(`e:${event.name}`)) bad(`event '${event.name}' is duplicated`);
     seen.add(`e:${event.name}`);
     const declared = fields(event.fields, `${where}.fields`, { allowIndexed: true });
-    if (declared.filter((field) => field.indexed).length > MAX_INDEXED) bad(`${where}: indexed ได้ไม่เกิน ${MAX_INDEXED} field`);
+    if (declared.filter((field) => field.indexed).length > MAX_INDEXED) bad(`${where}: at most ${MAX_INDEXED} indexed fields`);
     description(event, where);
   }
   return abi;
@@ -1074,18 +1074,18 @@ export const MAX_INDEXED = 3;
 /** emit options: { indexed: ["field", ...] }; names must be unique, present in data, and at most MAX_INDEXED → the list (not sent = []) */
 export function checkIndexed(options, data) {
   if (options === undefined || options === null) return [];
-  if (typeof options !== "object" || Array.isArray(options)) fail(ERRORS.invalidIndexed, "options ต้องเป็น { indexed: [...] }");
+  if (typeof options !== "object" || Array.isArray(options)) fail(ERRORS.invalidIndexed, "options must be { indexed: [...] }");
   const extra = Object.keys(options).find((key) => key !== "indexed");
-  if (extra) fail(ERRORS.invalidIndexed, `ไม่รู้จัก '${extra}'`);
+  if (extra) fail(ERRORS.invalidIndexed, `unknown '${extra}'`);
   const { indexed } = options;
   if (indexed === undefined || indexed === null) return [];
-  if (!Array.isArray(indexed)) fail(ERRORS.invalidIndexed, "indexed ต้องเป็น array ของชื่อ field");
-  if (indexed.length > MAX_INDEXED) fail(ERRORS.invalidIndexed, `ได้ไม่เกิน ${MAX_INDEXED} field`);
+  if (!Array.isArray(indexed)) fail(ERRORS.invalidIndexed, "indexed must be an array of field names");
+  if (indexed.length > MAX_INDEXED) fail(ERRORS.invalidIndexed, `at most ${MAX_INDEXED} fields`);
   for (const field of indexed) {
-    if (typeof field !== "string" || !METADATA_FIELD_PATTERN.test(field)) fail(ERRORS.invalidIndexed, `ชื่อ field ไม่ถูกต้อง: '${field}'`);
-    if (!Object.hasOwn(data ?? {}, field)) fail(ERRORS.invalidIndexed, `ไม่มี field '${field}' ใน data`);
+    if (typeof field !== "string" || !METADATA_FIELD_PATTERN.test(field)) fail(ERRORS.invalidIndexed, `invalid field name: '${field}'`);
+    if (!Object.hasOwn(data ?? {}, field)) fail(ERRORS.invalidIndexed, `field '${field}' is not in data`);
   }
-  if (new Set(indexed).size !== indexed.length) fail(ERRORS.invalidIndexed, "ชื่อ field ซ้ำ");
+  if (new Set(indexed).size !== indexed.length) fail(ERRORS.invalidIndexed, "duplicate field name");
   return [...indexed];
 }
 
@@ -1607,14 +1607,14 @@ export class VirtualMachine {
   #gasCache = new Map(); // names of active forks → gas table
 
   #setForks(forks, rules) {
-    if (typeof forks !== "object" || Array.isArray(forks)) fail(ERRORS.invalidFork, "(ตาราง)", "ต้องเป็น { ชื่อ: block }");
+    if (typeof forks !== "object" || Array.isArray(forks)) fail(ERRORS.invalidFork, "(table)", "must be { name: block }");
     this.#forks = Object.entries(forks).map(([name, block]) => {
       const rule = Object.hasOwn(rules, name) ? rules[name] : null;
       if (!rule) fail(ERRORS.unknownFork, name);
-      if (!Number.isSafeInteger(block) || block < 0) fail(ERRORS.invalidFork, name, `block ต้องเป็นจำนวนเต็ม ≥ 0 (ได้ ${block})`);
+      if (!Number.isSafeInteger(block) || block < 0) fail(ERRORS.invalidFork, name, `block must be an integer ≥ 0 (got ${block})`);
       for (const [field, value] of Object.entries(rule.gas ?? {})) {
-        if (field === "price" || !Object.hasOwn(DEFAULT_GAS, field)) fail(ERRORS.invalidFork, name, `เปลี่ยนค่าแก๊ส '${field}' ไม่ได้`);
-        if (!Number.isSafeInteger(value) || value < 0) fail(ERRORS.invalidFork, name, `ค่าแก๊ส '${field}' ต้องเป็นจำนวนเต็ม ≥ 0`);
+        if (field === "price" || !Object.hasOwn(DEFAULT_GAS, field)) fail(ERRORS.invalidFork, name, `gas cost '${field}' cannot be changed`);
+        if (!Number.isSafeInteger(value) || value < 0) fail(ERRORS.invalidFork, name, `gas cost '${field}' must be an integer ≥ 0`);
       }
       return { name, block, rule };
     }).sort((a, b) => a.block - b.block || (a.name < b.name ? -1 : 1));
@@ -1801,7 +1801,7 @@ export class VirtualMachine {
       this.checkMetadata(metadata);
       // ABI supplied at deploy: declared functions must actually be exported
       const missing = (metadata?.abi?.functions ?? []).find((fn) => !this.compiler.compile(oneLineCode).exports.includes(fn.name));
-      if (missing) fail(ERRORS.invalidAbi, `ฟังก์ชัน '${missing.name}' ไม่ได้ export`);
+      if (missing) fail(ERRORS.invalidAbi, `function '${missing.name}' is not exported`);
       tx.put(pendingKey(programUuid), {
         code: oneLineCode,
         context,
@@ -2314,7 +2314,7 @@ export class VirtualMachine {
    */
   prepareAdminAction(tx, request, action, { context, nonce, gasLimit, gasPrice }) {
     if (context === undefined) {
-      if (this.admins) fail(ERRORS.notAdmin, "(ไม่มีผู้เซ็น)");
+      if (this.admins) fail(ERRORS.notAdmin, "(no signer)");
       return;
     }
     checkContext(context);
@@ -2399,7 +2399,7 @@ export class VirtualMachine {
       if (current !== hash) fail(ERRORS.genesisMismatch, current, hash);
       return { hash, applied: false };
     }
-    if (this.latestBlockNumber() !== null) fail(ERRORS.genesisMismatch, "(มี block แล้ว)", hash);
+    if (this.latestBlockNumber() !== null) fail(ERRORS.genesisMismatch, "(blocks already exist)", hash);
 
     const writes = Object.entries(genesis.balances ?? {}).map(([address, amount]) =>
       ({ type: WRITE.PUT, dbKey: nativeKey(normalizeAddress(address), NATIVE_FIELD.RECEIVED), value: encodeNative(checkValue(amount)) }));
@@ -2943,11 +2943,11 @@ export class VirtualMachine {
    */
   checkTransaction({ nonce, from, context } = {}, { read = (dbKey) => this.read(dbKey) } = {}) {
     const address = normalizeAddress(from ?? context?.sender);
-    if (!isNonEmptyString(address)) return { ok: false, reason: "ไม่มี sender" };
+    if (!isNonEmptyString(address)) return { ok: false, reason: "missing sender" };
     if (!this.requireNonce) return { ok: true, expectedNonce: null };
 
     const expectedNonce = read(nonceKey(address)) ?? 0;
-    if (nonce !== expectedNonce) return { ok: false, reason: `nonce ต้องเป็น ${expectedNonce}`, expectedNonce };
+    if (nonce !== expectedNonce) return { ok: false, reason: `nonce must be ${expectedNonce}`, expectedNonce };
     return { ok: true, expectedNonce };
   }
 
@@ -3124,7 +3124,7 @@ export class VirtualMachine {
       throw new VMError(PROGRAM_ERROR, outcome.text);
     }
     // values leaving the program: BigInt converted to "123n" so they can be sent as JSON
-    return this.checkValueSize(fromProgram(outcome.value, "ค่าที่ return"), "ค่าที่ return");
+    return this.checkValueSize(fromProgram(outcome.value, "return value"), "return value");
   }
 
   // ---------- APIs that programs call ----------
@@ -3157,18 +3157,18 @@ export class VirtualMachine {
       transferNative: mutating("transferNative", (to, amount) => this.programTransferNative(tx, programUuid, to, fromProgramAmount(amount))),
       setMetadata: mutating("setMetadata", (field, value) => this.programSetMetadata(tx, programUuid, field, value === null ? null : fromProgram(value, "metadata"))),
       emit: mutating("emit", (name, data, options) => this.programEmit(tx, programUuid, caller.depth, name, fromProgram(data ?? {}, "event"), options)),
-      keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ keccak256"))),
-      ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ค่าที่ ecrecover"), signature)),
+      keccak256: guard((value) => this.programKeccak(tx, typeof value === "string" ? value : fromProgram(value, "keccak256 input"))),
+      ecrecover: guard((value, signature) => this.programEcrecover(tx, typeof value === "string" ? value : fromProgram(value, "ecrecover input"), signature)),
       runProgram: guard((target, functionName, input, options) => toProgram(
         this.programRunProgram(tx, caller, target, functionName,
           fromProgram(input ?? {}, "input"), fromProgramOptions(options)) ?? null,
-        "ผลลัพธ์")),
+        "result")),
       cloneProgram: mutating("cloneProgram", (template, initInput, options) => this.programCloneProgram(tx, caller, template,
         fromProgram(initInput ?? {}, "initInput"), options)),
       // ---- precompiles (input format same as keccak256: string or JSON data) ----
-      sha256: guard((value) => this.programDigest(tx, "sha256", text(value, "ค่าที่ sha256"))),
-      ripemd160: guard((value) => this.programDigest(tx, "ripemd160", text(value, "ค่าที่ ripemd160"))),
-      blake2b: guard((value) => this.programDigest(tx, "blake2b", text(value, "ค่าที่ blake2b"))),
+      sha256: guard((value) => this.programDigest(tx, "sha256", text(value, "sha256 input"))),
+      ripemd160: guard((value) => this.programDigest(tx, "ripemd160", text(value, "ripemd160 input"))),
+      blake2b: guard((value) => this.programDigest(tx, "blake2b", text(value, "blake2b input"))),
       modexp: guard((base, exponent, modulus) => this.programModexp(tx, base, exponent, modulus)),
       // ---- block / tx / code data ----
       BlockHash: guard((number) => this.programBlockHash(tx, number)),
@@ -3206,12 +3206,12 @@ export class VirtualMachine {
     tx.loaded.add(dbKey);
     const value = tx.current(dbKey);
     tx.useGas(tx.gas.read + tx.gas.byte * valueSize(value));
-    return value === undefined ? undefined : toProgram(value, "ค่าที่อ่านจาก DB");
+    return value === undefined ? undefined : toProgram(value, "value read from DB");
   }
 
   programWriteDB(tx, programUuid, key, value) {
     if (value === undefined) fail(ERRORS.writeUndefined);
-    const stored = this.checkValueSize(fromProgram(value, "ค่าที่ writeDB"), "writeDB");
+    const stored = this.checkValueSize(fromProgram(value, "writeDB value"), "writeDB");
     tx.useGas(tx.gas.write + tx.gas.byte * valueSize(stored));
     const dbKey = this.checkKeySize(tx.touch(programUuid, key));
     tx.useStateKeyGas(dbKey);
@@ -3285,14 +3285,14 @@ export class VirtualMachine {
 
   /** keccak256 of a string or JSON data (objects are canonicalized first) */
   programKeccak(tx, value) {
-    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ keccak256"));
+    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "keccak256 input"));
     tx.useGas(tx.gas.hash + tx.gas.byte * Buffer.byteLength(text, "utf8"));
     return keccak256Hex(text);
   }
 
   /** sha256 / ripemd160 / blake2b (BLAKE2b-512) of a string or JSON data → 0x… hex · gas = that hash's cost + bytes of data */
   programDigest(tx, name, value) {
-    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, `ค่าที่ ${name}`));
+    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, `${name} input`));
     const bytes = utf8ToBytes(text);
     tx.useGas(tx.gas[name] + tx.gas.byte * bytes.length);
     return `0x${bytesToHex(DIGESTS[name](bytes))}`;
@@ -3357,7 +3357,7 @@ export class VirtualMachine {
   /** recover the signer address from a message + signature (r + s + v, as in EIP-191/712) · digest = keccak256(UTF-8 of the message / canonical JSON) */
   programEcrecover(tx, value, signature) {
     if (!isNonEmptyString(signature) || !/^0x[0-9a-fA-F]{130}$/.test(signature)) fail(ERRORS.invalidSignature);
-    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ค่าที่ ecrecover"));
+    const text = typeof value === "string" ? value : canonicalJson(toJsonValue(value, "ecrecover input"));
     tx.useGas(tx.gas.recover + tx.gas.byte * Buffer.byteLength(text, "utf8"));
     return recoverAddress(hexToBytesStrict(keccak256Hex(text)), signature);
   }

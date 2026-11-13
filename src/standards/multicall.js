@@ -17,7 +17,7 @@
 export const MULTICALL_FUNCTIONS = ["aggregate", "tryAggregate"];
 
 export const MULTICALL_PROGRAM = `function program() {
-  // ชื่อ / คำอธิบายของโปรแกรม (ไม่บังคับ) เช่น { namespace: "multicall" } ตอน deploy ชุดโปรแกรมกลาง (src/standards/system.js)
+  // program name / description (optional), e.g. { namespace: "multicall" } when deploying the system program set (src/standards/system.js)
   function initialization(params) {
     if (typeof params.input.namespace === "string" && params.input.namespace !== "") setMetadata("namespace", params.input.namespace)
     if (typeof params.input.icon === "string" && params.input.icon !== "") setMetadata("icon", params.input.icon)

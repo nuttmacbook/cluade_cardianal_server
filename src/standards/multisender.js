@@ -84,7 +84,7 @@ export const MULTISENDER_PROGRAM = `function program() {
   function noValue(params) {
     if (params.value !== 0n) throw new Error("do not attach native value (use sendNative)")
   }
-  // กันการเรียกซ้อน (ผู้รับ NFT / multi-token หรือ token ปลอมเรียกกลับเข้ามา)
+  // reentrancy guard (an NFT / multi-token recipient or a fake token calling back in)
   function lock() {
     if (readDB("lock") === true) throw new Error("reentrant call")
     writeDB("lock", true)
@@ -112,7 +112,7 @@ export const MULTISENDER_PROGRAM = `function program() {
       total = total + amount
       items.push({ to: to, amount: amount })
     }
-    // ตรวจครบก่อนโอนออก · value ต้องเท่าผลรวมพอดี (ไม่มีเงินค้างในโปรแกรม)
+    // validate everything before transferring out · value must equal the total exactly (no funds left in the program)
     if (params.value !== total) throw new Error("value must equal the sum of amounts (" + total + ")")
     const before = ThisBalance() - params.value
     for (const item of items) transferNative(item.to, item.amount)

@@ -122,38 +122,38 @@ export function review(code, { apiNames = [] } = {}) {
   // second pass: check the rules
   walk(ast, (node, parent) => {
     if (!ALLOWED_NODES.has(node.type)) {
-      add(node, `ใช้ ${describe(node.type)} ไม่ได้`);
+      add(node, `${describe(node.type)} is not allowed`);
       return;
     }
     if (node.type === "NewExpression" && !(node.callee.type === "Identifier" && ALLOWED_NEW.has(node.callee.name))) {
-      add(node, "new ได้เฉพาะ Error และ Date เท่านั้น");
+      add(node, "new is allowed only with Error and Date");
     }
     if (node.type === "MemberExpression") {
       if (node.computed) {
-        add(node, "เข้าถึงแบบ obj[key] ไม่ได้ (ใช้ map() กับ readDB แทน)");
+        add(node, "obj[key] access is not allowed (use map() with readDB instead)");
       } else if (node.property.type === "Identifier") {
         const name = node.property.name;
-        if (BANNED_PROPERTIES.has(name)) add(node, `เข้าถึง .${name} ไม่ได้`);
-        else if (BANNED_METHODS.has(name)) add(node, `ใช้ .${name}() ไม่ได้ (ผลไม่แน่นอนหรือสร้างข้อมูลใหญ่เกินการนับค่าแก๊ส)`);
+        if (BANNED_PROPERTIES.has(name)) add(node, `accessing .${name} is not allowed`);
+        else if (BANNED_METHODS.has(name)) add(node, `.${name}() is not allowed (non-deterministic, or produces data too large to meter for gas)`);
         // allowed global: only the methods on its allowlist may be used
         else if (node.object.type === "Identifier" && ALLOWED_MEMBERS[node.object.name] && !declared.has(node.object.name)) {
           const allowed = ALLOWED_MEMBERS[node.object.name];
-          if (!allowed.includes(name)) add(node, `${node.object.name}.${name} ใช้ไม่ได้ (ใช้ได้เฉพาะ ${allowed.join(", ") || "ไม่มี"})`);
+          if (!allowed.includes(name)) add(node, `${node.object.name}.${name} is not allowed (allowed: ${allowed.join(", ") || "none"})`);
         }
       }
     }
     if (node.type === "Property" && (node.kind !== "init" || node.method)) {
-      add(node, "getter / setter / เมธอดใน object literal ใช้ไม่ได้");
+      add(node, "getters / setters / methods in object literals are not allowed");
     }
-    if (node.type === "Property" && node.computed) add(node, "ชื่อ key แบบคำนวณไม่ได้");
-    if (node.async) add(node, "async / await ใช้ไม่ได้");
-    if (node.generator) add(node, "generator ใช้ไม่ได้");
-    if (node.type === "Literal" && node.regex) add(node, "regular expression ใช้ไม่ได้ (เวลาทำงานไม่แน่นอน)");
+    if (node.type === "Property" && node.computed) add(node, "computed keys are not allowed");
+    if (node.async) add(node, "async / await is not allowed");
+    if (node.generator) add(node, "generators are not allowed");
+    if (node.type === "Literal" && node.regex) add(node, "regular expressions are not allowed (unbounded run time)");
     if (node.type === "Identifier" && isReference(node, parent)) {
       if (!declared.has(node.name) && !known.has(node.name)) {
-        add(node, `'${node.name}' ไม่รู้จัก (ใช้ได้เฉพาะ API ของ VM และตัวแปรที่ประกาศเอง)`);
+        add(node, `'${node.name}' is unknown (only VM APIs and your own declarations are allowed)`);
       }
-      if (node.name.startsWith("__")) add(node, `ห้ามใช้ชื่อที่ขึ้นต้นด้วย __ ('${node.name}')`);
+      if (node.name.startsWith("__")) add(node, `names starting with __ are not allowed ('${node.name}')`);
     }
   });
 
@@ -162,7 +162,7 @@ export function review(code, { apiNames = [] } = {}) {
 
 /** summary message shown to whoever submitted the code */
 export function reviewMessage(result) {
-  return result.ok ? "ผ่านการตรวจ" : result.issues.map((issue) => `บรรทัด ${issue.line}: ${issue.message}`).join("\n");
+  return result.ok ? "review passed" : result.issues.map((issue) => `line ${issue.line}: ${issue.message}`).join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ function isReference(node, parent) {
 const DESCRIPTIONS = {
   ClassDeclaration: "class", ClassExpression: "class", ImportDeclaration: "import", ExportNamedDeclaration: "export",
   AwaitExpression: "await", YieldExpression: "yield", ThisExpression: "this", WithStatement: "with",
-  ForInStatement: "for...in (ลำดับไม่แน่นอน ใช้ for...of แทน)", RegExpLiteral: "regular expression",
+  ForInStatement: "for...in (non-deterministic order; use for...of instead)", RegExpLiteral: "regular expression",
   TaggedTemplateExpression: "tagged template", MetaProperty: "import.meta / new.target", LabeledStatement: "label",
 };
 const describe = (type) => DESCRIPTIONS[type] ?? type;

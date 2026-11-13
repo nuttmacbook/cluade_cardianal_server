@@ -53,8 +53,8 @@ function program() {
   }
 
   function move(from, to, amount) {
-    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount ไม่ถูกต้อง")
-    if (balance(from) < amount) throw new Error("ยอดไม่พอ")
+    if (typeof amount !== "bigint" || amount <= 0n) throw new Error("invalid amount")
+    if (balance(from) < amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balance(from) - amount)
     writeDB(map("balances", to), balance(to) + amount)
     return { from, to, amount }
@@ -77,13 +77,13 @@ function program() {
     const spender = params.context.sender
     const { from, to, amount } = params.input
     const allowed = readDB(map("allowance", from, spender)) || 0n
-    if (allowed < amount) throw new Error("allowance ไม่พอ")
+    if (allowed < amount) throw new Error("insufficient allowance")
     writeDB(map("allowance", from, spender), allowed - amount)
     return move(from, to, amount)
   }
 
   function mint(params) {
-    if (params.context.sender !== readDB("owner")) throw new Error("ไม่ใช่ owner")
+    if (params.context.sender !== readDB("owner")) throw new Error("not the owner")
     writeDB("totalSupply", readDB("totalSupply") + params.input.amount)
     writeDB(map("balances", params.input.to), balance(params.input.to) + params.input.amount)
     return readDB("totalSupply")
@@ -327,8 +327,8 @@ function program() {
 
   function returnUndefined() {}
   function returnNull() { return null }
-  function returnNumber() { return 1.5 }   // number → ถูกปฏิเสธ (ต้องเป็น BigInt)
-  function returnString() { return "สวัสดี 🎉" }
+  function returnNumber() { return 1.5 }   // number → rejected (must be a BigInt)
+  function returnString() { return "héllo wörld 🎉" }
   function returnNested() { return { a: [1n, { b: true }], c: null } }
   function returnDate() { return new Date(0) }
   function returnNaN() { return NaN }
@@ -368,7 +368,7 @@ function program() {
     writeDB("afterSpin", 1n)
     return "survived"
   }
-  // Date ในโปรแกรมเป็นเวลาของ block (คงที่) จึงใช้ performance.now() เพื่อเผาเวลาจริงสำหรับทดสอบ timeout
+  // Date inside a program is the block time (constant), so use performance.now() to burn real time for the timeout test
   function busy(params) {
     const end = performance.now() + Number(params.input.ms)
     while (performance.now() < end) {}
@@ -547,7 +547,7 @@ function program() {
   }
 
   function collect(params) {
-    // ดึงเงินจากผู้เรียกเข้ากระเป๋าของโปรแกรมนี้เอง โดยไม่ต้องรู้ address ตัวเองล่วงหน้า
+    // pull funds from the caller into this program's own wallet without knowing its own address in advance
     runProgram(readDB("token"), "transferFrom", { from: params.context.origin, to: ThisAddress(), amount: params.input.amount })
     writeDB("collected", (readDB("collected") || 0n) + params.input.amount)
     return ThisAddress()
@@ -642,7 +642,7 @@ function program() {
   }
 
   function rejectMoney(params) {
-    if (params.value > 0n) throw new Error("ไม่รับเงิน")
+    if (params.value > 0n) throw new Error("does not accept funds")
     return "ok"
   }
   return { deposit, forward, forwardAll, forwardTooMuch, forwardSafe, seenValue, rejectMoney }
@@ -680,7 +680,7 @@ function program() {
 
   function rollMany(params) {
     const rolls = []
-    for (let i = 0n; i < params.input.times; i++) rolls.push(String(Math.random()))   // ทศนิยมส่งออกเป็น string
+    for (let i = 0n; i < params.input.times; i++) rolls.push(String(Math.random()))   // decimals are returned as strings
     return rolls
   }
 
@@ -700,7 +700,7 @@ export const PROFILE = `
 function program() {
   function initialization(params) {
     setMetadata("namespace", params.input.name)
-    setMetadata("description", "โปรแกรมตัวอย่าง")
+    setMetadata("description", "Sample program")
   }
 
   function rename(params) {
@@ -718,7 +718,7 @@ function program() {
   }
 
   function tryReserved() {
-    setMetadata("creator", "0xแอบแก้")
+    setMetadata("creator", "0xspoofed")
   }
   return { rename, setField, clearField, tryReserved }
 }
@@ -746,7 +746,7 @@ function program() {
   }
 
   function payIfWallet(params) {
-    if (IsProgram(params.input.to)) throw new Error("ปลายทางเป็นโปรแกรม")
+    if (IsProgram(params.input.to)) throw new Error("recipient is a program")
     transferNative(params.input.to, params.input.amount)
     return ThisBalance()
   }
@@ -772,7 +772,7 @@ function program() {
 
   function transfer(params) {
     const from = params.context.sender
-    if (balanceOf(from) < params.input.amount) throw new Error("ยอดไม่พอ")
+    if (balanceOf(from) < params.input.amount) throw new Error("insufficient balance")
     writeDB(map("balances", from), balanceOf(from) - params.input.amount)
     writeDB(map("balances", params.input.to), balanceOf(params.input.to) + params.input.amount)
     emit("Transfer", { from, to: params.input.to, amount: params.input.amount })
@@ -796,7 +796,7 @@ function program() {
   }
 
   function badName() {
-    emit("ชื่อไทย", {})
+    emit("bad name!", {})
   }
 
   return { transfer, relay, relaySafe, badName }
@@ -816,23 +816,23 @@ function program() {
   function withdrawUnsafe(params) {
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
-    if (balance <= 0n) throw new Error("ไม่มีเงิน")
-    runProgram(who, "receive", {}, { value: balance })     // เรียกออกไปก่อน ← ช่องโหว่
-    writeDB(map("balances", who), 0n)                        // ค่อยอัปเดตทีหลัง
+    if (balance <= 0n) throw new Error("no funds")
+    runProgram(who, "receive", {}, { value: balance })     // call out first ← the vulnerability
+    writeDB(map("balances", who), 0n)                        // update afterwards
     return balance
   }
 
   function withdrawSafe(params) {
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
-    if (balance <= 0n) throw new Error("ไม่มีเงิน")
-    writeDB(map("balances", who), 0n)                        // อัปเดตก่อน
-    runProgram(who, "receive", {}, { value: balance })      // แล้วค่อยเรียกออก
+    if (balance <= 0n) throw new Error("no funds")
+    writeDB(map("balances", who), 0n)                        // update first
+    runProgram(who, "receive", {}, { value: balance })      // then call out
     return balance
   }
 
   function withdrawGuarded(params) {
-    if (readDB("locked")) throw new Error("กำลังทำงานอยู่")
+    if (readDB("locked")) throw new Error("already running")
     writeDB("locked", true)
     const who = params.context.sender
     const balance = readDB(map("balances", who)) || 0n
@@ -870,9 +870,9 @@ function program() {
     if (left > 0n) {
       writeDB("rounds", left - 1n)
       try {
-        runProgram(readDB("vault"), readDB("method"), {})   // เรียกซ้ำระหว่างที่ยังทำงานค้าง
+        runProgram(readDB("vault"), readDB("method"), {})   // re-enter while still running
       } catch (e) {
-        writeDB("lastError", e.message)                     // ถูกกันไว้ได้ → จำไว้เฉย ๆ
+        writeDB("lastError", e.message)                     // blocked → just record it
       }
     }
     return true

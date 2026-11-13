@@ -55,7 +55,7 @@ export const STAKING_FUNCTIONS = ["createPool", "stake", "unstake", "claim", "ex
 export const STAKING_EVENTS = ["PoolCreated", "Staked", "Unstaked", "Claimed", "RewardsAdded", "EmergencyWithdraw", "RewardsRecovered"];
 
 export const STAKING_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const P = ${STAKING_PRECISION}n
   const MAX_DURATION = ${STAKING_MAX_DURATION}n
@@ -69,7 +69,7 @@ export const STAKING_PROGRAM = `function program() {
     setProgramMetadata(params.input)
   }
 
-  // ---------- ตัวช่วย ----------
+  // ---------- helpers ----------
   function nowOf(params) { return params.block.timestamp / 1000n }
   function lock() {
     if (readDB("locked") === true) throw new Error("reentrant call")
@@ -96,7 +96,7 @@ export const STAKING_PROGRAM = `function program() {
     return token
   }
   function balanceHere(token) { return runProgram(token, "balanceOf", { who: ThisAddress() }, { readonly: true }) }
-  // ดึงเงินเข้าแล้ววัดยอดที่เข้าจริง (token เก็บค่าธรรมเนียม / คืนค่าโกหก ก็ไม่หลอกบัญชีได้)
+  // pull funds in and measure what actually arrived (a fee-on-transfer or lying token cannot fool the accounting)
   function pullFrom(token, from, amount) {
     const before = balanceHere(token)
     runProgram(token, "transferFrom", { from: from, to: ThisAddress(), amount: amount })
@@ -106,12 +106,12 @@ export const STAKING_PROGRAM = `function program() {
   }
   function pushTo(token, to, amount) { runProgram(token, "transfer", { to: to, amount: amount }) }
 
-  // เดินเวลาของ pool ไปถึง now (ไม่เกิน endAt) — เปลี่ยน pool ในหน่วยความจำ
+  // advance the pool's clock to now (capped at endAt) — mutates pool in memory
   function accrue(pool, now) {
     const t = now < pool.endAt ? now : pool.endAt
     if (t <= pool.lastUpdate) return pool
     if (pool.totalStaked > 0n) {
-      // เศษที่หารไม่ลงตัวยกไปรอบถัดไป (carry) ไม่ทิ้ง → เรียกถี่ ๆ ก็ไม่ทำให้รางวัลหาย / ไม่กลายเป็นเงินที่ผู้สร้างดึงคืนได้
+      // the division remainder carries over to the next round (carry), not dropped → frequent calls neither lose rewards nor turn them into funds the creator can recover
       const scaled = pool.rewardRate * (t - pool.lastUpdate) + (pool.carry || 0n)
       const inc = scaled / pool.totalStaked
       pool.carry = scaled - inc * pool.totalStaked
@@ -123,7 +123,7 @@ export const STAKING_PROGRAM = `function program() {
   }
   function futureScaled(pool) { return pool.lastUpdate < pool.endAt ? pool.rewardRate * (pool.endAt - pool.lastUpdate) : 0n }
   function unallocatedOf(pool) {
-    const free = (pool.funded - pool.recovered) * P - pool.allocated - (pool.carry || 0n) - futureScaled(pool)   // carry = รางวัลที่ไหลแล้วแต่ยังไม่ถึงหน่วย
+    const free = (pool.funded - pool.recovered) * P - pool.allocated - (pool.carry || 0n) - futureScaled(pool)   // carry = rewards already streamed but not yet a whole unit
     return free > 0n ? free / P : 0n
   }
   function reserveOf(pool) { return pool.funded - pool.claimed - pool.recovered }
@@ -133,7 +133,7 @@ export const STAKING_PROGRAM = `function program() {
     const saved = readDB(map("rewards", poolId, who)) || 0n
     return { stake: stake, reward: saved + stake * (pool.acc - paid) / P, paid: paid, saved: saved }
   }
-  // บันทึกรางวัลของ who ถึงตอนนี้ (หลัง accrue) → { stake, reward }
+  // settle who's rewards up to now (after accrue) → { stake, reward }
   function settle(pool, poolId, who) {
     const user = earnedOf(pool, poolId, who)
     if (user.reward !== user.saved) writeDB(map("rewards", poolId, who), user.reward)
@@ -156,7 +156,7 @@ export const STAKING_PROGRAM = `function program() {
       funded: pool.funded, claimed: pool.claimed, recovered: pool.recovered, rewardReserve: reserveOf(pool), unallocated: unallocatedOf(pool) }
   }
 
-  // ---------- เปลี่ยน state ----------
+  // ---------- state changes ----------
   function createPool(params) { rejectValue(params);
     lock()
     const input = params.input
@@ -214,7 +214,7 @@ export const STAKING_PROGRAM = `function program() {
     return received
   }
 
-  // ลดต้นในบัญชี (ยังไม่โอน)
+  // reduce the account's principal (no transfer yet)
   function reduceStake(pool, poolId, who, stakeNow, amount) {
     const rest = stakeNow - amount
     if (rest === 0n) { deleteDB(map("stakes", poolId, who)); pool.stakers = pool.stakers - 1n }
@@ -278,7 +278,7 @@ export const STAKING_PROGRAM = `function program() {
     const pool = accrue(loadPool(poolId), nowOf(params))
     const user = earnedOf(pool, poolId, who)
     if (user.stake === 0n) throw new Error("nothing staked")
-    // รางวัลที่สละ → กลับเป็น "ยังไม่ได้แจก" (ปัดลงแล้ว จึงไม่กินส่วนของคนอื่น)
+    // forfeited rewards → back to "unallocated" (already rounded down, so it never eats into others' share)
     pool.allocated = pool.allocated - user.reward * P
     reduceStake(pool, poolId, who, user.stake, user.stake)
     if (user.saved !== 0n) deleteDB(map("rewards", poolId, who))
@@ -302,7 +302,7 @@ export const STAKING_PROGRAM = `function program() {
     const now = nowOf(params)
     const pool = accrue(loadPool(poolId), now)
     if (params.context.sender !== pool.creator) throw new Error("only pool creator")
-    let base = pool.lastUpdate      // = max(now, startAt) เมื่อ pool ยังไม่จบ
+    let base = pool.lastUpdate      // = max(now, startAt) while the pool has not ended
     let leftover = 0n
     if (now >= pool.endAt) {
       if (extend === 0n) throw new Error("pool has ended: give extendSeconds to start a new period")
@@ -341,7 +341,7 @@ export const STAKING_PROGRAM = `function program() {
     return amount
   }
 
-  // ---------- อ่าน ----------
+  // ---------- reads ----------
   function pageArgs(input, max) {
     const start = input.start === undefined || input.start === null ? 0n : input.start
     const limit = input.limit === undefined || input.limit === null ? BigInt(max) : input.limit

@@ -69,7 +69,7 @@ ${TOKEN_CORE}
     if (typeof amount !== "bigint" || amount <= 0n) throw new Error("amount must be greater than 0")
     const balance = readDB(map("balances", from)) || 0n
     if (balance < amount) throw new Error("insufficient balance")
-    // ลดยอดก่อนส่งเงินออก (กันเรียกซ้อนกลับเข้ามาถอนซ้ำ)
+    // decrease the balance before sending funds out (prevents reentrant double withdrawal)
     writeDB(map("balances", from), balance - amount)
     writeDB("totalSupply", readDB("totalSupply") - amount)
     emit("Transfer", { from: from, to: ZERO, amount: amount }, { indexed: ["from", "to"] })
@@ -109,7 +109,7 @@ export const MULTISIG_PROGRAM = `function program() {
 
   function initialization(params) {
     setProgramMetadata(params.input)
-    if (params.input.owners === undefined || params.input.owners === null) return   // ต้นแบบ
+    if (params.input.owners === undefined || params.input.owners === null) return   // template
     const list = []
     if (!Array.isArray(params.input.owners) || params.input.owners.length === 0) throw new Error("owners must be a non-empty array")
     if (params.input.owners.length > ${MULTISIG_MAX_OWNERS}) throw new Error("too many owners (max ${MULTISIG_MAX_OWNERS})")
@@ -199,7 +199,7 @@ export const MULTISIG_PROGRAM = `function program() {
     if (item.executed) throw new Error("already executed")
     if (countConfirmations(id) < threshold()) throw new Error("not enough confirmations")
     item.executed = true
-    writeDB(map("txs", id), item)   // ทำเครื่องหมายก่อนเรียกออก (กันเรียกซ้อนกลับมาทำซ้ำ)
+    writeDB(map("txs", id), item)   // mark it before calling out (prevents reentrant re-execution)
     let result = true
     if (item.fn === "") transferNative(item.target, item.value)
     else result = runProgram(item.target, item.fn, item.input, item.value > 0n ? { value: item.value } : {})

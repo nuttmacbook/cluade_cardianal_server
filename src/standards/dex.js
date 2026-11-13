@@ -69,7 +69,7 @@ export function dexPairSalt(tokenA, tokenB) {
 }
 
 export const DEX_PAIR_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const MINIMUM_LIQUIDITY = ${DEX_MINIMUM_LIQUIDITY}n
@@ -85,7 +85,7 @@ export const DEX_PAIR_PROGRAM = `function program() {
     writeDB("decimals", 18n)
     writeDB("totalSupply", 0n)
     setProgramMetadata(input)
-    if ((input.token0 === undefined || input.token0 === null) && (input.token1 === undefined || input.token1 === null)) return   // ต้นแบบ
+    if ((input.token0 === undefined || input.token0 === null) && (input.token1 === undefined || input.token1 === null)) return   // template
     const token0 = checkAddress(input.token0, "token0")
     const token1 = checkAddress(input.token1, "token1")
     if (!(token0 < token1)) throw new Error("tokens must be sorted (token0 < token1) and different")
@@ -173,7 +173,7 @@ ${TOKEN_CORE}
     if (supply === 0n) {
       liquidity = sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY
       if (liquidity <= 0n) throw new Error("insufficient liquidity minted")
-      mintLP(ZERO, MINIMUM_LIQUIDITY)   // ล็อกถาวร (กันหารด้วยศูนย์ / ราคา LP ถูกปั่น)
+      mintLP(ZERO, MINIMUM_LIQUIDITY)   // locked forever (prevents division by zero / LP price manipulation)
     } else {
       const l0 = amount0 * supply / reserve0
       const l1 = amount1 * supply / reserve1
@@ -198,10 +198,10 @@ ${TOKEN_CORE}
     const liquidity = readDB(map("balances", self)) || 0n
     const supply = readDB("totalSupply")
     if (liquidity === 0n || supply === 0n) throw new Error("insufficient liquidity burned")
-    const amount0 = liquidity * balance0 / supply   // ปัดลง (เข้าทาง pool)
+    const amount0 = liquidity * balance0 / supply   // round down (in the pool's favor)
     const amount1 = liquidity * balance1 / supply
     if (amount0 <= 0n || amount1 <= 0n) throw new Error("insufficient liquidity burned")
-    burnLP(self, liquidity)   // เผาก่อนส่งออก
+    burnLP(self, liquidity)   // burn before sending out
     safeTransfer(token0, to, amount0)
     safeTransfer(token1, to, amount1)
     update(balanceOfToken(token0), balanceOfToken(token1), readDB("reserve0"), readDB("reserve1"), params)
@@ -222,7 +222,7 @@ ${TOKEN_CORE}
     const token0 = readDB("token0")
     const token1 = readDB("token1")
     if (to === token0 || to === token1 || to === ThisAddress()) throw new Error("invalid to")
-    if (amount0Out > 0n) safeTransfer(token0, to, amount0Out)   // ส่งออกก่อน แล้วตรวจ k (ผิด = ย้อนทั้ง tx)
+    if (amount0Out > 0n) safeTransfer(token0, to, amount0Out)   // send out first, then check k (failure = the whole tx reverts)
     if (amount1Out > 0n) safeTransfer(token1, to, amount1Out)
     const balance0 = balanceOfToken(token0)
     const balance1 = balanceOfToken(token1)
@@ -272,7 +272,7 @@ ${TOKEN_CORE}
 }`;
 
 export const DEX_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const MAX_PATH = ${DEX_MAX_PATH}
   const MAX_PAGE = 100n
@@ -291,7 +291,7 @@ export const DEX_PROGRAM = `function program() {
     setProgramMetadata(params.input)
   }
 
-  // ── ตัวช่วย ──
+  // ── helpers ──
   function lock() {
     if (readDB("locked") === true) throw new Error("locked")
     writeDB("locked", true)
@@ -343,13 +343,13 @@ export const DEX_PROGRAM = `function program() {
     positive(amountIn, "amountIn")
     if (reserveIn <= 0n || reserveOut <= 0n) throw new Error("insufficient liquidity")
     const withFee = amountIn * 997n
-    return withFee * reserveOut / (reserveIn * 1000n + withFee)   // ปัดลง
+    return withFee * reserveOut / (reserveIn * 1000n + withFee)   // round down
   }
   function amountInFor(amountOut, reserveIn, reserveOut) {
     positive(amountOut, "amountOut")
     if (reserveIn <= 0n || reserveOut <= 0n) throw new Error("insufficient liquidity")
     if (amountOut >= reserveOut) throw new Error("insufficient liquidity")
-    return reserveIn * amountOut * 1000n / ((reserveOut - amountOut) * 997n) + 1n   // ปัดขึ้น
+    return reserveIn * amountOut * 1000n / ((reserveOut - amountOut) * 997n) + 1n   // round up
   }
   function checkPath(path) {
     if (!Array.isArray(path) || path.length < 2 || path.length > MAX_PATH) throw new Error("path must have 2 … " + MAX_PATH + " tokens")
@@ -394,7 +394,7 @@ export const DEX_PROGRAM = `function program() {
     runProgram(readDB("wrapped"), "withdraw", { amount: amount })
     transferNative(to, amount)
   }
-  // amounts.at(0) ต้องอยู่ใน pair แรกแล้ว · hop สุดท้ายส่งไปที่ to
+  // amounts.at(0) must already be in the first pair · the last hop sends to "to"
   function swapAlong(amounts, path, to) {
     for (let i = 0; i < path.length - 1; i++) {
       const input = path.at(i)
@@ -447,8 +447,8 @@ export const DEX_PROGRAM = `function program() {
     let pair = pairOf(tokenA, tokenB)
     if (pair === undefined) pair = createPairFor(tokenA, tokenB)
     const r = reservesOf(tokenA, tokenB)
-    // ยังว่าง (หรือมีคน sync donation ข้างเดียวไว้) → ใส่ตาม desired (pair.mint ครั้งแรกคิดจากยอดที่เกิน reserve)
-    // ยังไม่มี LP (totalSupply 0) ก็ถือว่าใหม่: กันคนบริจาค + sync ตั้งอัตราหลอกไว้ก่อน แล้วผู้ใส่คนแรกโดนดึงตามอัตรานั้น
+    // still empty (or someone synced a one-sided donation) → add the desired amounts (the first pair.mint counts the balance above reserve)
+    // no LP yet (totalSupply 0) also counts as new: stops someone from donating + syncing a fake rate so the first provider is pulled at that rate
     const supply = runProgram(pair, "totalSupply", {}, { readonly: true })
     if (r.reserveA === 0n || r.reserveB === 0n || supply === 0n) return { pair: pair, amountA: desiredA, amountB: desiredB }
     const optimalB = quoteAmount(desiredA, r.reserveA, r.reserveB)
@@ -645,7 +645,7 @@ export const DEX_PROGRAM = `function program() {
     return amounts
   }
 
-  // ── อ่าน ──
+  // ── reads ──
   function getAmountsOut(params) { rejectValue(params); return amountsOut(params.input.amountIn, checkPath(params.input.path)) }
   function getAmountsIn(params) { rejectValue(params); return amountsIn(params.input.amountOut, checkPath(params.input.path)) }
   function quote(params) { rejectValue(params);

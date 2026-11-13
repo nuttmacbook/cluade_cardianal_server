@@ -62,15 +62,15 @@ export function rlpEncode(item) {
 
 export function rlpDecode(bytes) {
   const [item, end] = rlpItem(bytes, 0);
-  if (end !== bytes.length) throw new Error("RLP มีข้อมูลเกิน");
+  if (end !== bytes.length) throw new Error("RLP has trailing data");
   return item;
 }
 
 function rlpItem(bytes, at) {
-  if (at >= bytes.length) throw new Error("RLP สั้นเกินไป");
+  if (at >= bytes.length) throw new Error("RLP too short");
   const first = bytes[at];
   const readLength = (count, from) => {
-    if (from + count > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (from + count > bytes.length) throw new Error("RLP too short");
     let length = 0;
     for (let i = 0; i < count; i++) length = length * 256 + bytes[from + i];
     return length;
@@ -80,7 +80,7 @@ function rlpItem(bytes, at) {
   if (first <= 0xbf) { const count = first - 0xb7; return slice(at + 1 + count, readLength(count, at + 1)); }
   const list = (start, length) => {
     const end = start + length;
-    if (end > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (end > bytes.length) throw new Error("RLP too short");
     const items = [];
     for (let i = start; i < end;) { const [item, next] = rlpItem(bytes, i); items.push(item); i = next; }
     return [items, end];
@@ -90,7 +90,7 @@ function rlpItem(bytes, at) {
   return list(at + 1 + count, readLength(count, at + 1));
 
   function slice(start, length) {
-    if (start + length > bytes.length) throw new Error("RLP สั้นเกินไป");
+    if (start + length > bytes.length) throw new Error("RLP too short");
     return [bytes.subarray(start, start + length), start + length];
   }
 }
@@ -110,7 +110,7 @@ function hexPrefix(nibbles, leaf) {
 function fromHexPrefix(bytes) {
   const text = bytesToHex(bytes);
   const flag = parseInt(text[0], 16);
-  if (flag > 3) throw new Error("hex-prefix ผิดรูปแบบ");
+  if (flag > 3) throw new Error("malformed hex-prefix");
   return { leaf: flag >= 2, nibbles: text.slice(flag % 2 ? 1 : 2) };
 }
 
@@ -125,7 +125,7 @@ const branchNode = (children, value) => ({ kind: BRANCH, children, value, dirty:
 
 /** RLP item → node (clean) · child given as a hash = { stored } · embedded child = node */
 function nodeFromItem(item, enc = rlpEncode(item)) {
-  if (!Array.isArray(item)) throw new Error("node ของ trie ต้องเป็น list");
+  if (!Array.isArray(item)) throw new Error("trie node must be a list");
   let node;
   if (item.length === 17) {
     node = { kind: BRANCH, children: item.slice(0, 16).map(childFromItem), value: item[16].length ? item[16] : null };
@@ -133,7 +133,7 @@ function nodeFromItem(item, enc = rlpEncode(item)) {
     const { leaf, nibbles } = fromHexPrefix(item[0]);
     node = leaf ? { kind: LEAF, key: nibbles, value: item[1] } : { kind: EXT, key: nibbles, child: childFromItem(item[1]) };
   } else {
-    throw new Error(`node ของ trie ต้องมี 2 หรือ 17 ช่อง (ได้ ${item.length})`);
+    throw new Error(`trie node must have 2 or 17 items (got ${item.length})`);
   }
   node.dirty = false;
   node.enc = enc;
@@ -143,7 +143,7 @@ function nodeFromItem(item, enc = rlpEncode(item)) {
 function childFromItem(item) {
   if (Array.isArray(item)) return nodeFromItem(item);
   if (item.length === 0) return null;
-  if (item.length !== 32) throw new Error("ลูกของ node ต้องเป็น hash 32 byte หรือ node ที่ฝังมา");
+  if (item.length !== 32) throw new Error("node child must be a 32-byte hash or an embedded node");
   return { stored: item };
 }
 
@@ -203,8 +203,8 @@ export class StateTrie {
   #resolve(child, path, verify = this.#verify) {
     if (!child?.stored) return child;
     const node = this.#fetch(path);
-    if (!node) throw new Error(`trie: ไม่พบ node ที่ path '${path}'`);
-    if (verify && bytesToHex(keccak_256(node.enc)) !== bytesToHex(child.stored)) throw new Error(`trie: node ที่ path '${path}' ไม่ตรงกับ hash ที่พ่ออ้างไว้`);
+    if (!node) throw new Error(`trie: no node at path '${path}'`);
+    if (verify && bytesToHex(keccak_256(node.enc)) !== bytesToHex(child.stored)) throw new Error(`trie: node at path '${path}' does not match the hash its parent references`);
     node.hash = child.stored;
     return node;
   }
@@ -435,7 +435,7 @@ export function verifyProof(root, dbKey, proof, { keyOf = trieKeyOf } = {}) {
     } else {
       if (ref.length === 0) return { exists: false };
       const bytes = byHash.get(bytesToHex(ref));
-      if (!bytes) throw new Error("หลักฐานไม่ครบ: ไม่มี node ที่ hash ตรงกับที่อ้างไว้");
+      if (!bytes) throw new Error("incomplete proof: no node matches the referenced hash");
       item = rlpDecode(bytes);
     }
     if (item.length === 17) {
@@ -444,7 +444,7 @@ export function verifyProof(root, dbKey, proof, { keyOf = trieKeyOf } = {}) {
       rest = rest.slice(1);
       continue;
     }
-    if (item.length !== 2) throw new Error("หลักฐานมี node ผิดรูปแบบ");
+    if (item.length !== 2) throw new Error("proof contains a malformed node");
     const { leaf, nibbles } = fromHexPrefix(item[0]);
     if (leaf) return nibbles === rest ? { exists: true, value: parseValue(item[1]) } : { exists: false };
     if (!rest.startsWith(nibbles)) return { exists: false };

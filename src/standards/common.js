@@ -13,7 +13,7 @@ export const SET_METADATA = `function setProgramMetadata(input) {
   }`;
 
 export const CHECK_ADDRESS = `function checkAddress(address, label) {
-    // 0x + 40 ตัวอักษร hex เท่านั้น (ตัวอื่นเป็น key ที่ไม่มีใครเซ็นได้ → ของที่ส่งไปหายถาวร)
+    // 0x + 40 hex characters only (anything else is a key nobody can sign for → whatever is sent there is lost forever)
     if (typeof address !== "string" || address.length !== 42 || !address.startsWith("0x")) throw new Error(label + " must be an address")
     const lower = address.toLowerCase()
     for (let i = 2; i < 42; i++) if (!"0123456789abcdef".includes(lower.charAt(i))) throw new Error(label + " must be an address")

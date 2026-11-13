@@ -67,7 +67,7 @@ export const NFT_MARKET_FUNCTIONS = ["list", "listMulti", "buy", "updatePrice", 
 export const NFT_MARKET_EVENTS = ["Listed", "PriceUpdated", "Cancelled", "Sold", "OfferMade", "OfferCancelled", "OfferAccepted"];
 
 export const NFT_MARKET_PROGRAM = `function program() {
-  // เรียกเป็น tx พร้อมแนบเหรียญหลักมา → ปฏิเสธ (โปรแกรมนี้ไม่มีทางส่งเหรียญหลักออก แนบมาจะค้างถาวร)
+  // called as a tx with native coin attached → reject (this program has no way to send native coin out, so it would be stuck forever)
   function rejectValue(params) { if (params && params.value !== undefined && params.value !== null && params.value !== 0n) throw new Error("this function does not accept native value") }
   const ZERO = "${ZERO_ADDRESS}"
   const MAX_FEE_BPS = ${NFT_MARKET_MAX_FEE_BPS}n
@@ -92,7 +92,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     setProgramMetadata(input)
   }
 
-  // ---------- ตัวช่วย ----------
+  // ---------- helpers ----------
   function now(params) { return params.block.timestamp / 1000n }
   function noValue(params) { if (params.value !== undefined && params.value !== 0n) throw new Error("this function does not accept native value") }
   function checkId(value, label) {
@@ -118,20 +118,20 @@ export const NFT_MARKET_PROGRAM = `function program() {
     writeDB("lock", expect)
   }
   function exit() { deleteDB("lock") }
-  // ปัดขึ้น: แยกซื้อทีละชิ้นก็หนีค่าธรรมเนียมไม่ได้ (feeBps ≤ 10% → fee ไม่เกิน total)
+  // round up: buying one item at a time cannot dodge the fee (feeBps ≤ 10% → fee never exceeds total)
   function feeOf(total) { return (total * readDB("feeBps") + 9999n) / 10000n }
 
   function tokenBalance(token, who) { return runProgram(token, "balanceOf", { who: who }, { readonly: true }) }
-  /** โอน token แล้วตรวจว่าผู้รับได้ยอดเต็มจริง (ไม่เชื่อค่าที่ token ตอบอย่างเดียว) · from = ThisAddress() → transfer */
+  /** transfer tokens and verify the recipient really got the full amount (does not trust the token's return value alone) · from = ThisAddress() → transfer */
   function moveToken(token, from, to, amount) {
-    if (amount === 0n || from === to) return   // โอนให้ตัวเอง (feeRecipient ซื้อเอง) = ไม่มีอะไรเปลี่ยน
+    if (amount === 0n || from === to) return   // transfer to self (feeRecipient buying) = nothing changes
     const before = tokenBalance(token, to)
     if (from === ThisAddress()) runProgram(token, "transfer", { to: to, amount: amount })
     else runProgram(token, "transferFrom", { from: from, to: to, amount: amount })
     if (tokenBalance(token, to) - before !== amount) throw new Error("token transfer did not deliver the full amount")
   }
   function moveNative(to, amount) { if (amount > 0n) transferNative(to, amount) }
-  /** จ่ายยอดรวม: ผู้ขายได้ total − fee · feeRecipient ได้ fee (payer = ThisAddress() → จ่ายจากเงินที่ฝากไว้) */
+  /** pay the total: seller gets total − fee · feeRecipient gets fee (payer = ThisAddress() → pay from deposited funds) */
   function settle(payToken, payer, seller, total) {
     const fee = feeOf(total)
     const recipient = readDB("feeRecipient")
@@ -146,7 +146,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
   }
   function ownerOfNft(collection, tokenId) { return runProgram(collection, "ownerOf", { tokenId: tokenId }, { readonly: true }) }
   function multiBalance(collection, account, id) { return runProgram(collection, "balanceOf", { account: account, id: id }, { readonly: true }) }
-  /** ส่ง NFT / ของออกจากตลาด แล้วตรวจว่าถึงผู้รับจริง */
+  /** send the NFT / item out of the market and verify it actually reached the recipient */
   function deliver(listing, to, amount, safe) {
     if (listing.kind === "erc721") {
       runProgram(listing.collection, safe ? "safeTransferFrom" : "transferFrom", { from: ThisAddress(), to: to, tokenId: listing.tokenId })
@@ -193,7 +193,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
       { indexed: ["listingId", "seller", "collection"] })
   }
 
-  // ---------- วางขาย ----------
+  // ---------- listing ----------
   function list(params) { rejectValue(params);
     noValue(params)
     const input = params.input || {}
@@ -237,7 +237,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return listingId
   }
 
-  // ---------- hook รับของ: รับเฉพาะของที่ตลาดดึงเองตาม lock ----------
+  // ---------- receive hook: accept only items the market pulls itself under the lock ----------
   function expected(params, kind, tokenId, amount) {
     const expect = readDB("lock")
     if (expect === undefined || expect === null || expect.kind !== kind) throw new Error("direct transfers are not accepted; use list / listMulti")
@@ -255,7 +255,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
   }
   function onERC1155BatchReceived(params) { rejectValue(params); throw new Error("batch transfers are not accepted; use listMulti") }
 
-  // ---------- ซื้อ / แก้ราคา / ยกเลิก ----------
+  // ---------- buy / reprice / cancel ----------
   function buy(params) {
     const input = params.input || {}
     enter(null)
@@ -264,7 +264,7 @@ export const NFT_MARKET_PROGRAM = `function program() {
     if (buyer === listing.seller) throw new Error("seller cannot buy own listing")
     const amount = input.amount === undefined || input.amount === null ? 1n : checkPositive(input.amount, "amount")
     if (amount > listing.amount) throw new Error("amount exceeds the listed amount")
-    // จ่ายด้วย token ต้องระบุ price (กันผู้ขายขึ้นราคาตัดหน้า แล้วดึงจาก allowance ที่ให้ไว้เยอะ) · native ตรวจจาก value อยู่แล้ว
+    // paying with a token requires price (stops the seller from front-running a price hike and pulling from a large allowance) · native is already checked via value
     if (input.price !== undefined && input.price !== null && input.price !== listing.price) throw new Error("price changed")
     const total = listing.price * amount
     const value = params.value || 0n
@@ -316,8 +316,8 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return true
   }
 
-  // ---------- ข้อเสนอซื้อ (ERC-721) ----------
-  /** เจ้าของ NFT ตอนนี้: วางขายในตลาดนี้ → ผู้ขาย · ไม่ได้วางขาย → ownerOf */
+  // ---------- offers (ERC-721) ----------
+  /** current NFT owner: listed in this market → the seller · not listed → ownerOf */
   function currentOwner(collection, tokenId) {
     const listingId = readDB(map("active", collection, tokenId))
     if (listingId !== undefined) return { owner: loadListing(listingId).seller, listingId: listingId }
@@ -401,14 +401,14 @@ export const NFT_MARKET_PROGRAM = `function program() {
     return { offerId: offer.offerId, listingId: current.listingId, amount: offer.amount, fee: fee }
   }
 
-  // ---------- อ่าน ----------
+  // ---------- reads ----------
   function fee(params) { rejectValue(params); return { feeBps: readDB("feeBps"), feeRecipient: readDB("feeRecipient") } }
   function listingCount(params) { rejectValue(params); return readDB("listingCount") }
   function offerCount(params) { rejectValue(params); return readDB("offerCount") }
   function getListing(params) { rejectValue(params); return loadListing((params.input || {}).listingId) }
   function getOffer(params) { rejectValue(params); return loadOffer((params.input || {}).offerId) }
 
-  /** ไล่ total รายการตั้งแต่ start ไม่เกิน limit รายการ (กรอง activeOnly หลังโหลด) */
+  /** walk total entries from start, at most limit entries (activeOnly is filtered after loading) */
   function page(input, total, idAt, load) {
     const start = input.start === undefined || input.start === null ? 0n : checkId(input.start, "start")
     const limit = input.limit === undefined || input.limit === null ? 20n : checkPositive(input.limit, "limit")
