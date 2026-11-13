@@ -105,8 +105,8 @@ test("wrong nonce: does not consume a nonce or pay gas", () => {
 test("checkTransaction: filters out duplicate txs before the block (reads only the nonce from the DB)", () => {
   const vm = setup();
   assert.deepEqual(vm.checkTransaction(transfer(1)), { ok: true, expectedNonce: 1 });
-  assert.deepEqual(vm.checkTransaction(transfer(0)), { ok: false, reason: "nonce ต้องเป็น 1", expectedNonce: 1 });
-  assert.deepEqual(vm.checkTransaction(transfer(5)), { ok: false, reason: "nonce ต้องเป็น 1", expectedNonce: 1 });
+  assert.deepEqual(vm.checkTransaction(transfer(0)), { ok: false, reason: "nonce must be 1", expectedNonce: 1 });
+  assert.deepEqual(vm.checkTransaction(transfer(5)), { ok: false, reason: "nonce must be 1", expectedNonce: 1 });
   assert.deepEqual(vm.checkTransaction({ from: "alice", to: "bob", amount: 1, nonce: 1 }), { ok: true, expectedNonce: 1 });
   assert.equal(vm.checkTransaction({}).ok, false);
 

@@ -72,10 +72,10 @@ test("storage: read values are copied — modifying a read object does not affec
 
 test("storage: writeDB non-JSON values / undefined", () => {
   activate("faulty", FAULTY);
-  fails(callAs("a", "faulty", "writeUndefined"), "INVALID_REQUEST", "writeDB ห้ามใช้ undefined (ใช้ deleteDB)");
-  fails(callAs("a", "faulty", "writeFunction"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
+  fails(callAs("a", "faulty", "writeUndefined"), "INVALID_REQUEST", "writeDB cannot store undefined (use deleteDB)");
+  fails(callAs("a", "faulty", "writeFunction"), "INVALID_REQUEST", "writeDB value must be JSON data");
   fails(callAs("a", "faulty", "writeCircular"), "PROGRAM_ERROR", /RangeError/);
-  fails(callAs("a", "faulty", "writeDate"), "INVALID_REQUEST", "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
+  fails(callAs("a", "faulty", "writeDate"), "INVALID_REQUEST", "writeDB value must be JSON data");
   // BigInt can be written, stored in the DB as "10n"
   const big = ok(callAs("a", "faulty", "writeBigInt"));
   assert.deepEqual(big.writes.map((w) => w.value), ["10n"]);
@@ -90,21 +90,21 @@ test("key: strings containing ':' are encoded — no collision with map() and no
   assert.equal(VM.storageKey("probe", VM.map("a", "b")), "probe:storage:a:b");
   assert.equal(VM.storageKey("probe", VM.map("a", 1)), "probe:storage:a:1");
   assert.equal(VM.storageKey("probe", VM.map("a", "1")), "probe:storage:a:1"); // 1 and "1" are the same key
-  assert.equal(VM.storageKey("probe", VM.map("ผู้ใช้", "a b/c")), "probe:storage:%E0%B8%9C%E0%B8%B9%E0%B9%89%E0%B9%83%E0%B8%8A%E0%B9%89:a%20b%2Fc");   // Thai key is intentional: tests percent-encoding of Unicode
+  assert.equal(VM.storageKey("probe", VM.map("用户", "a b/c")), "probe:storage:%E7%94%A8%E6%88%B7:a%20b%2Fc");   // non-ASCII key is intentional: tests percent-encoding of Unicode
 });
 
 test("key: invalid format → INVALID_REQUEST", () => {
   activate("faulty", FAULTY);
   const cases = {
-    empty: "แต่ละส่วนของ key ต้องเป็น string ที่ไม่ว่าง จำนวนเต็ม หรือ BigInt",
-    emptyMap: "key ต้องเป็น string หรือ map(...)",
-    emptyPart: "แต่ละส่วนของ key ต้องเป็น string ที่ไม่ว่าง จำนวนเต็ม หรือ BigInt",
-    floatPart: "แต่ละส่วนของ key ต้องเป็น string ที่ไม่ว่าง จำนวนเต็ม หรือ BigInt",
-    nullPart: "แต่ละส่วนของ key ต้องเป็น string ที่ไม่ว่าง จำนวนเต็ม หรือ BigInt",
-    objectKey: "key ต้องเป็น string หรือ map(...)",
-    numberKey: "key ต้องเป็น string หรือ map(...)",
-    nullKey: "key ต้องเป็น string หรือ map(...)",
-    arrayKey: "key ต้องเป็น string หรือ map(...)",
+    empty: "each key part must be a non-empty string, an integer or a BigInt",
+    emptyMap: "key must be a string or map(...)",
+    emptyPart: "each key part must be a non-empty string, an integer or a BigInt",
+    floatPart: "each key part must be a non-empty string, an integer or a BigInt",
+    nullPart: "each key part must be a non-empty string, an integer or a BigInt",
+    objectKey: "key must be a string or map(...)",
+    numberKey: "key must be a string or map(...)",
+    nullKey: "key must be a string or map(...)",
+    arrayKey: "key must be a string or map(...)",
   };
   for (const [which, message] of Object.entries(cases)) {
     fails(callAs("a", "faulty", "badKey", { which }), "INVALID_REQUEST", message);

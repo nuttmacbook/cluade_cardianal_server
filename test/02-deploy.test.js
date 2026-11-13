@@ -36,7 +36,7 @@ test("deploy: validates programUuid", () => {
   for (const programUuid of [null, "", 123, {}, "a:b", ":", "a:"]) {
     fails(vm.deploy({ programUuid, code: NO_INIT, context: user("a") }), "INVALID_REQUEST", /programUuid/);
   }
-  ok(vm.deploy({ programUuid: "uuid-with.dots_and-dashes/slash ไทย", code: NO_INIT, context: user("a") }));   // Thai is intentional: tests Unicode in programUuid
+  ok(vm.deploy({ programUuid: "uuid-with.dots_and-dashes/slash 中文", code: NO_INIT, context: user("a") }));   // non-ASCII is intentional: tests Unicode in programUuid
   ok(vm.deploy({ code: NO_INIT, context: user("a") })); // no programUuid → the VM derives the address
 });
 
@@ -48,8 +48,8 @@ test("deploy: validates context", () => {
 });
 
 test("deploy: validates code", () => {
-  fails(vm.deploy({ programUuid: "p", code: 123, context: user("a") }), "INVALID_REQUEST", /code ต้องเป็น string/);
-  fails(vm.deploy({ programUuid: "p", context: user("a") }), "INVALID_REQUEST", /code ต้องเป็น string/);
+  fails(vm.deploy({ programUuid: "p", code: 123, context: user("a") }), "INVALID_REQUEST", /code must be a string/);
+  fails(vm.deploy({ programUuid: "p", context: user("a") }), "INVALID_REQUEST", /code must be a string/);
   fails(vm.deploy({ programUuid: "p", code: INVALID_CODES.importUsed, context: user("a") }), "INVALID_REQUEST", /import/);
   fails(vm.deploy({ programUuid: "p", code: INVALID_CODES.exportDefault, context: user("a") }), "INVALID_REQUEST", /import/);
   // must be a single function wrapping the whole file (any name) — code outside that one scope is rejected
@@ -57,7 +57,7 @@ test("deploy: validates code", () => {
   fails(vm.deploy({ programUuid: "p", code: "const x = 1", context: user("a") }), "INVALID_REQUEST", /function program/);
   fails(vm.deploy({ programUuid: "p", code: "function a() {}\nfunction b() {}", context: user("a") }), "INVALID_REQUEST", /syntax error/);
   fails(vm.deploy({ programUuid: "p", code: INVALID_CODES.syntaxError, context: user("a") }), "INVALID_REQUEST", /syntax error/);
-  fails(vm.deploy({ programUuid: "p", code: INVALID_CODES.exportMissing, context: user("a") }), "INVALID_REQUEST", "export 'b' แต่ไม่มีฟังก์ชันนี้ในระดับบนสุด");
+  fails(vm.deploy({ programUuid: "p", code: INVALID_CODES.exportMissing, context: user("a") }), "INVALID_REQUEST", "export 'b' has no matching top-level function");
   // initialization may be exported (to keep editors quiet) but still cannot be called from outside
   const exported = ok(vm.deploy({ programUuid: "p-init", code: INVALID_CODES.exportInitialization, context: user("a") }));
   assert.equal(exported.result.state, "pending_review");
@@ -70,14 +70,14 @@ test("deploy: validates code", () => {
 
 test("deploy: exporting a function nested in another function → rejected", () => {
   const code = "function program() {\n  function outer() {\n    function inner() { return 1 }\n    return inner()\n  }\n  return { outer, inner }\n}";
-  fails(vm.deploy({ programUuid: "p", code, context: user("a") }), "INVALID_REQUEST", "export 'inner' แต่ไม่มีฟังก์ชันนี้ในระดับบนสุด");
+  fails(vm.deploy({ programUuid: "p", code, context: user("a") }), "INVALID_REQUEST", "export 'inner' has no matching top-level function");
 });
 
 test("deploy: function names inside strings / comments don't count as functions", () => {
   const code = "function program() {\n  const text = `\n  function fromString() {}\n  `\n  /*\n  function fromComment() {}\n  */\n  function real() { return text }\n  return { real, fromString }\n}";
-  fails(vm.deploy({ programUuid: "p", code, context: user("a") }), "INVALID_REQUEST", "export 'fromString' แต่ไม่มีฟังก์ชันนี้ในระดับบนสุด");
+  fails(vm.deploy({ programUuid: "p", code, context: user("a") }), "INVALID_REQUEST", "export 'fromString' has no matching top-level function");
   const onlyComment = "function program() {\n  /*\n  function fromComment() {}\n  */\n  function real() { return 1 }\n  return { fromComment }\n}";
-  fails(vm.deploy({ programUuid: "p2", code: onlyComment, context: user("a") }), "INVALID_REQUEST", "export 'fromComment' แต่ไม่มีฟังก์ชันนี้ในระดับบนสุด");
+  fails(vm.deploy({ programUuid: "p2", code: onlyComment, context: user("a") }), "INVALID_REQUEST", "export 'fromComment' has no matching top-level function");
 });
 
 test("deploy: indented / async top-level functions / ones sharing a name with an inner function can still be exported", () => {
@@ -94,15 +94,15 @@ test("deploy: a nested initialization does not count as the program's initializa
 });
 
 test("deploy: initInput must be JSON", () => {
-  fails(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a"), initInput: { n: 10n } }), "INVALID_REQUEST", "initInput ต้องเป็นข้อมูล JSON");
+  fails(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a"), initInput: { n: 10n } }), "INVALID_REQUEST", "initInput must be JSON data");
 });
 
 test("deploy: programUuid cannot duplicate a pending or active program", () => {
   ok(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }));
-  fails(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }), "INVALID_REQUEST", "programUuid 'p' ถูกใช้แล้ว");
+  fails(vm.deploy({ programUuid: "p", code: NO_INIT, context: user("a") }), "INVALID_REQUEST", "programUuid 'p' is already in use");
 
   activate("active", NO_INIT);
-  fails(vm.deploy({ programUuid: "active", code: NO_INIT, context: user("a") }), "INVALID_REQUEST", "programUuid 'active' ถูกใช้แล้ว");
+  fails(vm.deploy({ programUuid: "active", code: NO_INIT, context: user("a") }), "INVALID_REQUEST", "programUuid 'active' is already in use");
 });
 
 test("deploy: the same code can be used for several programUuids (separate storage)", () => {

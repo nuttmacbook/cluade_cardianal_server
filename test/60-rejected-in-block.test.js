@@ -100,7 +100,7 @@ test("tampering with rejected entries in the DB afterwards → replayBlock detec
   block.commit();
   const [saved] = vm.getBlockRejected(1);
   vm.commit([{ type: "put", dbKey: VM.blockRejectedKey(1), value: [{ ...saved, reason: "forged" }] }]);
-  assert.throws(() => vm.replayBlock(1), /hash ไม่ตรง/);
+  assert.throws(() => vm.replayBlock(1), /hash that does not match/);
   assert.equal(vm.replayBlock(1, { verify: false }).rejected[0].reason, "forged");
 });
 

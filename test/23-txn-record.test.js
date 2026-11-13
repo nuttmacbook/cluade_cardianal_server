@@ -65,7 +65,7 @@ test("txn: a failed tx is recorded too, with the reason", () => {
 
   assert.equal(res.status, "throw");
   assert.equal(record.status, "throw");
-  assert.deepEqual(record.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(record.error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.equal(record.hash, vm.hashTransaction(request));
   assert.ok(num(record.fee) > 0);
 });

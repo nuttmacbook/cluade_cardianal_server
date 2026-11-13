@@ -97,8 +97,8 @@ test("full summary: 2 successful txs + 1 failed tx", () => {
       {
         status: "throw",
         timestamp: T,
-        error: { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" },
-        calls: [record("throw", { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" })],
+        error: { code: "PROGRAM_ERROR", message: "insufficient balance" },
+        calls: [record("throw", { code: "PROGRAM_ERROR", message: "insufficient balance" })],
         writes: [],
       },
     ],
@@ -208,7 +208,7 @@ test("invariant: cross-program (approve → shop.buy via token.transferFrom)", (
     ["shop:storage:items:alice", "2n"],
     ["shop:storage:sales", "2n"],
     ["shop:storage:attempts:alice", "1n"],
-    ["shop:storage:failed:alice", "allowance ไม่พอ"],
+    ["shop:storage:failed:alice", "insufficient allowance"],
   ]);
   assertBlockInvariants(vm, block);
 });

@@ -83,7 +83,7 @@ test("producerSchedule is not in the genesis hash: a schedule can be added later
   const vm = new VM.VirtualMachine(new MemoryDB());
   const { hash } = vm.applyGenesis(genesis);
   assert.equal(vm.checkGenesis({ ...genesis, producerSchedule: [{ fromBlock: 100, producers: [NEW] }] }), hash);
-  assert.throws(() => vm.checkGenesis({ ...genesis, config: { producers: [NEW] } }), /genesis ไม่ตรงกัน/);   // changing config.producers = a new chain
+  assert.throws(() => vm.checkGenesis({ ...genesis, config: { producers: [NEW] } }), /genesis mismatch/);   // changing config.producers = a new chain
 });
 
 test("case 3 leaked key: from block N the old key cannot produce (rejected even with a valid signature) · blocks before N still sync · the new key carries on", async () => {

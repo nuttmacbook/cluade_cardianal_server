@@ -50,7 +50,7 @@ test("block: a throwing tx does not affect the block, and the next tx still work
   const after = block.call(transfer("alice", "jane", 40));
 
   assert.equal(failed.status, "throw");
-  assert.equal(failed.error.message, "ยอดไม่พอ");
+  assert.equal(failed.error.message, "insufficient balance");
   assert.equal(after.status, "success");
   assert.deepEqual(block.results().map((r) => r.status), ["success", "throw", "success"]);
 
@@ -185,7 +185,7 @@ test("block.commit: saves once and closes the block — no further use or repeat
   assert.equal(block.committed, true);
   assert.equal(stored("token", "balances", "bob"), "10n");
 
-  assert.throws(() => block.commit(), { code: "INVALID_REQUEST", message: "block นี้ commit ไปแล้ว" });
+  assert.throws(() => block.commit(), { code: "INVALID_REQUEST", message: "this block is already committed" });
   assert.throws(() => block.call(transfer("alice", "bob", 1)), { code: "INVALID_REQUEST" });
 });
 

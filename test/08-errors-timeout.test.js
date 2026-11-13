@@ -8,12 +8,12 @@ beforeEach(resetVM);
 test("error: messages from various kinds of throw", () => {
   activate("faulty", FAULTY);
   fails(callAs("a", "faulty", "throwError"), "PROGRAM_ERROR", "error message");
-  fails(callAs("a", "faulty", "throwTypeError"), "PROGRAM_ERROR", /โปรแกรมทำงานผิดพลาด \(TypeError\)/);
-  fails(callAs("a", "faulty", "throwReference"), "PROGRAM_ERROR", "โปรแกรมทำงานผิดพลาด (ReferenceError)");
+  fails(callAs("a", "faulty", "throwTypeError"), "PROGRAM_ERROR", /program error \(TypeError\)/);
+  fails(callAs("a", "faulty", "throwReference"), "PROGRAM_ERROR", "program error (ReferenceError)");
   fails(callAs("a", "faulty", "throwString"), "PROGRAM_ERROR", "plain string");
   fails(callAs("a", "faulty", "throwNumber"), "PROGRAM_ERROR", "42");
   fails(callAs("a", "faulty", "throwObject"), "PROGRAM_ERROR", "[object Object]");
-  fails(callAs("a", "faulty", "stackOverflow"), "PROGRAM_ERROR", "โปรแกรมทำงานผิดพลาด (RangeError)");
+  fails(callAs("a", "faulty", "stackOverflow"), "PROGRAM_ERROR", "program error (RangeError)");
 });
 
 test("error: a program can catch its own errors", () => {
@@ -38,7 +38,7 @@ test("error: an object faking a timeout code from a nested program is caught nor
 test("timeout: infinite loop → TIMEOUT within the time limit, no writes", () => {
   activate("faulty", FAULTY);
   const started = Date.now();
-  const res = fails(callAs("a", "faulty", "spin"), "TIMEOUT", "โปรแกรมทำงานเกินเวลาที่กำหนด");
+  const res = fails(callAs("a", "faulty", "spin"), "TIMEOUT", "program exceeded its time limit");
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= TEST_TIMEOUT_MS - 5 && elapsed < TEST_TIMEOUT_MS + 200, `took ${elapsed}ms`);
   assert.deepEqual(trace(res), ["0:faulty.spin:throw:TIMEOUT"]);
@@ -100,7 +100,7 @@ test("timeout: initialization that calls another program which loops", () => {
 //  DB failure: the whole request always fails as INTERNAL (programs cannot catch it)
 // ---------------------------------------------------------------------------
 
-const DB_DOWN = "อ่านข้อมูลจาก DB ไม่สำเร็จ: db down";
+const DB_DOWN = "failed to read from DB: db down";
 
 /** a read that fails when dbKey matches the condition */
 const failingRead = (shouldFail) => (dbKey) => {

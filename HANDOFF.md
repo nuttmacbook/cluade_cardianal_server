@@ -13,7 +13,7 @@ Project handoff document for another agent or team to continue the work. Read th
 | Language / runtime | JavaScript (ESM), Node 22 only (`engines: >=22 <23`) |
 | Dependencies | `@noble/curves`, `@noble/hashes`, `acorn`, `lmdb`, `quickjs-emscripten` (pinned to 0.32.0, do not bump it yourself, see section 4) (+`ethers` as dev) |
 | Total code | ~16,600 lines in `src/` `server.js` and both SDKs (the VM itself ~4,300) |
-| Language in code | comments / error messages are English, variable names are English — **keep this style** · Thai that remains in consensus text (deployed program source, VM execution messages in `src/core/`) is part of existing blocks and must not be changed |
+| Language in code | comments / error messages are English, variable names are English — **keep this style** · consensus text (deployed program source, VM execution messages in `src/core/`) is part of the chain: changing it needs a chain reset |
 | Tests | `npm test` → 1045 cases + `npm run test:e2e` 34 cases |
 
 ---
@@ -396,7 +396,7 @@ POST /sendtx
   Not enough (both legacy) → `gas price too low to replace (must be at least X)` · with 1559 → `(needs maxFeePerGas ≥ X and maxPriorityFeePerGas ≥ Y)` + `minimumMaxFeePerGas` / `minimumMaxPriorityFeePerGas`
   · no gasPrice given = `vm.gas.price`
 - The new tx can be any action → **cancel = replace with a 0 transfer to yourself** (`{ action: "transfer", to: <yourself>, value: 0 }`)
-  The chain accepts EVM-style native transfers of 0: gas is still charged and the nonce consumed · negative / non-integer → `amount ต้องเป็นจำนวนเต็มไม่ติดลบ` ("amount must be a non-negative integer"; VM consensus message, kept in Thai)
+  The chain accepts EVM-style native transfers of 0: gas is still charged and the nonce consumed · negative / non-integer → `amount must be a non-negative integer` (VM consensus message)
   (`transferNative` inside programs still does not accept 0, as before)
 - Does not use up more `maxPerSender` / `maxSize`, but counts toward the per-address rate limit · must pass simulate first — fails → the old tx stays
 - The old tx leaves the queue but stays in "seen" (it cannot be resubmitted) · `mempool.replacedBy(hash)` remembers it in memory for `ttlMs`
@@ -500,7 +500,7 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
 - Not yet charged by size: array-likes whose `length` getter lies (allocated first, charged after — bounded by the memory cap)
 
 **CPU-based gas: regex / BigInt** (test `81-cpu-gas`) — previously these two burned seconds of CPU for a few hundred gas and could only be stopped by timeout (not deterministic across machines)
-- **regex is fully disabled** (exponential backtracking, gas cannot be charged deterministically — the engine has no hook to count steps): regex literal → deploy fails (`regular expression ใช้ในโปรแกรมไม่ได้` — "regular expressions cannot be used in programs"; consensus message, kept in Thai)
+- **regex is fully disabled** (exponential backtracking, gas cannot be charged deterministically — the engine has no hook to count steps): regex literal → deploy fails (`regular expressions are not allowed in programs …`; consensus message)
   · `RegExp` / `new RegExp` / `Reflect.construct(RegExp)` → TypeError · `RegExp.prototype` keeps only `toString` (exec / test / `[Symbol.match|matchAll|replace|search|split]` throw)
   · `String.prototype.match` / `matchAll` / `search` → TypeError (previously they took a string pattern and built a regex themselves, **passing autoreview**)
   · `split` / `replace` / `replaceAll` with strings work as before (use `indexOf` / `includes` / `split` instead of regex)
@@ -520,7 +520,7 @@ call 100 · read 100 · write 500 · stateKey 1000 · byte 1 · event 200 · top
   | string → BigInt (`BigInt(s)` / `s == 1n` / `s < 1n` / input `"123n"`) | W² (W = ⌈length / 19⌉ · ≤ 171 chars free) | before converting |
   | comparisons `<` `==` … between BigInts | 0 (linear work, very fast) | — |
 
-  · **cap 8192 bits** (= 1024 bytes, same as modexp) — result over the cap → RangeError `BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` ("BigInt larger than 8192 bits (1024 bytes)"; consensus message, kept in Thai) (catchable) · literal over the cap → deploy fails
+  · **cap 8192 bits** (= 1024 bytes, same as modexp) — result over the cap → RangeError `BigInt exceeds 8192 bits (1024 bytes)` (consensus message) (catchable) · literal over the cap → deploy fails
     The cap guards the paths where the engine converts BigInt to string itself without going through the counter: ≤ ~0.4 ms per conversion (stock QuickJS accepted up to ~1M bits = 0.7 s toString)
   · Methods where the engine converts BigInt ↔ string internally are wrapped / rewritten in the prelude to charge per the table: `join` `sort` (default comparator) `toSorted` `Object.fromEntries`
     `Error.prototype.toString` `String.raw` (rewritten per spec) · `Object.hasOwn` / `defineProperty` / `Reflect.*` / `Map.get` / `Array.pop` / `at` / `parseInt` / `Symbol` / `Error(x)` … (charge arguments and results)
@@ -791,7 +791,7 @@ Code lives in `src/node/explorer-api.js` (`pageOf` `slicePage` `page*`) · test 
 
 **trace in receipts** (`/tx/:h/receipt` → `trace[]`): `{ depth, program, method, from, origin, input, value, result, gasUsed, status, error }`
 `input` / `value` / `result` / `gasUsed` were added on Oct 9 (kept in `tx.calls` during execution, not written to the DB and not part of the block hash)
-The outer level's `gasUsed` includes the inner levels · server error messages are English (VM execution error messages in `src/core/` stay in Thai because they are part of consensus)
+The outer level's `gasUsed` includes the inner levels · server error messages are English (VM execution error messages in `src/core/` are English too and are part of consensus)
 `type: "create"` appears only on entries that created a program with `cloneProgram` (plain calls have no such field) · the tx page shows "Create #n" + a CREATE tag · `/evm`'s callTracer shows it as a `CREATE` frame
 | `GET /` or `/explorer` | the explorer page |
 
@@ -1102,9 +1102,9 @@ Real check over HTTP:
 ```
 code: function program() { function evil(p) { return process.env } return { evil } }
 → 400 { "error": "code failed review",
-        "issues": [{ "line": 2, "message": "'process' ไม่รู้จัก (ใช้ได้เฉพาะ API ของ VM และตัวแปรที่ประกาศเอง)" }] }
+        "issues": [{ "line": 2, "message": "'process' is unknown (only VM APIs and your own declarations are allowed)" }] }
 ```
-(The issue message comes from `src/core/autoreview.js` and stays in Thai because it is consensus text; it means "'process' is unknown (only VM APIs and your own declared variables are allowed)")
+(The issue message comes from `src/core/autoreview.js`; it is consensus text)
 
 **A limitation to understand**: autoreview blocks code that is *plainly written* to be dangerous, but it is not a sandbox
 Programs now run in the sandbox (QuickJS), so even if something slips past review it can't reach Node · `while(true)` ends by running out of gas (the last line of defense is QuickJS's interrupt per `timeoutMs`)

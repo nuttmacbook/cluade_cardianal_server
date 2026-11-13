@@ -85,9 +85,9 @@ test("historyfrom: new chain = 1 · a block without history → restart from the
   next.commit();
   assert.equal(vm.historyFrom(), 6);   // later blocks with history do not move the value back
 
-  assert.throws(() => vm.replayBlock(5), /ไม่มีข้อมูลย้อนหลัง/);
+  assert.throws(() => vm.replayBlock(5), /no history for block/);
   assert.equal(vm.replayBlock(6).hash, vm.getBlock(6).hash);
-  assert.throws(() => vm.snapshotAt(4, "store:storage:"), /ไม่มีข้อมูลย้อนหลัง/);
+  assert.throws(() => vm.snapshotAt(4, "store:storage:"), /no history for block/);
   assert.doesNotThrow(() => vm.snapshotAt(5, "store:storage:"));   // as of closing block 5 = uses history from block 6 onward
 });
 
@@ -148,8 +148,8 @@ test("pageSnapshotAt: pages join up completely with no repeats · does not read 
 
 test("pageSnapshotAt: block past the latest / negative → block not found", () => {
   const vm = buildChain(3);
-  assert.throws(() => vm.snapshotAt(4), /ไม่พบ block/);
-  assert.throws(() => vm.snapshotAt(-1), /ไม่พบ block/);
+  assert.throws(() => vm.snapshotAt(4), /block 4 not found/);
+  assert.throws(() => vm.snapshotAt(-1), /block -1 not found/);
   assert.deepEqual(vm.snapshotAt(3, "store:storage:"), Object.fromEntries(vm.listProgramStorage("store").map(({ key, value }) => [`store:storage:${key.join(":")}`, value])));
 });
 
@@ -196,7 +196,7 @@ test("rebuildFrom: history incomplete from block 1 → rejected before touching 
   const gap = vm.createBlock({ timestamp: T + 10_000, feeRecipient: "miner", recordHistory: false });
   gap.commit();
   const before = everything(vm);
-  assert.throws(() => vm.rebuildFrom(1), /ไม่มีข้อมูลย้อนหลัง/);
+  assert.throws(() => vm.rebuildFrom(1), /no history for block/);
   assert.deepEqual(everything(vm), before);
 });
 

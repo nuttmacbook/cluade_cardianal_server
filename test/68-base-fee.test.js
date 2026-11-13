@@ -147,10 +147,10 @@ test("gas fee field checks: priority > maxFee / maxFee < baseFee / combined with
   const vm = setup();
   const block = vm.createBlock({ timestamp: T, feeRecipient: MINER });
   const bad = [
-    [{ maxFeePerGas: "1500", maxPriorityFeePerGas: "1600" }, /maxPriorityFeePerGas ต้องไม่มากกว่า maxFeePerGas/],
-    [{ maxFeePerGas: "999" }, /ต่ำกว่า base fee/],
-    [{ gasPrice: "2000", maxFeePerGas: "2000" }, /gasPrice คู่กับ maxFeePerGas/],
-    [{ maxPriorityFeePerGas: "-1" }, /maxPriorityFeePerGas ต้องเป็นจำนวนเต็มไม่ติดลบ/],
+    [{ maxFeePerGas: "1500", maxPriorityFeePerGas: "1600" }, /maxPriorityFeePerGas must not exceed maxFeePerGas/],
+    [{ maxFeePerGas: "999" }, /is below the block base fee/],
+    [{ gasPrice: "2000", maxFeePerGas: "2000" }, /gasPrice cannot be combined with maxFeePerGas/],
+    [{ maxPriorityFeePerGas: "-1" }, /maxPriorityFeePerGas must be a non-negative integer/],
   ];
   for (const [fees, message] of bad) {
     const res = block.transfer({ from: ALICE, to: BOB, amount: 1, nonce: 0, ...fees });

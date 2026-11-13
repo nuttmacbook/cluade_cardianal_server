@@ -115,13 +115,13 @@ test("events store numbers as strings ending in n", () => {
 
 test("using number inside a program → rejected", () => {
   const vm = setup();
-  assert.match(call(vm, "useNumber").error.message, /ต้องเป็น BigInt/);
-  assert.match(call(vm, "writeNumber").error.message, /ต้องเป็น BigInt/);
+  assert.match(call(vm, "useNumber").error.message, /must be BigInt/);
+  assert.match(call(vm, "writeNumber").error.message, /must be BigInt/);
 });
 
 test("decimals in input → rejected", () => {
   const vm = setup();
-  assert.match(call(vm, "balanceOf", { who: "alice", extra: 1.5 }).error.message, /ต้องเป็น BigInt/);
+  assert.match(call(vm, "balanceOf", { who: "alice", extra: 1.5 }).error.message, /must be BigInt/);
 });
 
 test("comparisons and arithmetic across functions work normally", () => {
@@ -147,7 +147,7 @@ test("no number mode anymore: passing bigintValues: false still gives BigInt", (
   assert.equal(vm.db.readKeys(["counter:storage:count"])[0], "0n");
   const number = vm.call({ programUuid: "counter", functionName: "addNumber", context: user("alice") }, { timestamp: T });
   assert.equal(number.error.code, "INVALID_REQUEST");
-  assert.match(number.error.message, /ต้องเป็น BigInt/);
+  assert.match(number.error.message, /must be BigInt/);
 });
 
 test("helpers convert values both ways", () => {

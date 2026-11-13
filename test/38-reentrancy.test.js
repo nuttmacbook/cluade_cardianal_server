@@ -60,7 +60,7 @@ test("withdrawGuarded: lock with a flag → reentrant call is rejected", () => {
 
   assert.equal(res.status, "success");
   vm.commit(res.writes);
-  assert.equal(vm.db.readKeys(["attacker:storage:lastError"])[0], "กำลังทำงานอยู่");  // reentrant call fails
+  assert.equal(vm.db.readKeys(["attacker:storage:lastError"])[0], "already running");  // reentrant call fails
   assert.equal(vm.nativeBalanceOf("attacker").balance, 100n);   // gets back only what was deposited
   assert.equal(vm.nativeBalanceOf("vault").balance, 500n);      // the victim's funds are intact
   assert.equal(vm.db.readKeys(["vault:storage:locked"])[0], undefined); // lock released
@@ -96,7 +96,7 @@ test("reentrancy depth is capped by maxCallDepth", () => {
   const res = vm.call({ programUuid: "attacker", functionName: "attack", input: { method: "withdrawUnsafe" }, context: user("alice"), value: 100 }, { timestamp: T + 200 });
   assert.equal(Math.max(...res.calls.map((call) => call.depth)), 4);   // no deeper than maxCallDepth
   vm.commit(res.writes);
-  assert.match(vm.db.readKeys(["attacker:storage:lastError"])[0], /ซ้อนได้ไม่เกิน 4 ชั้น/);  // the extra level is rejected
+  assert.match(vm.db.readKeys(["attacker:storage:lastError"])[0], /calls cannot exceed 4 levels/);  // the extra level is rejected
 });
 
 test("the lock does not carry over to the next tx", () => {

@@ -88,6 +88,6 @@ test("real flow: deploy → init → many sequential calls give the same final D
   assert.equal(data["token:storage:balances:alice"], "20n");
   assert.equal(data["token:storage:balances:shop"], "100n");
   assert.equal(data["shop:storage:sales"], "2n");
-  assert.equal(data["shop:storage:failed:alice"], "allowance ไม่พอ");
+  assert.equal(data["shop:storage:failed:alice"], "insufficient allowance");
   assert.equal(data["pending:counter"], undefined);
 });

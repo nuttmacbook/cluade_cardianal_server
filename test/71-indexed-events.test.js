@@ -59,11 +59,11 @@ test("emit indexed: validates options (at most 3 / must exist in data / no dupli
   assert.deepEqual(run({ indexed: ["who"] }).events[0].indexed, ["who"]);
   assert.equal(run(undefined).events[0].indexed, undefined);   // omitted = event looks as before
   for (const [options, message] of [
-    [{ indexed: ["nope"] }, /ไม่มี field 'nope'/],
-    [{ indexed: ["who", "who"] }, /ซ้ำ/],
-    [{ indexed: "who" }, /ต้องเป็น array/],
-    [{ indexed: ["a", "b", "c", "d"] }, /ไม่เกิน 3/],
-    [{ topics: ["who"] }, /ไม่รู้จัก 'topics'/],
+    [{ indexed: ["nope"] }, /field 'nope' is not in data/],
+    [{ indexed: ["who", "who"] }, /duplicate/],
+    [{ indexed: "who" }, /must be an array/],
+    [{ indexed: ["a", "b", "c", "d"] }, /at most 3/],
+    [{ topics: ["who"] }, /unknown 'topics'/],
   ]) {
     const res = run(options);
     assert.equal(res.status, "throw", JSON.stringify(options));

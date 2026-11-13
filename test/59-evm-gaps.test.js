@@ -238,7 +238,7 @@ test("modexp: (base ** exp) % mod with BigInt · mod 0 → 0n · negative / numb
 
   assert.equal(pow(-1n, 2n, 5n).status, "throw");
   // values over 1024 bytes (8192 bits) can no longer be BigInts in a program (the sandbox BigInt cap = the max modexp size · test 81)
-  assert.equal(pow(1n << 8200n, 2n, 5n).error.message, "โปรแกรมทำงานผิดพลาด (RangeError)");
+  assert.equal(pow(1n << 8200n, 2n, 5n).error.message, "program error (RangeError)");
   assert.equal(pow((1n << 8192n) - 1n, 2n, 5n).result, `${((1n << 8192n) - 1n) ** 2n % 5n}n`);   // exactly 1024 bytes still works
   const res = call("env", "powNumber");
   assert.equal(res.status, "throw");
@@ -265,13 +265,13 @@ test("runProgram { readonly: true }: reads work normally · trace shows staticca
   assert.equal(call("caller", "lookThenWrite", { target: "target" }).result, "0n");
 });
 
-test("runProgram { readonly: true }: write / delete / transfer / metadata / emit / clone → catchable error (Thai VM message)", () => {
+test("runProgram { readonly: true }: write / delete / transfer / metadata / emit / clone → catchable error (VM message)", () => {
   const { call } = setup();
   for (const [fn, name] of [["bump", "writeDB"], ["remove", "deleteDB"], ["pay", "transferNative"], ["meta", "setMetadata"], ["log", "emit"], ["clone", "cloneProgram"]]) {
     const args = fn === "pay" ? { to: "bob" } : fn === "clone" ? { template: "target" } : {};
     const res = call("caller", "attempt", { target: "target", fn, args });
     assert.equal(res.status, "success", JSON.stringify(res.error));
-    assert.equal(res.result, `caught: ${name}() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว (runProgram แบบ { readonly: true } ห้ามแก้ state ทุกชั้น)`, fn);
+    assert.equal(res.result, `caught: ${name}() cannot be used in a read-only call (runProgram with { readonly: true } must not change state at any depth)`, fn);
     assert.equal(res.writes.length, 0, fn);
     assert.equal(res.events.length, 0, fn);
   }
@@ -280,13 +280,13 @@ test("runProgram { readonly: true }: write / delete / transfer / metadata / emit
   assert.equal(res.status, "throw");
   assert.equal(res.error.code, "FORBIDDEN");
   // the target can catch it itself (state unchanged)
-  assert.match(call("caller", "look", { target: "target", fn: "tryBump" }).result, /^caught: writeDB\(\) ใช้ไม่ได้/);
+  assert.match(call("caller", "look", { target: "target", fn: "tryBump" }).result, /^caught: writeDB\(\) cannot be used/);
 });
 
 test("runProgram { readonly: true }: no state changes at any deeper level, even when inner calls are normal", () => {
   const { call } = setup();
   const nested = { target: "target", fn: "forward", args: { next: "target", fn: "bump" } };
-  assert.match(call("caller", "attempt", nested).result, /^caught: writeDB\(\) ใช้ไม่ได้/);
+  assert.match(call("caller", "attempt", nested).result, /^caught: writeDB\(\) cannot be used/);
   // the innermost level can read
   assert.equal(call("caller", "look", { target: "target", fn: "forward", args: { next: "target", fn: "get" } }).result, "0n");
   // normal call: writes work as before
@@ -299,10 +299,10 @@ test("runProgram { readonly: true }: no value can be attached · readonly must b
   const { call } = setup();
   const withValue = call("caller", "withValue", { target: "target" });
   assert.equal(withValue.status, "throw");
-  assert.match(withValue.error.message, /แนบ value ไม่ได้/);
+  assert.match(withValue.error.message, /cannot carry value/);
   const bad = call("caller", "badFlag", { target: "target" });
   assert.equal(bad.status, "throw");
-  assert.match(bad.error.message, /readonly ต้องเป็น true \/ false/);
+  assert.match(bad.error.message, /readonly must be true \/ false/);
 });
 
 test("autoreview accepts every new API, and deploy passes with autoReview on", () => {

@@ -104,12 +104,12 @@ test("readonly: every call is a staticcall · calls that write state fail (aggre
 
   const strict = call("aggregate", { readonly: true, calls: [{ target: C, fn: "get" }, add("1n")] });
   assert.equal(strict.status, "throw");
-  assert.match(strict.error.message, /อ่านอย่างเดียว/);
+  assert.match(strict.error.message, /read-only/);
   const loose = call("tryAggregate", { readonly: true, calls: [{ target: C, fn: "get" }, add("1n")] });
   assert.equal(loose.status, "success");
   assert.deepEqual(loose.result[0], { success: true, result: "0n" });
   assert.equal(loose.result[1].success, false);
-  assert.match(loose.result[1].error, /writeDB\(\) ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว/);
+  assert.match(loose.result[1].error, /writeDB\(\) cannot be used in a read-only call/);
   assert.equal(read(C, "get").result, "0n");
   // not readonly → writes work normally
   assert.equal(call("tryAggregate", { calls: [add("1n")] }).result[0].success, true);

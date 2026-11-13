@@ -147,7 +147,7 @@ test("names __gas / __call / __str / __props / __spread are reserved → deploy 
   ]) {
     const res = vm.deploy({ programUuid: "x", code, context: as("owner") }, { timestamp: T });
     assert.equal(res.status, "throw");
-    assert.match(res.error.message, /สงวนไว้/);
+    assert.match(res.error.message, /is reserved/);
   }
 });
 

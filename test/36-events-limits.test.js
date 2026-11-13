@@ -62,7 +62,7 @@ test("emit: reverted branch → that branch's events are dropped too", () => {
 
   assert.equal(res.status, "success");
   assert.deepEqual(res.events.map((event) => event.name), ["RelayFailed"]); // no Transfer from the failed branch
-  assert.match(res.events[0].data.reason, /ยอดไม่พอ/);
+  assert.match(res.events[0].data.reason, /insufficient balance/);
 });
 
 test("emit: fully failed tx → no events at all", () => {
@@ -151,19 +151,19 @@ test("key: longer than 1000 bytes → only that tx fails, not the block", () => 
 
   assert.equal(ok.status, "success");
   assert.equal(tooLong.error.code, "INVALID_REQUEST");
-  assert.match(tooLong.error.message, /key ของ storage ยาวเกินกำหนด/);
+  assert.match(tooLong.error.message, /storage key too long/);
   block.commit();
   assert.equal(vm.getBlock(1).successCount, 1);
 });
 
-test("key: Thai text is counted by real byte length", () => {
+test("key: non-ASCII text is counted by real byte length", () => {
   const vm = new VM.VirtualMachine(new MemoryDB(), { maxKeySize: 200 });
   vm.commit(vm.deploy({ programUuid: "probe", code: PROBE, context: user("alice") }, { timestamp: T }).writes);
   vm.commit(vm.init({ programUuid: "probe" }, { timestamp: T }).writes);
 
   const write = (key) => vm.call({ programUuid: "probe", functionName: "writeKey", input: { key, value: 1 }, context: user("alice") }, { timestamp: T });
-  assert.equal(write("ก".repeat(10)).status, "success");     // 10 chars = 90 bytes after encoding (Thai on purpose: tests UTF-8 byte counting)
-  assert.equal(write("ก".repeat(30)).error.code, "INVALID_REQUEST"); // 270 bytes
+  assert.equal(write("中".repeat(10)).status, "success");     // 10 chars = 90 bytes after encoding (3 UTF-8 bytes each, non-ASCII on purpose: tests UTF-8 byte counting)
+  assert.equal(write("中".repeat(30)).error.code, "INVALID_REQUEST"); // 270 bytes
 });
 
 test("key: the default is 1000 bytes", () => {

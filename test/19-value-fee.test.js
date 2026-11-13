@@ -58,7 +58,7 @@ test("value: insufficient balance → nothing changes", () => {
   const vm = setup({}, { alice: 100 });
   const res = vm.call({ programUuid: "wallet", functionName: "deposit", context: user("alice"), value: 500 });
   assert.equal(res.error.code, "PROGRAM_ERROR");
-  assert.match(res.error.message, /ยอด native ของ 'alice' ไม่พอ/);
+  assert.match(res.error.message, /insufficient native balance for 'alice'/);
   assert.deepEqual(res.writes, []);
 });
 
@@ -72,7 +72,7 @@ test("value: must be a non-negative integer", () => {
 test("value: program refuses the funds (throw) → everything is refunded", () => {
   const vm = setup({}, { alice: 1000 });
   const res = vm.call({ programUuid: "wallet", functionName: "rejectMoney", context: user("alice"), value: 10 });
-  assert.equal(res.error.message, "ไม่รับเงิน");
+  assert.equal(res.error.message, "does not accept funds");
   assert.deepEqual(res.writes, []);
   assert.equal(native(vm, "alice"), 1000);
 });
@@ -104,7 +104,7 @@ test("runProgram: attaching more than the program has → a catchable error, and
   const vm = setup({}, { alice: 1000 });
   const failed = vm.call({ programUuid: "wallet", functionName: "forwardTooMuch", input: { target: "wallet2" }, context: user("alice"), value: 50 });
   assert.equal(failed.error.code, "PROGRAM_ERROR");
-  assert.match(failed.error.message, /ยอด native ของ 'wallet' ไม่พอ/);
+  assert.match(failed.error.message, /insufficient native balance for 'wallet'/);
 
   const caught = vm.call({ programUuid: "wallet", functionName: "forwardSafe", input: { target: "wallet2", value: 999 }, context: user("alice"), value: 50 });
   assert.equal(caught.status, "success");

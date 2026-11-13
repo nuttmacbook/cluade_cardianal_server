@@ -27,9 +27,9 @@ const CASES = {
   "key order": { b: 1, a: 2, c: { z: 1, y: [3, 2, 1] } },
   "BigInt": { amount: 10n ** 30n, neg: -5n },
   "BigInt already a string": { amount: "123n" },
-  "Thai + emoji": { name: "โทเคนทดสอบ 🚀", note: "สวัสดี\nบรรทัดใหม่\t\"quote\"" },   // Thai on purpose: tests non-ASCII canonical output
+  "CJK + emoji": { name: "テストトークン 🚀", note: "こんにちは\n新しい行\t\"quote\"" },   // non-ASCII on purpose: tests non-ASCII canonical output
   "special characters": { s: "\u0000\u001f  \\/" },
-  "numeric keys + Thai key": { 10: "a", 2: "b", "ก": 1, "a": 0 },   // Thai key on purpose: tests non-ASCII key ordering
+  "numeric keys + non-ASCII key": { 10: "a", 2: "b", "中": 1, "a": 0 },   // non-ASCII key on purpose: tests non-ASCII key ordering
   "null / boolean / numbers": { n: null, t: true, f: false, x: 1.5, z: 0, big: 9007199254740991 },
   "nested arrays": [[1, [2, [3]]], { a: [] }],
   "bare string": "hello",

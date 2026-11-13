@@ -184,7 +184,7 @@ test("canonicalJson: sorts keys and skips undefined", () => {
   assert.equal(VM.canonicalJson({ a: undefined, b: 1 }), '{"b":1}');
   assert.equal(VM.canonicalJson([1, "a", null, { z: 1, y: 2 }]), '[1,"a",null,{"y":2,"z":1}]');
   assert.equal(VM.canonicalJson(undefined), "null");
-  assert.equal(VM.canonicalJson("ไทย 🎉"), JSON.stringify("ไทย 🎉"));   // Thai is intentional: tests Unicode handling
+  assert.equal(VM.canonicalJson("中文 🎉"), JSON.stringify("中文 🎉"));   // non-ASCII is intentional: tests Unicode handling
 });
 
 test("hash: addresses inside input are normalized before hashing too", () => {

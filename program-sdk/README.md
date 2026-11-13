@@ -113,7 +113,7 @@ or the helpers in `programvm/program-signature.js`: `typedDataDigest(domain, typ
 
 `runProgram(target, fn, input, { readonly: true })` works like the EVM's `STATICCALL`: the target **and every level it calls further**
 can read as usual, but `writeDB` / `deleteDB` / `transferNative` / `setMetadata` / `emit` / `cloneProgram` throw
-`"writeDB() ใช้ไม่ได้ในการเรียกแบบอ่านอย่างเดียว …"` ("writeDB() is not allowed in a read-only call …", code `FORBIDDEN`), which can be caught like any error
+`"writeDB() cannot be used in a read-only call …"` (code `FORBIDDEN`), which can be caught like any error
 `value` cannot be attached · shown as `STATICCALL` in traces / `debug_traceTransaction`
 
 ```js
@@ -195,7 +195,7 @@ CPU time must be chargeable as gas deterministically on every machine, so there 
 | string → BigInt (`BigInt("…")` · `"…" == x` · `"…" < x` · input `"123n"`) | W² where W = ⌈number of characters ÷ 19⌉ (≤ 171 characters is free) |
 | Comparing BigInt with BigInt (`<` `==` …) | Nothing extra |
 
-- **BigInt max 8192 bits** (1024 bytes, same as `modexp`) — result too large → `RangeError: BigInt ใหญ่เกิน 8192 bit (1024 ไบต์)` ("BigInt exceeds 8192 bits (1024 bytes)", catchable) · a literal that's too large → deploy fails
+- **BigInt max 8192 bits** (1024 bytes, same as `modexp`) — result too large → `RangeError: BigInt exceeds 8192 bits (1024 bytes)` (catchable) · a literal that's too large → deploy fails
 - Examples: `x * x` for a 4096-bit x = 1,024 gas · `x.toString()` for an 8192-bit x = 16,384 gas
 - `BigInt64Array` / `BigUint64Array` are not available
 

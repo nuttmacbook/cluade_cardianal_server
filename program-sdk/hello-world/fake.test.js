@@ -41,5 +41,5 @@ test("emit records events for checking", () => {
   const { api } = setup();
   api.emit("Transfer", { to: "0xbob", amount: 5n });
   assert.deepEqual(api.events, [{ index: 0, name: "Transfer", data: { to: "0xbob", amount: 5n } }]);
-  assert.throws(() => api.emit("ชื่อไทย"), /event name/);   // Thai name on purpose: non-ASCII event names must be rejected
+  assert.throws(() => api.emit("événement"), /event name/);   // non-ASCII name on purpose: non-ASCII event names must be rejected
 });

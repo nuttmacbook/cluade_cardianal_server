@@ -64,7 +64,7 @@ test("init: initialization loops forever → TIMEOUT", () => {
 });
 
 test("init: no pending / repeated init → NOT_FOUND", () => {
-  fails(vm.init({ programUuid: "nothing" }), "NOT_FOUND", "ไม่พบโปรแกรมที่รอรีวิว");
+  fails(vm.init({ programUuid: "nothing" }), "NOT_FOUND", "no program pending review");
   activate("p", NO_INIT);
   fails(vm.init({ programUuid: "p" }), "NOT_FOUND");
   fails(vm.init({ programUuid: "a:b" }), "INVALID_REQUEST");
@@ -90,7 +90,7 @@ test("initialization can call other programs, with sender = the new program", ()
 
 test("initialization: users and other programs cannot call it", () => {
   activate("token", TOKEN, { initInput: { supply: 100 } });
-  fails(vm.call({ programUuid: "token", functionName: "initialization", context: user("owner") }), "FORBIDDEN", "เรียก 'initialization' ไม่ได้ (ไม่มีหรือไม่ได้ export)");
+  fails(vm.call({ programUuid: "token", functionName: "initialization", context: user("owner") }), "FORBIDDEN", "cannot call 'initialization' (missing or not exported)");
 });
 
 test("reject: removes pending, repeated reject is NOT_FOUND, the same id can be deployed again", () => {

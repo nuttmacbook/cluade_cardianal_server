@@ -73,7 +73,7 @@ test("genesis: mismatch → rejected before syncing", () => {
   const vm = reader();
   assert.equal(vm.genesisHash(), vm.hashData(GENESIS));
   assert.deepEqual(vm.applyGenesis(GENESIS), { hash: vm.genesisHash(), applied: false });   // repeatable, changes nothing
-  assert.throws(() => vm.applyGenesis({ chainId: 1, balances: { alice: 999 } }), { code: "INTERNAL", message: /genesis ไม่ตรงกัน/ });
+  assert.throws(() => vm.applyGenesis({ chainId: 1, balances: { alice: 999 } }), { code: "INTERNAL", message: /genesis mismatch/ });
   assert.equal(vm.nativeBalanceOf("alice").balance, 1_000_000n);
 });
 
@@ -105,6 +105,6 @@ test("V8 errors are replaced with a fixed message (same result on every Node ver
   vm.commit(vm.init({ programUuid: "p" }, { timestamp: T }).writes);
 
   const call = (fn) => vm.call({ programUuid: "p", functionName: fn, context: user("alice") }, { timestamp: T });
-  assert.equal(call("typeError").error.message, "โปรแกรมทำงานผิดพลาด (TypeError)");
+  assert.equal(call("typeError").error.message, "program error (TypeError)");
   assert.equal(call("ownError").error.message, "the program's own message");   // the program's own errors are unchanged
 });

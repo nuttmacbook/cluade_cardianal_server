@@ -14,9 +14,9 @@ test("token: transfer / balanceOf / mint (owner only)", () => {
   assert.equal(stored("token", "balances", "owner"), "700n");
   assert.equal(stored("token", "balances", "alice"), "300n");
 
-  fails(callAs("alice", "token", "transfer", { to: "bob", amount: 301 }), "PROGRAM_ERROR", "ยอดไม่พอ");
-  fails(callAs("alice", "token", "transfer", { to: "bob", amount: -1 }), "PROGRAM_ERROR", "amount ไม่ถูกต้อง");
-  fails(callAs("alice", "token", "mint", { to: "alice", amount: 1 }), "PROGRAM_ERROR", "ไม่ใช่ owner");
+  fails(callAs("alice", "token", "transfer", { to: "bob", amount: 301 }), "PROGRAM_ERROR", "insufficient balance");
+  fails(callAs("alice", "token", "transfer", { to: "bob", amount: -1 }), "PROGRAM_ERROR", "invalid amount");
+  fails(callAs("alice", "token", "mint", { to: "alice", amount: 1 }), "PROGRAM_ERROR", "not the owner");
 
   assert.equal(ok(callAs("owner", "token", "mint", { to: "bob", amount: 50 })).result, "1050n");
   assert.equal(ok(callAs("x", "token", "balanceOf", { account: "bob" })).result, "50n");
@@ -52,7 +52,7 @@ test("shop.buy: charges the user through token (cross-program) and saves shop da
 
 test("shop.buy: no approve → everything throws, no data changes", () => {
   const before = new Map(mockData);
-  const res = fails(callAs("alice", "shop", "buy"), "PROGRAM_ERROR", "allowance ไม่พอ");
+  const res = fails(callAs("alice", "shop", "buy"), "PROGRAM_ERROR", "insufficient allowance");
   assert.deepEqual(trace(res), ["0:shop.buy:throw:PROGRAM_ERROR", "1:token.transferFrom:throw:PROGRAM_ERROR"]);
   assert.deepEqual(new Map(mockData), before);
 });
@@ -64,13 +64,13 @@ test("shop.buySafe: token fails but shop catches → success, only shop's log is
   assert.equal(res.result, false);
   assert.deepEqual(trace(res), ["0:shop.buySafe:success", "1:token.transferFrom:throw:PROGRAM_ERROR"]);
   assert.deepEqual(dbKeys(res), ["put shop:storage:attempts:alice", "put shop:storage:failed:alice"]);
-  assert.equal(stored("shop", "failed", "alice"), "allowance ไม่พอ");
+  assert.equal(stored("shop", "failed", "alice"), "insufficient allowance");
   assert.equal(stored("token", "allowance", "alice", "shop"), "50n");
 });
 
 test("shop.buyMany: 3rd item runs out of funds, no catch → all 3 items revert", () => {
   ok(callAs("alice", "token", "approve", { spender: "shop", amount: 1000 }));
-  const res = fails(callAs("alice", "shop", "buyMany", { qty: 4 }), "PROGRAM_ERROR", "ยอดไม่พอ");
+  const res = fails(callAs("alice", "shop", "buyMany", { qty: 4 }), "PROGRAM_ERROR", "insufficient balance");
   assert.deepEqual(trace(res), [
     "0:shop.buyMany:throw:PROGRAM_ERROR",
     "1:token.transferFrom:success",
@@ -93,7 +93,7 @@ test("shop.buyMany: all purchases succeed → balances and data are correct in e
 
 test("an intermediary program cannot change token data on the user's behalf: sender is the program, not the user", () => {
   activate("probe", PROBE);
-  const res = fails(callAs("alice", "probe", "relay", { target: "token", fn: "transfer", args: { to: "probe", amount: 1 } }), "PROGRAM_ERROR", "ยอดไม่พอ");
+  const res = fails(callAs("alice", "probe", "relay", { target: "token", fn: "transfer", args: { to: "probe", amount: 1 } }), "PROGRAM_ERROR", "insufficient balance");
   assert.equal(res.calls[1].sender, "probe");
   assert.equal(stored("token", "balances", "alice"), "300n");
 });

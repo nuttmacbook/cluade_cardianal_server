@@ -46,7 +46,7 @@ const CASES = [
     ] },
     primaryType: "Atoms",
     message: { a: "0x00000000000000000000000000000000000000aa", u8: 255n, u256: (1n << 256n) - 1n, i8: -128n, i256: -1n, flag: true,
-      b1: "0xff", b32: `0x${"ab".repeat(32)}`, data: "0xdeadbeef", text: "สวัสดี 🌏", empty: "0x", blank: "" } },   // Thai on purpose: tests UTF-8 string hashing
+      b1: "0xff", b32: `0x${"ab".repeat(32)}`, data: "0xdeadbeef", text: "こんにちは 🌏", empty: "0x", blank: "" } },   // non-ASCII on purpose: tests UTF-8 string hashing
   { label: "arrays (dynamic / fixed / nested) + multi-level nested structs", domain: { name: "Nested", version: "2", chainId: 7777n,
     verifyingContract: "0x00000000000000000000000000000000000000f1", salt: `0x${"01".repeat(32)}` },
     types: {
@@ -60,7 +60,7 @@ const CASES = [
       maker: { who: "0x00000000000000000000000000000000000000b2", zone: { code: "0x01020304", open: false } },
       items: [{ id: 1n, amount: -5n, zone: { code: "0xaabbccdd", open: true } }, { id: 2n, amount: 9n, zone: { code: "0x00000000", open: false } }],
       grid: [[1n, 2n], [3n, 65535n]],
-      tags: ["a", "", "ค"],   // Thai on purpose: non-ASCII string
+      tags: ["a", "", "中"],   // non-ASCII string on purpose
     } },
   { label: "empty arrays + domain with only chainId", domain: { chainId: 1n }, types: { Batch: [{ name: "ids", type: "uint256[]" }, { name: "who", type: "address[]" }] },
     primaryType: "Batch", message: { ids: [], who: [] } },
@@ -92,20 +92,20 @@ test("eip712Digest / eip712DomainSeparator / eip712EncodeType / eip712HashStruct
 test("eip712Digest: malformed data → clear error (never silent)", () => {
   const bad = [
     [MAIL_DOMAIN, MAIL_TYPES, "Nope", MAIL, /primaryType 'Nope'/],
-    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, contents: undefined }, /Mail.contents: ไม่มีค่า/],
-    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, from: { ...MAIL.from, wallet: "0x1234" } }, /ต้องเป็น address/],
-    [{ ...MAIL_DOMAIN, foo: 1 }, MAIL_TYPES, "Mail", MAIL, /ไม่รู้จัก field 'foo'/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint7" }] }, "A", { x: 1n }, /ไม่รู้จักชนิด/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }] }, "A", { x: 256n }, /เกินช่วง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "int8" }] }, "A", { x: -129n }, /เกินช่วง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "bytes2" }] }, "A", { x: "0x01" }, /ยาว 2 byte/],
+    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, contents: undefined }, /Mail.contents: missing value/],
+    [MAIL_DOMAIN, MAIL_TYPES, "Mail", { ...MAIL, from: { ...MAIL.from, wallet: "0x1234" } }, /must be an address/],
+    [{ ...MAIL_DOMAIN, foo: 1 }, MAIL_TYPES, "Mail", MAIL, /unknown field 'foo'/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint7" }] }, "A", { x: 1n }, /unknown type/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }] }, "A", { x: 256n }, /out of range/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "int8" }] }, "A", { x: -129n }, /out of range/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "bytes2" }] }, "A", { x: "0x01" }, /exactly 2 bytes/],
     [MAIL_DOMAIN, { A: [{ name: "x", type: "bool" }] }, "A", { x: 1n }, /true \/ false/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8[2]" }] }, "A", { x: [1n] }, /ต้องมี 2 ช่อง/],
-    [MAIL_DOMAIN, { A: [{ name: "b", type: "B" }], B: [{ name: "a", type: "A" }] }, "A", {}, /เป็นวง/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }, { name: "x", type: "uint8" }] }, "A", { x: 1n }, /ซ้ำ/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8[2]" }] }, "A", { x: [1n] }, /must have 2 items/],
+    [MAIL_DOMAIN, { A: [{ name: "b", type: "B" }], B: [{ name: "a", type: "A" }] }, "A", {}, /cyclically/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: "uint8" }, { name: "x", type: "uint8" }] }, "A", { x: 1n }, /duplicate/],
     // caps that protect the host stack (every machine fails at the same point)
-    [MAIL_DOMAIN, Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`T${i}`, [{ name: "x", type: "uint8" }]])), "T0", { x: 1n }, /ไม่เกิน 64 ชนิด/],
-    [MAIL_DOMAIN, { A: [{ name: "x", type: `uint8${"[]".repeat(40)}` }] }, "A", { x: [] }, /ซ้อนลึกเกิน 32/],
+    [MAIL_DOMAIN, Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`T${i}`, [{ name: "x", type: "uint8" }]])), "T0", { x: 1n }, /at most 64 structs/],
+    [MAIL_DOMAIN, { A: [{ name: "x", type: `uint8${"[]".repeat(40)}` }] }, "A", { x: [] }, /nested deeper than 32/],
   ];
   for (const [domain, types, primaryType, message, pattern] of bad) {
     assert.throws(() => eip712Digest(domain, types, primaryType, message), pattern);
@@ -171,7 +171,7 @@ test("eip712Digest / eip712DomainSeparator in programs = ethers TypedDataEncoder
   }
   // bad data → catchable INVALID_REQUEST · JS numbers are not allowed (program numbers are BigInt)
   const bad = call("catchBad", toInput({ domain: MAIL_DOMAIN, types: MAIL_TYPES, message: { ...MAIL, to: null } }));
-  assert.match(bad.result, /^INVALID_REQUEST: EIP-712: Mail.to: ไม่มีค่า/);
+  assert.match(bad.result, /^INVALID_REQUEST: EIP-712: Mail.to: missing value/);
   const number = call("numberValue");
   assert.equal(number.status, "throw");
   assert.equal(number.error.code, "INVALID_REQUEST");

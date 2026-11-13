@@ -115,10 +115,10 @@ test("receipt: failed call", () => {
   const receipt = receiptOf(vm, "call", { programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 99999 }, context: user("alice"), nonce: 0 });
 
   assert.equal(receipt.status, "throw");
-  assert.deepEqual(receipt.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(receipt.error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.equal(receipt.result, null);
   assert.deepEqual(receipt.stateChanges, []);
-  assert.deepEqual(receipt.trace[0].error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(receipt.trace[0].error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.equal(receipt.nonce, 1);                       // failure still consumes the nonce
   assert.ok(num(receipt.fee) > 0);                      // and pays gas
 });
@@ -245,7 +245,7 @@ test("receipt: OUT_OF_GAS and TIMEOUT", () => {
     { action: "call" },
   );
   assert.equal(timeout.error.code, "TIMEOUT");
-  assert.deepEqual(timeout.trace, [{ depth: 0, program: "faulty", method: "spin", from: "alice", origin: "alice", input: {}, value: "0n", result: null, gasUsed: 150, status: "throw", error: { code: "TIMEOUT", message: "โปรแกรมทำงานเกินเวลาที่กำหนด" } }]);
+  assert.deepEqual(timeout.trace, [{ depth: 0, program: "faulty", method: "spin", from: "alice", origin: "alice", input: {}, value: "0n", result: null, gasUsed: 150, status: "throw", error: { code: "TIMEOUT", message: "program exceeded its time limit" } }]);
 });
 
 test("receipt: infers the action when none is given", () => {

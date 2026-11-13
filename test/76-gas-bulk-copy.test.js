@@ -201,7 +201,7 @@ test("ArrayBuffer / typed arrays cost by allocated size · charged before alloca
   assert.equal(perGrowth(call, "bytes", "words", n), n);
   assert.equal(perGrowth(call, "bytes", "copy", n), 2 * n + n);          // fill (in + out) + copied elements
   // RegExp is fully disabled (backtracking cannot be charged up front, see test 81); previously charged by pattern length
-  assert.equal(call("bytes", "regexp", { n: "10n" }).error.message, "โปรแกรมทำงานผิดพลาด (TypeError)");
+  assert.equal(call("bytes", "regexp", { n: "10n" }).error.message, "program error (TypeError)");
   const started = Date.now();
   assert.equal(call("bytes", "buffer", { n: "2000000000n" }).error.code, "OUT_OF_GAS");   // never actually allocated
   assert.equal(call("bytes", "bytes", { n: "100000000n" }).error.code, "OUT_OF_GAS");

@@ -60,7 +60,7 @@ test("limit: txs per address in a single block", () => {
   assert.equal(block.call(send("alice", 1)).status, "success");
   const third = block.call(send("alice", 2));
   assert.equal(third.error.code, "LIMIT_EXCEEDED");
-  assert.match(third.error.message, /โควตาของ block/);
+  assert.match(third.error.message, /per-block quota/);
 
   assert.equal(block.call(send("bob", 0)).status, "success"); // others can still send
   block.commit();
@@ -75,7 +75,7 @@ test("limit: total block gas", () => {
   assert.equal(block.call(send("alice", 1)).status, "success");
   const third = block.call(send("alice", 2));
   assert.equal(third.error.code, "LIMIT_EXCEEDED");
-  assert.match(third.error.message, /แก๊สของ block/);
+  assert.match(third.error.message, /block gas/);
 
   block.commit();
   assert.equal(vm.getBlock(1).gasUsed, 200);
@@ -114,7 +114,7 @@ test("nonce: several consecutive txs in one block are allowed, but no skipping n
 
   const skipped = block.call(send("alice", 6)); // skips 5
   assert.equal(skipped.accepted, false);
-  assert.match(skipped.error.message, /nonce ไม่ถูกต้อง: ต้องเป็น 5/);
+  assert.match(skipped.error.message, /invalid nonce: expected 5/);
   assert.equal(block.call(send("alice", 5)).status, "success"); // filling the gap makes it pass
 
   block.commit();
@@ -166,7 +166,7 @@ test("admin: someone not on the list cannot init", () => {
 
   const res = submit(vm, { ...adminTx("init", "counter", 0), from: outsider }, OUTSIDER_KEY);
   assert.equal(res.error.code, "FORBIDDEN");
-  assert.match(res.error.message, /ไม่มีสิทธิ์ init/);
+  assert.match(res.error.message, /not authorized to init/);
 
   // a direct call without a signature also fails when an admin list is set
   assert.equal(vm.init({ programUuid: "counter" }).error.code, "FORBIDDEN");

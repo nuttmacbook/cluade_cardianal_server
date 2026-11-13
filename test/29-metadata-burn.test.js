@@ -99,7 +99,7 @@ test("metadata: deploy attaching system fields → rejected", () => {
   for (const field of ["type", "creator", "createdAt"]) {
     const res = vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: { [field]: "x" } });
     assert.equal(res.error.code, "FORBIDDEN");
-    assert.match(res.error.message, /เป็นฟิลด์ของระบบ/);
+    assert.match(res.error.message, /is a system field/);
   }
   assert.equal(vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: { "bad name!": 1 } }).error.code, "INVALID_REQUEST");
   assert.equal(vm.deploy({ programUuid: "p", code: COUNTER, context: user("alice"), metadata: "x" }).error.code, "INVALID_REQUEST");
@@ -110,7 +110,7 @@ test("metadata: a program can set its own metadata with setMetadata()", () => {
   save(vm, vm.deploy({ programUuid: "profile", code: PROFILE, context: user("alice"), initInput: { name: "Shop" } }, { timestamp: T }));
   save(vm, vm.init({ programUuid: "profile" }, { timestamp: T }));
   assert.equal(vm.getMetadata("profile").namespace, "shop");
-  assert.equal(vm.getMetadata("profile").description, "โปรแกรมตัวอย่าง");
+  assert.equal(vm.getMetadata("profile").description, "Sample program");
 
   save(vm, vm.call({ programUuid: "profile", functionName: "setField", input: { field: "icon", value: "🛒" }, context: user("bob") }));
   assert.equal(vm.getMetadata("profile").icon, "🛒");
@@ -159,7 +159,7 @@ test("namespace: must be unique, and renaming releases the old name", () => {
 
   const taken = vm.setMetadata({ metadata: { namespace: "SHOP" }, context: user("bob") });
   assert.equal(taken.error.code, "FORBIDDEN");
-  assert.match(taken.error.message, /ถูกใช้โดย alice/);
+  assert.match(taken.error.message, /already taken by alice/);
 
   save(vm, vm.setMetadata({ metadata: { namespace: "market" }, context: user("alice") })); // rename
   assert.equal(vm.resolveNamespace("shop"), null);   // old name released

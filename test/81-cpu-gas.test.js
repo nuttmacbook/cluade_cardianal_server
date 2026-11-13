@@ -40,14 +40,14 @@ const program = (fns) => `function program() {
   return { ${Object.keys(fns).join(", ")} }
 }`;
 
-const TYPE_ERROR = "โปรแกรมทำงานผิดพลาด (TypeError)";
-const RANGE_ERROR = "โปรแกรมทำงานผิดพลาด (RangeError)";
+const TYPE_ERROR = "program error (TypeError)";
+const RANGE_ERROR = "program error (RangeError)";
 
 test("regex: literals are rejected at deploy · RegExp / match / search / matchAll / species fail even with autoreview off · replace / split with strings still work", () => {
   const { vm, activate, call } = setup({ maxTxGas: 3_000_000 });
   const literal = vm.deploy({ programUuid: "lit", code: program({ f: "return /(a+)+$/.test('a')" }), context: as("owner") }, { timestamp: T });
   assert.equal(literal.status, "throw");
-  assert.match(literal.error.message, /regular expression ใช้ในโปรแกรมไม่ได้/);
+  assert.match(literal.error.message, /regular expressions are not allowed in programs/);
 
   const evil = `const s = "a".repeat(30) + "b";`;   // (a+)+$ on a×30 + b = ~2^30 backtracking steps (it used to take ~2 seconds at 24 chars)
   activate("re", program({
@@ -105,7 +105,7 @@ test("8192-bit BigInt cap: large literals rejected · results over the cap → R
   const { vm, activate, call } = setup();
   const lit = vm.deploy({ programUuid: "lit", code: program({ f: `return 0x${"f".repeat(2049)}n` }), context: as("owner") }, { timestamp: T });
   assert.equal(lit.status, "throw");
-  assert.match(lit.error.message, /BigInt ใหญ่เกิน 8192 bit/);
+  assert.match(lit.error.message, /BigInt exceeds 8192 bits/);
   activate("cap", program({
     max: "const m = ((1n << 8191n) - 1n) * 2n + 1n; return BigInt(m.toString(16).length)",   // 2^8192 − 1 (1n << 8192n itself is already over)
     shl: "return 1n << 8192n",

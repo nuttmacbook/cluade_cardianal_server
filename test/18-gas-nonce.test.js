@@ -55,7 +55,7 @@ test("nonce: repeated or skipped → INVALID_REQUEST and no writes at all", () =
   const { vm } = setup({ chargeGas: false });
   vm.commit(vm.call(transfer(0)).writes);
 
-  for (const [nonce, message] of [[0, "nonce ไม่ถูกต้อง: ต้องเป็น 1 แต่ได้ 0"], [5, "nonce ไม่ถูกต้อง: ต้องเป็น 1 แต่ได้ 5"], [undefined, "nonce ไม่ถูกต้อง: ต้องเป็น 1 แต่ได้ undefined"]]) {
+  for (const [nonce, message] of [[0, "invalid nonce: expected 1 but got 0"], [5, "invalid nonce: expected 1 but got 5"], [undefined, "invalid nonce: expected 1 but got undefined"]]) {
     const res = vm.call(transfer(nonce));
     assert.equal(res.error.code, "INVALID_REQUEST");
     assert.equal(res.error.message, message);
@@ -159,7 +159,7 @@ test("gas: insufficient balance → OUT_OF_GAS, no program writes, consumes the 
 
   assert.equal(res.status, "throw");
   assert.equal(res.error.code, "OUT_OF_GAS");
-  assert.match(res.error.message, /แก๊สไม่พอ/);
+  assert.match(res.error.message, /out of gas/);
   assert.deepEqual(res.writes, [
     { type: "put", dbKey: "alice:nonce", value: 1 },
     { type: "put", dbKey: "alice:native:consumed", value: "250n" }, // pays what it has
@@ -231,20 +231,20 @@ test("transferNative: insufficient balance / invalid amount → an error the pro
   const { vm } = setup({ requireNonce: false, chargeGas: false, balances: { treasury: 10 } });
   const payout = (input) => vm.call({ programUuid: "treasury", functionName: "payout", input, context: user("alice") });
 
-  assert.equal(payout({ to: "bob", amount: 50 }).error.message, "ยอด native ของ 'treasury' ไม่พอ");
+  assert.equal(payout({ to: "bob", amount: 50 }).error.message, "insufficient native balance for 'treasury'");
   assert.equal(payout({ to: "bob", amount: 0 }).error.code, "INVALID_REQUEST");
   assert.equal(payout({ to: "bob", amount: 1.5 }).error.code, "INVALID_REQUEST");
   assert.equal(payout({ to: "", amount: 1 }).error.code, "INVALID_REQUEST");
 
   const caught = vm.call({ programUuid: "treasury", functionName: "payoutSafe", input: { to: "bob", amount: 50 }, context: user("alice") });
-  assert.equal(caught.result, "ยอด native ของ 'treasury' ไม่พอ");
-  assert.deepEqual(caught.writes, [{ type: "put", dbKey: "treasury:storage:lastError", value: "ยอด native ของ 'treasury' ไม่พอ" }]);
+  assert.equal(caught.result, "insufficient native balance for 'treasury'");
+  assert.deepEqual(caught.writes, [{ type: "put", dbKey: "treasury:storage:lastError", value: "insufficient native balance for 'treasury'" }]);
 });
 
 test("transferNative: a program cannot transfer another address's native (only its own)", () => {
   const { vm } = setup({ requireNonce: false, chargeGas: false, balances: { alice: 1000, treasury: 5 } });
   const res = vm.call({ programUuid: "treasury", functionName: "payout", input: { to: "bob", amount: 100 }, context: user("alice") });
-  assert.equal(res.error.message, "ยอด native ของ 'treasury' ไม่พอ"); // even though alice has funds
+  assert.equal(res.error.message, "insufficient native balance for 'treasury'"); // even though alice has funds
 });
 
 test("transferNative: transferring out until gas cannot be paid → OUT_OF_GAS and nothing is saved", () => {

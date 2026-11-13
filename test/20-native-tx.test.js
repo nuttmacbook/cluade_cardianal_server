@@ -48,7 +48,7 @@ test("transfer: transfer into a program's wallet works too (no code runs)", () =
 
 test("transfer: insufficient balance / invalid value", () => {
   const vm = setup({}, { alice: 100 });
-  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 200 }).error.message, "ยอด native ของ 'alice' ไม่พอ");
+  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: 200 }).error.message, "insufficient native balance for 'alice'");
   for (const request of [
     { from: "", to: "bob", amount: 1 },
     { from: "alice", to: "", amount: 1 },
@@ -77,7 +77,7 @@ test("transfer: transferring 0 is allowed (as in EVM) · still charges gas and c
   vm.commit(self.writes);
   assert.equal(native(vm, "alice"), 10_000 - 200);
   assert.equal(vm.checkTransaction({ from: "alice", nonce: -1 }).expectedNonce, 2);
-  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: -1, nonce: 2 }).error.message, "amount ต้องเป็นจำนวนเต็มไม่ติดลบ");
+  assert.equal(vm.transfer({ from: "alice", to: "bob", amount: -1, nonce: 2 }).error.message, "amount must be a non-negative integer");
 });
 
 test("transfer: charges gas and consumes a nonce like other txs", () => {
@@ -107,7 +107,7 @@ test("transfer: works in a block, and the next tx sees the latest balance", () =
   const failed = block.transfer({ from: "bob", to: "carol", amount: 500 });
 
   assert.equal(second.status, "success");
-  assert.equal(failed.error.message, "ยอด native ของ 'bob' ไม่พอ");
+  assert.equal(failed.error.message, "insufficient native balance for 'bob'");
   block.commit();
   assert.deepEqual([native(vm, "alice"), native(vm, "bob"), native(vm, "carol")], [400, 100, 500]);
 });
@@ -148,7 +148,7 @@ test("deploy with value: reject refunds the deployer", () => {
 test("deploy with value: insufficient balance → nothing changes", () => {
   const vm = setup({}, { alice: 100 });
   const res = vm.deploy({ programUuid: "funded", code: FUNDED, context: user("alice"), value: 500 });
-  assert.equal(res.error.message, "ยอด native ของ 'alice' ไม่พอ");
+  assert.equal(res.error.message, "insufficient native balance for 'alice'");
   assert.deepEqual(res.writes, []);
 });
 

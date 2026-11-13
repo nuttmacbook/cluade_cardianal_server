@@ -15,7 +15,7 @@ test("call: calls an exported function and returns result / calls", () => {
 test("call: internal functions can be called from inside the program but not from outside, and are not recorded in calls", () => {
   activate("probe", PROBE);
   assert.equal(ok(callAs("a", "probe", "callInternal")).result, "secret");
-  fails(callAs("a", "probe", "internalOnly"), "FORBIDDEN", "เรียก 'internalOnly' ไม่ได้ (ไม่มีหรือไม่ได้ export)");
+  fails(callAs("a", "probe", "internalOnly"), "FORBIDDEN", "cannot call 'internalOnly' (missing or not exported)");
 
   activate("counter", COUNTER);
   assert.deepEqual(trace(ok(callAs("a", "counter", "addTwice", { amount: 1 }))), ["0:counter.addTwice:success"]);
@@ -34,7 +34,7 @@ test("call: program with no exports → nothing can be called", () => {
 });
 
 test("call: program not found / still pending → NOT_FOUND", () => {
-  fails(callAs("a", "missing", "x"), "NOT_FOUND", "ไม่พบโปรแกรม 'missing'");
+  fails(callAs("a", "missing", "x"), "NOT_FOUND", "program 'missing' not found");
   ok(vm.deploy({ programUuid: "pending", code: PROBE, context: user("a") }));
   fails(callAs("a", "pending", "whoami"), "NOT_FOUND");
 });
@@ -63,7 +63,7 @@ test("call: input is copied — a program modifying input does not affect the ca
 
 test("call: non-JSON input → INVALID_REQUEST", () => {
   activate("probe", PROBE);
-  fails(callAs("a", "probe", "echo", { big: 1n }), "INVALID_REQUEST", "input ต้องเป็นข้อมูล JSON");
+  fails(callAs("a", "probe", "echo", { big: 1n }), "INVALID_REQUEST", "input must be JSON data");
 });
 
 test("call: return values are converted as JSON (BigInt → \"123n\")", () => {
@@ -73,23 +73,23 @@ test("call: return values are converted as JSON (BigInt → \"123n\")", () => {
   assert.equal(result("returnUndefined"), undefined);
   assert.equal(result("returnNull"), null);
   assert.equal(result("returnBigInt"), "10n");
-  assert.equal(result("returnString"), "สวัสดี 🎉");
+  assert.equal(result("returnString"), "héllo wörld 🎉");
   assert.deepEqual(result("returnNested"), { a: ["1n", { b: true }], c: null });
   assert.deepEqual(result("returnWithUndefinedField"), { a: "1n" });
 
   // numbers (including decimals / NaN) must be BigInt
-  fails(callAs("a", "faulty", "returnNumber"), "INVALID_REQUEST", "ค่าที่ return: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
-  fails(callAs("a", "faulty", "returnNaN"), "INVALID_REQUEST", "ค่าที่ return: ตัวเลขในโปรแกรมต้องเป็น BigInt เท่านั้น (เช่น 10n)");
+  fails(callAs("a", "faulty", "returnNumber"), "INVALID_REQUEST", "return value: numbers in programs must be BigInt (e.g. 10n)");
+  fails(callAs("a", "faulty", "returnNaN"), "INVALID_REQUEST", "return value: numbers in programs must be BigInt (e.g. 10n)");
   // non-plain objects (Date / function) are not JSON
-  fails(callAs("a", "faulty", "returnDate"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
-  fails(callAs("a", "faulty", "returnFunction"), "INVALID_REQUEST", "ค่าที่ return ต้องเป็นข้อมูล JSON");
+  fails(callAs("a", "faulty", "returnDate"), "INVALID_REQUEST", "return value must be JSON data");
+  fails(callAs("a", "faulty", "returnFunction"), "INVALID_REQUEST", "return value must be JSON data");
   fails(callAs("a", "faulty", "returnCircular"), "PROGRAM_ERROR", /RangeError/);
 });
 
 test("call: async / thenable not supported", () => {
   activate("faulty", FAULTY);
-  fails(callAs("a", "faulty", "asyncFn"), "PROGRAM_ERROR", "ไม่รองรับ async");
-  fails(callAs("a", "faulty", "thenable"), "PROGRAM_ERROR", "ไม่รองรับ async");
+  fails(callAs("a", "faulty", "asyncFn"), "PROGRAM_ERROR", "async is not supported");
+  fails(callAs("a", "faulty", "thenable"), "PROGRAM_ERROR", "async is not supported");
 });
 
 test("call: top-level program variables do not persist across calls", () => {
@@ -101,7 +101,7 @@ test("call: top-level program variables do not persist across calls", () => {
 
 test("call: strict mode — an accidental global variable → error", () => {
   activate("faulty", FAULTY);
-  fails(callAs("a", "faulty", "implicitGlobal"), "PROGRAM_ERROR", /โปรแกรมทำงานผิดพลาด \(ReferenceError\)/);
+  fails(callAs("a", "faulty", "implicitGlobal"), "PROGRAM_ERROR", /program error \(ReferenceError\)/);
   assert.equal(globalThis.leakedGlobal, undefined);
 });
 

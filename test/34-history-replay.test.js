@@ -164,7 +164,7 @@ test("replayBlock: every block in the chain replays and every hash matches", () 
 test("replayBlock: corrupted data → detected", () => {
   const vm = buildChain();
   vm.db.writeKeys([{ type: "put", dbKey: `history:${BALANCE}:000000000003`, value: { existed: true, before: 9999 } }]);
-  assert.throws(() => vm.replayBlock(3), { code: "INTERNAL", message: /hash ไม่ตรง/ });
+  assert.throws(() => vm.replayBlock(3), { code: "INTERNAL", message: /hash that does not match/ });
   assert.equal(vm.replayBlock(3, { verify: false }).number, 3); // turn off verification to see where it diverges
 });
 

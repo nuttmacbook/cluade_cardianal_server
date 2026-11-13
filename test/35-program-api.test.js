@@ -65,7 +65,7 @@ test("IsProgram: guards against sending to programs that cannot receive funds", 
 
   assert.equal(call(vm, "payIfWallet", { to: "bob", amount: 100 }).result, "200n");
   const blocked = call(vm, "payIfWallet", { to: "token", amount: 100 });
-  assert.equal(blocked.error.message, "ปลายทางเป็นโปรแกรม");
+  assert.equal(blocked.error.message, "recipient is a program");
 });
 
 test("MetadataOf: reads another address's metadata", () => {

@@ -190,15 +190,15 @@ test("deploy: gas depends on code size (longer = more expensive)", () => {
   assert.equal(num(expensive.fee), expensive.gasUsed * GAS.price);
 });
 
-test("deploy: Thai code is charged by its real byte count", () => {
+test("deploy: non-ASCII code is charged by its real byte count", () => {
   const vm = setup({ requireNonce: false, gas: { ...GAS, code: 1 } });
   const ascii = 'function program() {\n  function a() { return "abc" }\n  return { a }\n}';
-  // Thai text is intentional: tests UTF-8 byte counting
-  const thai = 'function program() {\n  function a() { return "กขค" }\n  return { a }\n}';
+  // non-ASCII text is intentional: tests UTF-8 byte counting
+  const cjk = 'function program() {\n  function a() { return "中文字" }\n  return { a }\n}';
 
   const plain = vm.deploy({ programUuid: "ascii", code: ascii, context: user("alice") });
-  const unicode = vm.deploy({ programUuid: "thai", code: thai, context: user("alice") });
-  assert.equal(unicode.gasUsed - plain.gasUsed, 6); // 3 Thai characters = 9 bytes instead of 3
+  const unicode = vm.deploy({ programUuid: "cjk", code: cjk, context: user("alice") });
+  assert.equal(unicode.gasUsed - plain.gasUsed, 6); // 3 CJK characters = 9 bytes instead of 3
 });
 
 test("deploy: code longer than maxCodeSize → rejected", () => {
@@ -207,7 +207,7 @@ test("deploy: code longer than maxCodeSize → rejected", () => {
   const res = vm.deploy({ programUuid: "big", code: long, context: user("alice") });
 
   assert.equal(res.error.code, "INVALID_REQUEST");
-  assert.match(res.error.message, /โค้ดยาวเกินกำหนด/);
+  assert.match(res.error.message, /code too long/);
   assert.equal(vm.deploy({ programUuid: "ok", code: "function program() { return {} }", context: user("alice") }).status, "success");
 });
 

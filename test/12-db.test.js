@@ -79,7 +79,7 @@ test("VM: reads via db.readKeys and commits via db.writeKeys", () => {
 test("VM: readKeys throw → INTERNAL", () => {
   const vm = new VM.VirtualMachine({ readKeys: () => { throw new Error("503"); }, writeKeys: () => {} });
   const res = vm.call({ programUuid: "p", functionName: "f", context: user("a") });
-  assert.deepEqual(res.error, { code: "INTERNAL", message: "อ่านข้อมูลจาก DB ไม่สำเร็จ: 503" });
+  assert.deepEqual(res.error, { code: "INTERNAL", message: "failed to read from DB: 503" });
 });
 
 test("VM: commit passes writeKeys errors straight through to the caller", () => {

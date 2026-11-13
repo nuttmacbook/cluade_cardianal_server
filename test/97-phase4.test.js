@@ -79,7 +79,7 @@ test("getProof: values in the latest state prove against the latest header's sta
   // an old proof does not work with a new root (value changed → nodes on the path changed)
   const old = result.proofs[0];
   produce(vm, 5, 5);
-  assert.throws(() => verifyProof(vm.getBlock(5).stateRoot, old.dbKey, old.proof), /หลักฐานไม่ครบ/);
+  assert.throws(() => verifyProof(vm.getBlock(5).stateRoot, old.dbKey, old.proof), /incomplete proof/);
   assert.throws(() => vm.getProof("x"), /key/);
 });
 

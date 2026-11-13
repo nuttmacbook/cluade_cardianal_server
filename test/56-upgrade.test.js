@@ -115,12 +115,12 @@ test("upgrade: non-upgraders cannot submit new code · cannot resubmit during re
   const t = deployed();
   const res = t.one((b) => b.upgrade({ programUuid: P, code: V2, context: user("bob") }));
   assert.deepEqual([res.status, res.error.code], ["throw", "FORBIDDEN"]);
-  assert.match(res.error.message, /ไม่ใช่ upgrader/);
+  assert.match(res.error.message, /is not the upgrader/);
   assert.equal(t.vm.read(VM.pendingUpgradeKey(P)), undefined);
 
   t.ok(t.one((b) => b.upgrade({ programUuid: P, code: V2, context: user("alice") })));
   const twice = t.one((b) => b.upgrade({ programUuid: P, code: V3, context: user("alice") }));
-  assert.match(twice.error.message, /รออยู่แล้ว/);
+  assert.match(twice.error.message, /already has a pending upgrade/);
 
   const missing = t.one((b) => b.upgrade({ programUuid: "nope", code: V2, context: user("alice") }));
   assert.equal(missing.error.code, "NOT_FOUND");
@@ -132,9 +132,9 @@ test("upgrade: programs without an upgrader (including all existing programs) ar
   assert.equal(t.vm.read(VM.pendingKey(P)), undefined);
   const res = t.one((b) => b.upgrade({ programUuid: P, code: V2, context: user("owner") }));
   assert.deepEqual([res.status, res.error.code], ["throw", "FORBIDDEN"]);
-  assert.match(res.error.message, /อัปเกรดไม่ได้/);
+  assert.match(res.error.message, /cannot be upgraded/);
   const grab = t.one((b) => b.setUpgrader({ programUuid: P, upgrader: "owner", context: user("owner") }));
-  assert.match(grab.error.message, /อัปเกรดไม่ได้/);
+  assert.match(grab.error.message, /cannot be upgraded/);
 
   // system field: users / programs cannot write it
   for (const field of ["upgrader", "version", "template"]) {
@@ -147,7 +147,7 @@ test("upgrade: programs without an upgrader (including all existing programs) ar
       function initialization(params) { setMetadata("upgrader", params.context.sender) }
       return {}
     }`, context: user("owner") }));
-    assert.match(b.init({ programUuid: "s" }).error.message, /ฟิลด์ของระบบ/);
+    assert.match(b.init({ programUuid: "s" }).error.message, /system field/);
   });
 
   // pending entries of programs without an upgrader look as before (no upgrader field) · upgrader must be a string
@@ -170,7 +170,7 @@ test("upgrade: transfer the upgrader right to someone else, and renounce it (nul
   assert.deepEqual(t.ok(t.one((b) => b.setUpgrader({ programUuid: P, upgrader: null, context: user("bob") }))).result, { programUuid: P, upgrader: null });
   assert.equal(t.meta("upgrader"), undefined);
   const stale = t.one((b) => b.initUpgrade({ programUuid: P }));
-  assert.match(stale.error.message, /อัปเกรดไม่ได้/);
+  assert.match(stale.error.message, /cannot be upgraded/);
   t.ok(t.one((b) => b.rejectUpgrade({ programUuid: P })));
   assert.equal(t.ok(t.call("version")).result, "1n");
   assert.equal(t.one((b) => b.upgrade({ programUuid: P, code: V2, context: user("bob") })).error.code, "FORBIDDEN");
@@ -185,9 +185,9 @@ test("upgrade: team rejects → old code · approvers follow the same rules as i
   });
   t.ok(t.one((b) => b.upgrade({ programUuid: P, code: V2, context: user("alice") })));
 
-  assert.match(t.one((b) => b.initUpgrade({ programUuid: P })).error.message, /ไม่มีสิทธิ์/);   // no signer
-  assert.match(t.one((b) => b.initUpgrade({ programUuid: P, context: user("alice") })).error.message, /ไม่มีสิทธิ์/);
-  assert.match(t.one((b) => b.rejectUpgrade({ programUuid: P, context: user("bob") })).error.message, /ไม่มีสิทธิ์/);
+  assert.match(t.one((b) => b.initUpgrade({ programUuid: P })).error.message, /not authorized/);   // no signer
+  assert.match(t.one((b) => b.initUpgrade({ programUuid: P, context: user("alice") })).error.message, /not authorized/);
+  assert.match(t.one((b) => b.rejectUpgrade({ programUuid: P, context: user("bob") })).error.message, /not authorized/);
 
   const rejected = t.ok(t.one((b) => b.rejectUpgrade({ programUuid: P, context: user("0xadmin") })));
   assert.equal(rejected.result.state, "rejected");
@@ -234,7 +234,7 @@ test("upgrade: timelock N > 0 → old code runs until block (approval + N), then
     b.upgrade({ programUuid: P, code: V3, context: user("alice") }),
     b.call({ programUuid: P, functionName: "version", context: user("carol") }),
   ]);
-  assert.match(again.error.message, /รออยู่แล้ว/);
+  assert.match(again.error.message, /already has a pending upgrade/);
   assert.equal(before.number, at - 1);
   assert.equal(t.ok(stillOld).result, "1n");
   assert.equal(before.header().upgrades, undefined);
@@ -255,7 +255,7 @@ test("upgrade: timelock N > 0 → old code runs until block (approval + N), then
 
   // approval outside a block (no block number) cannot be scheduled
   t.ok(t.one((b) => b.upgrade({ programUuid: P, code: V3, context: user("alice") })));
-  assert.match(t.vm.initUpgrade({ programUuid: P }).error.message, /เลข block/);
+  assert.match(t.vm.initUpgrade({ programUuid: P }).error.message, /block number/);
 });
 
 test("upgrade: timelock N > 0 and migrate fails at activation → upgrade cancelled, old code keeps running", () => {
@@ -346,7 +346,7 @@ test("upgrade: signed actions (deploy + upgrader / upgrade / setUpgrader / initU
 test("upgrade: autoreview checks new code the same way as deploy, and the receipt shows action upgrade", () => {
   const t = deployed({ autoReview: true });
   const bad = t.one((b) => b.upgrade({ programUuid: P, code: V1.replace("return 1n", "return process.env"), context: user("alice") }));
-  assert.match(bad.error.message, /ไม่ผ่านการตรวจอัตโนมัติ/);
+  assert.match(bad.error.message, /failed automatic review/);
   const { b } = t.block((block) => t.ok(block.upgrade({ programUuid: P, code: V2, migrateInput: { tag: "r" }, context: user("alice") })));
   const receipt = b.receipt().transactions[0];
   assert.deepEqual([receipt.action, receipt.to, receipt.input], ["upgrade", P, { tag: "r" }]);

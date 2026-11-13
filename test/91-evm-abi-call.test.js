@@ -68,10 +68,10 @@ test("eth_call via metadata.abi: ethers encodes / decodes every type · at a blo
   assert.equal(read("count")[0], 12n);
   assert.equal(read("count", [], "0x2")[0], 5n);   // state as of closing block 2
 
-  const echoed = read("echo", [BOB, 2n ** 200n, -42n, true, "สวัสดี", '{"a":[1,"2n"]}', "0xdeadbeef"]);   // Thai on purpose: tests UTF-8 string encoding
+  const echoed = read("echo", [BOB, 2n ** 200n, -42n, true, "こんにちは", '{"a":[1,"2n"]}', "0xdeadbeef"]);   // non-ASCII on purpose: tests UTF-8 string encoding
   assert.equal(echoed[0].toLowerCase(), BOB);
   // objects come back from the program as chain-style JSON (integers in input are BigInt → "1n")
-  assert.deepEqual([...echoed].slice(1), [2n ** 200n, -42n, true, "สวัสดี", '{"a":["1n","2n"]}', "0xdeadbeef"]);
+  assert.deepEqual([...echoed].slice(1), [2n ** 200n, -42n, true, "こんにちは", '{"a":["1n","2n"]}', "0xdeadbeef"]);
 
   const profile = read("profile", [21n]);
   assert.equal(profile.name, "nutt 21");

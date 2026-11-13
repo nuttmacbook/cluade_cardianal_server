@@ -6,8 +6,8 @@ const SAMPLES = {
   lf: "function a() {\n  return 1\n}",
   crlf: "function a() {\r\n  return 1\r\n}",
   cr: "function a() {\r  return 1\r}",
-  // Thai text is intentional: tests Unicode handling
-  tabsAndThai: "function\tทดสอบ() {\n\treturn \"สวัสดี 🎉\"\n}",
+  // non-ASCII text is intentional: tests Unicode handling
+  tabsAndUnicode: "function\tテスト() {\n\treturn \"こんにちは 🎉\"\n}",
   quotesAndBackslash: String.raw`const s = "a\"b" + 'c\'d' + "\\n" + /\d+\n/.source`,
   template: "const t = `line1\nline2 ${1 + 1}`",
   unicodeLineSeparators: "const s = \"a\u2028b\u2029c\"",

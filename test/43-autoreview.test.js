@@ -11,14 +11,14 @@ const wrap = (body) => `function program() {\n${body}\n  return {}\n}`;
 
 test("a normal program passes", () => {
   assert.equal(check(TOKEN).ok, true);
-  assert.equal(reviewMessage(check(TOKEN)), "ผ่านการตรวจ");
+  assert.equal(reviewMessage(check(TOKEN)), "review passed");
 });
 
 test("rejects access to Node globals without listing each one", () => {
   for (const name of ["process", "fetch", "globalThis", "require", "eval", "Function", "WebAssembly", "Proxy", "Reflect", "performance"]) {
     const result = check(wrap(`  function f() { return ${name} }`));
     assert.equal(result.ok, false, name);
-    assert.match(result.issues[0].message, /ไม่รู้จัก/);
+    assert.match(result.issues[0].message, /is unknown/);
   }
 });
 
@@ -47,7 +47,7 @@ test("allows new Error and new Date", () => {
 test("reports the offending line so it can be fixed", () => {
   const result = check("function program() {\n  function f() {\n    return process.env\n  }\n  return { f }\n}");
   assert.equal(result.issues[0].line, 3);
-  assert.match(reviewMessage(result), /^บรรทัด 3:/);
+  assert.match(reviewMessage(result), /^line 3:/);
 });
 
 test("VM: with autoReview on, deploying failing code is rejected", () => {
@@ -57,7 +57,7 @@ test("VM: with autoReview on, deploying failing code is rejected", () => {
 
   const bad = vm.deploy({ programUuid: "bad", code: wrap("  function f() { return process.env }"), context });
   assert.equal(bad.error.code, "INVALID_REQUEST");
-  assert.match(bad.error.message, /โค้ดไม่ผ่านการตรวจอัตโนมัติ[\s\S]*บรรทัด/);
+  assert.match(bad.error.message, /code failed automatic review[\s\S]*line/);
 });
 
 test("VM: autoReview off (default) → manual review as before", () => {
@@ -70,7 +70,7 @@ test("blocks prototype pollution via Object", () => {
   for (const method of ["getPrototypeOf", "setPrototypeOf", "defineProperty", "create", "freeze", "assign", "getOwnPropertyNames"]) {
     const result = check(wrap(`  function f(o) { return Object.${method}(o) }`));
     assert.equal(result.ok, false, method);
-    assert.match(result.issues[0].message, /ใช้ไม่ได้/);
+    assert.match(result.issues[0].message, /is not allowed/);
   }
   assert.equal(check(wrap("  function f(o) { return Object.keys(o) }")).ok, true);
 });

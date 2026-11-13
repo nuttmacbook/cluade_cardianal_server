@@ -117,8 +117,8 @@ test("proofs: presence / absence verify against the root · altered value / wron
   const [dbKey] = live.keys();
   const { proof } = inc.trie.proof(dbKey);
   const otherRoot = memoryTrie().update([{ dbKey, value: 1 }]);
-  assert.throws(() => verifyProof(otherRoot, dbKey, proof), /หลักฐานไม่ครบ/);
-  assert.throws(() => verifyProof(root, dbKey, proof.slice(0, -1)), /หลักฐานไม่ครบ/);
+  assert.throws(() => verifyProof(otherRoot, dbKey, proof), /incomplete proof/);
+  assert.throws(() => verifyProof(root, dbKey, proof.slice(0, -1)), /incomplete proof/);
   const forged = [...proof];
   forged[forged.length - 1] = forged.at(-1).replace(/..$/, (h) => (h === "00" ? "01" : "00"));
   assert.throws(() => verifyProof(root, dbKey, forged));
@@ -132,5 +132,5 @@ test("a tampered stored node = update / proof detects it (hash differs from what
   node[5] ^= 1;   // inside a child hash / key (RLP structure still valid)
   inc.store.set(path, node);
   const keys = [...Array(64).keys()].map((i) => `s:prog${i % 4}:k${i}`);
-  assert.throws(() => { for (const dbKey of keys) inc.trie.proof(dbKey); }, /ไม่ตรงกับ hash/);
+  assert.throws(() => { for (const dbKey of keys) inc.trie.proof(dbKey); }, /does not match the hash/);
 });

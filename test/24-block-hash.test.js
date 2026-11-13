@@ -210,14 +210,14 @@ test("chain: a block number cannot be committed twice", () => {
   const vm = setup();
   buildBlock(vm, { number: 1, txs: [callTx(0)] }).commit();
 
-  assert.throws(() => vm.createBlock({ timestamp: T + 1, number: 1 }), { code: "INVALID_REQUEST", message: /block 1 ถูกบันทึกไปแล้ว/ });
+  assert.throws(() => vm.createBlock({ timestamp: T + 1, number: 1 }), { code: "INVALID_REQUEST", message: /block 1 is already recorded/ });
 
   // created first, but someone else commits the same number first → commit fails
   const pending = vm.createBlock({ timestamp: T + 2, number: 2, feeRecipient: "miner" });
   const other = vm.createBlock({ timestamp: T + 3, number: 2, feeRecipient: "miner" });
   other.call(callTx(1));
   other.commit();
-  assert.throws(() => pending.commit(), { code: "INVALID_REQUEST", message: /block 2 ถูกบันทึกไปแล้ว/ });
+  assert.throws(() => pending.commit(), { code: "INVALID_REQUEST", message: /block 2 is already recorded/ });
 });
 
 test("chain: timestamp must always move forward", () => {
@@ -226,7 +226,7 @@ test("chain: timestamp must always move forward", () => {
   const previous = vm.getBlock(1).timestamp;
 
   for (const timestamp of [previous, previous - 1000]) {
-    assert.throws(() => vm.createBlock({ timestamp, number: 2 }), { code: "INVALID_REQUEST", message: /timestamp ของ block ต้องมากกว่า/ });
+    assert.throws(() => vm.createBlock({ timestamp, number: 2 }), { code: "INVALID_REQUEST", message: /block timestamp must be greater than/ });
   }
   assert.equal(vm.createBlock({ timestamp: previous + 1, number: 2 }).number, 2);
 });
@@ -337,5 +337,5 @@ test("stateRoot: editing state in the DB directly (bypassing commit) → a rebui
   const nodes = broken.listKeys("trie:", { limit: 1000 }).filter((key) => key !== "trie:");   // every node except the root
   assert.ok(nodes.length > 0);
   broken.db.writeKeys(nodes.map((dbKey) => { const value = broken.read(dbKey); value[5] ^= 1; return { type: "put", dbKey, value }; }));
-  assert.throws(() => broken.getProof(["token:storage:balances:bob"]), /ไม่ตรงกับ hash/);
+  assert.throws(() => broken.getProof(["token:storage:balances:bob"]), /does not match the hash/);
 });

@@ -198,7 +198,7 @@ test("router: second hop fails with no catch → the whole tx fails, nothing cha
   const res = vm.call(routeTx(["swapab", "swapbc"], 300), { timestamp: T }); // the first hop passes, but swapbc lacks tokenC (300×2×3 = 1800)
 
   assert.equal(res.status, "throw");
-  assert.deepEqual(res.error, { code: "PROGRAM_ERROR", message: "ยอดไม่พอ" });
+  assert.deepEqual(res.error, { code: "PROGRAM_ERROR", message: "insufficient balance" });
   assert.deepEqual(trace(res), [
     "0 router.route (alice→alice) throw",
     "1 swapab.swap (router→alice) success",

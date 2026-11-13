@@ -52,7 +52,7 @@ test("server: /proof is self-verifiable · /evm cardianal_getProof · /snapshot 
       body.proofs[0].proof[body.proofs[0].proof.length - 1] = body.proofs[1].proof.at(-1);
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     } });
-    await assert.rejects(liar.verifiedState(keys), /หลักฐาน/);
+    await assert.rejects(liar.verifiedState(keys), /proof/);
     assert.equal((await fetch(`${url}/proof`)).status, 400);
 
     const rpc = (method, params) => fetch(`${url}/evm`, { method: "POST", headers: { "content-type": "application/json" },

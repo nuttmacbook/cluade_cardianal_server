@@ -85,17 +85,17 @@ test("fork: new rules from the given block · earlier blocks keep the old ones �
   // a node without the fork → block 3 mismatches (chain split detected) · block 2 still matches
   const old = new VM.VirtualMachine(vm.db, { gas: GAS, recordBlocks: true, recordHistory: true });
   assert.equal(old.replayBlock(2).hash, vm.getBlock(2).hash);
-  assert.throws(() => old.replayBlock(3), /hash ไม่ตรง/);
+  assert.throws(() => old.replayBlock(3), /hash that does not match/);
 });
 
 test("fork: a name unknown to the code / bad block / changing a nonexistent gas value = refuses to start", () => {
   const make = (options) => () => new VM.VirtualMachine(new MemoryDB(), options);
-  assert.throws(make({ forks: { future: 10 } }), /ไม่รู้จัก fork 'future'/);
-  assert.throws(make({ forks: { cheapWrite: -1 }, forkRules: RULES }), /block ต้องเป็นจำนวนเต็ม/);
-  assert.throws(make({ forks: { cheapWrite: 1.5 }, forkRules: RULES }), /block ต้องเป็นจำนวนเต็ม/);
-  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { price: 2 } } } }), /เปลี่ยนค่าแก๊ส 'price' ไม่ได้/);
-  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { nope: 2 } } } }), /เปลี่ยนค่าแก๊ส 'nope' ไม่ได้/);
-  assert.throws(make({ forks: [] }), /ต้องเป็น \{ ชื่อ: block \}/);
+  assert.throws(make({ forks: { future: 10 } }), /unknown fork 'future'/);
+  assert.throws(make({ forks: { cheapWrite: -1 }, forkRules: RULES }), /block must be an integer/);
+  assert.throws(make({ forks: { cheapWrite: 1.5 }, forkRules: RULES }), /block must be an integer/);
+  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { price: 2 } } } }), /gas cost 'price' cannot be changed/);
+  assert.throws(make({ forks: { bad: 1 }, forkRules: { bad: { gas: { nope: 2 } } } }), /gas cost 'nope' cannot be changed/);
+  assert.throws(make({ forks: [] }), /must be \{ name: block \}/);
   assert.deepEqual(new VM.VirtualMachine(new MemoryDB()).forkSchedule(), []);
   assert.deepEqual(Object.keys(VM.FORKS), ["bluewolf"]);   // forks defined in code (genesis.json enables it from block 0)
 });
@@ -106,7 +106,7 @@ test("fork: the genesis hash excludes forks (the schedule can be extended later)
   const { hash } = vm.applyGenesis(genesis);
   assert.equal(vm.checkGenesis({ ...genesis, forks: { cheapWrite: 100 } }), hash);
   assert.equal(vm.applyGenesis({ ...genesis, forks: { cheapWrite: 100 } }).applied, false);
-  assert.throws(() => vm.checkGenesis({ ...genesis, chainId: 2 }), /genesis ไม่ตรงกัน/);
+  assert.throws(() => vm.checkGenesis({ ...genesis, chainId: 2 }), /genesis mismatch/);
 
   assert.deepEqual(resolveSettings({ ...genesis, forks: { cheapWrite: 100 } }, {}).settings.forks, { cheapWrite: 100 });
   assert.deepEqual(resolveSettings(genesis, {}).settings.forks, {});

@@ -43,7 +43,7 @@ test("query: caller can be set, and program errors are reported as usual", () =>
   assert.equal(ok.status, "success");
 
   const failed = vm.query({ programUuid: "token", functionName: "transfer", input: { to: "bob", amount: 99_999 }, context: user("alice") });
-  assert.equal(failed.error.message, "ยอดไม่พอ");
+  assert.equal(failed.error.message, "insufficient balance");
 });
 
 // ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ test("value larger than maxValueSize → only that tx fails", () => {
     assert.equal(call(fn, 100).status, "success", fn);
     const tooBig = call(fn, 5000);
     assert.equal(tooBig.error.code, "INVALID_REQUEST", fn);
-    assert.match(tooBig.error.message, /ค่าใหญ่เกินกำหนด/);
+    assert.match(tooBig.error.message, /value too large/);
   }
 });
 

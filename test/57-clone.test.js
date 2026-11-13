@@ -138,7 +138,7 @@ test("clone: repeated salt → error (address already exists) · salt cannot be 
   t.ok(t.make({ salt: "dup" }));
   const again = t.make({ salt: "dup" });
   assert.deepEqual([again.status, again.error.code], ["throw", "INVALID_REQUEST"]);
-  assert.match(again.error.message, /ถูกใช้แล้ว/);
+  assert.match(again.error.message, /is already in use/);
   const empty = t.make({ salt: "" });
   assert.match(empty.error.message, /salt/);
 });
@@ -153,7 +153,7 @@ test("clone: template pending approval / rejected / missing → error", () => {
   for (const template of ["waiting", "nope", "0x0000000000000000000000000000000000000999"]) {
     const res = t.make({ template, salt: template });
     assert.deepEqual([res.status, res.error.code], ["throw", "NOT_FOUND"], template);
-    assert.match(res.error.message, /ต้นแบบ/);
+    assert.match(res.error.message, /template program/);
   }
 });
 
@@ -182,7 +182,7 @@ test("clone: value sends native from factory to the new program · initializatio
   assert.deepEqual([info.funded, info.balance], ["30n", "30n"]);
   // insufficient funds → whole tx fails
   const broke = t.make({ salt: "broke", value: "1000n" });
-  assert.match(broke.error.message, /ไม่พอ/);
+  assert.match(broke.error.message, /insufficient/);
 });
 
 test("clone: charges gas for call + code size (like deploy) + writes", () => {

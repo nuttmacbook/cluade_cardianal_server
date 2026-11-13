@@ -138,9 +138,9 @@ test("catchable runProgram errors: NOT_FOUND / FORBIDDEN / initialization / non-
   activateProbes("a", "b");
   const relayCatch = (args) => ok(callAs("u", "a", "relayCatch", args)).result;
 
-  assert.deepEqual(relayCatch({ target: "missing", fn: "whoami" }), { ok: false, message: "ไม่พบโปรแกรม 'missing'", code: "NOT_FOUND" });
-  assert.deepEqual(relayCatch({ target: "b", fn: "internalOnly" }), { ok: false, message: "เรียก 'internalOnly' ไม่ได้ (ไม่มีหรือไม่ได้ export)", code: "FORBIDDEN" });
-  assert.deepEqual(relayCatch({ target: "b", fn: "initialization" }), { ok: false, message: "เรียก 'initialization' ไม่ได้ (ไม่มีหรือไม่ได้ export)", code: "FORBIDDEN" });
+  assert.deepEqual(relayCatch({ target: "missing", fn: "whoami" }), { ok: false, message: "program 'missing' not found", code: "NOT_FOUND" });
+  assert.deepEqual(relayCatch({ target: "b", fn: "internalOnly" }), { ok: false, message: "cannot call 'internalOnly' (missing or not exported)", code: "FORBIDDEN" });
+  assert.deepEqual(relayCatch({ target: "b", fn: "initialization" }), { ok: false, message: "cannot call 'initialization' (missing or not exported)", code: "FORBIDDEN" });
   assert.deepEqual(relayCatch({ target: "a:b", fn: "whoami" }).ok, false);
 });
 
@@ -159,7 +159,7 @@ test("recursion: bounded self-recursion → success", () => {
 
 test("recursion: unbounded → LIMIT_EXCEEDED at maxCallDepth, every level throws", () => {
   activateProbes("r");
-  const res = fails(callAs("u", "r", "recurse", { self: "r" }), "LIMIT_EXCEEDED", "เรียกโปรแกรมซ้อนได้ไม่เกิน 8 ชั้น");
+  const res = fails(callAs("u", "r", "recurse", { self: "r" }), "LIMIT_EXCEEDED", "nested program calls cannot exceed 8 levels");
   assert.equal(res.calls.length, 9); // depth 0..8
   assert.ok(trace(res).every((t) => t.endsWith(":throw:LIMIT_EXCEEDED")));
 });
@@ -173,7 +173,7 @@ test("recursion: LIMIT_EXCEEDED can be caught", () => {
 test("config.maxCallDepth is configurable", () => {
   activateProbes("r");
   vm.maxCallDepth = 2;
-  fails(callAs("u", "r", "recurse", { self: "r", left: 3 }), "LIMIT_EXCEEDED", "เรียกโปรแกรมซ้อนได้ไม่เกิน 2 ชั้น");
+  fails(callAs("u", "r", "recurse", { self: "r", left: 3 }), "LIMIT_EXCEEDED", "nested program calls cannot exceed 2 levels");
   ok(callAs("u", "r", "recurse", { self: "r", left: 2 }));
 });
 

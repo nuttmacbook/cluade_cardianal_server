@@ -31,7 +31,7 @@ test("programUuid: deploy / init / call with different letter case give the same
 
 test("programUuid: re-deploy with different letter case → counts as a duplicate", () => {
   ok(vm.deploy({ programUuid: TOKEN_ADDR, code: TOKEN, context: ctx(alice) }));
-  fails(vm.deploy({ programUuid: token, code: TOKEN, context: ctx(alice) }), "INVALID_REQUEST", `programUuid '${token}' ถูกใช้แล้ว`);
+  fails(vm.deploy({ programUuid: token, code: TOKEN, context: ctx(alice) }), "INVALID_REQUEST", `programUuid '${token}' is already in use`);
 });
 
 test("context: sender / origin are lowercase in the program, calls and pending", () => {

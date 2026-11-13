@@ -45,7 +45,7 @@ test("memory over the limit → OUT_OF_MEMORY, whole tx fails, catch / finally c
     const res = call("hog", name);
     assert.equal(res.status, "throw", name);
     assert.equal(res.error.code, "OUT_OF_MEMORY", name);
-    assert.match(res.error.message, /หน่วยความจำเกินกำหนด \(4194304 ไบต์ต่อ tx\)/);
+    assert.match(res.error.message, /exceeded the memory limit \(4194304 bytes per tx\)/);
     assert.deepEqual(res.writes, [], name);
   }
   // a nested program exceeding it → the caller cannot catch it either
@@ -100,7 +100,7 @@ test("stack overflow → PROGRAM_ERROR (RangeError) that the program can catch a
   }`);
   const res = call("deep", "overflow");
   assert.equal(res.error.code, "PROGRAM_ERROR");
-  assert.equal(res.error.message, "โปรแกรมทำงานผิดพลาด (RangeError)");
+  assert.equal(res.error.message, "program error (RangeError)");
   assert.deepEqual(call("deep", "recover").result, [false, "InternalError", "3n"]);
   const depth = Number(call("deep", "depth").result.slice(0, -1));
   assert.ok(depth > 500, `nested ${depth} levels`);
@@ -217,9 +217,9 @@ test("values across the boundary: BigInt / nested objects / null round-trip inta
   assert.deepEqual(call("echo", "echo", value).result, value);
   assert.deepEqual(call("echo", "relay", { target: "echo", value }).result, value);
   assert.deepEqual(call("echo", "store", { value }).result, value);
-  assert.equal(call("echo", "badFunction").error.message, "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  assert.equal(call("echo", "badSymbol").error.message, "ค่าที่ writeDB ต้องเป็นข้อมูล JSON");
-  assert.equal(call("echo", "badReturn").error.message, "ค่าที่ return ต้องเป็นข้อมูล JSON");
+  assert.equal(call("echo", "badFunction").error.message, "writeDB value must be JSON data");
+  assert.equal(call("echo", "badSymbol").error.message, "writeDB value must be JSON data");
+  assert.equal(call("echo", "badReturn").error.message, "return value must be JSON data");
 });
 
 test("all handles / contexts are released: memory does not grow after thousands of calls (including txs that use more programs than the pre-made contexts)", () => {
@@ -257,7 +257,7 @@ test("all handles / contexts are released: memory does not grow after thousands 
 });
 
 test("memory / stack sizes outside the supported range are rejected", () => {
-  assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { maxStackBytes: 1024 * 1024 }), /maxStackBytes ต้องเป็นจำนวนเต็มระหว่าง 16384 ถึง 262144/);
+  assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { maxStackBytes: 1024 * 1024 }), /maxStackBytes must be an integer between 16384 and 262144/);
   assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { memoryLimitBytes: 1000 }), /memoryLimitBytes/);
   assert.throws(() => new VM.VirtualMachine(new MemoryDB(), { memoryLimitBytes: 4 * MB + 0.5 }), /memoryLimitBytes/);
 });

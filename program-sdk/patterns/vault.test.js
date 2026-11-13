@@ -29,8 +29,8 @@ test("validate inputs", () => {
   for (const amount of [0, -5, "10"]) {
     assert.throws(() => vault.call("withdraw", { amount }, { as: "alice" }), /invalid amount/);
   }
-  // decimals can't convert to BigInt → the VM rejects before reaching the program (VM message, kept in Thai)
-  assert.throws(() => vault.call("withdraw", { amount: 1.5 }, { as: "alice" }), /ต้องเป็น BigInt/);
+  // decimals can't convert to BigInt → the VM rejects before reaching the program (VM message)
+  assert.throws(() => vault.call("withdraw", { amount: 1.5 }, { as: "alice" }), /must be BigInt/);
   assert.throws(() => vault.call("withdraw", { amount: 999 }, { as: "alice" }), /insufficient balance/);
 });
 

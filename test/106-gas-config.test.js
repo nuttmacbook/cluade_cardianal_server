@@ -68,9 +68,9 @@ test("setGasConfig: unit prices (gas) cannot be changed on-chain · other txs in
   assert.equal(seal(vm, transfer).results[0].gasUsed, 1300);
   const refused = seal(vm, (b) => setGas(b, { gas: { call: 0 } })).results[0];
   assert.notEqual(refused.status, "success");
-  assert.match(refused.error.message, /ปรับบนเชนไม่ได้/);
+  assert.match(refused.error.message, /cannot be changed on-chain/);
   const mixed = seal(vm, (b) => setGas(b, { minBaseFee: 1, gas: { write: 0 } })).results[0];
-  assert.match(mixed.error.message, /ปรับบนเชนไม่ได้/);
+  assert.match(mixed.error.message, /cannot be changed on-chain/);
   assert.equal(vm.gasConfig(), null);
   assert.equal(seal(vm, transfer).results[0].gasUsed, 1300);
   assert.equal(vm.gasAt().call, 100);
@@ -96,18 +96,18 @@ test("setGasConfig: admins only · chains without admins cannot change it · bad
   const vm = chain();
   const notAdmin = seal(vm, (b) => setGas(b, { minBaseFee: 1 }, ALICE)).results[0];
   assert.notEqual(notAdmin.status, "success");
-  assert.match(notAdmin.error.message, /ไม่มีสิทธิ์ปรับค่าแก๊ส/);
+  assert.match(notAdmin.error.message, /not authorized to change gas settings/);
   assert.equal(vm.gasConfig(), null);
 
   const open = chain({ admins: null });
   const refused = seal(open, (b) => setGas(b, { minBaseFee: 1 })).results[0];
-  assert.match(refused.error.message, /เฉพาะเชนที่ตั้ง admins/);
+  assert.match(refused.error.message, /only on chains that set admins/);
 
   for (const [change, pattern] of [
     [{ minBaseFee: 0 }, /wei ≥ 1/],
     [{ minBaseFee: "-5" }, /wei ≥ 1/],
     [{ minBaseFee: "abc" }, /wei ≥ 1/],
-    [{}, /ต้องส่ง minBaseFee/],
+    [{}, /minBaseFee is required/],
   ]) {
     const result = seal(vm, (b) => setGas(b, change)).results[0];
     assert.notEqual(result.status, "success", JSON.stringify(change));
@@ -133,7 +133,7 @@ test("setGasConfig: signed tx (action setGasConfig) → VM request", () => {
   // gas included in the signed tx → VM rejects (old values unchanged)
   const withGas = { ...tx, nonce: 1, input: { minBaseFee: "200000000", gas: { call: 0 } } };
   const second = sign.verifyTransaction({ tx: withGas, signature: sign.signTransaction(withGas, key) });
-  assert.match(seal(vm, (b) => b[second.method](second.request)).results[0].error.message, /ปรับบนเชนไม่ได้/);
+  assert.match(seal(vm, (b) => b[second.method](second.request)).results[0].error.message, /cannot be changed on-chain/);
   assert.equal(vm.minBaseFeeNow(), 100_000_000n);
 });
 
@@ -141,7 +141,7 @@ test("setGasConfig: chain with admins and a failing DB → the tx still fails as
   const vm = new VM.VirtualMachine({ readKeys: () => { throw new Error("503"); }, writeKeys: () => {} }, { admins: [ADMIN] });
   const res = vm.transfer({ from: ALICE, to: BOB, amount: 1 });
   assert.equal(res.status, "throw");
-  assert.deepEqual(res.error, { code: "INTERNAL", message: "อ่านข้อมูลจาก DB ไม่สำเร็จ: 503" });
+  assert.deepEqual(res.error, { code: "INTERNAL", message: "failed to read from DB: 503" });
 });
 
 // ---------- real server.js: scripts/set-gas.js → the producer uses the new value · a follower (FOLLOW) syncs and gets the same hash ----------
