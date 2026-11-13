@@ -5,6 +5,13 @@ const EXPLORER = {
   api: "",
   /** สีจุดหน้าชื่อโปรแกรมในเมนูข้าง (วนตามลำดับ) */
   sideColors: ["#2f6df0", "#db2777", "#7c5ce6", "#0d9488", "#d97706", "#4d53d0", "#16a34a", "#e11d48"],
+  /**
+   * Reown (WalletConnect) — ปุ่ม Connect wallet เปิดหน้าต่างเลือกกระเป๋าของ Reown: กระเป๋าในเบราว์เซอร์ (MetaMask / Brave / Rabby …)
+   * + สแกน QR ด้วยกระเป๋ามือถือ (MetaMask / Trust / OKX / Bitget … กว่า 500 ตัว) · มือถือที่ไม่มีกระเป๋าในเบราว์เซอร์ก็เชื่อมได้
+   * ขอ Project ID ฟรีที่ https://cloud.reown.com (สร้าง project แบบ AppKit · ใส่โดเมนของ explorer ใน Domain allowlist)
+   * "" = ไม่ใช้ Reown (เชื่อมกับกระเป๋าในเบราว์เซอร์ตรง ๆ แบบเดิม)
+   */
+  reownProjectId: "",
   /** ถามสถานะเชนทุกกี่ ms (เลข block ที่หัวเว็บ · หน้าแรกอัปเดตเอง) */
   pollMs: 2000,
   /**

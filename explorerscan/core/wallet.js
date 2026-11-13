@@ -39,14 +39,87 @@ function signingInput(tx) {
   return canonical({ input: deep(tx.input ?? {}), code: tx.code ?? null, ...(tx.upgrader ? { upgrader: String(tx.upgrader).toLowerCase() } : {}) });
 }
 
+// ---------- provider: Reown (WalletConnect + any wallet) when EXPLORER.reownProjectId is set · else the browser wallet (window.ethereum) ----------
+const REOWN_CDN = "https://cdn.jsdelivr.net/npm/@reown/appkit-cdn@1.8.24/dist/appkit.js";   // exact version · change both together when upgrading
+let provider = null;    // EIP-1193 provider of the wallet connected through Reown (null = use window.ethereum)
+let reownKit = null;    // Promise<AppKit | null> · null result = Reown not set up / failed to load → browser wallet
+const eth = () => {
+  const p = provider ?? window.ethereum;
+  if (!p) throw new Error(EXPLORER.reownProjectId ? "No wallet connected — press Connect wallet" : "No wallet found — install MetaMask first");
+  return p;
+};
+
+function showWallet() {
+  const button = document.getElementById("wbtn");
+  if (button) button.textContent = wallet ? cut(wallet) : "Connect wallet";
+}
+function useAccount(account) {
+  walletAccount = account ? String(account) : null;
+  wallet = walletAccount ? walletAccount.toLowerCase() : null;
+  showWallet();
+}
+
+/** AppKit loaded once (the chain itself is the default network: chainId / name / symbol / RPC / explorer from GET /evm) */
+function reown() {
+  if (!EXPLORER.reownProjectId) return Promise.resolve(null);
+  reownKit ??= (async () => {
+    const [{ createAppKit, WagmiAdapter }, evm] = await Promise.all([import(REOWN_CDN), api("/evm")]);
+    const id = Number(BigInt(evm.chainId));
+    const chain = { id, caipNetworkId: `eip155:${id}`, chainNamespace: "eip155", name: evm.chainName, nativeCurrency: evm.nativeCurrency,
+      rpcUrls: { default: { http: evm.rpcUrls } },
+      ...(evm.blockExplorerUrls?.[0] ? { blockExplorers: { default: { name: evm.chainName, url: evm.blockExplorerUrls[0] } } } : {}) };
+    const projectId = EXPLORER.reownProjectId;
+    const kit = createAppKit({ adapters: [new WagmiAdapter({ projectId, networks: [chain] })], networks: [chain], defaultNetwork: chain, projectId,
+      metadata: { name: document.title, description: document.title, url: location.origin, icons: [`${location.origin}/favicon.ico`] },
+      features: { analytics: false, email: false, socials: false, swaps: false, onramp: false, send: false, history: false } });
+    // connected / switched / disconnected in the Reown window or in the wallet → follow it
+    kit.subscribeAccount((state) => {
+      provider = state?.isConnected ? kit.getWalletProvider() ?? provider : null;
+      useAccount(state?.isConnected ? state.address : null);
+    });
+    return kit;
+  })().catch((error) => { console.warn("Reown failed to load — using the browser wallet", error); return null; });
+  return reownKit;
+}
+
+/** wait until the Reown window connects a wallet (rejects when it is closed first) */
+function reownConnect(kit) {
+  return new Promise((resolve, reject) => {
+    let opened = false;
+    const stop = [];
+    const done = (fn, value) => { stop.forEach((off) => off?.()); fn(value); };
+    stop.push(kit.subscribeAccount((state) => {
+      if (state?.isConnected && state.address) {
+        provider = kit.getWalletProvider() ?? provider;
+        useAccount(state.address);
+        if (provider) done(resolve);
+      }
+    }));
+    stop.push(kit.subscribeState((state) => {
+      if (state?.open) opened = true;
+      else if (opened && !wallet) done(reject, new Error("Wallet not connected"));
+    }));
+    kit.open();
+  });
+}
+
 /** rerender = false while sending a tx — redrawing would remove the result box (#out) */
 async function connect(rerender = true) {
-  if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
-  const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
-  walletAccount = String(account);
-  wallet = walletAccount.toLowerCase();
-  document.getElementById("wbtn").textContent = cut(wallet);
+  const kit = await reown();
+  if (kit) {
+    if (!wallet || !provider) await reownConnect(kit);
+  } else {
+    const [account] = await eth().request({ method: "eth_requestAccounts" });
+    useAccount(account);
+  }
   if (rerender) render(true);
+}
+
+/** header button: Reown → its window (connect / switch account or network / disconnect) · browser wallet → ask for the account */
+async function walletButton() {
+  const kit = await reown();
+  if (kit && wallet) return kit.open();
+  return connect();
 }
 
 /**
@@ -55,16 +128,14 @@ async function connect(rerender = true) {
  *   after connecting leaves the old address here → error 4100 "not authorized" · so ask again whenever it is not in the list
  */
 async function ensureWallet() {
-  if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
+  const kit = await reown();
+  if (kit && !provider) { await connect(false); return wallet; }
   let accounts = [];
-  try { accounts = (await window.ethereum.request({ method: "eth_accounts" })) ?? []; } catch {}
+  try { accounts = (await eth().request({ method: "eth_accounts" })) ?? []; } catch {}
   const same = accounts.find((a) => String(a).toLowerCase() === wallet);
   if (wallet && same) { walletAccount = String(same); return wallet; }
   if (accounts.length) {   // the wallet switched to another authorized account → use the one it has selected
-    walletAccount = String(accounts[0]);
-    wallet = walletAccount.toLowerCase();
-    const button = document.getElementById("wbtn");
-    if (button) button.textContent = cut(wallet);
+    useAccount(accounts[0]);
     return wallet;
   }
   await connect(false);   // not authorized (yet / any more) → the wallet asks the user to connect
@@ -72,22 +143,19 @@ async function ensureWallet() {
 }
 
 // account switched / disconnected in the wallet → follow it (no stale address left to sign with)
-window.ethereum?.on?.("accountsChanged", (accounts) => {
-  walletAccount = accounts?.[0] ? String(accounts[0]) : null;
-  wallet = walletAccount ? walletAccount.toLowerCase() : null;
-  const button = document.getElementById("wbtn");
-  if (button) button.textContent = wallet ? cut(wallet) : "Connect wallet";
-});
+// (Reown follows its own wallet through subscribeAccount · start Reown early so a wallet connected before reconnects on reload)
+window.ethereum?.on?.("accountsChanged", (accounts) => { if (!provider) useAccount(accounts?.[0]); });
+reown();
 
 /** add this chain to the wallet (MetaMask): chainId / name / symbol / rpcUrls / explorer come from GET /evm of the node */
 async function addNetwork() {
-  if (!window.ethereum) throw new Error("No wallet found — install MetaMask first");
-  await window.ethereum.request({ method: "wallet_addEthereumChain", params: [await api("/evm")] });
+  if (EXPLORER.reownProjectId && !provider) await connect(false);
+  await eth().request({ method: "wallet_addEthereumChain", params: [await api("/evm")] });
 }
 
 /** chain the wallet has open right now (any EVM chain works · recorded as signedOnChainId) */
 async function walletChainId() {
-  try { return Number(BigInt(await window.ethereum.request({ method: "eth_chainId" }))); } catch { return null; }
+  try { return Number(BigInt(await eth().request({ method: "eth_chainId" }))); } catch { return null; }
 }
 
 /**
@@ -156,7 +224,7 @@ async function sendTx(fields, { onCost } = {}) {
     ...(legacy ? { gasPrice: tx.gasPrice } : { maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas }),
     signedOnChainId: tx.signedOnChainId };
 
-  const signature = await window.ethereum.request({
+  const signature = await eth().request({
     method: "eth_signTypedData_v4",
     params: [walletAccount ?? wallet, JSON.stringify({ domain: DOMAIN,
       types: { EIP712Domain: DOMAIN_TYPE, Transaction: legacy ? TX_TYPE : TX_TYPE_1559 }, primaryType: "Transaction", message })],
