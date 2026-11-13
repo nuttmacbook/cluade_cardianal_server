@@ -5,7 +5,7 @@
 ```
 explorerscan/
 ├── index.html            🎨 โครงหน้า: ชื่อเว็บ, โลโก้, เมนูบน, เมนูข้าง, ลำดับโหลดไฟล์
-├── config.js             🎨 ตั้งค่า: ที่อยู่ node, สีจุดในเมนูข้าง, ความถี่ถามสถานะ, รายชื่อโปรแกรมกลาง
+├── config.js             🎨 ตั้งค่า: ที่อยู่ node, Reown Project ID, สีจุดในเมนูข้าง, ความถี่ถามสถานะ, รายชื่อโปรแกรมกลาง
 ├── theme/                🎨 ความสวยงาม
 │   ├── colors.css            สีทั้งหมดของธีม (ตัวแปร --bg --card --accent …) — เปลี่ยนธีมแก้ไฟล์นี้ก่อน
 │   └── style.css             พื้นหลัง, แถบบน, เมนูข้าง, ตาราง, การ์ด, ฟอร์ม, มือถือ (@media)
@@ -29,7 +29,7 @@ explorerscan/
 │       └── metadata.js           แก้ชื่อ / ไอคอน / ลิงก์ของ address ตัวเอง
 └── core/                 ⚙️ ระบบ — ทุกโปรเจกต์ต้องมี ไม่ต้องแก้
     ├── chain.js              อ่านข้อมูลจากเชน: api() + การแบ่งหน้า (เลขหน้า / cursor)
-    ├── wallet.js             ต่อ MetaMask, Add network, เซ็น tx EIP-712, ส่ง /sendtx
+    ├── wallet.js             ต่อกระเป๋า (MetaMask ในเบราว์เซอร์ หรือ Reown / WalletConnect), Add network, เซ็น tx EIP-712, ส่ง /sendtx
     ├── actions.js            เซ็น + ส่ง + รอผลจาก block แล้วรายงานสถานะ
     ├── interact.js           อ่านโค้ดโปรแกรมเพื่อเดาช่องกรอกของแต่ละฟังก์ชัน
     ├── format.js             แปลงค่า: เลข BigInt, หน่วยเหรียญ, เวลา, escape HTML
@@ -47,6 +47,7 @@ explorerscan/
 | พื้นหลัง / กริด / ขนาด / ระยะห่าง / มือถือ | `theme/style.css` |
 | ชื่อเว็บ, โลโก้, ปุ่มบนสุด, เมนูข้าง | `index.html` |
 | ต่อกับ node ของเชนตัวเอง | `config.js` → `api: "https://chain.example.com"` |
+| เชื่อมกระเป๋ามือถือ / กระเป๋าอื่นผ่าน Reown (WalletConnect) | `config.js` → `reownProjectId: "<Project ID จาก cloud.reown.com>"` · ว่าง = ใช้กระเป๋าในเบราว์เซอร์อย่างเดียว |
 | คอลัมน์ / ข้อความในหน้า block, tx, address … | `ui/pages/<หน้า>.js` |
 | หน้าตาตาราง, ลิงก์ address, tag สถานะ ทุกหน้าพร้อมกัน | `ui/components.js` |
 | รูปแบบวันที่ / ตัวเลข | `core/format.js` (`when` `ago` `num`) |

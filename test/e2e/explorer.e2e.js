@@ -786,6 +786,23 @@ test("ฟอร์ม deploy: โปรแกรมใหญ่ใช้แก�
   assert.deepEqual(pageErrors, []);
 });
 
+test("ฟอร์ม deploy: ตั้ง gas limit เองได้ (อยู่ในข้อมูลที่เซ็น) · ไม่ใช่ตัวเลขถูกห้ามก่อนเซ็น · ว่าง = อัตโนมัติ", async () => {
+  const big = `function program() {\n  function ping(params) { return 3n }\n  function pad(params) { return "${"y".repeat(16000)}" }\n  return { ping, pad };\n}`;
+  await open("#deploy");
+  await page.fill("#dp-code", big);
+  await page.fill("#dp-upgrader", "");
+  await page.fill("#dp-gasLimit", "abc");
+  await page.click("#dp-send");
+  assert.match(await page.locator("#dp-out").textContent(), /Gas limit must be a whole number/);
+  await page.fill("#dp-gasLimit", "2,000,000");                                            // ใส่ , คั่นหลักได้
+  const sent = page.waitForRequest((r) => r.url().endsWith("/sendtx"));
+  await page.click("#dp-send");
+  assert.equal(JSON.parse((await sent).postData()).tx.gasLimit, 2_000_000);               // ค่าที่ตั้งอยู่ในข้อมูลที่เซ็น
+  await outSays("#dp-out", /Deployed[\s\S]*awaiting approval/);
+  await page.evaluate(() => { deployDraft.gasLimit = ""; });
+  assert.deepEqual(pageErrors, []);
+});
+
 test("แถบ Upgrade: ส่งโค้ดใหม่ + migrate input → รอรีวิว → Approve upgrade → version 2 · โอนสิทธิ์ให้ BOB · โปรแกรมที่ไม่มี upgrader แก้ไม่ได้", async () => {
   await open(`#address/${upgradable}`);
   await tab("Upgrade");

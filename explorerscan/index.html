@@ -18,7 +18,7 @@
   <input id="q" placeholder="Search block / tx / address / name" onkeydown="if(event.key==='Enter')search()">
   <button class="btn" id="dbtn" onclick="go('#deploy')">Deploy</button>
   <button class="btn" id="nbtn" title="Add this chain to MetaMask" onclick="addNetwork().catch((e) => alert(e.message))">Add network</button>
-  <button class="btn" id="wbtn" onclick="connect().catch((e) => alert(e.message))">Connect wallet</button>
+  <button class="btn" id="wbtn" onclick="walletButton().catch((e) => alert(e.message))">Connect wallet</button>
 </div></header>
 <div class="shell">
 <aside class="side" id="side" aria-label="Navigation">
