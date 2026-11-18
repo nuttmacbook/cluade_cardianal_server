@@ -206,9 +206,9 @@ pre.code .c-br0{color:#ffd700}
 pre.code .c-br1{color:#da70d6}
 pre.code .c-br2{color:#179fff}
 /* code editor (ui/code.js codeEditor): transparent textarea over the colored view · both use the same font, padding and line-number gutter */
+/* the textarea alone sets the box size · the colored view is pinned to it (absolute), so pasting long code never stretches the box */
 .code-edit{display:grid;position:relative;min-width:0;background:#1e1e1e;border-radius:8px}
-.code-edit>*{grid-area:1/1;min-width:0}
-.code-edit>pre.code{margin:0;max-height:none;overflow:hidden;pointer-events:none}
+.code-edit>pre.code{position:absolute;inset:0;margin:0;max-height:none;overflow:hidden;pointer-events:none}
 .code-edit>pre.code code{will-change:transform}
 .code-edit:focus-within>pre.code{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(110,165,255,.20)}
 .form .code-edit textarea.code-input{position:relative;z-index:1;margin:0;background:transparent;color:transparent;caret-color:#aeafad;

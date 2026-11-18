@@ -763,6 +763,13 @@ let upgradable;
 test("deploy form: set the upgrader to your own wallet (part of the signed data) → pending → press Approve on the program list page", async () => {
   await open("#deploy");
   assert.match(await view(), /Deploy a program/);
+  // pasting long code keeps the box its own size (the textarea scrolls) · the colored view never stretches it
+  const boxHeight = () => page.evaluate(() => { const t = document.getElementById("dp-code");
+    return [Math.round(t.parentElement.getBoundingClientRect().height), Math.round(t.getBoundingClientRect().height)]; });
+  const before = await boxHeight();
+  await page.fill("#dp-code", Array.from({ length: 200 }, (_, i) => `// line ${i}`).join("\n"));
+  await page.waitForTimeout(100);
+  assert.deepEqual(await boxHeight(), before);
   await page.fill("#dp-code", V1);
   // the code box is colored like the Code tab: the colored view under the textarea follows what was typed
   const editor = page.locator("#deploy-form .code-edit pre.code");
