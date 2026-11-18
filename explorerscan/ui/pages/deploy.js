@@ -8,7 +8,7 @@ function deployPage(draw = el) {
   const d = deployDraft;
   draw(panel("Deploy a program", `<div class="pad form" id="deploy-form">
     ${walletRow("Deploying sends a signed transaction · the program runs after an admin approves it")}
-    <label>Code<textarea id="dp-code" rows="12" spellcheck="false">${esc(d.code)}</textarea></label>
+    <label>Code${codeEditor(d.code, { id: "dp-code", rows: 14 })}</label>
     <label>Init input (JSON, passed to initialization)<textarea id="dp-input" rows="2" spellcheck="false">${esc(d.input)}</textarea></label>
     <label>Attached value (coins)<input id="dp-value" value="${attr(d.value)}" inputmode="decimal"></label>
     <label>Gas limit (optional · empty = automatic, up to the per-transaction cap · only the gas used is charged)<input id="dp-gasLimit" value="${attr(d.gasLimit)}" inputmode="numeric" placeholder="automatic" spellcheck="false" autocomplete="off"></label>

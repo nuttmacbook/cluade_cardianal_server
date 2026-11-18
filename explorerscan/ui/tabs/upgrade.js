@@ -22,7 +22,7 @@ function upgradePanel(program, meta) {
         <span class="dim">Admin only</span></div>` : ""}
     ${scheduled ? `<div class="dim">An approved upgrade becomes active at block ${esc(scheduled.activateAt)}</div>` : ""}
     ${upgrader ? `${head("Submit new code")}
-      <label>New code<textarea id="up-code" rows="10" spellcheck="false">${esc(sourceOf(program.code))}</textarea></label>
+      <label>New code${codeEditor(sourceOf(program.code), { id: "up-code", rows: 14 })}</label>
       <label>Migrate input (JSON, passed to migrate)<textarea id="up-input" rows="2" spellcheck="false">{}</textarea></label>
       <div class="row"><button class="btn solid" id="up-send" onclick="sendUpgrade('${program.address}')">Send upgrade</button>
         <span class="dim">The new code waits for admin review before it runs</span></div>
