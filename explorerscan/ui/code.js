@@ -109,3 +109,61 @@ function codeView(src, { id = "", max = "" } = {}) {
   return `<pre class="code"${id ? ` id="${id}"` : ""} style="--ln:${width}ch${max ? `;max-height:${max}` : ""}"><code>${
     lines.map((line) => `<span class="line">${line || " "}</span>`).join("\n")}</code></pre>`;
 }
+
+// ---------- code editor: a plain <textarea> laid over the colored view ----------
+// the textarea keeps the real text (same id / .value as before), its text is transparent so the colors underneath show through
+
+/** editable colored code box · id = the textarea id · rows = visible lines */
+function codeEditor(src, { id, rows = 12 } = {}) {
+  const text = String(src ?? "");
+  const width = String(codeLines(text).length).length;
+  return `<div class="code-edit" style="--ln:${width}ch">${codeView(text)}<textarea id="${id}" class="code-input" rows="${rows}"
+    spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Code"
+    oninput="codeEditSync(this)" onscroll="codeEditScroll(this)" onkeydown="codeEditKey(event)">${esc(text)}</textarea></div>`;
+}
+
+/** redraw the colors after typing (once per frame) */
+function codeEditSync(input) {
+  if (input._codeFrame) return;
+  input._codeFrame = requestAnimationFrame(() => {
+    input._codeFrame = 0;
+    const box = input.parentElement, lines = codeLines(input.value);
+    box.style.setProperty("--ln", `${String(lines.length).length}ch`);
+    box.querySelector("pre.code").style.setProperty("--ln", `${String(lines.length).length}ch`);
+    box.querySelector("pre.code code").innerHTML = lines.map((line) => `<span class="line">${line || " "}</span>`).join("\n");
+    codeEditScroll(input);
+  });
+}
+
+/** the colored view follows the textarea's scroll */
+function codeEditScroll(input) {
+  const code = input.parentElement.querySelector("pre.code code");
+  if (code) code.style.transform = `translate(${-input.scrollLeft}px,${-input.scrollTop}px)`;
+}
+
+/** Tab = indent 2 spaces · Shift+Tab = remove up to 2 · Enter keeps the line's indent · Esc then Tab leaves the box */
+function codeEditKey(event) {
+  const input = event.target;
+  if (event.key === "Escape") { input._codeTabOut = true; return; }
+  if (event.key === "Tab" && !input._codeTabOut && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    event.preventDefault();
+    const { selectionStart: start, selectionEnd: end, value } = input;
+    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+    if (event.shiftKey) {
+      const lead = /^ {0,2}/.exec(value.slice(lineStart))[0].length;
+      if (lead) { input.setRangeText("", lineStart, lineStart + lead, "preserve"); input.setSelectionRange(Math.max(lineStart, start - lead), Math.max(lineStart, end - lead)); }
+    } else input.setRangeText("  ", start, end, "end");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  input._codeTabOut = false;
+  if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
+    const { selectionStart: start, selectionEnd: end, value } = input;
+    const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+    let indent = /^[ \t]*/.exec(value.slice(lineStart, start))[0];
+    if (/[{([]\s*$/.test(value.slice(lineStart, start))) indent += "  ";
+    event.preventDefault();
+    input.setRangeText(`\n${indent}`, start, end, "end");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+}

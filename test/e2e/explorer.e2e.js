@@ -764,6 +764,10 @@ test("deploy form: set the upgrader to your own wallet (part of the signed data)
   await open("#deploy");
   assert.match(await view(), /Deploy a program/);
   await page.fill("#dp-code", V1);
+  // the code box is colored like the Code tab: the colored view under the textarea follows what was typed
+  const editor = page.locator("#deploy-form .code-edit pre.code");
+  await page.waitForFunction((v) => document.querySelector("#deploy-form .code-edit pre.code")?.textContent === v, V1);
+  assert.ok(await editor.locator(".c-kw").count() > 0 && await editor.locator(".c-str").count() > 0);
   await page.click("button:has-text('Use my wallet as upgrader')");
   assert.equal(await page.inputValue("#dp-upgrader"), ME);
   await page.fill("#dp-upgrader", "0x123");

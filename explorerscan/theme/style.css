@@ -205,6 +205,17 @@ pre.code .c-op{color:#d4d4d4}
 pre.code .c-br0{color:#ffd700}
 pre.code .c-br1{color:#da70d6}
 pre.code .c-br2{color:#179fff}
+/* code editor (ui/code.js codeEditor): transparent textarea over the colored view · both use the same font, padding and line-number gutter */
+.code-edit{display:grid;position:relative;min-width:0;background:#1e1e1e;border-radius:8px}
+.code-edit>*{grid-area:1/1;min-width:0}
+.code-edit>pre.code{margin:0;max-height:none;overflow:hidden;pointer-events:none}
+.code-edit>pre.code code{will-change:transform}
+.code-edit:focus-within>pre.code{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(110,165,255,.20)}
+.form .code-edit textarea.code-input{position:relative;z-index:1;margin:0;background:transparent;color:transparent;caret-color:#aeafad;
+  border:1px solid transparent;border-radius:8px;box-shadow:none;padding:12px 14px 12px calc(var(--ln, 3ch) + 1ch + 37px);
+  font:13px/1.55 var(--mono);font-variant-ligatures:none;letter-spacing:normal;tab-size:2;white-space:pre;overflow:auto;
+  overflow-wrap:normal;resize:vertical;min-height:120px;max-height:80vh;outline:none;-webkit-text-fill-color:transparent}
+.code-edit textarea.code-input::selection{background:rgba(38,79,120,.6);-webkit-text-fill-color:transparent}
 tr.code-row>td{padding:0 12px 14px;background:transparent}
 .btn.on{border-color:var(--accent-2);color:var(--accent)}
 @media(max-width:640px){.metaform{grid-template-columns:1fr}}
