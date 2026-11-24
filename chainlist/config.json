@@ -1,0 +1,25 @@
+{
+  "name": "Bluewolfchain Mainnet",
+  "chain": "BWSC",
+  "shortName": "bwsc",
+  "chainId": 41234,
+  "nativeCurrency": {
+    "name": "Bluewolfchain",
+    "symbol": "BWSC",
+    "decimals": 18
+  },
+  "rpc": [
+    "https://syncblock.network/evm"
+  ],
+  "explorer": {
+    "name": "Bluewolfchain Explorer",
+    "url": "https://syncblock.network/evm/explorer"
+  },
+  "infoURL": "https://www.bluewolfchain.com",
+  "faucets": [],
+  "status": "active",
+  "icon": {
+    "name": "bluewolfchain",
+    "file": "logo/bluewolfchain.png"
+  }
+}
