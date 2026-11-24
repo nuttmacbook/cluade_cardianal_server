@@ -81,7 +81,6 @@ if ($Icon) {
 }
 ipfs pin ls --type=recursive $CID
 & $Exe routing provide $CID *> $null
-$size = (& $Exe cat $CID | Measure-Object -Character).Characters
 Write-Host ""
 Write-Host "DONE: this server now pins the logo ($CID)."
 Write-Host "You can stop IPFS on the Mac now (ipfs shutdown)."
